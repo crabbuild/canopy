@@ -216,7 +216,12 @@ CREATE TABLE pull_merges (
     binding BLOB NOT NULL CHECK(length(binding) = 32),
     pull_number INTEGER NOT NULL UNIQUE REFERENCES pull_requests(number),
     oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
-    merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0)
+    merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) = 20),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) = 20),
+    base_version INTEGER NOT NULL CHECK(base_version > 0)
 ) WITHOUT ROWID;
 
 CREATE TABLE merge_candidates (

@@ -75,6 +75,15 @@ pub(crate) struct FileChange {
     before: Option<Entry>,
     after: Option<Entry>,
 }
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub(crate) enum ComparisonTarget {
+    Current { revision: PullRevision },
+    Review { number: i64 },
+    // An empty struct rejects extra keys; serde's internally tagged unit
+    // variant would silently discard a caller-supplied revision.
+    Merged {},
+}
 #[derive(Serialize)]
 pub(crate) struct Comparison {
     revision: PullRevision,
@@ -122,26 +131,54 @@ impl Reader {
         &self,
         actor: &str,
         number: i64,
-        revision: &PullRevision,
-    ) -> Result<(Oid, Oid), ReadError> {
-        let source = oid(&revision.source_oid)?;
-        let base = oid(&revision.base_oid)?;
-        let pull = self
-            .repository
-            .pull(actor, number)
-            .await?
-            .output
-            .ok_or(ReadError::Missing)?;
-        let pull = pull.summary;
-        if pull.version != revision.pull_version
-            || pull.source.oid.as_deref() != Some(&revision.source_oid)
-            || pull.source.version != revision.source_version
-            || pull.base.oid.as_deref() != Some(&revision.base_oid)
-            || pull.base.version != revision.base_version
-        {
-            return Err(ReadError::Changed);
+        target: &ComparisonTarget,
+    ) -> Result<PullRevision, ReadError> {
+        if matches!(target, ComparisonTarget::Review { number } if *number < 1) {
+            return Err(ReadError::Invalid);
         }
-        Ok((base, source))
+        let revision = match target {
+            ComparisonTarget::Review { number: review } => self
+                .repository
+                .reviewed_revision(actor, number, *review)
+                .await?
+                .ok_or(ReadError::Missing)?,
+            ComparisonTarget::Current { revision } => {
+                if revision.pull_version < 1
+                    || revision.source_version < 1
+                    || revision.base_version < 1
+                {
+                    return Err(ReadError::Invalid);
+                }
+                oid(&revision.source_oid)?;
+                oid(&revision.base_oid)?;
+                let pull = self
+                    .repository
+                    .pull(actor, number)
+                    .await?
+                    .output
+                    .ok_or(ReadError::Missing)?
+                    .summary;
+                if pull.version != revision.pull_version
+                    || pull.source.oid.as_deref() != Some(&revision.source_oid)
+                    || pull.source.version != revision.source_version
+                    || pull.base.oid.as_deref() != Some(&revision.base_oid)
+                    || pull.base.version != revision.base_version
+                {
+                    return Err(ReadError::Changed);
+                }
+                revision.clone()
+            }
+            ComparisonTarget::Merged {} => {
+                self.repository
+                    .pull(actor, number)
+                    .await?
+                    .output
+                    .and_then(|pull| pull.merge)
+                    .ok_or(ReadError::Missing)?
+                    .revision
+            }
+        };
+        Ok(revision)
     }
     async fn roots(&mut self, base: Oid, source: Oid) -> Result<(Oid, Oid, Oid), ReadError> {
         let merge_base = self.merge_base(base, source).await?;
@@ -153,11 +190,12 @@ impl Reader {
         mut self,
         actor: &str,
         number: i64,
-        revision: PullRevision,
+        target: ComparisonTarget,
         after: Option<&str>,
     ) -> Result<Comparison, ReadError> {
         let cursor = after.map(path).transpose()?;
-        let (base, source) = self.authorize(actor, number, &revision).await?;
+        let revision = self.authorize(actor, number, &target).await?;
+        let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);
         let (merge_base, before, after) = self.roots(base, source).await?;
         let changes = self.changes(before, after).await?;
         let mut remaining = changes
@@ -178,9 +216,9 @@ impl Reader {
                 after: after.map(Entry::from),
             })
             .collect();
-        // Work follows immutable objects. Reject a moved/revoked view before
-        // responding, rather than presenting it as the pull's current revision.
-        self.authorize(actor, number, &revision).await?;
+        // Historical roots are immutable, but access is always current. Live
+        // views also reject tip movement before returning their result.
+        self.authorize(actor, number, &target).await?;
         Ok(Comparison {
             revision,
             merge_base: hex::encode(merge_base),
@@ -192,12 +230,13 @@ impl Reader {
         mut self,
         actor: &str,
         number: i64,
-        revision: PullRevision,
+        target: ComparisonTarget,
         encoded_path: &str,
         side: Side,
     ) -> Result<FilePreview, ReadError> {
         let path = path(encoded_path)?;
-        let (base, source) = self.authorize(actor, number, &revision).await?;
+        let revision = self.authorize(actor, number, &target).await?;
+        let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);
         let (merge_base, before, after) = self.roots(base, source).await?;
         let root = match side {
             Side::Before => before,
@@ -219,7 +258,7 @@ impl Reader {
                 (Some(size), "included", Some(URL_SAFE_NO_PAD.encode(body)))
             }
         };
-        self.authorize(actor, number, &revision).await?;
+        self.authorize(actor, number, &target).await?;
         Ok(FilePreview {
             revision,
             merge_base: hex::encode(merge_base),

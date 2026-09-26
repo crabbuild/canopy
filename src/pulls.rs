@@ -221,7 +221,7 @@ impl RepositoryCell {
     ) -> Result<Observed<Option<PullRequest>>, Invocation> {
         validate_component(actor).map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-            sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid, merged.id, merged.oid, merged.merged_ms FROM {JOINS} LEFT JOIN pull_merges merged ON merged.pull_number = p.number WHERE p.number = ?2 AND ({ACCESS})"),
+            sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid, merged.id, merged.pull_number, merged.oid, merged.merged_ms, merged.pull_version, merged.source_oid, merged.source_version, merged.base_oid, merged.base_version FROM {JOINS} LEFT JOIN pull_merges merged ON merged.pull_number = p.number WHERE p.number = ?2 AND ({ACCESS})"),
             parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
         }] }).await?;
         let rows = result
@@ -248,23 +248,14 @@ impl RepositoryCell {
                     initial_source_oid: hex::encode(source),
                     initial_base_oid: hex::encode(base),
                     merge: match row.get(18..) {
-                        Some([SqlValue::Null, SqlValue::Null, SqlValue::Null]) => None,
-                        Some(
-                            [
-                                SqlValue::Blob(id),
-                                SqlValue::Blob(oid),
-                                SqlValue::Integer(at),
-                            ],
-                        ) if oid.len() == 20 => Some(merge::MergeRecord {
-                            id: record_id(id)?,
-                            number: match row.first() {
-                                Some(SqlValue::Integer(n)) => *n,
-                                _ => return Err(Error::Command("invalid merged pull number")),
-                            },
-                            oid: hex::encode(oid),
-                            merged_at_ms: *at,
-                        }),
-                        _ => return Err(Error::Command("invalid pull merge details")),
+                        Some(values)
+                            if values.len() == 9
+                                && values.iter().all(|value| matches!(value, SqlValue::Null)) =>
+                        {
+                            None
+                        }
+                        Some(values) => Some(merge::record(values)?),
+                        None => return Err(Error::Command("missing pull merge details")),
                     },
                 })
             })
@@ -299,6 +290,27 @@ impl RepositoryCell {
             output,
             receipt: result.receipt,
         })
+    }
+    pub(crate) async fn reviewed_revision(
+        &self,
+        actor: &str,
+        number: i64,
+        review: i64,
+    ) -> Result<Option<PullRevision>, Invocation> {
+        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
+            sql: format!("SELECT pull_version, source_oid, source_version, base_oid, base_version FROM pull_reviews WHERE pull_number = ?2 AND number = ?3 AND ({ACCESS})"),
+            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number), SqlValue::Integer(review)],
+        }] }).await?;
+        result
+            .output
+            .first()
+            .ok_or_else(|| invalid("missing historical review result"))?
+            .rows
+            .first()
+            .map(|row| stored_revision(row))
+            .transpose()
+            .map_err(Invocation::NotStarted)
     }
     async fn pull_rows(
         &self,
@@ -436,5 +448,33 @@ fn review(row: &[SqlValue]) -> cellule_runtime::Result<PullReview> {
         },
         applicable: *applicable == 1,
         created_at_ms: *created,
+    })
+}
+
+fn stored_revision(row: &[SqlValue]) -> cellule_runtime::Result<PullRevision> {
+    let [
+        SqlValue::Integer(pull_version),
+        SqlValue::Blob(source_oid),
+        SqlValue::Integer(source_version),
+        SqlValue::Blob(base_oid),
+        SqlValue::Integer(base_version),
+    ] = row
+    else {
+        return Err(Error::Command("invalid stored pull revision"));
+    };
+    if *pull_version < 1
+        || *source_version < 1
+        || *base_version < 1
+        || source_oid.len() != 20
+        || base_oid.len() != 20
+    {
+        return Err(Error::Command("invalid stored pull revision fields"));
+    }
+    Ok(PullRevision {
+        pull_version: *pull_version,
+        source_oid: hex::encode(source_oid),
+        source_version: *source_version,
+        base_oid: hex::encode(base_oid),
+        base_version: *base_version,
     })
 }

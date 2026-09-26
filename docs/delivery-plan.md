@@ -1428,3 +1428,76 @@ check/policy administration UI, releases/assets, public visibility, organization
 search, webhooks and account lifecycle remain. Native resource bounds, fault
 coverage, backup/GC, multi-node routing, observability, hosted CI and production
 capacity gates remain open. The earlier saved-download verification gap remains.
+
+
+## Historical pull comparisons milestone — 2026-09-26
+
+Classification: verified progress. Merged requests now retain the exact
+pre-publication pull/source/base revision in the same transaction as ref movement
+and the merge result. The browser defaults merged Changed files to that snapshot.
+Every review links to its immutable reviewed revision, so later source pushes,
+editorial edits and branch deletion do not erase the inspected changes.
+
+Comparison requests now use one tagged target: current with an exact expected
+revision, review with a review number belonging to this pull, or merged. Current
+views still reject ref/version movement. Historical views resolve stored roots;
+no arbitrary caller-supplied historical OIDs are accepted. All targets enforce
+current repository access before and after bounded traversal. Existing Git object
+verification, path handling, pagination, admission and resource budgets are shared.
+
+The merge record includes its saved revision, with source/base object foreign
+keys for future retention. Operation 9 uses codec 3. Schema 1 remains unreleased;
+this change requires a fresh development storage prefix. The former comparison
+request shape is replaced in all repository clients, tests and process probes.
+No compatibility reader, dependency or lockfile change was added.
+
+Evidence:
+
+- Four focused comparison tests pass. The new real-server/stock-Git scenario
+  records a review, moves the source, rejects the stale current comparison,
+  merges the newer revision, and deletes both refs. Reviewed and merged file
+  bytes remain distinct and exact. Wrong-pull review IDs and missing merge
+  records return 404; invalid/ambiguous selectors return 422.
+- A read-scoped member can read snapshots. Revocation during a paused comparison
+  body returns 404. A fresh local directory restores both comparison/list and
+  file-preview results exactly; revoked access remains denied and merge retries
+  retain their original revision and result.
+- Both focused merge tests and all three native-candidate tests pass. They retain
+  publication authority, competing-writer checks, review/check policy, native Git
+  graph/path semantics, object fetchability and durable replay.
+- A selector test exposed serde's internally tagged unit variant accepting extra
+  fields despite the enum's unknown-field policy. The merged selector uses an
+  empty struct variant; the strict rejection test now passes. The upstream
+  derive implementation confirms the different deserialization paths.
+- Chrome with a real RustFS-backed server: opened a merged request after both
+  branches were deleted. Changed files showed the later merged source; the first
+  review link showed the earlier source. Labels state the selected revision and
+  distinguish live branches. Reloading the historical deep link after a fresh-
+  directory restart retained the earlier bytes; switching to merged changes
+  retained the later bytes. The viewer had read-only access throughout.
+- Desktop and 390×844 mobile views inspected; document width remained 390 pixels.
+  No page console errors. JavaScript syntax, Rust formatting, probe parsing and
+  Clippy with warnings denied pass.
+
+The release binary build and full RustFS process probe pass with
+`--sqlite-chunks --many-objects 256`. The probe now retains historical comparison
+responses before publication and checks them afterward for fast-forward, native
+merge and squash, including fresh-disk recovery and lease takeover. Existing
+Git/LFS, token rotation/revocation, ACL, branch policy, chunks, 300 extra refs,
+embedded assets and lost push/merge reply checks also pass. The post-takeover
+256-file clone took 0.61s; exact large tree/commit/tag restoration took 0.91s.
+These local measurements do not establish production capacity. RustFS logged
+missing internal metadata while initializing its fresh test store; qualification
+completed with all assertions passing and exit status zero.
+
+Implementation growth stores the missing historical authority and exposes it
+through the existing reader and browser. Merge result decoding is shared by
+normal reads and exact retries; the history regression sits beside the existing
+comparison suite. No separate Git storage or diff implementation was introduced.
+
+Completion audit: the full hosting goal remains active. This retains reviewed
+and merged snapshots, not every push as an independent historical revision.
+Unified patches, inline discussions, rebase/conflict resolution, administration,
+releases/assets, public-service features, account lifecycle, native resource
+bounds, backup/GC, routing, observability, hosted CI and production capacity gates
+remain open. The saved-download verification gap also remains.

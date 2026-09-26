@@ -59,7 +59,7 @@ const COMMANDS: [OperationDescriptor; 9] = [
     operation(6),
     operation(7),
     operation_with_codec(8, 2),
-    operation_with_codec(9, 2),
+    operation_with_codec(9, 3),
     operation(10),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];

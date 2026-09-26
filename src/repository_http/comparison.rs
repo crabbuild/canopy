@@ -1,15 +1,12 @@
 use super::*;
-use crate::{
-    git_read::{ReadError, Reader, Side},
-    pulls::PullRevision,
-};
+use crate::git_read::{ComparisonTarget, ReadError, Reader, Side};
 use std::time::Duration;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
     repository_id: String,
-    revision: PullRevision,
+    target: ComparisonTarget,
     query: View,
 }
 #[derive(Deserialize)]
@@ -100,22 +97,15 @@ async fn serve(
     if input.repository_id != expected {
         return plain(StatusCode::CONFLICT, "Repository identity changed");
     }
-    if number < 1
-        || input.revision.pull_version < 1
-        || input.revision.source_version < 1
-        || input.revision.base_version < 1
-    {
-        return plain(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid comparison revision",
-        );
+    if number < 1 {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid pull number");
     }
     let reader = Reader::new(Arc::clone(&route.repository), permit);
     let operation = async {
         match input.query {
             View::Files { after } => {
                 let comparison = reader
-                    .files(&actor.account, number, input.revision, after.as_deref())
+                    .files(&actor.account, number, input.target, after.as_deref())
                     .await?;
                 Ok(json_response(
                     StatusCode::OK,
@@ -124,7 +114,7 @@ async fn serve(
             }
             View::File { path_base64, side } => {
                 let file = reader
-                    .file(&actor.account, number, input.revision, &path_base64, side)
+                    .file(&actor.account, number, input.target, &path_base64, side)
                     .await?;
                 Ok(json_response(
                     StatusCode::OK,

@@ -904,31 +904,42 @@ the pull merged, as specified below. Required-PR branches reject direct pushes.
 Text patches, inline threads, rebase, conflict-resolution UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications and UI remain open. A future collector must retain initial pull
-OIDs, historical review OIDs, merge result OIDs and merge preparation roots in addition to live refs.
+OIDs, historical review OIDs, merged source/base and result OIDs, and merge preparation roots in addition to live refs.
 Aggregate retention/quotas and production throughput evidence remain open.
 
 
 ### Exact-revision pull comparisons
 
 `POST /api/repositories/<name>/pulls/<number>/comparison` is a read operation.
-It accepts canonical `repository_id`, the same exact `PullRevision` as reviews,
-and tagged `query`: `files` with optional `after`, or `file` with `path_base64`
-and `side` (`before`/`after`). Read token scope suffices. JSON rejects unknown
-fields. Input is bounded to 32 KiB and 30 seconds; computation to 120 seconds.
-Missing membership/pull/file returns 404, invalid identity/revision/path 422,
-repository identity mismatch or moved revision 409, budget exhaustion 413,
-computation deadline 504, and unavailable/corrupt data 503. Unrelated histories
-and multiple best merge bases return distinct 409 messages.
+It accepts canonical `repository_id`, tagged `target`, and tagged `query`:
+`files` with optional `after`, or `file` with `path_base64` and `side`
+(`before`/`after`). Read token scope suffices. JSON rejects unknown fields.
+Input is bounded to 32 KiB and 30 seconds; computation to 120 seconds.
+Missing membership/pull/review/merge/file returns 404, invalid identity/target/path
+422, repository identity mismatch or moved current revision 409, budget
+exhaustion 413, computation deadline 504, and unavailable/corrupt data 503.
+Unrelated histories and multiple best merge bases return distinct 409 messages.
 
-The reader checks membership and exact editorial/source/base OIDs and retained
-ref versions before and after traversal. Every page repeats these checks.
-It supports open, closed and draft proposals with live refs. Equal current tips
-produce an empty file list; deleted refs conflict. It does not serve arbitrary
-historical OIDs through this endpoint. The response records the requested revision
-and computed merge base, which describe that observed view rather than promising
-that refs cannot move after the response. Token revocation retains the existing
-request-admission boundary; repository membership is checked again after body
-upload and before returning the result. Revoke during a paused body is rejected.
+| Target | Fields | Snapshot |
+| --- | --- | --- |
+| `current` | `revision`: exact `PullRevision` | Observed editorial version and both live ref versions/OIDs |
+| `review` | `number`: positive repository review number | Immutable review revision belonging to this pull |
+| `merged` | none | Immutable source/base/editorial revision committed with merge publication |
+
+Current views support open, closed, draft and merged proposals with live refs.
+The reader checks the requested editorial/source/base OIDs and retained ref
+versions before and after traversal, on every page. Equal current tips produce
+an empty list; deleted refs conflict. Historical selectors load stored revisions
+instead of trusting supplied OIDs; a review from another pull is unavailable.
+Historical views survive editorial changes, ref movement, deletion and recreation.
+They do not make a past review applicable or authorize another merge.
+
+Every target rechecks current repository membership after upload and again before
+returning the result. Token revocation retains the request-admission boundary.
+Responses retain `revision` and computed `merge_base`, identifying the immutable
+objects compared. No general per-push history is recorded: saved historical
+snapshots are reviews and successful merges. Pagination and file previews use
+the same target; the existing traversal/output budgets apply unchanged.
 
 Comparison uses verified immutable `commit_parents` rows, emitted only by object
 closure certification. Union ancestry is read in groups of 128 commits and SQL
@@ -989,7 +1000,9 @@ is pinned while Cell reads run. Comparisons use SQLite objects directly and do
 not hydrate the native bare Git cache. Current no-GC storage makes immutable
 object traversal safe; future collection must fence active comparison roots.
 
-No schema, Cell command registration, dependency or lockfile change is needed.
+Historical merged comparisons persist the pre-merge revision in `pull_merges`;
+operation 9 codec 3 commits it with publication. Schema 1 remains unreleased and
+requires a fresh development prefix. No dependency or lockfile change is needed.
 Fast-forward review policy and atomic publication are implemented below. Native
 rebase candidate preparation and line-based review remain open delivery gates.
 
@@ -1042,7 +1055,7 @@ moves refs. Source must descend from base for this strategy even when the branch
 rule does not require fast-forward pushes. Non-ancestor or unrelated histories
 conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
-Operation 9, codec 2 publishes the merge in one Repository Cell command:
+Operation 9, codec 3 publishes the merge in one Repository Cell command:
 
 1. Check current write authority. For an existing application UUID, compare its
    binding to actor, pull number, full requested revision and strategy; an exact
@@ -1061,7 +1074,7 @@ Operation 9, codec 2 publishes the merge in one Repository Cell command:
    `pull_merges` record with request binding, result OID and timestamp. Ref
    generation advances with publication. All changes commit together.
 
-Success returns 200 and `merge: {id, number, oid, merged_at_ms}`. Missing resources
+Success returns 200 and `merge: {id, number, oid, merged_at_ms, revision}`. Missing resources
 are 404, insufficient authority 403, and stale/conflicting intent, insufficient
 reviews, non-fast-forward history or failed branch policy are distinct 409
 responses. Service errors are 503 and elapsed work is 504. State is not edited to
@@ -1174,7 +1187,7 @@ Candidate input/result objects and their ancestor closure are retention roots.
 No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
 historic candidates need quota/retention policy before persistent public use.
 Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
-codec 2 require a fresh development prefix. No dependency or lockfile changes.
+codec 3 require a fresh development prefix. No dependency or lockfile changes.
 
 
 ## Repository browser
@@ -1320,12 +1333,15 @@ against the displayed revision. The interface never replaces a stale intent
 with current tips. Candidate responses include the resolved repository UUID,
 allowing reads to reject name reuse before combining state from different Cells.
 
-Changed files are paged and compare the current source against its merge base.
+Changed files are paged and compare the selected source against its merge base.
+Merged requests default to the stored pre-merge revision. Each review links to
+its historical comparison; its header states the review number, pull version and
+source/base OIDs. The separate branch header explicitly labels live tips.
 Opening a file reads each side through the exact-revision comparison API.
 UTF-8 text up to 256 KiB is displayed literally, with binary, large-file and
 submodule states explained. Non-UTF-8 paths retain their base64 representation.
 Renames appear as deletion/addition. These are side-by-side file previews;
-unified patches, line comments and historical merged comparisons are pending.
+unified patches and line comments are pending.
 
 Merge preparation is a separate action from publication. A ready candidate
 exposes its file view, immutable Git fetch ref and check results for its exact

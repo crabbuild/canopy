@@ -61,7 +61,7 @@ pub(crate) struct MergePull;
 impl Command for MergePull {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = MergeInput;
     type Output = MergeOutcome;
     fn execute(
@@ -99,31 +99,20 @@ impl Command for MergePull {
         ]);
         let previous = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT binding, pull_number, oid, merged_ms FROM pull_merges WHERE id = ?1"
+                sql: "SELECT binding, id, pull_number, oid, merged_ms, pull_version, source_oid, source_version, base_oid, base_version FROM pull_merges WHERE id = ?1"
                     .into(),
                 parameters: vec![SqlValue::Blob(id.as_bytes().to_vec())],
             }],
         })?;
         if let Some(row) = previous.first().and_then(|set| set.rows.first()) {
-            let [
-                SqlValue::Blob(stored),
-                SqlValue::Integer(number),
-                SqlValue::Blob(oid),
-                SqlValue::Integer(at),
-            ] = row.as_slice()
-            else {
-                return Err(Error::Command("invalid merge record"));
+            let Some(SqlValue::Blob(stored)) = row.first() else {
+                return Err(Error::Command("invalid merge binding"));
             };
             if *stored != binding {
                 return rejected(MergeOutcome::Conflict);
             }
             return Ok(CommandResult::Success(MergeOutcome::Applied {
-                merge: MergeRecord {
-                    id: input.request.id,
-                    number: *number,
-                    oid: hex::encode(oid),
-                    merged_at_ms: *at,
-                },
+                merge: record(&row[1..])?,
             }));
         }
         let Some(state) = policy_state(&context.sql(&SqlBatch {
@@ -187,7 +176,7 @@ impl Command for MergePull {
         let result=context.sql(&SqlBatch {statements:vec![SqlStatement {
             sql:"UPDATE pull_requests SET state = 'merged', version = version + 1, updated_ms = max(updated_ms, ?2) WHERE number = ?1 AND state = 'open'".into(),parameters:vec![SqlValue::Integer(input.number),SqlValue::Integer(input.issued_at_ms)],
         },SqlStatement {
-            sql:"INSERT INTO pull_merges (id, binding, pull_number, oid, merged_ms) VALUES (?1, ?2, ?3, ?4, ?5)".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec()),SqlValue::Blob(binding),SqlValue::Integer(input.number),SqlValue::Blob(source.to_vec()),SqlValue::Integer(input.issued_at_ms)],
+            sql:"INSERT INTO pull_merges (id, binding, pull_number, oid, merged_ms, pull_version, source_oid, source_version, base_oid, base_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec()),SqlValue::Blob(binding),SqlValue::Integer(input.number),SqlValue::Blob(source.to_vec()),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),SqlValue::Blob(oid(&input.request.revision.source_oid)?.to_vec()),SqlValue::Integer(input.request.revision.source_version),SqlValue::Blob(base.to_vec()),SqlValue::Integer(input.request.revision.base_version)],
         }]})?;
         if result.first().is_none_or(|set| set.rows_affected != 1) {
             return Err(Error::Command("merged pull was not updated"));
@@ -198,6 +187,7 @@ impl Command for MergePull {
                 number: input.number,
                 oid: hex::encode(source),
                 merged_at_ms: input.issued_at_ms,
+                revision: input.request.revision,
             },
         }))
     }

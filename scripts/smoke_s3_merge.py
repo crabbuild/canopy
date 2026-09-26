@@ -53,12 +53,17 @@ def seed(base_url, repository_id, local, source, base, author_token):
         connection.close()
     result = request(base_url, f"{api}/merge", "POST", payload)
     assert result["merge"]["oid"] == source
+    comparison_input = {"repository_id": repository_id, "target": {"kind": "merged"}, "query": {"kind": "files"}}
+    comparison = request(base_url, f"{api}/comparison", "POST", comparison_input)
+    assert comparison["comparison"]["revision"] == current
+    assert comparison["comparison"]["files"]
     candidates = seed_candidates(base_url, repository_id, local, source, base, author_token)
-    return api, payload, result, request(base_url, api), candidates
+    return api, payload, result, request(base_url, api), candidates, comparison_input, comparison
 
 
 def verify(base_url, local, expected):
-    api, payload, result, pull, candidates = expected
+    api, payload, result, pull, candidates, comparison_input, comparison = expected
+    assert request(base_url, f"{api}/comparison", "POST", comparison_input) == comparison
     assert request(base_url, f"{api}/merge", "POST", payload) == result
     assert request(base_url, api) == pull
     with tempfile.TemporaryDirectory(prefix="merged-clone-", dir=local.parent) as directory:
@@ -114,7 +119,10 @@ def seed_candidates(base_url, repository_id, local, source, base, author_token):
         })
         merge = {"repository_id": repository_id, "id": str(uuid.uuid4()), "revision": current,
                  "strategy": strategy, "candidate_id": payload["id"]}
-        states.append({"api": api, "payload": payload, "candidate": candidate, "merge": merge, "result": None})
+        comparison = request(base_url, f"{api}/comparison", "POST", {
+            "repository_id": repository_id, "target": {"kind": "current", "revision": current}, "query": {"kind": "files"},
+        })
+        states.append({"api": api, "payload": payload, "candidate": candidate, "merge": merge, "result": None, "comparison": comparison})
     return states
 
 
@@ -140,4 +148,8 @@ def verify_candidates(base_url, local, states):
         else:
             assert merged == state["result"]
         assert request(base_url, api)["pull"]["merge"] == merged["merge"]
+        assert merged["merge"]["revision"] == state["merge"]["revision"]
+        assert request(base_url, f"{api}/comparison", "POST", {
+            "repository_id": payload["repository_id"], "target": {"kind": "merged"}, "query": {"kind": "files"},
+        }) == state["comparison"]
     print("PASS: native merge/squash candidates fetch and publish after recovery, then replay after owner loss", flush=True)

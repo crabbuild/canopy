@@ -50,7 +50,9 @@ candidate, inspect its files, fetch it for testing, then explicitly publish it.
 Publication rechecks the revision, permissions, reviews and required checks.
 Stale or conflicting candidates cannot be published. Check reporting, branch
 policy configuration and access management remain API operations. Text patches,
-inline discussions, historical comparisons and conflict resolution are pending.
+inline discussions and conflict resolution are pending. Merged requests retain
+their pre-merge comparison, and **View reviewed changes** opens the exact version
+bound to a review, including after branch movement or deletion.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
 paths, pagination, limits and authorization behavior.
 
@@ -191,7 +193,12 @@ grant does not. Lists return up to 32 pull summaries or 16 reviews with numeric
 issues: 256-byte titles, 16 KiB bodies; review comments must be nonblank.
 
 Comparison POSTs require a read-scoped token, current repository membership,
-`repository_id`, the `revision` object above, and one of these queries:
+`repository_id`, a tagged `target`, and one of the queries below. Use
+`{"kind":"current","revision":<the revision object above>}` for a live view,
+`{"kind":"review","number":<review number>}` for a saved review, or
+`{"kind":"merged"}` for the published request's pre-merge revision. Historical
+selectors resolve immutable records belonging to this pull; callers cannot
+substitute arbitrary historical OIDs.
 
 ```json
 {"kind":"files","after":null}
@@ -205,7 +212,7 @@ Changed files compare the unique merge-base tree to the source tree. Responses
 include `comparison` with `merge_base`, `revision`, up to 32 `files`, and
 `next_after`. Each file has a byte-preserving `path_base64`, optional UTF-8 `path`,
 and nullable `before`/`after` entries containing six-digit octal `mode` and `oid`.
-Pass `next_after` as `query.after` with the same revision for the next page.
+Pass `next_after` as `query.after` with the same target for the next page.
 Renames appear as deletion plus addition. Unrelated or ambiguous histories and
 moved revisions return 409; traversal limits return 413 without a partial list.
 
@@ -236,7 +243,8 @@ Merge POSTs require a write-scoped token and current repository write access:
 For `fast_forward`, the source must descend from the current base. Current reviews, required checks
 and exact ref versions are checked in the transaction that advances the base and
 marks the pull `merged`. The response contains `merge` with `id`, `number`, `oid`
-and `merged_at_ms`; pull details retain that record. Exact retries with the same
+and `merged_at_ms`, plus the exact pre-merge `revision`; pull details retain that
+record. Exact retries with the same
 UUID and payload return the original result, including after a lost reply or
 later branch movement. Changed payloads or actors conflict. Retry an uncertain
 result with the original request ID and revision. Merged pulls cannot be reopened
@@ -247,7 +255,7 @@ required approvals, eligible approval count, outstanding requested changes and
 `reviews_satisfied`. It does not claim checks have passed or history can merge.
 For `merge_commit` or `squash`, first POST `/merge-candidates` with the same
 `repository_id` and `revision`, a new UUID `id`, the selected `strategy`, and a
-nonblank `message` (up to 16 KiB UTF-8). It returns `candidate` and `fetch_ref`.
+nonblank `message` (up to 16 KiB UTF-8). It returns `repository_id`, `candidate` and `fetch_ref`.
 The candidate result is `ready` with `oid` and `tree_oid`, `conflicted` with
 URL-safe unpadded `paths_base64`, or `unrelated`. GET may also show `pending`
 after interrupted preparation. Exact preparation retries return the same result.

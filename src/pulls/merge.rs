@@ -27,6 +27,29 @@ pub struct MergeRecord {
     pub number: i64,
     pub oid: String,
     pub merged_at_ms: i64,
+    pub revision: PullRevision,
+}
+pub(super) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
+    let [
+        SqlValue::Blob(id),
+        SqlValue::Integer(number),
+        SqlValue::Blob(oid),
+        SqlValue::Integer(at),
+        revision @ ..,
+    ] = row
+    else {
+        return Err(Error::Command("invalid merge record"));
+    };
+    if oid.len() != 20 || *number < 1 || *at < 0 {
+        return Err(Error::Command("invalid merge result"));
+    }
+    Ok(MergeRecord {
+        id: record_id(id)?,
+        number: *number,
+        oid: hex::encode(oid),
+        merged_at_ms: *at,
+        revision: stored_revision(revision)?,
+    })
 }
 /// Current review requirements; this does not assert Git mergeability or check success.
 #[derive(Debug, Serialize)]

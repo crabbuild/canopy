@@ -43,6 +43,7 @@ function route() {
     const value = JSON.parse(decodeURIComponent(location.hash.slice(1)));
     if (!value || typeof value.repo !== "string") return {};
     return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue", "pulls", "pull", "new-pull"].includes(value.view) ? value.view : "tree",
+      review: Number.isSafeInteger(value.review) && value.review > 0 ? value.review : undefined,
       pull: Number.isSafeInteger(value.pull) && value.pull > 0 ? value.pull : undefined,
       section: ["changes", "merge"].includes(value.section) ? value.section : "discussion",
       candidate: typeof value.candidate === "string" ? value.candidate : undefined,

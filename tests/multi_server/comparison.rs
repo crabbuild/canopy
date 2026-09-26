@@ -47,9 +47,11 @@ async fn push(local: &Path, url: &str, reference: &str) -> Result {
 async fn request(client: &Client, repo: &str) -> Result<Value> {
     let pull = value(client.get(format!("{repo}/pulls/1")).bearer_auth(OWNER)).await?;
     let p = &pull["pull"];
-    Ok(json!({"repository_id":pull["repository_id"],"revision":{
+    Ok(
+        json!({"repository_id":pull["repository_id"],"target":{"kind":"current","revision":{
         "pull_version":p["version"],"source_oid":p["source"]["oid"],"source_version":p["source"]["version"],
-        "base_oid":p["base"]["oid"],"base_version":p["base"]["version"]},"query":{"kind":"files"}}))
+        "base_oid":p["base"]["oid"],"base_version":p["base"]["version"]}},"query":{"kind":"files"}}),
+    )
 }
 async fn open(client: &Client, repo: &str, source: &str, base: &str) -> Result {
     let repository = value(client.get(repo).bearer_auth(OWNER)).await?["repository_id"].clone();
@@ -72,7 +74,7 @@ async fn files(
     loop {
         let page = value(client.post(api).bearer_auth(token).json(&input)).await?;
         assert_eq!(page["comparison"]["merge_base"], merge_base);
-        assert_eq!(page["comparison"]["revision"], input["revision"]);
+        assert_eq!(page["comparison"]["revision"], input["target"]["revision"]);
         let rows = page["comparison"]["files"].as_array().unwrap();
         assert!(rows.len() <= 32);
         for file in rows {
@@ -532,3 +534,6 @@ async fn comparison_rejects_oversized_change_sets_without_partial_results() -> R
     server.shutdown().await?;
     Ok(())
 }
+
+#[path = "comparison/history.rs"]
+mod history;

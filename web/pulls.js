@@ -95,7 +95,8 @@ const pullsView = (() => {
       const kind = { comment: "Commented", approve: "Approved", request_changes: "Requested changes" }[review.kind];
       item.append(element("p", `${review.reviewer} · ${kind} · ${date(review.created_at_ms)}`, "discussion-meta"));
       if (review.kind !== "comment") item.append(element("p", review.applicable ? "Applies to the current revision" : "Historical decision", "hint"));
-      item.append(element("div", review.body, "discussion-body"), element("p", `Reviewed ${review.revision.source_oid.slice(0, 12)} into ${review.revision.base_oid.slice(0, 12)} · pull version ${review.revision.pull_version}`, "hint")); panel.append(item);
+      item.append(element("div", review.body, "discussion-body"), element("p", `Reviewed ${review.revision.source_oid.slice(0, 12)} into ${review.revision.base_oid.slice(0, 12)} · pull version ${review.revision.pull_version}`, "hint"),
+        link("View reviewed changes", { ...target(current, pull.number, "changes"), review: review.number })); panel.append(item);
     }
     if (!data.reviews.length) panel.append(element("p", "No reviews on this page.", "muted"));
     panel.append(pageLinks(current, data.next_after, "Reviews"));
@@ -114,11 +115,14 @@ const pullsView = (() => {
 
   async function changes(repository, current, pull, path, signal) {
     const rev = revision(pull);
-    if (!rev) return empty("A branch is unavailable.", "The current comparison requires both branch tips.");
-    const compare = query => api(`${path}/comparison`, { method: "POST", body: { repository_id: repository.repository_id, revision: rev, query }, signal });
+    const snapshot = current.review ? { kind: "review", number: current.review } : pull.merge ? { kind: "merged" } : rev ? { kind: "current", revision: rev } : null;
+    if (!snapshot) return empty("A branch is unavailable.", "Choose a historical review from Discussion to inspect its saved changes.");
+    const compare = query => api(`${path}/comparison`, { method: "POST", body: { repository_id: repository.repository_id, target: snapshot, query }, signal });
     const { comparison } = await compare({ kind: "files", after: current.after }); signal.throwIfAborted();
     const panel = element("section"), rows = element("div", undefined, "changed-files");
-    panel.append(element("p", `Current source compared with merge base ${comparison.merge_base.slice(0, 12)}. Renames appear as deletion and addition.`, "hint"));
+    const label = current.review ? `Review #${current.review}` : pull.merge ? "Merged revision" : "Current revision";
+    panel.append(element("h3", label), element("p", `Source ${comparison.revision.source_oid.slice(0, 12)} into base ${comparison.revision.base_oid.slice(0, 12)} · pull version ${comparison.revision.pull_version}. Compared with merge base ${comparison.merge_base.slice(0, 12)}. Renames appear as deletion and addition.`, "hint"));
+    if (current.review) panel.append(link(pull.merge ? "View merged changes" : "View current changes", target(current, pull.number, "changes")));
     for (const file of comparison.files) {
       const row = element("details", undefined, "surface"), label = file.path === null ? `Path bytes: ${file.path_base64}` : safe(file.path);
       const summary = element("summary", `${file.before ? file.after ? "Modified" : "Deleted" : "Added"} · ${label}`); row.append(summary);
@@ -141,7 +145,7 @@ const pullsView = (() => {
       }); rows.append(row);
     }
     panel.append(rows);
-    if (!comparison.files.length) panel.append(empty("No changed files.", "The current source and merge-base trees match."));
+    if (!comparison.files.length) panel.append(empty("No changed files.", "The selected source and merge-base trees match."));
     panel.append(pageLinks(current, comparison.next_after, "Files")); return panel;
   }
 
@@ -222,7 +226,7 @@ const pullsView = (() => {
     const panel = element("section", undefined, "pull-detail"), title = element("div", undefined, "issue-title");
     panel.append(link("← Pull requests", { repo: current.repo, view: "pulls" }));
     title.append(element("h2", safe(pull.title)), element("span", `#${pull.number}`, "issue-number")); panel.append(title, stateLabel(pull));
-    const branches = element("p", undefined, "pull-branches");
+    const branches = element("p", "Live branches: ", "pull-branches");
     for (const [index, branch] of [pull.source, pull.base].entries()) {
       if (index) branches.append(element("span", " → "));
       const name = safe(branch.reference.replace(/^refs\/heads\//, ""));
@@ -230,7 +234,7 @@ const pullsView = (() => {
     }
     panel.append(branches); const tabs = element("nav", undefined, "tabs"); tabs.setAttribute("aria-label", "Pull request views");
     for (const [label, section] of [["Discussion", "discussion"], ["Changed files", "changes"], ["Merge", "merge"]]) {
-      const tab = link(label, { ...target(current, pull.number, section), candidate: current.candidate }, "tab"); if (section === current.section) tab.setAttribute("aria-current", "page"); tabs.append(tab);
+      const tab = link(label, { ...target(current, pull.number, section), candidate: current.candidate, review: section === "changes" ? current.review : undefined }, "tab"); if (section === current.section) tab.setAttribute("aria-current", "page"); tabs.append(tab);
     }
     panel.append(tabs);
     if (current.section === "changes") panel.append(await changes(repository, current, pull, path, signal));

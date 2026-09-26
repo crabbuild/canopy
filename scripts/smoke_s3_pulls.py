@@ -34,7 +34,7 @@ def seed(base_url, repository_id, source_oid, base_oid):
     request(base_url, f"{api}/reviews", "POST", fresh)
     reviews = request(base_url, f"{api}/reviews")
     assert [review["id"] for review in reviews["reviews"] if review["applicable"]] == [fresh["id"]]
-    comparison_input = {"repository_id": repository_id, "revision": fresh["revision"],
+    comparison_input = {"repository_id": repository_id, "target": {"kind": "current", "revision": fresh["revision"]},
                         "query": {"kind": "files"}}
     comparison = request(base_url, f"{api}/comparison", "POST", comparison_input, token=token)
     changed = comparison["comparison"]["files"]
