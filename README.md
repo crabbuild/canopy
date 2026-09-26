@@ -32,8 +32,8 @@ buffers requests and responses, and caps Git and LFS
 payloads at 64 MiB. Local recovery currently admits a 512 MiB SQLite database.
 There is no account or organization model, per-repository ACL, multi-node
 routing, backup, repository browser, issue or pull request API, or production
-capacity evidence. The local Cellule path dependencies in `Cargo.toml` are
-for development only.
+capacity evidence. `Cargo.toml` pins Cellule to a specific Git revision, so a
+fresh Canopy checkout builds without a local Cellule checkout.
 
 ## Run the current service
 

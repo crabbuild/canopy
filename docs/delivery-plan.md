@@ -7,7 +7,7 @@ Do not infer completion from compilation or a disposable cache test.
 
 | Gate | Deliverable | Acceptance proof | State |
 | --- | --- | --- | --- |
-| 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Open: local paths remain |
+| 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: create/list and multi-repository Git routing survive recovery; account identity, rename, token scopes and ACL remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: small and 64 MiB buffered paths work |
@@ -28,8 +28,9 @@ separate product decisions.
 ## Next reviewable changes
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
-   test the target production object store. Pin an immutable public Cellule
-   revision before a fresh checkout can build independently.
+   test the target production object store. Run the checked-in CI workflow on
+   a Canopy remote; the pinned Cellule revision currently lives on a public
+   branch and needs an upstream release or merge plan.
 2. Replace the buffered CGI and per-object subprocess path with bounded
    streaming pack ingest/fetch. Add SQLite chunks for large trees, commits
    and tags, plus a real corpus benchmark. Keep the bare repo disposable.

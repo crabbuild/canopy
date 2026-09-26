@@ -13,11 +13,11 @@ axum = "0.8.9"
 base64 = "0.22"
 blake3 = "1.8"
 bytes = "1.11"
-cellule-app = { path = "/Users/haipingfu/Github/cellule/crates/cellule-app" }
-cellule-host = { path = "/Users/haipingfu/Github/cellule/crates/cellule-host" }
-cellule-ltx = { path = "/Users/haipingfu/Github/cellule/crates/cellule-ltx", features = ["replica"] }
-cellule-runtime = { path = "/Users/haipingfu/Github/cellule/crates/cellule-runtime" }
-cellule-store = { path = "/Users/haipingfu/Github/cellule/crates/cellule-store" }
+cellule-app = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958" }
+cellule-host = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958" }
+cellule-ltx = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958", features = ["replica"] }
+cellule-runtime = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958" }
+cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958" }
 ed25519-dalek = "2"
 flate2 = "1.1"
 hex = "0.4"
