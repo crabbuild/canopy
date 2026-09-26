@@ -154,7 +154,9 @@ impl RepositoryCell {
         ]);
         let review_binding = parameters[3].clone();
         self.pull_change(identity, vec![check,
-            SqlStatement { sql: format!("INSERT INTO pull_reviews (id, creation_digest, pull_number, reviewer, membership_version, kind, body, pull_version, source_oid, source_version, base_oid, base_version, created_ms) SELECT ?3, ?4, ?2, ?1, CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 0 ELSE (SELECT version FROM membership_versions WHERE account = ?1) END, ?5, ?11, ?6, ?7, ?8, ?9, ?10, ?12 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM pull_reviews WHERE id = ?3)"), parameters },
+            // Public commenters may have no grant history. Version zero cannot
+            // authorize an approval: only the owner or a current writer qualifies.
+            SqlStatement { sql: format!("INSERT INTO pull_reviews (id, creation_digest, pull_number, reviewer, membership_version, kind, body, pull_version, source_oid, source_version, base_oid, base_version, created_ms) SELECT ?3, ?4, ?2, ?1, CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 0 ELSE coalesce((SELECT version FROM membership_versions WHERE account = ?1), 0) END, ?5, ?11, ?6, ?7, ?8, ?9, ?10, ?12 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM pull_reviews WHERE id = ?3)"), parameters },
             // Only an inserted or exact-bound decision can advance its reviewer's
             // head. Historical retries cannot replace a newer decision; comments
             // never enter this table.

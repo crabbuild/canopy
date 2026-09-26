@@ -1,5 +1,7 @@
 //! Owner-configured commit checks with reporter identity and ordered reruns.
 
+use crate::ReadIdentity;
+
 mod mutations;
 
 use crate::{RepositoryCell, directory::validate_component, validate_repository_id};
@@ -11,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 type Invocation = InvocationError<Vec<SqlResultSet>>;
 pub const CHECK_PAGE_SIZE: usize = 32;
-const ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1)";
+use crate::access::READ_ACCESS as ACCESS;
 const OWNER: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)";
 const RUN_COLUMNS: &str = "r.id, r.oid, r.context, r.context_version, r.reporter, r.state, r.version, r.summary, r.created_ms, r.updated_ms";
 
@@ -106,11 +108,12 @@ pub(crate) fn valid_summary(value: &str) -> bool {
 
 impl RepositoryCell {
     /// Lists bounded context policy, including disabled names, for a repository reader.
-    pub async fn check_contexts(
+    pub async fn check_contexts<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         after: Option<&str>,
     ) -> Result<Observed<Option<Vec<CheckContext>>>, Invocation> {
+        let actor = actor.into();
         let parameters = cursor_parameters(actor, after)?;
         let result = self.check_rows(
             SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![parameters[0].clone()] },
@@ -128,12 +131,13 @@ impl RepositoryCell {
     }
 
     /// Reads a historical attempt while the actor has repository read access.
-    pub async fn check_run(
+    pub async fn check_run<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         id: [u8; 16],
     ) -> Result<Observed<Option<CheckRun>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self
             .sql
             .query(
@@ -143,7 +147,7 @@ impl RepositoryCell {
                         sql: format!(
                             "SELECT {RUN_COLUMNS} FROM check_runs r WHERE r.id = ?2 AND ({ACCESS})"
                         ),
-                        parameters: vec![SqlValue::Text(actor.into()), SqlValue::Blob(id.to_vec())],
+                        parameters: vec![actor.parameter(), SqlValue::Blob(id.to_vec())],
                     }],
                 },
             )
@@ -170,12 +174,13 @@ impl RepositoryCell {
     ///
     /// A context version change invalidates older attempts; exact start retries
     /// never change the ordering. Missing access or a non-commit returns `None`.
-    pub async fn commit_checks(
+    pub async fn commit_checks<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         oid: [u8; 20],
         after: Option<&str>,
     ) -> Result<Observed<Option<Vec<CommitCheck>>>, Invocation> {
+        let actor = actor.into();
         let mut parameters = cursor_parameters(actor, after)?;
         parameters.push(SqlValue::Blob(oid.to_vec()));
         let result = self.check_rows(
@@ -251,13 +256,17 @@ impl RepositoryCell {
     }
 }
 
-fn cursor_parameters(actor: &str, after: Option<&str>) -> Result<Vec<SqlValue>, Invocation> {
-    validate_component(actor).map_err(Invocation::NotStarted)?;
+fn cursor_parameters<'a>(
+    actor: impl Into<ReadIdentity<'a>>,
+    after: Option<&str>,
+) -> Result<Vec<SqlValue>, Invocation> {
+    let actor = actor.into();
+    actor.validate().map_err(Invocation::NotStarted)?;
     if let Some(after) = after {
         validate_component(after).map_err(Invocation::NotStarted)?;
     }
     Ok(vec![
-        SqlValue::Text(actor.into()),
+        actor.parameter(),
         SqlValue::Text(after.unwrap_or("").into()),
     ])
 }

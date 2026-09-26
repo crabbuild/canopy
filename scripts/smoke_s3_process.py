@@ -176,7 +176,7 @@ def default_branch(base_url, name, reference=None):
 
 
 def api_get(base_url, path, token):
-    request = urllib.request.Request(f"{base_url}{path}", headers={"Authorization": f"Bearer {token}"})
+    request = urllib.request.Request(f"{base_url}{path}", headers={} if token is None else {"Authorization": f"Bearer {token}"})
     for _ in range(10):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -223,7 +223,7 @@ def api_status(base_url, path, token, method="GET", payload=None):
         f"{base_url}{path}",
         data=data,
         headers={
-            "Authorization": f"Bearer {token}",
+            **({} if token is None else {"Authorization": f"Bearer {token}"}),
             "Content-Type": "application/json",
         },
         method=method,
@@ -268,9 +268,10 @@ def verify_disabled_account(base_url, tokens):
 
 
 def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token", branch="main"):
+    authorization = "http.extraHeader=" if token is None else f"http.extraHeader=Authorization: Bearer {token}"
     git(
         "-c",
-        f"http.extraHeader=Authorization: Bearer {token}",
+        authorization,
         "clone",
         url,
         str(directory),
@@ -279,7 +280,7 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
         git("lfs", "install", "--local", cwd=directory)
         git(
             "-c",
-            f"http.extraHeader=Authorization: Bearer {token}",
+            authorization,
             "lfs",
             "pull",
             cwd=directory,

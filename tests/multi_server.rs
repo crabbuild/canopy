@@ -42,6 +42,8 @@ mod residency;
 mod tokens;
 #[path = "multi_server/transfers.rs"]
 mod transfers;
+#[path = "multi_server/visibility.rs"]
+mod visibility;
 #[path = "multi_server/workspace.rs"]
 mod workspace;
 
@@ -77,9 +79,11 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
     let other_url = create_repository(first_address, "other").await?;
     assert_ne!(first_url, other_url);
     let listing_url = format!("http://{first_address}/api/repositories");
+    let anonymous = client.get(&listing_url).send().await?;
+    assert_eq!(anonymous.status(), reqwest::StatusCode::OK);
     assert_eq!(
-        client.get(&listing_url).send().await?.status(),
-        reqwest::StatusCode::UNAUTHORIZED
+        anonymous.json::<serde_json::Value>().await?["repositories"],
+        serde_json::json!([])
     );
     assert_eq!(
         client

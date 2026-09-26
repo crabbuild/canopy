@@ -20,6 +20,8 @@ mod objects;
 mod pages;
 #[path = "repository_cell/pulls.rs"]
 mod pulls;
+#[path = "repository_cell/visibility.rs"]
+mod visibility;
 
 use std::{
     sync::Arc,
@@ -438,6 +440,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
             })
         );
         default_branch::verify(&repository).await?;
+        visibility::verify(&repository).await?;
         graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
         branch_rules::verify(&repository, &graph_sql, &application_handle, &target).await?;
         pulls::verify(&repository).await?;

@@ -14,7 +14,7 @@ pub(super) async fn read(
     Path(name): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, _) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, _) = match readable_route(&state, &name, &headers).await {
         Ok(authorized) => authorized,
         Err(response) => return response,
     };

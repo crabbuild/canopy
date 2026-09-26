@@ -16,7 +16,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone and fenced Unix runtime reclamation pass; full routing fault matrix, backup, GC and telemetry remain |
-| 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
+| 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 
 The **internal preview** requires gates 0–5, including real storage and
 two-node owner loss. A private beta requires gates 0–8. A public release
@@ -1958,3 +1958,60 @@ configuration, dependency, storage format or schema. Shared-manager admission ca
 wait for one second under this pressure; the current three-gateway limit remains
 an initial bound, not production capacity. Placement races, partitions, requests
 spanning owner movement and larger hot-set throughput still need broader proof.
+
+## Public repository visibility
+
+On 2026-09-26, Repository Cells gained private-by-default visibility with an
+owner-only generation-checked update. Anonymous identities are typed explicitly
+and share the same read policy as authenticated public readers. Git/LFS writes,
+approvals and merges retain explicit write authority. Public readers with a
+write-scoped credential can participate in discussions, including PR comments
+without a collaborator grant. Invalid supplied credentials remain errors.
+
+Directory discovery publishes an owner-authorized candidate before visibility,
+then rechecks each candidate's current Repository Cell access. Candidates remain
+after privatization; pagination advances across inaccessible candidates without
+returning their names. This avoids a cross-Cell cleanup racing a new public change.
+The browser adds public discovery, visibility badges and owner controls. The
+visibility dialog names the exposed data and explains that copies cannot be recalled.
+
+Evidence:
+
+- `tests/multi_server/visibility.rs`: stock anonymous clone and LFS pull with exact
+  contents; issue, pull, review, line-discussion, check and browser reads; denied
+  anonymous mutations; invalid credentials; owner-only and stale-generation
+  visibility updates; no duplicate owner discovery; public non-member comments
+  with denied approval; public and private state across fresh local recovery.
+- `tests/repository_cell/visibility.rs`: Cell-local owner enforcement, anonymous
+  read role, explicit writer role, exact receipt replay, stale/ABA denial and
+  rejected direct Git publication by a public reader. Directory, Repository Cell
+  and stock smart-HTTP integration targets pass. The existing private two-repository
+  Git/LFS recovery test also passes.
+- The direct Repository Cell test exposed an older rollback fixture that omitted
+  mandatory merged-revision fields already present in baseline `d6d7d40`. Its
+  injected row now supplies those fields, preserving the duplicate-row failure
+  and all ref/generation/pull-state rollback assertions.
+- All-target Clippy with warnings denied, Rust formatting, JavaScript syntax and
+  Python probe parsing pass. The release binary builds.
+- Real browser actions: anonymous empty listing, owner public toggle, anonymous
+  files and issue detail without write controls, deep-link reload, then owner
+  privatization and anonymous disappearance. No browser JavaScript errors.
+- Release process smoke against RustFS `1.0.0-beta.8-glibc`: existing collaboration,
+  checks, policies, dropped replies, token/account revocation and Git/LFS survive
+  restart and takeover. Large tree/commit/tag SQLite chunks, a 256-file history
+  and 300 refs restore exactly. Eight repositories across two HTTPS-connected
+  nodes exceed resident capacity; anonymous Git/LFS and discovery work through
+  the opposite gateway and survive SIGKILL takeover without restarting the
+  survivor. Privatization then denies anonymous Git/LFS and discovery.
+
+The RustFS fixture uses bounded Docker tmpfs because this host's active Docker
+VM does not mount the workspace volume. This proves Canopy process recovery
+against an S3-compatible service; it does not prove provider disk or power-loss
+durability. Both initialization schemas changed; use a fresh development prefix.
+No upgrade migration, dependency change or lockfile change was introduced.
+
+The new source surface implements one visibility authority, a typed reader,
+Directory coordination, HTTP/UI controls and shared query-policy changes; it
+also removes duplicate read predicates. Public-service gate 9 remains partial:
+organizations/teams, search, webhooks, candidate index rebuilding/retention and
+production quotas remain open, along with the earlier operational gates.

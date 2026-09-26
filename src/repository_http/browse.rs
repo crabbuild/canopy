@@ -71,11 +71,10 @@ async fn serve(
     request: Request<Body>,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Response<Body> {
-    let (route, actor) =
-        match authorized_route(state, name, request.headers(), TokenScope::Read).await {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (route, actor) = match readable_route(state, name, request.headers()).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let body = match tokio::time::timeout(
         Duration::from_secs(30),
         to_bytes(request.into_body(), 32 * 1024),
@@ -96,26 +95,26 @@ async fn serve(
     let operation = async {
         let view = match input.query {
             View::Refs { after, generation } => {
-                serde_json::json!({"refs":reader.browser_refs(&actor.account,after.as_deref().unwrap_or(""),generation).await?})
+                serde_json::json!({"refs":reader.browser_refs(actor.identity(),after.as_deref().unwrap_or(""),generation).await?})
             }
             View::Resolve { reference } => {
-                serde_json::json!({"resolved":reader.browser_ref(&actor.account,reference.as_deref()).await?})
+                serde_json::json!({"resolved":reader.browser_ref(actor.identity(),reference.as_deref()).await?})
             }
             View::Tree {
                 commit,
                 path_base64,
                 after,
             } => {
-                serde_json::json!({"tree":reader.browser_tree(&actor.account,&commit,&path_base64,after.as_deref()).await?})
+                serde_json::json!({"tree":reader.browser_tree(actor.identity(),&commit,&path_base64,after.as_deref()).await?})
             }
             View::File {
                 commit,
                 path_base64,
             } => {
-                serde_json::json!({"file":reader.browser_file(&actor.account,&commit,&path_base64).await?})
+                serde_json::json!({"file":reader.browser_file(actor.identity(),&commit,&path_base64).await?})
             }
             View::History { commit } => {
-                serde_json::json!({"history":reader.browser_history(&actor.account,&commit).await?})
+                serde_json::json!({"history":reader.browser_history(actor.identity(),&commit).await?})
             }
         };
         Ok::<_, ReadError>(json_response(

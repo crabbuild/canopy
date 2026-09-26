@@ -25,7 +25,7 @@ pub(super) async fn list(
     Query(cursor): Query<Cursor>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -41,7 +41,7 @@ pub(super) async fn list(
     }
     match route
         .repository
-        .branch_rules(&actor.account, cursor.after.as_deref())
+        .branch_rules(actor.identity(), cursor.after.as_deref())
         .await
     {
         Ok(result) => match result.output {

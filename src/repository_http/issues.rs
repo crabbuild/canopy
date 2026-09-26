@@ -67,7 +67,7 @@ async fn writable_route(
 ) -> Result<(RepositoryRoute, Principal), Response<Body>> {
     let authorized = authorized_route(state, name, headers, TokenScope::Read).await?;
     // Discussion permits repository readers, while token scope independently
-    // restricts mutations. The Cell rechecks membership when publishing.
+    // restricts mutations. The Cell rechecks read access when publishing.
     if authorized.1.scope < TokenScope::Write {
         return Err(plain(StatusCode::FORBIDDEN, "Token scope is insufficient"));
     }
@@ -130,7 +130,7 @@ pub(super) async fn list(
     Query(query): Query<ListQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -139,7 +139,7 @@ pub(super) async fn list(
     }
     match route
         .repository
-        .issues(&actor.account, query.after, query.state)
+        .issues(actor.identity(), query.after, query.state)
         .await
     {
         Ok(result) => match result.output {
@@ -164,11 +164,11 @@ pub(super) async fn read(
     Path((name, number)): Path<(String, i64)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
-    match route.repository.issue(&actor.account, number).await {
+    match route.repository.issue(actor.identity(), number).await {
         Ok(result) => match result.output {
             Some(issue) if (state.manager.ready)() => json_response(
                 StatusCode::OK,
@@ -187,7 +187,7 @@ pub(super) async fn comments(
     Query(query): Query<CommentQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -196,7 +196,7 @@ pub(super) async fn comments(
     }
     match route
         .repository
-        .issue_comments(&actor.account, number, query.after)
+        .issue_comments(actor.identity(), number, query.after)
         .await
     {
         Ok(result) => match result.output {

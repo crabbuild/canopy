@@ -1,4 +1,5 @@
 use super::*;
+use crate::ReadIdentity;
 
 const MAX_LINES: usize = 20_000;
 const MAX_TRACE: usize = 1_048_576;
@@ -95,13 +96,14 @@ impl Patch {
 }
 
 impl Reader {
-    pub(crate) async fn patch(
+    pub(crate) async fn patch<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         target: ComparisonTarget,
         encoded_path: &str,
     ) -> Result<Patch, ReadError> {
+        let actor = actor.into();
         let path = path(encoded_path)?;
         let revision = self.authorize(actor, number, &target).await?;
         let (merge_base, old_tree, new_tree) = self

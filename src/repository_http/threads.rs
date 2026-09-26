@@ -47,7 +47,7 @@ pub(super) async fn list(
     Query(page): Query<Page>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -56,7 +56,7 @@ pub(super) async fn list(
     }
     match route
         .repository
-        .threads(&actor.account, number, page.after)
+        .threads(actor.identity(), number, page.after)
         .await
     {
         Ok(Some(threads)) if (state.manager.ready)() => {
@@ -78,7 +78,7 @@ pub(super) async fn read(
     Path((name, number, thread)): Path<(String, i64, i64)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -87,7 +87,7 @@ pub(super) async fn read(
     }
     match route
         .repository
-        .thread(&actor.account, number, thread)
+        .thread(actor.identity(), number, thread)
         .await
     {
         Ok(Some(thread)) if (state.manager.ready)() => json_response(
@@ -105,7 +105,7 @@ pub(super) async fn comments(
     Query(page): Query<Page>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -114,7 +114,7 @@ pub(super) async fn comments(
     }
     match route
         .repository
-        .thread_comments(&actor.account, number, thread, page.after)
+        .thread_comments(actor.identity(), number, thread, page.after)
         .await
     {
         Ok(Some(comments)) if (state.manager.ready)() => {

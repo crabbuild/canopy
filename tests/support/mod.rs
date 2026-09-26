@@ -12,7 +12,7 @@ use axum::{
 };
 use canopy_server::{
     directory::{Principal, TokenScope},
-    http::GitHttpApi,
+    http::{GitHttpApi, Viewer},
 };
 use cellule_runtime::{MutationIdentity, RequestId};
 
@@ -29,10 +29,12 @@ async fn test_identity(mut request: Request<Body>, next: Next) -> Response {
     if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    request.extensions_mut().insert(Principal {
-        account: "canopy".into(),
-        scope: TokenScope::Admin,
-    });
+    request
+        .extensions_mut()
+        .insert(Viewer::Authenticated(Principal {
+            account: "canopy".into(),
+            scope: TokenScope::Admin,
+        }));
     next.run(request).await
 }
 

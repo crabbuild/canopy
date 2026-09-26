@@ -1,5 +1,7 @@
 //! Revision-bound review requirements and atomic merge publication.
 
+use crate::ReadIdentity;
+
 pub(crate) mod command;
 use super::*;
 use crate::{RefExpectation, RefUpdate, directory::TokenScope};
@@ -115,12 +117,13 @@ pub(crate) fn valid_request(request: &MergeRequest) -> bool {
 
 impl RepositoryCell {
     /// Reads current review requirements and eligible decisions in one Cell observation.
-    pub async fn pull_review_policy(
+    pub async fn pull_review_policy<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
     ) -> Result<Observed<Option<ReviewPolicy>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self
             .sql
             .query(
@@ -224,14 +227,18 @@ pub(super) fn oid(text: &str) -> cellule_runtime::Result<[u8; 20]> {
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))
 }
-pub(super) fn policy_statement(actor: &str, number: i64) -> SqlStatement {
+pub(super) fn policy_statement<'a>(
+    actor: impl Into<ReadIdentity<'a>>,
+    number: i64,
+) -> SqlStatement {
+    let actor = actor.into();
     // Heads bound this aggregation to one decision per reviewer. Historical
     // retries and comments cannot increase the count or restore old decisions.
     SqlStatement {
         sql: format!(
             "SELECT p.version, p.state, p.draft, p.source_ref, s.oid, s.version, p.base_ref, b.oid, b.version, coalesce(q.version,0), coalesce(q.enabled = 1 AND q.require_pull_request = 1,0), CASE WHEN q.enabled = 1 THEN q.required_approvals ELSE 0 END, (SELECT count(*) FROM pull_review_heads h JOIN pull_reviews r ON r.number = h.review_number WHERE h.pull_number = p.number AND r.kind = 'approve' AND ({APPLICABLE})), EXISTS (SELECT 1 FROM pull_review_heads h JOIN pull_reviews r ON r.number = h.review_number WHERE h.pull_number = p.number AND r.kind = 'request_changes' AND ({APPLICABLE})), ({WRITE}) FROM {JOINS} LEFT JOIN branch_rules q ON q.reference = p.base_ref WHERE p.number = ?2 AND ({ACCESS})"
         ),
-        parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
+        parameters: vec![actor.parameter(), SqlValue::Integer(number)],
     }
 }
 pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<ReviewState>> {

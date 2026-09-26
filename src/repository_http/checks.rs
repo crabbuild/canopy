@@ -121,7 +121,7 @@ pub(super) async fn contexts(
     Query(cursor): Query<Cursor>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -134,7 +134,7 @@ pub(super) async fn contexts(
     }
     match route
         .repository
-        .check_contexts(&actor.account, cursor.after.as_deref())
+        .check_contexts(actor.identity(), cursor.after.as_deref())
         .await
     {
         Ok(result) => match result.output {
@@ -203,7 +203,7 @@ pub(super) async fn commit(
     Query(cursor): Query<Cursor>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -219,7 +219,7 @@ pub(super) async fn commit(
     }
     match route
         .repository
-        .commit_checks(&actor.account, oid, cursor.after.as_deref())
+        .commit_checks(actor.identity(), oid, cursor.after.as_deref())
         .await
     {
         Ok(result) => match result.output {
@@ -244,14 +244,14 @@ pub(super) async fn read(
     Path((name, id)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
     let Some(id) = uuid(&id) else {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid check UUID");
     };
-    match route.repository.check_run(&actor.account, id).await {
+    match route.repository.check_run(actor.identity(), id).await {
         Ok(result) => match result.output {
             Some(run) if (state.manager.ready)() => json_response(
                 StatusCode::OK,

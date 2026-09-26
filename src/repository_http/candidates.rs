@@ -21,7 +21,7 @@ pub(super) async fn read(
     Path((name, number, id)): Path<(String, i64, String)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -37,7 +37,7 @@ pub(super) async fn read(
     }
     match route
         .repository
-        .merge_candidate(&actor.account, number, &id)
+        .merge_candidate(actor.identity(), number, &id)
         .await
     {
         Ok(result) if (state.manager.ready)() => match result.output {

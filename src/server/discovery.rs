@@ -1,16 +1,45 @@
 use super::*;
-use crate::{DefaultBranch, directory::REPOSITORY_PAGE_SIZE};
+use crate::{
+    DefaultBranch, ReadIdentity, RepositoryCell, RepositoryVisibility, Visibility,
+    directory::REPOSITORY_PAGE_SIZE,
+};
 
 pub(crate) struct RepositoryDetails {
     pub entry: RepositoryEntry,
     pub role: TokenScope,
     pub head: DefaultBranch,
+    pub visibility: RepositoryVisibility,
 }
 
 impl RepositoryManager {
+    pub(crate) async fn set_visibility(
+        &self,
+        repository: &RepositoryCell,
+        actor: &str,
+        generation: i64,
+        visibility: Visibility,
+    ) -> Result<bool, ServerError> {
+        // Publish the discovery hint first. Failed/stale visibility writes leave
+        // only an invisible candidate, and later privacy changes cannot race a
+        // deletion of a newer public listing. Every listing rechecks Cell access.
+        if visibility == Visibility::Public
+            && !self
+                .directory
+                .remember_public(mutation_identity()?, actor, repository.repository_id())
+                .await?
+                .output
+        {
+            return Ok(false);
+        }
+        Ok(repository
+            .set_visibility(mutation_identity()?, actor, generation, visibility)
+            .await?
+            .output)
+    }
+
     pub(crate) async fn inspect(
         self: &Arc<Self>,
-        actor: &str,
+        actor: ReadIdentity<'_>,
         name: &str,
     ) -> Result<Option<RepositoryDetails>, ServerError> {
         let Some(entry) = self
@@ -26,12 +55,18 @@ impl RepositoryManager {
             return Ok(None);
         };
         let head = route.repository.default_branch(None).await?.output;
-        Ok(Some(RepositoryDetails { entry, role, head }))
+        let visibility = route.repository.visibility().await?.output;
+        Ok(Some(RepositoryDetails {
+            entry,
+            role,
+            head,
+            visibility,
+        }))
     }
 
     pub(crate) async fn list(
         self: &Arc<Self>,
-        actor: &str,
+        actor: ReadIdentity<'_>,
         after: Option<[u8; 16]>,
     ) -> Result<(Vec<RepositoryEntry>, Option<String>), ServerError> {
         let candidates = self.directory.list_candidates(actor, after).await?.output;
@@ -41,7 +76,7 @@ impl RepositoryManager {
         let mut scanned = None;
         let mut entries = Vec::new();
         for entry in candidates {
-            if entry.owner == actor {
+            if matches!(actor, ReadIdentity::Account(account) if entry.owner == account) {
                 scanned = Some(entry.repository_id);
                 entries.push(entry);
                 continue;

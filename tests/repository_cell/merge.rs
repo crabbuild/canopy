@@ -124,7 +124,7 @@ pub async fn verify(
     // The injected duplicate parent record is removed after proving rollback.
     let injected = uuid::Uuid::new_v4().into_bytes();
     sql.batch(identity()?,SqlBatch {statements:vec![SqlStatement {
-        sql:"INSERT INTO pull_merges (id,binding,pull_number,oid,merged_ms) VALUES (?1,?2,?3,?4,0)".into(),parameters:vec![SqlValue::Blob(injected.to_vec()),SqlValue::Blob(vec![0;32]),SqlValue::Integer(number),SqlValue::Blob(base.to_vec())],
+        sql:"INSERT INTO pull_merges (id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version) VALUES (?1,?2,?3,?4,0,1,?5,1,?4,1)".into(),parameters:vec![SqlValue::Blob(injected.to_vec()),SqlValue::Blob(vec![0;32]),SqlValue::Integer(number),SqlValue::Blob(base.to_vec()),SqlValue::Blob(source.to_vec())],
     }]}).await?;
     let before = repo.ref_state(base_ref, None).await?.output;
     let generation = repo.refs_page("", None).await?.output.generation;

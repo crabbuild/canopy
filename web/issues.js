@@ -116,7 +116,7 @@ const issuesView = (() => {
         // confirmed post so it is visible even beyond the first comment page.
         navigate({ ...current, after: String(result.number - 1) }); notice("Comment added.");
       } }));
-    else panel.append(element("p", "Your token allows reading. Connect with a write-scoped token to join the discussion.", "hint"));
+    else panel.append(element("p", "Connect with a write-scoped token to join the discussion.", "hint"));
     return panel;
   }
 

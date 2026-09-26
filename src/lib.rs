@@ -12,6 +12,8 @@ use cellule_runtime::{
 use sha1::{Digest as _, Sha1};
 
 mod access;
+mod visibility;
+pub use visibility::{RepositoryVisibility, Visibility};
 mod ancestry;
 pub mod branch_rules;
 pub mod checks;
@@ -40,7 +42,7 @@ pub mod server;
 mod transfer;
 mod web;
 
-pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator};
+pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
 pub use object_chunks::{MAX_SQLITE_OBJECT_BYTES, ObjectStageError};
@@ -182,6 +184,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
+                source.update(include_bytes!("visibility.rs"));
                 source.update(include_bytes!("checks.rs"));
                 source.update(include_bytes!("checks/mutations.rs"));
                 source.update(include_bytes!("pulls.rs"));

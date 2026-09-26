@@ -1,4 +1,4 @@
-//! HTTP ingress for private Git repositories.
+//! HTTP ingress for Git repositories with current Cell access checks.
 
 use std::{net::IpAddr, sync::Arc};
 
@@ -15,17 +15,39 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
+    ReadIdentity,
     directory::{Principal, TokenScope, validate_component},
     git_gateway::{GatewayError, GitGateway},
     git_http::GitHttpRequest,
     lfs::{LfsError, MAX_LFS_BYTES},
 };
 
+/// Identity established by the outer HTTP authentication boundary.
+#[derive(Clone)]
+pub enum Viewer {
+    Anonymous,
+    Authenticated(Principal),
+}
+impl Viewer {
+    pub(crate) fn identity(&self) -> ReadIdentity<'_> {
+        match self {
+            Self::Anonymous => ReadIdentity::Anonymous,
+            Self::Authenticated(principal) => ReadIdentity::Account(&principal.account),
+        }
+    }
+    pub(crate) fn principal(&self) -> Option<&Principal> {
+        match self {
+            Self::Anonymous => None,
+            Self::Authenticated(principal) => Some(principal),
+        }
+    }
+}
+
 const MAX_LFS_BATCH_BYTES: usize = 1024 * 1024;
 const MAX_LFS_BATCH_OBJECTS: usize = 100;
 const LFS_JSON: &str = "application/vnd.git-lfs+json";
 
-/// Git and LFS transport for one private Repository Cell.
+/// Git and LFS transport for one Repository Cell.
 pub struct GitHttpApi {
     gateway: Arc<GitGateway>,
     repository_path: String,
@@ -61,20 +83,32 @@ impl GitHttpApi {
             .route(&lfs_batch_path, post(lfs_batch))
             .route(&lfs_object_path, get(lfs_get).put(lfs_put))
             .with_state(self)
+            .layer(axum::middleware::map_response(
+                |mut response: Response<Body>| async {
+                    // Visibility is mutable; shared HTTP caches must not serve bytes
+                    // after a fresh request would be denied by the Repository Cell.
+                    response
+                        .headers_mut()
+                        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                    response
+                },
+            ))
     }
 
-    async fn permission(
-        &self,
-        principal: &Principal,
-        required: TokenScope,
-    ) -> Result<(), StatusCode> {
-        if principal.scope < required {
-            return Err(StatusCode::FORBIDDEN);
+    async fn permission(&self, viewer: &Viewer, required: TokenScope) -> Result<(), StatusCode> {
+        match viewer.principal() {
+            Some(principal) if principal.scope < required => return Err(StatusCode::FORBIDDEN),
+            None if required > TokenScope::Read => return Err(StatusCode::UNAUTHORIZED),
+            _ => {}
         }
-        match self.gateway.access_level(&principal.account).await {
+        match self.gateway.access_level(viewer.identity()).await {
             Ok(Some(role)) if role >= required => Ok(()),
             Ok(Some(_)) => Err(StatusCode::FORBIDDEN),
-            Ok(None) => Err(StatusCode::NOT_FOUND),
+            Ok(None) => Err(if viewer.principal().is_none() {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::NOT_FOUND
+            }),
             Err(error) => {
                 tracing::error!(error = %error, "repository access check failed");
                 Err(StatusCode::SERVICE_UNAVAILABLE)
@@ -145,15 +179,14 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
     if !(api.ready)() {
         return unavailable();
     }
-    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+    let Some(principal) = request.extensions().get::<Viewer>().cloned() else {
         return lfs_unauthorized();
     };
-    let Some(authorization) = request.headers().get(header::AUTHORIZATION) else {
-        return lfs_unauthorized();
-    };
-    let Ok(authorization) = authorization.to_str().map(str::to_owned) else {
-        return lfs_unauthorized();
-    };
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let body = match lfs_body(request.into_body(), MAX_LFS_BATCH_BYTES).await {
         Ok(body) => body,
         Err(StatusCode::REQUEST_TIMEOUT) => {
@@ -224,6 +257,8 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
             ));
             continue;
         }
+        // LFS uses this flag to suppress credential discovery. Public downloads
+        // are already authorized and must not prompt for an account credential.
         let mut response = json!({
             "oid": requested.oid,
             "size": requested.size,
@@ -250,10 +285,10 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
                 requested.oid
             );
             response["actions"] = json!({});
-            response["actions"][action] = json!({
-                "href": href,
-                "header": {"Authorization": authorization}
-            });
+            response["actions"][action] = json!({"href": href});
+            if let Some(authorization) = &authorization {
+                response["actions"][action]["header"] = json!({"Authorization": authorization});
+            }
         }
         objects.push(response);
     }
@@ -274,7 +309,7 @@ async fn lfs_get(
     if !(api.ready)() {
         return unavailable();
     }
-    let Some(principal) = request.extensions().get::<Principal>() else {
+    let Some(principal) = request.extensions().get::<Viewer>() else {
         return lfs_unauthorized();
     };
     if let Err(status) = api.permission(principal, TokenScope::Read).await {
@@ -309,7 +344,7 @@ async fn lfs_put(
     if !(api.ready)() {
         return unavailable();
     }
-    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+    let Some(principal) = request.extensions().get::<Viewer>().cloned() else {
         return lfs_unauthorized();
     };
     if let Err(status) = api.permission(&principal, TokenScope::Write).await {
@@ -324,6 +359,9 @@ async fn lfs_put(
             return plain(StatusCode::REQUEST_TIMEOUT, "LFS request timed out");
         }
         Err(status) => return plain(status, "LFS object is too large"),
+    };
+    let Some(principal) = principal.principal() else {
+        return lfs_unauthorized();
     };
     match api.gateway.lfs().put(&principal.account, oid, &body).await {
         Ok(_) if (api.ready)() => plain(StatusCode::OK, ""),
@@ -387,7 +425,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     if !(api.ready)() {
         return unavailable();
     }
-    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+    let Some(principal) = request.extensions().get::<Viewer>().cloned() else {
         return unauthorized();
     };
     let method = request.method().as_str().to_owned();
@@ -400,7 +438,11 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         return plain(StatusCode::NOT_FOUND, "Git service does not exist");
     };
     if let Err(status) = api.permission(&principal, required).await {
-        return plain(status, "Repository access denied");
+        return if status == StatusCode::UNAUTHORIZED {
+            unauthorized()
+        } else {
+            plain(status, "Repository access denied")
+        };
     }
     let content_type = request
         .headers()
@@ -472,9 +514,9 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
                 gzip,
                 protocol_v2,
                 body: request.into_body(),
-                authenticated: true,
+                authenticated: principal.principal().is_some(),
             },
-            &principal.account,
+            principal.identity(),
             push_id,
             admission,
         )

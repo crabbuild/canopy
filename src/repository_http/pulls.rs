@@ -127,7 +127,7 @@ pub(super) async fn list(
     Query(query): Query<ListQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -136,7 +136,7 @@ pub(super) async fn list(
     }
     match route
         .repository
-        .pulls(&actor.account, query.after, query.state)
+        .pulls(actor.identity(), query.after, query.state)
         .await
     {
         Ok(result) => match result.output {
@@ -160,11 +160,11 @@ pub(super) async fn read(
     Path((name, number)): Path<(String, i64)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
-    match route.repository.pull(&actor.account, number).await {
+    match route.repository.pull(actor.identity(), number).await {
         Ok(result) => match result.output {
             Some(pull) if (state.manager.ready)() => json_response(
                 StatusCode::OK,
@@ -182,7 +182,7 @@ pub(super) async fn reviews(
     Query(query): Query<ReviewQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -191,7 +191,7 @@ pub(super) async fn reviews(
     }
     match route
         .repository
-        .pull_reviews(&actor.account, number, query.after)
+        .pull_reviews(actor.identity(), number, query.after)
         .await
     {
         Ok(result) => match result.output {

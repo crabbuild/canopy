@@ -1,5 +1,7 @@
 //! Durable bridge from Git smart HTTP to one repository's SQLite Cell.
 
+use crate::ReadIdentity;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
@@ -115,7 +117,10 @@ impl GitGateway {
         &self.lfs
     }
 
-    pub async fn access_level(&self, account: &str) -> Result<Option<TokenScope>, GatewayError> {
+    pub async fn access_level<'a>(
+        &self,
+        account: impl Into<ReadIdentity<'a>>,
+    ) -> Result<Option<TokenScope>, GatewayError> {
         Ok(self
             .repository
             .access_level(account, None)
@@ -125,18 +130,25 @@ impl GitGateway {
     }
 
     /// Waits for Cell publication before returning any successful receive-pack body.
-    pub async fn handle(
+    pub async fn handle<'a>(
         &self,
         request: GitHttpRequest<Body>,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         push_id: Option<[u8; 16]>,
         admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<GitHttpResponse<Body>, GatewayError> {
-        if !request.authenticated {
+        let actor = actor.into();
+        if self.access_level(actor).await?.is_none() {
             return Err(GatewayError::Unauthorized);
         }
         let is_push = request.method == "POST" && request.path_info == "/repo.git/git-receive-pack";
         if is_push {
+            let ReadIdentity::Account(actor) = actor else {
+                return Err(GatewayError::Unauthorized);
+            };
+            if !request.authenticated {
+                return Err(GatewayError::Unauthorized);
+            }
             let _push = self.push.lock().await;
             let request = self.receive(request, MAX_PUSH_BYTES, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());

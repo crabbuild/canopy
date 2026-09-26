@@ -1,4 +1,5 @@
 use super::*;
+use crate::ReadIdentity;
 use crate::refs::{REF_PAGE_SIZE, RefReadError, valid_ref_name};
 
 const PAGE: usize = 32;
@@ -48,7 +49,8 @@ pub(crate) struct History {
 }
 
 impl Reader {
-    async fn member(&self, actor: &str) -> Result<(), ReadError> {
+    async fn member<'a>(&self, actor: impl Into<ReadIdentity<'a>>) -> Result<(), ReadError> {
+        let actor = actor.into();
         self.repository
             .access_level(actor, None)
             .await?
@@ -56,12 +58,13 @@ impl Reader {
             .ok_or(ReadError::Missing)?;
         Ok(())
     }
-    pub(crate) async fn browser_refs(
+    pub(crate) async fn browser_refs<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         after: &str,
         generation: Option<i64>,
     ) -> Result<serde_json::Value, ReadError> {
+        let actor = actor.into();
         if (!after.is_empty() && (!valid_ref_name(after) || generation.is_none()))
             || generation.is_some_and(|n| n < 0)
         {
@@ -86,11 +89,12 @@ impl Reader {
             serde_json::json!({"generation":page.generation,"default_branch":page.default_branch,"entries":entries,"next_after":next_after}),
         )
     }
-    pub(crate) async fn browser_ref(
+    pub(crate) async fn browser_ref<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         reference: Option<&str>,
     ) -> Result<serde_json::Value, ReadError> {
+        let actor = actor.into();
         if reference.is_some_and(|name| !valid_ref_name(name)) {
             return Err(ReadError::Invalid);
         }
@@ -173,13 +177,14 @@ impl Reader {
         }
         Err(ReadError::TooLarge)
     }
-    pub(crate) async fn browser_tree(
+    pub(crate) async fn browser_tree<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         revision: &str,
         encoded_path: &str,
         after: Option<&str>,
     ) -> Result<Directory, ReadError> {
+        let actor = actor.into();
         self.member(actor).await?;
         let path = if encoded_path.is_empty() {
             Vec::new()
@@ -229,12 +234,13 @@ impl Reader {
             next_after,
         })
     }
-    pub(crate) async fn browser_file(
+    pub(crate) async fn browser_file<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         revision: &str,
         encoded_path: &str,
     ) -> Result<File, ReadError> {
+        let actor = actor.into();
         self.member(actor).await?;
         let path = path(encoded_path)?;
         let commit = self.commit(oid(revision)?).await?;
@@ -268,11 +274,12 @@ impl Reader {
             content_base64,
         })
     }
-    pub(crate) async fn browser_history(
+    pub(crate) async fn browser_history<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         revision: &str,
     ) -> Result<History, ReadError> {
+        let actor = actor.into();
         self.member(actor).await?;
         let mut target = Some(oid(revision)?);
         let mut commits = Vec::new();

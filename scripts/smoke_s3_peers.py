@@ -51,7 +51,7 @@ def proxy(upstream, certificate, key):
 
 
 def qualify(binary, directory, settings, processes):
-    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status
+    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status, api_get, verify_discovery
 
     ca, ca_key = directory / "peer-ca.pem", directory / "peer-ca-key.pem"
     certificate, key = directory / "peer-server.pem", directory / "peer-key.pem"
@@ -105,6 +105,15 @@ def qualify(binary, directory, settings, processes):
             oid = git("rev-parse", "HEAD", cwd=local)
             clone_and_verify(url, directory / f"{name}-live", oid, readme, lfs)
             expected.append((name, oid, readme, lfs))
+        public_name, public_oid, public_readme, public_lfs = expected[0]
+        visibility_path = f"/api/repositories/{public_name}/visibility"
+        current = api_get(base_b, visibility_path, "local-test-token")
+        assert api_status(base_b, visibility_path, "local-test-token", "PUT", {
+            "repository_id": current["repository_id"],
+            "expected_generation": current["generation"], "visibility": "public"}) == 200
+        verify_discovery(base_b, None, [public_name])
+        clone_and_verify(f"{base_b}/canopy/{public_name}.git", directory / "public-live",
+                         public_oid, public_readme, public_lfs, token=None)
         first.kill()
         first.wait(timeout=10)
         assert api_status(base_b, "/api/repositories", "local-test-token") == 503
@@ -112,6 +121,18 @@ def qualify(binary, directory, settings, processes):
         for name, oid, readme, lfs in expected:
             clone_and_verify(f"{base_b}/canopy/{name}.git", directory / f"{name}-takeover",
                              oid, readme, lfs)
+        verify_discovery(base_b, None, [public_name])
+        clone_and_verify(f"{base_b}/canopy/{public_name}.git", directory / "public-takeover",
+                         public_oid, public_readme, public_lfs, token=None)
+        current = api_get(base_b, visibility_path, "local-test-token")
+        assert api_status(base_b, visibility_path, "local-test-token", "PUT", {
+            "repository_id": current["repository_id"],
+            "expected_generation": current["generation"], "visibility": "private"}) == 200
+        verify_discovery(base_b, None, [])
+        assert api_status(base_b, f"/canopy/{public_name}.git/info/refs?service=git-upload-pack", None) == 401
+        assert api_status(base_b, f"/canopy/{public_name}.git/info/lfs/objects/batch", None,
+                          "POST", {"operation": "download", "objects": []}) == 401
+        print("PASS: anonymous Git/LFS and public discovery survive cross-node routing and SIGKILL; privatization revokes new reads", flush=True)
         second.send_signal(signal.SIGTERM)
         second.wait(timeout=30)
         assert second.returncode == 0

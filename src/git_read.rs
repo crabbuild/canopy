@@ -1,5 +1,7 @@
 //! Bounded repository browsing and PR comparison over verified Cell Git objects.
 
+use crate::ReadIdentity;
+
 pub(crate) mod browse;
 mod graph;
 pub(crate) mod patch;
@@ -129,12 +131,13 @@ impl Reader {
             entries: 0,
         }
     }
-    async fn authorize(
+    async fn authorize<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         target: &ComparisonTarget,
     ) -> Result<PullRevision, ReadError> {
+        let actor = actor.into();
         if matches!(target, ComparisonTarget::Review { number } | ComparisonTarget::Thread { number } if *number < 1)
         {
             return Err(ReadError::Invalid);
@@ -194,13 +197,14 @@ impl Reader {
         let after = self.commit_tree(source).await?;
         Ok((merge_base, before, after))
     }
-    pub(crate) async fn files(
+    pub(crate) async fn files<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         target: ComparisonTarget,
         after: Option<&str>,
     ) -> Result<Comparison, ReadError> {
+        let actor = actor.into();
         let cursor = after.map(path).transpose()?;
         let revision = self.authorize(actor, number, &target).await?;
         let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);
@@ -234,14 +238,15 @@ impl Reader {
             next_after,
         })
     }
-    pub(crate) async fn file(
+    pub(crate) async fn file<'a>(
         mut self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         target: ComparisonTarget,
         encoded_path: &str,
         side: Side,
     ) -> Result<FilePreview, ReadError> {
+        let actor = actor.into();
         let path = path(encoded_path)?;
         let revision = self.authorize(actor, number, &target).await?;
         let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);

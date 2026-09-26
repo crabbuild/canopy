@@ -1,5 +1,7 @@
 //! Repository-local pull requests and immutable reviews tied to live ref versions.
 
+use crate::ReadIdentity;
+
 pub mod candidates;
 pub mod merge;
 mod mutations;
@@ -21,7 +23,7 @@ use serde::{Deserialize, Serialize};
 type Invocation = InvocationError<Vec<SqlResultSet>>;
 pub const PULL_PAGE_SIZE: usize = 32;
 pub const REVIEW_PAGE_SIZE: usize = 16;
-const ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1)";
+use crate::access::READ_ACCESS as ACCESS;
 const WRITE: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1 AND role = 'write')";
 const JOINS: &str =
     "pull_requests p JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref";
@@ -183,17 +185,18 @@ pub(crate) fn valid_review(input: &NewReview<'_>) -> bool {
 
 impl RepositoryCell {
     /// Lists 32 pull summaries with coherent current branches; missing access returns None.
-    pub async fn pulls(
+    pub async fn pulls<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         after: i64,
         state: Option<PullState>,
     ) -> Result<Observed<Option<Vec<PullSummary>>>, Invocation> {
+        let actor = actor.into();
         if after < 0 {
             return Err(invalid("invalid pull cursor"));
         }
-        validate_component(actor).map_err(Invocation::NotStarted)?;
-        let mut parameters = vec![SqlValue::Text(actor.into()), SqlValue::Integer(after)];
+        actor.validate().map_err(Invocation::NotStarted)?;
+        let mut parameters = vec![actor.parameter(), SqlValue::Integer(after)];
         let filter = if let Some(state) = state {
             parameters.push(SqlValue::Text(state.as_str().into()));
             "AND p.state = ?3"
@@ -201,7 +204,7 @@ impl RepositoryCell {
             ""
         };
         let result = self.pull_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![SqlValue::Text(actor.into())] },
+            SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![actor.parameter()] },
             SqlStatement { sql: format!("SELECT {COLUMNS} FROM {JOINS} WHERE p.number > ?2 {filter} AND ({ACCESS}) ORDER BY p.number LIMIT {PULL_PAGE_SIZE}"), parameters },
         ).await?;
         let output = result
@@ -215,15 +218,16 @@ impl RepositoryCell {
         })
     }
     /// Reads a pull, original tips and live ref state under current read membership.
-    pub async fn pull(
+    pub async fn pull<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
     ) -> Result<Observed<Option<PullRequest>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
             sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid, merged.id, merged.pull_number, merged.oid, merged.merged_ms, merged.pull_version, merged.source_oid, merged.source_version, merged.base_oid, merged.base_version FROM {JOINS} LEFT JOIN pull_merges merged ON merged.pull_number = p.number WHERE p.number = ?2 AND ({ACCESS})"),
-            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
+            parameters: vec![actor.parameter(), SqlValue::Integer(number)],
         }] }).await?;
         let rows = result
             .output
@@ -268,19 +272,20 @@ impl RepositoryCell {
         })
     }
     /// Reads 16 immutable reviews with current applicability; missing pull/access returns None.
-    pub async fn pull_reviews(
+    pub async fn pull_reviews<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         after: i64,
     ) -> Result<Observed<Option<Vec<PullReview>>>, Invocation> {
+        let actor = actor.into();
         if after < 0 {
             return Err(invalid("invalid review cursor"));
         }
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self.pull_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)] },
-            SqlStatement { sql: format!("SELECT r.number, r.id, r.reviewer, r.kind, r.body, r.pull_version, r.source_oid, r.source_version, r.base_oid, r.base_version, coalesce(({APPLICABLE}), 0), r.created_ms FROM pull_reviews r JOIN pull_requests p ON p.number = r.pull_number JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref WHERE r.pull_number = ?2 AND r.number > ?3 AND ({ACCESS}) ORDER BY r.number LIMIT {REVIEW_PAGE_SIZE}"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number), SqlValue::Integer(after)] },
+            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![actor.parameter(), SqlValue::Integer(number)] },
+            SqlStatement { sql: format!("SELECT r.number, r.id, r.reviewer, r.kind, r.body, r.pull_version, r.source_oid, r.source_version, r.base_oid, r.base_version, coalesce(({APPLICABLE}), 0), r.created_ms FROM pull_reviews r JOIN pull_requests p ON p.number = r.pull_number JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref WHERE r.pull_number = ?2 AND r.number > ?3 AND ({ACCESS}) ORDER BY r.number LIMIT {REVIEW_PAGE_SIZE}"), parameters: vec![actor.parameter(), SqlValue::Integer(number), SqlValue::Integer(after)] },
         ).await?;
         let output = result
             .output
@@ -292,16 +297,17 @@ impl RepositoryCell {
             receipt: result.receipt,
         })
     }
-    pub(crate) async fn reviewed_revision(
+    pub(crate) async fn reviewed_revision<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         review: i64,
     ) -> Result<Option<PullRevision>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
             sql: format!("SELECT pull_version, source_oid, source_version, base_oid, base_version FROM pull_reviews WHERE pull_number = ?2 AND number = ?3 AND ({ACCESS})"),
-            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number), SqlValue::Integer(review)],
+            parameters: vec![actor.parameter(), SqlValue::Integer(number), SqlValue::Integer(review)],
         }] }).await?;
         result
             .output

@@ -27,11 +27,34 @@ gateway. The Directory Cell has one owner, with on-demand recovery after release
 or lease expiry. Automatic fleet balancing and production capacity qualification
 remain pending.
 
+### Public repositories
+
+Repositories start private. An owner with an admin-scoped token can use **Change
+visibility** in the repository browser, or `GET` then
+`PUT /api/repositories/<name>/visibility`. The PUT body contains `repository_id`,
+`expected_generation` from the GET, and `visibility` (`private` or `public`).
+A stale generation returns 409; after an uncertain response, read current state
+before retrying. Visibility shares the repository ref generation, so concurrent
+pushes or default-branch edits can require a refresh too.
+
+Public repositories allow anonymous discovery, stock Git clone/fetch, LFS
+batch/download, code browsing, issues, pull requests, reviews and check reads.
+Authenticated readers with write-scoped tokens can participate in discussions;
+Git/LFS writes, approvals and merges still require explicit repository write
+access. Anonymous mutations are denied. Supplied invalid credentials return 401,
+even on public repositories. Collaborator rosters remain owner-only.
+
+Making a repository private blocks newly authorized anonymous reads. Requests
+already admitted can finish, and downloaded copies cannot be recalled. Successful
+data responses and Git/LFS responses use `Cache-Control: no-store`. Public discovery candidates are retained and
+rechecked against the Repository Cell on every listing; a stale index entry
+never grants access.
+
 ### Repository browser
 
-Open `/` on the Canopy HTTP listener and connect using your existing access
-token. The embedded interface lists authorized repositories, creates repositories
-with an owner token, selects branches/tags, browses directories, previews or
+Open `/` on the Canopy HTTP listener to browse public repositories or connect
+using your existing access token. The embedded interface lists authorized
+repositories, creates repositories with an owner token, selects branches/tags, browses directories, previews or
 downloads small files, and follows first-parent commit history. Merge commits
 link to each parent. No separate frontend build or asset service is required.
 The token remains in tab memory and clears on disconnect or reload. Use HTTPS
@@ -68,14 +91,15 @@ paths, pagination, limits and authorization behavior.
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`
-lists ready repositories that the authenticated account can access. Pass the
-returned `next_cursor` as `after` until it is null. Pages inspect at most 32
+lists ready repositories that the viewer can access, including anonymous public
+reads. Pass the returned `next_cursor` as `after` until it is null. Pages inspect at most 32
 UUID-ordered candidates and can be short or empty with a non-null cursor,
 including when access was revoked or Cell movement capacity runs out.
 A page that cannot make progress returns 503 with `Retry-After: 1`.
 `GET /api/repositories/<name>` returns the UUID, clone URL, repository role,
-default branch and ref generation, plus `viewer.account` and `viewer.token_scope`
-for the authenticated request; missing or inaccessible names return 404.
+default branch, ref generation and visibility, plus `viewer.account` and
+`viewer.token_scope` for an authenticated request (`viewer: null` anonymously).
+Missing or inaccessible names return 404.
 `PATCH /api/repositories/<old_name>` with
 `{"name":"new_name","repository_id":"<returned UUID>"}` atomically renames a ready
 repository. The UUID is a precondition and remains unchanged; a retry with
@@ -131,8 +155,8 @@ Issues and comments live in the same Repository Cell as Git and its ACL:
 | GET / POST | `/api/repositories/<name>/issues/<number>/comments` | List / add comments |
 | PUT | `/api/repositories/<name>/issues/<number>/comments/<comment>` | Replace comment text |
 
-Reads require repository access and a read-scoped token. Mutations require a
-write-scoped token. Repository readers can create issues and comments; authors
+Reads require repository read access, including anonymous public access. Mutations
+require a write-scoped token. Repository readers can create issues and comments; authors
 and repository writers can edit. Revocation is checked again in the Cell write.
 
 All mutation bodies include `repository_id`, obtained from repository discovery.
@@ -209,7 +233,7 @@ grant does not. Lists return up to 32 pull summaries or 16 reviews with numeric
 `after` / `next_after`; pulls support an optional `state` filter. Text limits match
 issues: 256-byte titles, 16 KiB bodies; review comments must be nonblank.
 
-Comparison POSTs require a read-scoped token, current repository membership,
+Comparison POSTs are read operations and require current repository read access,
 `repository_id`, a tagged `target`, and one of the queries below. Use
 `{"kind":"current","revision":<the revision object above>}` for a live view,
 `{"kind":"review","number":<review number>}` for a saved review, or
@@ -274,7 +298,7 @@ Creation accepts current, review or merged targets. The side/line must occur in 
 text hunk returned by the patch query, including context lines. The server verifies
 the blob and coordinates; clients cannot supply an anchor OID. A thread keeps its
 original revision, merge base, byte path, side, line and blob identity.
-Current members with write-scoped tokens may start/reply; replies use a new UUID
+Current readers with write-scoped tokens may start/reply; replies use a new UUID
 and `body`. Exact retries return the original number. Discussion text and replies
 are immutable; corrections can be added as replies. Lists page at 16 records with
 numeric `after`/`next_after`.
@@ -662,6 +686,7 @@ writes. Page time includes inline integrity verification; cache time includes
 worker scheduling, OID verification, compression and admitted disk writes.
 Use release builds for performance measurements.
 
-The chunk, default-branch, repository-discovery, token-metadata, issue and check layouts
+The chunk, default-branch, repository-discovery, token-metadata, collaboration and visibility layouts
 change the unreleased schema; use a fresh development storage prefix when moving
-from older builds.
+from older builds. No upgrade migration or mixed-build rolling upgrade is supported yet.
+Do not reuse an existing development prefix with this changed initialization schema.

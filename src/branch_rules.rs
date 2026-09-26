@@ -1,5 +1,7 @@
 //! Exact-branch policy enforced in the authoritative ref transaction.
 
+use crate::ReadIdentity;
+
 pub(crate) mod command;
 
 use crate::{
@@ -14,7 +16,7 @@ use cellule_runtime::{
 use serde::{Deserialize, Serialize};
 
 pub const RULE_PAGE_SIZE: usize = 32;
-const ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1)";
+use crate::access::READ_ACCESS as ACCESS;
 
 /// Versioned policy for one exact branch; disabled records retain their versions.
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -92,22 +94,23 @@ impl RepositoryCell {
     }
 
     /// Reads up to 32 exact-branch rules, including disabled records, for a member.
-    pub async fn branch_rules(
+    pub async fn branch_rules<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         after: Option<&str>,
     ) -> Result<Observed<Option<Vec<BranchRule>>>, InvocationError<Vec<SqlResultSet>>> {
-        validate_component(actor).map_err(InvocationError::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(InvocationError::NotStarted)?;
         if after.is_some_and(|name| !valid_default_branch(name)) {
             return Err(InvocationError::NotStarted(Error::Command(
                 "invalid branch rule cursor",
             )));
         }
         let result = self.sql.query(None, SqlBatch { statements: vec![
-            SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![SqlValue::Text(actor.into())] },
+            SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![actor.parameter()] },
             SqlStatement {
                 sql: format!("SELECT b.reference, b.version, b.enabled, b.deny_deletions, b.fast_forward, coalesce((SELECT group_concat(context, ',') FROM (SELECT context FROM branch_required_checks WHERE reference = b.reference ORDER BY context)), ''), b.require_pull_request, b.required_approvals FROM branch_rules b WHERE b.reference > ?2 AND ({ACCESS}) ORDER BY b.reference LIMIT {RULE_PAGE_SIZE}"),
-                parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(after.unwrap_or("").into())],
+                parameters: vec![actor.parameter(), SqlValue::Text(after.unwrap_or("").into())],
             },
         ] }).await?;
         let allowed = result

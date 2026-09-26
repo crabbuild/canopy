@@ -29,3 +29,7 @@ CREATE TABLE repository_discovery (
     repository_id BLOB NOT NULL REFERENCES repositories(repository_id),
     PRIMARY KEY(account, repository_id)
 ) WITHOUT ROWID;
+
+CREATE TABLE public_repository_candidates (
+    repository_id BLOB PRIMARY KEY REFERENCES repositories(repository_id)
+) WITHOUT ROWID;

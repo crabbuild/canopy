@@ -1,5 +1,7 @@
 //! Durable native merge candidates, separate from branch publication.
 
+use crate::ReadIdentity;
+
 pub(crate) mod command;
 use super::merge::{MergeStrategy, oid, policy_state, policy_statement};
 use super::*;
@@ -89,17 +91,18 @@ pub(crate) fn valid_result(result: &CandidateResult) -> bool {
 
 impl RepositoryCell {
     /// Reads an immutable candidate intent and its durable preparation result for a member.
-    pub async fn merge_candidate(
+    pub async fn merge_candidate<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         id: &str,
     ) -> Result<Observed<Option<MergeCandidate>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let id = uuid::Uuid::parse_str(id).map_err(|_| invalid("invalid candidate UUID"))?;
         let result=self.sql.query(None,SqlBatch {statements:vec![SqlStatement {
             sql:format!("SELECT binding, pull_number, actor, request, created_ms, result FROM merge_candidates WHERE id = ?3 AND pull_number = ?2 AND ({ACCESS})"),
-            parameters:vec![SqlValue::Text(actor.into()),SqlValue::Integer(number),SqlValue::Blob(id.as_bytes().to_vec())],
+            parameters:vec![actor.parameter(),SqlValue::Integer(number),SqlValue::Blob(id.as_bytes().to_vec())],
         }]}).await?;
         Ok(Observed {
             output: decode(&result.output)

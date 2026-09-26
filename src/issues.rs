@@ -1,5 +1,7 @@
 //! Repository-local issues and discussion, stored with the repository ACL.
 
+use crate::ReadIdentity;
+
 mod mutations;
 
 use cellule_runtime::{
@@ -8,13 +10,13 @@ use cellule_runtime::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{RepositoryCell, directory::validate_component, validate_repository_id};
+use crate::{RepositoryCell, validate_repository_id};
 
 pub const ISSUE_PAGE_SIZE: usize = 32;
 pub const COMMENT_PAGE_SIZE: usize = 16;
 pub const ISSUE_BODY_LIMIT: usize = 16 * 1024;
 const TITLE_LIMIT: usize = 256;
-const READ_ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1)";
+use crate::access::READ_ACCESS;
 const WRITE_ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1 AND role = 'write')";
 const SUMMARY_COLUMNS: &str = "number, id, author, title, state, version, created_ms, updated_ms";
 
@@ -117,21 +119,25 @@ pub(crate) fn valid_body(body: &str) -> bool {
     body.len() <= ISSUE_BODY_LIMIT && !body.contains('\0')
 }
 
-fn actor_parameters(actor: &str) -> cellule_runtime::Result<Vec<SqlValue>> {
-    validate_component(actor)?;
-    Ok(vec![SqlValue::Text(actor.into())])
+fn actor_parameters<'a>(
+    actor: impl Into<ReadIdentity<'a>>,
+) -> cellule_runtime::Result<Vec<SqlValue>> {
+    let actor = actor.into();
+    actor.validate()?;
+    Ok(vec![actor.parameter()])
 }
 
 impl RepositoryCell {
     /// Lists up to 32 issue summaries after a number, optionally filtered by state.
     ///
     /// Returns `None` without repository access. Pages are independent observations.
-    pub async fn issues(
+    pub async fn issues<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         after: i64,
         state: Option<IssueState>,
     ) -> Result<Observed<Option<Vec<IssueSummary>>>, Invocation> {
+        let actor = actor.into();
         if after < 0 {
             return Err(Invocation::NotStarted(Error::Command(
                 "invalid issue cursor",
@@ -168,11 +174,12 @@ impl RepositoryCell {
     /// Reads an issue only while the actor has repository access.
     ///
     /// Missing issues and missing access both return `None`.
-    pub async fn issue(
+    pub async fn issue<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
     ) -> Result<Observed<Option<Issue>>, Invocation> {
+        let actor = actor.into();
         let mut parameters = actor_parameters(actor).map_err(Invocation::NotStarted)?;
         parameters.push(SqlValue::Integer(number));
         let observed = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
@@ -208,12 +215,13 @@ impl RepositoryCell {
     /// Lists up to 16 comments on an accessible issue, after a comment number.
     ///
     /// Returns `None` for a missing issue or missing repository access.
-    pub async fn issue_comments(
+    pub async fn issue_comments<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         after: i64,
     ) -> Result<Observed<Option<Vec<IssueComment>>>, Invocation> {
+        let actor = actor.into();
         if after < 0 {
             return Err(Invocation::NotStarted(Error::Command(
                 "invalid comment cursor",

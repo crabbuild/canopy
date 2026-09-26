@@ -75,8 +75,8 @@ ref changes and HEAD ABA invalidate the precondition. The SDK's mutation identit
 replays its recorded result; the HTTP API uses an explicit generation and requires
 a fresh GET after an ambiguous reply. It does not silently retry updates.
 
-`GET /api/repositories/<name>/default-branch` requires a read-scoped token and
-repository access. It returns `repository_id`, `reference` and `generation`.
+`GET /api/repositories/<name>/default-branch` requires repository read access,
+including anonymous public access. It returns `repository_id`, `reference` and `generation`.
 `PUT` requires an admin-scoped token and repository ownership, with
 `repository_id`, `reference` and `expected_generation` in its JSON body. The UUID
 prevents name reuse from retargeting a stale administrative write. Malformed
@@ -231,8 +231,8 @@ open. Owned repositories use the immutable Directory owner field without loading
 each Cell. Candidate discovery itself is not authorization, and the SDK names
 its primitive `list_candidates` to preserve that distinction.
 
-`GET /api/repositories` requires an authenticated read-scoped token and checks
-at most 32 candidates per page. Results use UUID order, so rename preserves
+`GET /api/repositories` accepts anonymous readers or an authenticated read-scoped
+token and checks at most 32 candidates per page. Results use UUID order, so rename preserves
 pagination position. The `after` parameter is a returned UUID cursor; arbitrary
 cursors never bypass the caller's account filter or Cell ACL. Missing and
 revoked candidates contribute no entries. A page may be empty while
@@ -244,8 +244,8 @@ Cell movement capacity can stop a cold scan early. After any progress, the
 manager returns the authorized entries already read and a cursor for the last
 candidate checked. With no progress it returns 503 and `Retry-After: 1`. Other
 storage/runtime failures return an error rather than an apparently complete
-listing. Directory queries use owner/UUID and account/UUID indexes; they do not
-enumerate other accounts' repositories. Pages are not a cross-Cell snapshot:
+listing. Directory queries merge owner/UUID, account/UUID and public-candidate
+UUID ranges, deduplicating repositories that match more than one range. Pages are not a cross-Cell snapshot:
 new grants or repositories behind a cursor require a fresh scan, and each ACL
 is observed when that candidate is checked. Cold lists still restore candidate
 Cells, so the 32-candidate bound is not a production latency guarantee.
@@ -253,7 +253,7 @@ Cells, so the 32-candidate bound is not a production latency guarantee.
 `GET /api/repositories/<name>` first checks for a Directory candidate (or owner),
 then the current Cell ACL before returning metadata. Missing and unauthorized
 names return 404. It returns `owner`, `name`, `repository_id`, `clone_url`, `role`,
-`default_branch` and `ref_generation`. `role` describes repository membership;
+`default_branch`, `ref_generation` and `visibility`. `role` describes effective repository access;
 token scope remains an independent restriction. Repository access is checked at
 read admission, as for existing Git/LFS reads. Rename and ACL/default-branch
 changes across Cells are not presented as one atomic snapshot.
@@ -753,12 +753,12 @@ body and `open`/`closed` state; comment rows hold body. Comments do not advance 
 parent issue's version or edit timestamp. Closed issues still accept comments.
 No application state is written to the disposable Git cache.
 
-All issue reads check current Repository Cell membership. Creation permits any
+All issue reads check current Repository Cell read access. Creation permits any
 current repository reader; edits permit the record author or a repository writer,
-provided that actor still has repository access. HTTP independently requires a
-read-scoped token for reads and write scope for every mutation. The SDK takes a
+provided that actor still has repository access. HTTP permits anonymous public
+reads and requires a write-scoped token for every mutation. SDK mutations take a
 trusted authenticated account assertion, as the existing ACL/ref primitives do.
-Authentication happens at HTTP admission; the Cell rechecks membership and edit
+Authentication happens at HTTP admission; the Cell rechecks read access and edit
 authority in the mutation transaction. A token revoked after request admission
 may finish an admitted operation; ACL revocation before publication blocks it.
 
@@ -836,13 +836,13 @@ branch protection; an enabled branch rule must explicitly require it.
 
 Only the configured reporter can start runs. The owner has no implicit reporting
 bypass and must explicitly configure itself as reporter if desired. Starting
-requires the enabled context's current version and current repository membership.
+requires the enabled context's current version and current repository read access.
 The UUID binds commit/context/version/reporter. Exact start retries return the
 same UUID without updating the row or its creation order; a different binding
 conflicts. Retrying after a context change still requires current policy and
 reporter authority. An accepted start begins `queued` at version one.
 
-Updates require the attempt's reporter, current repository membership, unchanged
+Updates require the attempt's reporter, current repository read access, unchanged
 enabled context version/reporter, and an expected run version. Queued and
 in-progress attempts can become `in_progress`, `success`, `failure`, or `cancelled`.
 Success, failure and cancelled attempts are terminal and immutable; use a new UUID
@@ -854,7 +854,7 @@ All decisions and guarded writes share one Cell SQL command transaction. The SDK
 trusts its authenticated account assertion; the HTTP layer authenticates the
 token at admission. Context mutations require an admin-scoped owner token. Run
 mutations require a write-scoped token, while the reporter needs only repository
-read membership. Membership and context authority are rechecked in the write,
+read access. Read access and context authority are rechecked in the write,
 including after receiving a delayed body. Token revocation after HTTP admission
 has the same admitted-request boundary as Git/LFS and issue operations.
 
@@ -912,8 +912,8 @@ and be enabled. Disabled rules can retain names of unavailable contexts. Every
 replacement increments the version; disabling never releases a name/version.
 The typed `SetBranchRule` command is operation 8, codec 2.
 
-`GET /api/repositories/<name>/branch-rules?after=<ref>` requires read membership
-and a read-scoped token. It returns `repository_id`, `rules`, and `next_after`;
+`GET /api/repositories/<name>/branch-rules?after=<ref>` requires repository read
+access, including anonymous public access. It returns `repository_id`, `rules`, and `next_after`;
 32 sorted rules per page, disabled included. A full final page may lead to an
 empty terminal page. Each observation is independent. PUT requires an
 admin-scoped owner token and `{repository_id, rule}`. `rule` contains `reference`,
@@ -996,8 +996,8 @@ Both names must be distinct valid branches, with live, unequal tips matching the
 request. The branch publication path already guarantees commit type and graph
 closure. A retry with the same binding returns the original number before checking
 current tips, preserving later changes. A conflicting binding returns conflict.
-Current read membership is required even for retries. Edits require the author
-or a current writer, current membership and the expected editorial version.
+Current read access is required even for retries. Edits require the author
+or a current writer, current read access and the expected editorial version.
 Every accepted edit advances that version, invalidating prior review eligibility.
 Neither close/reopen nor draft transitions change Git refs.
 
@@ -1005,7 +1005,7 @@ Neither close/reopen nor draft transitions change Git refs.
 parent pull number, reviewer, grant generation, kind, body and exact revision:
 pull version, source OID/ref version and base OID/ref version. New reviews require
 an open pull, live unequal source/base tips, and that exact revision in the same
-SQL transaction. Comments admit read members; approvals and requested changes
+SQL transaction. Comments admit authenticated readers; approvals and requested changes
 require a writer other than the author and a non-draft pull. A pull author has
 no self-approval exemption, including the owner. An exact review retry checks
 current membership and original binding, then returns its historical number;
@@ -1100,7 +1100,7 @@ instead of trusting supplied OIDs; a review from another pull is unavailable.
 Historical views survive editorial changes, ref movement, deletion and recreation.
 They do not make a past review applicable or authorize another merge.
 
-Every target rechecks current repository membership after upload and again before
+Every target rechecks current repository read access after upload and again before
 returning the result. Token revocation retains the request-admission boundary.
 Responses retain `revision` and computed `merge_base`, identifying the immutable
 objects compared. No general per-push history is recorded: saved historical
@@ -1408,7 +1408,7 @@ its original request fields, pull `number`, `actor`, `created_at_ms`, and `resul
 Operation 10, codec 1 reserves the UUID against actor, pull and complete intent.
 It retains the first timestamp. Retrying completed preparation returns the
 original result, even if the pull later changes or merges; current write access
-is still required for POST. GET requires current read membership. For pending
+is still required for POST. GET requires current read access. For pending
 work, reservation and completion check the current open, nondraft pull and full
 source/base/editorial versions. Reviews and checks may be completed afterward.
 A changed intent or actor cannot reuse an ID. Concurrent completions retain the
@@ -1477,8 +1477,8 @@ codec 3 require a fresh development prefix. No dependency or lockfile changes.
 
 ## Repository browser
 
-`POST /api/repositories/<name>/browse` requires a read-scoped token, current
-membership, the canonical `repository_id` UUID from discovery and a `query`.
+`POST /api/repositories/<name>/browse` is a read operation requiring repository
+read access (including anonymous public access), the canonical `repository_id` UUID from discovery and a `query`.
 A different UUID returns 409; malformed input returns 422. The response is
 `{"repository_id":"<UUID>","view":{"<view name>":{...}}}`. The queries are:
 
@@ -1532,10 +1532,10 @@ at most the first 4 KiB of bytes and need not be UTF-8. History is explicitly
 first-parent, not a topologically sorted traversal of all reachable commits.
 `next_commit` selects the next page; clients may follow any returned parent.
 
-Reads check membership before and after traversal. Token admission follows the
+Reads check repository access before and after traversal. Token admission follows the
 existing Directory-token contract: revocation prevents new admissions, while an
-already admitted request may finish. A revoked Repository Cell grant fails the
-final membership check. Missing/inaccessible roots and entries return 404;
+already admitted request may finish. Revoked Repository Cell access fails the
+final read check; a revoked grant still permits reads when visibility is public. Missing/inaccessible roots and entries return 404;
 resource ceilings return 413; unavailable Cell/data returns 503; the 120-second
 work deadline returns 504. Bodies are limited to 32 KiB with a 30-second deadline.
 The shared reader limits each object to 8 MiB, aggregate reads to 64 MiB and tree
@@ -1646,3 +1646,49 @@ uncertain reply; versioned edits retain copyable drafts and require reload.
 All drafts/pending identities remain page-local. `pulls.js` and `pulls.css` share
 the existing authenticated session, cancellation, literal text, CSP and no-store
 asset behavior. No new publisher, schema, operation codec or dependency.
+
+
+## Public visibility and anonymous readers
+
+`ReadIdentity::Anonymous` binds SQL NULL; `ReadIdentity::Account` binds a validated
+account. No magic account name represents an anonymous caller. Read queries use
+the shared owner/member/public predicate. Mutation methods retain account
+identities, and final Git/LFS publication still requires explicit Write access.
+Public discussion comments may carry membership version zero; comments never
+qualify as approvals, and approval eligibility requires a current writer grant
+or ownership. HTTP mutations always require a valid write-capable credential.
+
+`ref_generation.visibility` defaults to private. Owner-only `set_visibility`
+checks the expected generation and changes visibility in one SQL transaction,
+incrementing the generation. Exact SDK mutation retries return the original
+receipt; a new request with an old generation returns false, including after a
+private/public/private cycle. HTTP PUT validates the repository UUID and generation,
+returns 409 on stale state, and requires the caller to reread after an uncertain
+result. Visibility changes invalidate ref-generation-bound caches and cursors.
+
+The service first publishes an owner-authorized Directory public candidate,
+then changes Repository Cell visibility. Failed or stale changes can leave
+candidates. Candidates survive privatization, avoiding a deletion racing a newer
+public change. Discovery always rechecks the Cell. Direct SDK `set_visibility`
+is a local primitive; SDK coordinators must publish the candidate first for
+service discovery. Candidate GC, quotas and index rebuilding remain open.
+
+Missing Authorization means anonymous. Supplied malformed, revoked or disabled
+credentials remain authentication failures; they never fall back to public
+access. Public metadata includes `visibility` and a null `viewer` for anonymous
+readers. Public read admission includes Git/LFS and collaboration queries;
+rosters and all mutation routes retain authenticated authorization. Privacy
+changes deny new read admission but do not cancel already admitted responses.
+Successful API data responses and Git/LFS responses use `Cache-Control: no-store`;
+downloaded data cannot be revoked.
+
+Anonymous LFS download actions omit Authorization headers and set
+`authenticated: true`. Under the [Git LFS Batch API contract](https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md),
+that flag says credentials have already been resolved; false or omitted asks
+the client to discover credentials. It does not claim an account is logged in.
+Stock `git lfs pull` without credentials verifies this behavior.
+
+Both Directory and Repository initialization schemas changed in this unreleased
+build. Use a fresh development prefix; existing data is not migrated or removed.
+Source digest validation rejects old modules; mixed-build rolling upgrades are
+not supported. Production upgrade migration remains a delivery gate.

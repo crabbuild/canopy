@@ -10,7 +10,41 @@ use crate::{
     directory::{TokenScope, validate_component},
 };
 
-const ACCESS_QUERY: &str = "SELECT CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 'admin' ELSE (SELECT role FROM repository_members WHERE account = ?1) END";
+const ACCESS_QUERY: &str = "SELECT CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 'admin' ELSE coalesce((SELECT role FROM repository_members WHERE account = ?1), (SELECT 'read' FROM ref_generation WHERE singleton = 1 AND visibility = 'public')) END";
+
+pub(crate) const READ_ACCESS: &str = "EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?1) OR EXISTS (SELECT 1 FROM ref_generation WHERE singleton = 1 AND visibility = 'public')";
+
+/// An authenticated account or an anonymous repository reader.
+#[derive(Clone, Copy)]
+pub enum ReadIdentity<'a> {
+    Anonymous,
+    Account(&'a str),
+}
+
+impl<'a> From<&'a str> for ReadIdentity<'a> {
+    fn from(account: &'a str) -> Self {
+        Self::Account(account)
+    }
+}
+impl<'a> From<&'a String> for ReadIdentity<'a> {
+    fn from(account: &'a String) -> Self {
+        Self::Account(account)
+    }
+}
+impl ReadIdentity<'_> {
+    pub(crate) fn validate(self) -> cellule_runtime::Result<()> {
+        match self {
+            Self::Anonymous => Ok(()),
+            Self::Account(account) => validate_component(account),
+        }
+    }
+    pub(crate) fn parameter(self) -> SqlValue {
+        match self {
+            Self::Anonymous => SqlValue::Null,
+            Self::Account(account) => SqlValue::Text(account.into()),
+        }
+    }
+}
 
 pub const COLLABORATOR_PAGE_SIZE: usize = 32;
 
@@ -124,12 +158,13 @@ impl RepositoryCell {
     }
 
     /// Reads the role granted to one account by this Repository Cell.
-    pub async fn access_level(
+    pub async fn access_level<'a>(
         &self,
-        account: &str,
+        account: impl Into<ReadIdentity<'a>>,
         minimum: Option<Receipt>,
     ) -> Result<Observed<Option<TokenScope>>, InvocationError<Vec<SqlResultSet>>> {
-        validate_component(account).map_err(InvocationError::NotStarted)?;
+        let account = account.into();
+        account.validate().map_err(InvocationError::NotStarted)?;
         let observed = self
             .sql
             .query(
@@ -234,10 +269,11 @@ impl RepositoryCell {
     }
 }
 
-pub(crate) fn access_statement(account: &str) -> SqlStatement {
+pub(crate) fn access_statement<'a>(account: impl Into<ReadIdentity<'a>>) -> SqlStatement {
+    let account = account.into();
     SqlStatement {
         sql: ACCESS_QUERY.into(),
-        parameters: vec![SqlValue::Text(account.into())],
+        parameters: vec![account.parameter()],
     }
 }
 

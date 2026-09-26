@@ -1,7 +1,7 @@
 "use strict";
 
 const discussion = (() => {
-  const editable = repository => repository.viewer.token_scope !== "read";
+  const editable = repository => Boolean(repository.viewer && repository.viewer.token_scope !== "read");
   const owns = (repository, record) => editable(repository) &&
     (repository.role !== "read" || repository.viewer.account === record.author);
   const date = value => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });

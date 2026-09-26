@@ -56,11 +56,10 @@ async fn serve(
     request: Request<Body>,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Response<Body> {
-    let (route, actor) =
-        match authorized_route(state, name, request.headers(), TokenScope::Read).await {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (route, actor) = match readable_route(state, name, request.headers()).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let body = match tokio::time::timeout(
         Duration::from_secs(30),
         to_bytes(request.into_body(), 32 * 1024),
@@ -106,7 +105,7 @@ async fn serve(
         match input.query {
             View::Files { after } => {
                 let comparison = reader
-                    .files(&actor.account, number, input.target, after.as_deref())
+                    .files(actor.identity(), number, input.target, after.as_deref())
                     .await?;
                 Ok(json_response(
                     StatusCode::OK,
@@ -115,7 +114,7 @@ async fn serve(
             }
             View::Patch { path_base64 } => {
                 let patch = reader
-                    .patch(&actor.account, number, input.target, &path_base64)
+                    .patch(actor.identity(), number, input.target, &path_base64)
                     .await?;
                 Ok(json_response(
                     StatusCode::OK,
@@ -124,7 +123,7 @@ async fn serve(
             }
             View::File { path_base64, side } => {
                 let file = reader
-                    .file(&actor.account, number, input.target, &path_base64, side)
+                    .file(actor.identity(), number, input.target, &path_base64, side)
                     .await?;
                 Ok(json_response(
                     StatusCode::OK,

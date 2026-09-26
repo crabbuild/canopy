@@ -23,7 +23,7 @@ pub(super) async fn policy(
     Path((name, number)): Path<(String, i64)>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, actor) = match authorized_route(&state, &name, &headers, TokenScope::Read).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -32,7 +32,7 @@ pub(super) async fn policy(
     }
     match route
         .repository
-        .pull_review_policy(&actor.account, number)
+        .pull_review_policy(actor.identity(), number)
         .await
     {
         Ok(result) => match result.output {

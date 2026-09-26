@@ -14,6 +14,7 @@ function notice(message) { clearTimeout(noticeTimer); $("notice").textContent = 
 function revokeDownloads() { for (const url of downloads) URL.revokeObjectURL(url); downloads.clear(); }
 function disconnect() {
   session++; generation++; token = ""; clearTimeout(noticeTimer); $("notice").hidden = true; viewController?.abort(); for (const controller of requests) controller.abort();
+  $("visibility-dialog")?.remove();
   revokeDownloads(); repositories = []; nextRepository = null; $("repositories").replaceChildren(); $("view").replaceChildren();
   $("connect-form").reset(); $("workspace").hidden = true; $("login").hidden = false; $("disconnect").hidden = true;
   $("create-dialog").close(); $("create-form").reset(); $("create-error").textContent = ""; $("token").focus(); document.title = "Canopy · Repositories";
@@ -28,10 +29,10 @@ async function api(path, { method = "GET", body, signal } = {}) {
   const timer = setTimeout(abort, 125000);
   try {
     const response = await fetch(path, { method, body: body === undefined ? undefined : JSON.stringify(body),
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, cache: "no-store", credentials: "omit", redirect: "error", signal: controller.signal });
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" }, cache: "no-store", credentials: "omit", redirect: "error", signal: controller.signal });
     if (!response.ok) {
       const message = await response.text(); currentSession(epoch);
-      if (response.status === 401) { disconnect(); notice("Your access token was rejected. Connect with an active token."); }
+      if (response.status === 401) { const authenticated = Boolean(token); disconnect(); notice(authenticated ? "Your access token was rejected. Connect with an active token." : "Connect with an access token to read this repository."); }
       const error = new Error(`${message || "Request failed"} (${response.status})`); error.status = response.status; throw error;
     }
     const data = response.status === 204 ? null : await response.json(); currentSession(epoch);
@@ -75,7 +76,7 @@ async function loadRepositories(append = false) {
 }
 $("connect-form").addEventListener("submit", async event => {
   event.preventDefault(); const submit = event.currentTarget.querySelector("button"); submit.disabled = true;
-  const epoch = ++session; token = $("token").value.trim();
+  const epoch = ++session; token = $("token").value.trim(); $("new-repo").hidden = false; $("disconnect").textContent = "Disconnect";
   try {
     await loadRepositories(); currentSession(epoch); $("connect-form").reset(); $("login").hidden = true; $("workspace").hidden = false; $("disconnect").hidden = false;
     await render();
@@ -83,6 +84,17 @@ $("connect-form").addEventListener("submit", async event => {
 });
 document.querySelector(".skip").addEventListener("click", event => { event.preventDefault(); $("content").focus(); });
 $("disconnect").addEventListener("click", disconnect);
+async function browsePublic() {
+  disconnect(); const epoch = ++session;
+  try {
+    await loadRepositories(); currentSession(epoch);
+    $("login").hidden = true; $("workspace").hidden = false;
+    $("new-repo").hidden = true; $("disconnect").hidden = false; $("disconnect").textContent = "Connect";
+    await render();
+  } catch (error) { if (epoch === session) notice(error.message); }
+}
+$("browse-public").addEventListener("click", browsePublic);
+window.addEventListener("DOMContentLoaded", () => { if (route().repo) browsePublic(); });
 $("more-repos").addEventListener("click", async event => { event.currentTarget.disabled = true; try { await loadRepositories(true); } catch (error) { if (error.name !== "AbortError") notice(error.message); } finally { $("more-repos").disabled = false; } });
 $("new-repo").addEventListener("click", () => { $("create-error").textContent = ""; $("create-dialog").showModal(); $("repo-name").focus(); });
 $("cancel-create").addEventListener("click", () => $("create-dialog").close());
@@ -102,15 +114,44 @@ async function browse(repository, query, signal) {
 function empty(title, message) { const panel = element("section", undefined, "empty"); panel.append(element("h2", title), element("p", message)); return panel; }
 function welcome() {
   const panel = element("section", undefined, "welcome");
-  panel.append(element("p", "Your workspace", "eyebrow"), element("h1", repositories.length ? "Choose a repository." : "Make room for your next project."), element("p", repositories.length ? "Open a repository to browse its files and follow the history behind them." : "Create a repository, then push your first commit with Git. Repositories shared with you will appear here too."));
+  panel.append(element("p", token ? "Your workspace" : "Public repositories", "eyebrow"), element("h1", repositories.length ? "Choose a repository." : token ? "Make room for your next project." : "No public repositories yet."), element("p", repositories.length ? "Open a repository to browse its files and follow the history behind them." : token ? "Create a repository, then push your first commit with Git. Repositories shared with you will appear here too." : "Connect with an access token to open repositories shared with you."));
   $("view").replaceChildren(panel);
 }
 function heading(repository) {
   const head = element("div", undefined, "repo-heading"), title = element("div");
-  title.append(element("p", repository.owner, "repo-owner"), element("h1", repository.name), element("span", `${repository.role} access`, "badge"));
+  title.append(element("p", repository.owner, "repo-owner"), element("h1", repository.name), element("span", repository.visibility, "badge"), element("span", `${repository.role} access`, "badge"));
   const clone = element("div", undefined, "clone"), input = element("input"); input.value = repository.clone_url; input.readOnly = true; input.setAttribute("aria-label", "Clone URL");
   clone.append(input, button("Copy clone URL", async () => { try { await navigator.clipboard.writeText(repository.clone_url); notice("Clone URL copied."); } catch { input.style.display = "block"; input.focus(); input.select(); notice("Select and copy the clone URL."); } }));
+  if (repository.role === "admin" && repository.viewer?.token_scope === "admin") {
+    clone.append(button("Change visibility", () => visibilityDialog(repository)));
+  }
   head.append(title, clone); return head;
+}
+async function visibilityDialog(repository) {
+  const epoch = session, path = `/api/repositories/${encodeURIComponent(repository.name)}/visibility`;
+  let current;
+  try { current = await api(path); currentSession(epoch); } catch (error) { if (epoch === session) notice(error.message); return; }
+  const dialog = element("dialog"), form = element("form"), select = element("select"), caption = element("label", "Who can read this repository?");
+  for (const [value, text] of [["private", "Private — owner and collaborators"], ["public", "Public — anyone"]]) { const option = element("option", text); option.value = value; select.append(option); }
+  $("visibility-dialog")?.remove(); dialog.id = "visibility-dialog"; dialog.setAttribute("aria-label", `Visibility of ${repository.name}`);
+  select.value = current.visibility; caption.append(select);
+  const error = element("p", "", "error"); error.setAttribute("role", "alert");
+  const save = element("button", "Save visibility", "primary"); save.type = "submit";
+  const close = () => { dialog.close(); dialog.remove(); };
+  dialog.addEventListener("close", () => dialog.remove());
+  const actions = element("div", undefined, "actions"); actions.append(button("Cancel", close), save);
+  form.append(element("h2", `Visibility of ${repository.name}`), caption,
+    element("p", "Public repositories expose code, LFS files, issues, pull requests and checks. Making a repository private cannot recall copies already downloaded.", "hint"), error,
+    actions);
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); save.disabled = true;
+    try {
+      await api(path, { method: "PUT", body: { repository_id: repository.repository_id, expected_generation: current.generation, visibility: select.value } });
+      currentSession(epoch); close(); await loadRepositories(); await render(); notice("Repository visibility updated.");
+    } catch (failure) { if (epoch === session) error.textContent = `${failure.message} Close and reopen this dialog to read current visibility.`; }
+    finally { save.disabled = false; }
+  });
+  dialog.append(form); document.body.append(dialog); dialog.showModal(); select.focus();
 }
 function tabs(current, commit) {
   const node = element("nav", undefined, "tabs"); node.setAttribute("aria-label", "Repository views");
@@ -222,7 +263,7 @@ async function historyView(repository, current, signal) {
   return panel;
 }
 async function render() {
-  if (!token) return;
+  if ($("workspace").hidden) return;
   const ticket = ++generation; viewController?.abort(); viewController = new AbortController(); const signal = viewController.signal;
   revokeDownloads(); sidebar(); const current = route(); $("view").replaceChildren(element("p", "Opening repository…", "loading"));
   if (!current.repo) { welcome(); return; }

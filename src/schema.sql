@@ -40,7 +40,8 @@ CREATE TABLE refs (
 CREATE TABLE ref_generation (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation >= 0),
-    default_branch TEXT NOT NULL
+    default_branch TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('private', 'public'))
 ) WITHOUT ROWID;
 INSERT INTO ref_generation (singleton, generation, default_branch) VALUES (1, 0, 'refs/heads/main');
 

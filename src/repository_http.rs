@@ -14,8 +14,10 @@ mod merge;
 mod pulls;
 mod threads;
 mod tokens;
+mod visibility;
 
-use authorization::authorized_route;
+use crate::http::Viewer;
+use authorization::{authorized_route, readable_route};
 
 use std::sync::Arc;
 
@@ -89,6 +91,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}",
                 get(get_repository).patch(rename_repository),
+            )
+            .route(
+                "/api/repositories/{name}/visibility",
+                get(visibility::read).put(visibility::update),
             )
             .route(
                 "/api/repositories/{name}/browse",
@@ -205,6 +211,15 @@ impl RepositoryHttp {
                 .as_deref()
                 .is_none_or(|user| user == principal.account)
         }))
+    }
+
+    async fn viewer(&self, headers: &axum::http::HeaderMap) -> Result<Viewer, Response<Body>> {
+        if !headers.contains_key(header::AUTHORIZATION) {
+            return Ok(Viewer::Anonymous);
+        }
+        self.require(headers, TokenScope::Read)
+            .await
+            .map(Viewer::Authenticated)
     }
 
     async fn require(
@@ -408,7 +423,7 @@ async fn list_repositories(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    let principal = match state.require(&headers, TokenScope::Read).await {
+    let principal = match state.viewer(&headers).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };
@@ -428,7 +443,7 @@ async fn list_repositories(
             );
         }
     };
-    match state.manager.list(&principal.account, after).await {
+    match state.manager.list(principal.identity(), after).await {
         Ok((entries, next)) if (state.manager.ready)() => json_response(
             StatusCode::OK,
             &serde_json::json!({
@@ -463,14 +478,14 @@ async fn get_repository(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    let principal = match state.require(&headers, TokenScope::Read).await {
+    let principal = match state.viewer(&headers).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };
     if directory::validate_component(&name).is_err() {
         return plain(StatusCode::NOT_FOUND, "Repository does not exist");
     }
-    match state.manager.inspect(&principal.account, &name).await {
+    match state.manager.inspect(principal.identity(), &name).await {
         Ok(Some(details)) if (state.manager.ready)() => {
             let repository = repository_response(&state.manager, details.entry);
             json_response(
@@ -481,7 +496,8 @@ async fn get_repository(
                     "repository_id": repository.repository_id,
                     "clone_url": repository.clone_url,
                     "role": details.role.as_str(),
-                    "viewer": {"account": principal.account, "token_scope": principal.scope.as_str()},
+                    "viewer": principal.principal().map(|principal| serde_json::json!({"account":principal.account,"token_scope":principal.scope.as_str()})),
+                    "visibility": details.visibility.visibility,
                     "default_branch": details.head.reference,
                     "ref_generation": details.head.generation,
                 }),
@@ -673,7 +689,7 @@ async fn dispatch_repository(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    let principal = match state.require(request.headers(), TokenScope::Read).await {
+    let principal = match state.viewer(request.headers()).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };

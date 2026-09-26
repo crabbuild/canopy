@@ -1,5 +1,7 @@
 //! Line discussions retain verified file anchors independently of live branches.
+
 use super::*;
+use crate::ReadIdentity;
 use crate::git_read::{ComparisonTarget, Side, patch::LineAnchor};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
@@ -59,19 +61,20 @@ pub(crate) struct Comment {
 }
 
 impl RepositoryCell {
-    pub(crate) async fn threads(
+    pub(crate) async fn threads<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         pull: i64,
         after: i64,
     ) -> Result<Option<Vec<Thread>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         if pull < 1 || after < 0 {
             return Err(invalid("invalid thread page"));
         }
         let result = self.pull_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(pull)] },
-            SqlStatement { sql: format!("SELECT {THREAD_COLUMNS} FROM pull_threads WHERE pull_number = ?2 AND number > ?3 AND ({ACCESS}) ORDER BY number LIMIT {PAGE}"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(pull), SqlValue::Integer(after)] },
+            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![actor.parameter(), SqlValue::Integer(pull)] },
+            SqlStatement { sql: format!("SELECT {THREAD_COLUMNS} FROM pull_threads WHERE pull_number = ?2 AND number > ?3 AND ({ACCESS}) ORDER BY number LIMIT {PAGE}"), parameters: vec![actor.parameter(), SqlValue::Integer(pull), SqlValue::Integer(after)] },
         ).await?;
         result
             .output
@@ -79,16 +82,17 @@ impl RepositoryCell {
             .transpose()
             .map_err(Invocation::NotStarted)
     }
-    pub(crate) async fn thread(
+    pub(crate) async fn thread<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         pull: i64,
         number: i64,
     ) -> Result<Option<Thread>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
             sql: format!("SELECT {THREAD_COLUMNS} FROM pull_threads WHERE pull_number = ?2 AND number = ?3 AND ({ACCESS})"),
-            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(pull), SqlValue::Integer(number)],
+            parameters: vec![actor.parameter(), SqlValue::Integer(pull), SqlValue::Integer(number)],
         }] }).await?;
         result
             .output
@@ -100,16 +104,17 @@ impl RepositoryCell {
             .transpose()
             .map_err(Invocation::NotStarted)
     }
-    pub(crate) async fn thread_revision(
+    pub(crate) async fn thread_revision<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         pull: i64,
         number: i64,
     ) -> Result<Option<PullRevision>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
             sql: format!("SELECT pull_version, source_oid, source_version, base_oid, base_version FROM pull_threads WHERE pull_number = ?2 AND number = ?3 AND ({ACCESS})"),
-            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(pull), SqlValue::Integer(number)],
+            parameters: vec![actor.parameter(), SqlValue::Integer(pull), SqlValue::Integer(number)],
         }] }).await?;
         result
             .output
@@ -249,14 +254,15 @@ impl RepositoryCell {
         self.pull_change(identity, vec![check, SqlStatement { sql: format!("UPDATE pull_threads SET resolved = ?5, version = version + 1, updated_ms = max(updated_ms, ?6) WHERE number = ?3 AND ({decision}) = 'applied'"), parameters },
             SqlStatement { sql: "SELECT number FROM pull_threads WHERE number = ?1".into(), parameters: vec![SqlValue::Integer(number)] }]).await
     }
-    pub(crate) async fn thread_comments(
+    pub(crate) async fn thread_comments<'a>(
         &self,
-        actor: &str,
+        actor: impl Into<ReadIdentity<'a>>,
         pull: i64,
         number: i64,
         after: i64,
     ) -> Result<Option<Vec<Comment>>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let actor = actor.into();
+        actor.validate().map_err(Invocation::NotStarted)?;
         if after < 0 {
             return Err(invalid("invalid comment cursor"));
         }
@@ -264,7 +270,7 @@ impl RepositoryCell {
             "({ACCESS}) AND EXISTS (SELECT 1 FROM pull_threads WHERE pull_number = ?2 AND number = ?3)"
         );
         let mut parameters = vec![
-            SqlValue::Text(actor.into()),
+            actor.parameter(),
             SqlValue::Integer(pull),
             SqlValue::Integer(number),
         ];

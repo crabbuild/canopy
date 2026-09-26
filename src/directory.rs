@@ -15,7 +15,7 @@ use cellule_runtime::{
     SqlResultSet, SqlStatement, SqlValue, TenantId, partition_for_shard, register_sql,
 };
 
-use crate::{CanopyApplication, validate_repository_id};
+use crate::{CanopyApplication, ReadIdentity, validate_repository_id};
 
 pub const DIRECTORY: NamespaceId = NamespaceId::from_bytes([72; 16]);
 pub const SCHEMA: &str = include_str!("directory_schema.sql");
@@ -436,21 +436,22 @@ impl DirectoryCell {
         })
     }
 
-    /// Finds a ready name only if the viewer owns it or has an access candidate.
+    /// Finds a ready name with an ownership, grant, or public discovery candidate.
     ///
     /// A candidate still requires a current Repository Cell ACL check.
-    pub async fn lookup_candidate(
+    pub async fn lookup_candidate<'a>(
         &self,
-        account: &str,
+        account: impl Into<ReadIdentity<'a>>,
         owner: &str,
         name: &str,
     ) -> Result<Observed<Option<RepositoryEntry>>, InvocationError<Vec<SqlResultSet>>> {
-        validate_component(account).map_err(InvocationError::NotStarted)?;
+        let account = account.into();
+        account.validate().map_err(InvocationError::NotStarted)?;
         validate_name(owner, name).map_err(InvocationError::NotStarted)?;
         let result = self.sql.query(None, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT owner, name, repository_id, state FROM repositories r WHERE owner = ?1 AND name = ?2 AND state = 'ready' AND (owner = ?3 OR EXISTS (SELECT 1 FROM repository_discovery d WHERE d.repository_id = r.repository_id AND d.account = ?3))".into(),
-                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(name.into()), SqlValue::Text(account.into())],
+                sql: "SELECT owner, name, repository_id, state FROM repositories r WHERE owner = ?1 AND name = ?2 AND state = 'ready' AND (owner = ?3 OR EXISTS (SELECT 1 FROM repository_discovery d WHERE d.repository_id = r.repository_id AND d.account = ?3) OR EXISTS (SELECT 1 FROM public_repository_candidates p WHERE p.repository_id = r.repository_id))".into(),
+                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(name.into()), account.parameter()],
             }],
         }).await?;
         let output = result
@@ -539,25 +540,51 @@ impl DirectoryCell {
         })
     }
 
-    /// Reads a bounded UUID-ordered page of owned repositories and access candidates.
+    /// Records a public discovery candidate before its owner publishes visibility.
+    ///
+    /// Candidates survive later privacy changes; callers must check the Cell ACL.
+    pub async fn remember_public(
+        &self,
+        identity: MutationIdentity,
+        actor: &str,
+        repository_id: [u8; 16],
+    ) -> Result<Committed<bool>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(actor).map_err(InvocationError::NotStarted)?;
+        validate_repository_id(repository_id).map_err(InvocationError::NotStarted)?;
+        let committed = self.sql.batch(identity, SqlBatch { statements: vec![
+            SqlStatement { sql: "INSERT INTO public_repository_candidates (repository_id) SELECT repository_id FROM repositories WHERE owner = ?1 AND repository_id = ?2 AND state = 'ready' ON CONFLICT DO NOTHING".into(), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Blob(repository_id.to_vec())] },
+            SqlStatement { sql: "SELECT 1 FROM repositories WHERE owner = ?1 AND repository_id = ?2 AND state = 'ready'".into(), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Blob(repository_id.to_vec())] },
+        ] }).await?;
+        let output = committed
+            .output
+            .get(1)
+            .is_some_and(|set| !set.rows.is_empty());
+        Ok(Committed {
+            output,
+            receipt: committed.receipt,
+        })
+    }
+
+    /// Reads a bounded UUID-ordered page of owned, granted, and public candidates.
     ///
     /// A candidate is not an authorization decision; its current Cell ACL must
     /// be checked. Pending repositories are excluded and renames retain position.
-    pub async fn list_candidates(
+    pub async fn list_candidates<'a>(
         &self,
-        account: &str,
+        account: impl Into<ReadIdentity<'a>>,
         after: Option<[u8; 16]>,
     ) -> Result<Observed<Vec<RepositoryEntry>>, InvocationError<Vec<SqlResultSet>>> {
-        validate_component(account).map_err(InvocationError::NotStarted)?;
+        let account = account.into();
+        account.validate().map_err(InvocationError::NotStarted)?;
         if let Some(after) = after {
             validate_repository_id(after).map_err(InvocationError::NotStarted)?;
         }
         let result = self.sql.query(None, SqlBatch {
             statements: vec![SqlStatement {
-                // Owner entries and candidates are disjoint: remember_access refuses
-                // self-grants. Both UUID ranges can merge without sorting every grant.
-                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND state = 'ready' AND repository_id > ?2 UNION ALL SELECT r.owner, r.name, d.repository_id, r.state FROM repository_discovery d JOIN repositories r ON r.repository_id = d.repository_id WHERE d.account = ?1 AND d.repository_id > ?2 AND r.state = 'ready' ORDER BY repository_id LIMIT ?3".into(),
-                parameters: vec![SqlValue::Text(account.into()), SqlValue::Blob(after.map_or_else(Vec::new, |id| id.to_vec())), SqlValue::Integer(REPOSITORY_PAGE_SIZE as i64)],
+                // Public candidates are hints. UNION removes duplicate grant/public
+                // entries; Repository Cell access remains authoritative.
+                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND state = 'ready' AND repository_id > ?2 UNION SELECT r.owner, r.name, d.repository_id, r.state FROM repository_discovery d JOIN repositories r ON r.repository_id = d.repository_id WHERE d.account = ?1 AND d.repository_id > ?2 AND r.state = 'ready' UNION SELECT r.owner, r.name, p.repository_id, r.state FROM public_repository_candidates p JOIN repositories r ON r.repository_id = p.repository_id WHERE p.repository_id > ?2 AND r.state = 'ready' ORDER BY repository_id LIMIT ?3".into(),
+                parameters: vec![account.parameter(), SqlValue::Blob(after.map_or_else(Vec::new, |id| id.to_vec())), SqlValue::Integer(REPOSITORY_PAGE_SIZE as i64)],
             }],
         }).await?;
         let entries = result
