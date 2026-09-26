@@ -21,6 +21,8 @@ mod support;
 
 #[path = "smart_http/cache_admission.rs"]
 mod cache_admission;
+#[path = "smart_http/encoded_input.rs"]
+mod encoded_input;
 #[path = "smart_http/ref_snapshots.rs"]
 mod ref_snapshots;
 

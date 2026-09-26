@@ -269,13 +269,25 @@ file. Its worker retains the spool's disk reservation until subprocess work ends
 No Git objects or refs are published from an incomplete HTTP upload.
 
 Git requests support identity and gzip content encoding (`x-gzip` is also
-accepted). Unsupported or stacked encodings return 415. The spool retains wire
-bytes and their exact length; the gateway passes canonical `HTTP_CONTENT_ENCODING`
-to [Git's CGI implementation](https://github.com/git/git/blob/v2.50.1/http-backend.c),
-which inflates gzip before passing bytes to upload-pack or receive-pack. This is required
-for stock clients that compress large fetch requests. The admission limits above
-bound encoded bytes; native inflation and pack expansion still need resource
-enforcement beyond the subprocess deadline.
+accepted). Unsupported or stacked encodings return 415. The initial spool retains
+wire bytes for the unchanged push digest and replay lookup. A pending operation
+then validates and decodes the entire gzip stream into a second anonymous spool
+before hydrating the cache or starting Git. Both spools share disk admission;
+the encoded charge is released when decoding completes. Each decoded write
+reserves capacity first. Both encoded and decoded sizes must fit the request's
+512 MiB push or 64 MiB fetch limit. Corrupt headers, checksums, truncated members
+and trailing garbage return 400; decoded overflow returns 413 and exhausted
+admission returns 507. Concatenated valid gzip members are decoded together.
+
+Decoding has a separate 120-second deadline. Cancellation is checked during
+compressed reads and decoded writes, including streams of empty members. A
+blocking worker retains both files and reservations until it stops. Git receives
+only the validated decoded file with identity encoding and its exact length.
+Canopy sets [Git CGI's request-buffer limit](https://github.com/git/git/blob/v2.50.1/http-backend.c)
+to the admitted 64 MiB fetch limit, replacing its smaller default. Native pack
+expansion and scratch usage still need resource enforcement. Exact replay binds
+the original wire representation and gzip flag; it does not re-run decoding or
+Git for a previously completed operation.
 
 Push reports, LFS transfers and individual object hydration still allocate
 bounded whole buffers. Cold fetches still rebuild the complete bare cache.

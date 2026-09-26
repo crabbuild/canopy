@@ -136,6 +136,7 @@ impl GitGateway {
                     id,
                 )));
             }
+            let request = self.decode(request, MAX_PUSH_BYTES).await?;
             self.cache.lock().await.take();
             let cache = self.build_cache(self.cell_refs().await?).await?;
             return self
@@ -144,6 +145,7 @@ impl GitGateway {
                 .map(http_body);
         }
         let request = self.receive(request, MAX_FETCH_REQUEST_BYTES).await?;
+        let request = self.decode(request, MAX_FETCH_REQUEST_BYTES).await?;
         let live_refs = self.cell_refs().await?;
         let cached = {
             let mut cache = self.cache.lock().await;
@@ -187,6 +189,21 @@ impl GitGateway {
             body,
             authenticated,
         })
+    }
+
+    async fn decode(
+        &self,
+        mut request: GitHttpRequest,
+        limit: u64,
+    ) -> Result<GitHttpRequest, GatewayError> {
+        if request.gzip {
+            request.body = request
+                .body
+                .decode_gzip(&self.scratch_root, &self.disk_budget, limit)
+                .await?;
+            request.gzip = false;
+        }
+        Ok(request)
     }
 
     async fn handle_push(

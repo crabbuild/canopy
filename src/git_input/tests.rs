@@ -134,3 +134,155 @@ async fn cancelled_upload_releases_the_file_and_reservation() -> Result<()> {
     assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
     Ok(())
 }
+
+fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(bytes)?;
+    Ok(encoder.finish()?)
+}
+
+#[tokio::test]
+async fn gzip_members_preserve_wire_digest_and_release_encoded_admission() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1024);
+    let mut wire = gzip(b"abc")?;
+    wire.extend(gzip(b"def")?);
+    let mut expected = blake3::Hasher::new();
+    expected.update(&(wire.len() as u64).to_le_bytes());
+    expected.update(&wire);
+    let input = GitInput::receive(Body::from(wire), directory.path(), &budget, 1024).await?;
+    assert_eq!(
+        input.digest(blake3::Hasher::new()).await?,
+        *expected.finalize().as_bytes()
+    );
+    let decoded = input.decode_gzip(directory.path(), &budget, 6).await?;
+    assert_eq!(decoded.size(), 6);
+    assert_eq!(budget.used(), 6);
+    let mut bytes = Vec::new();
+    (&decoded.spool.file).read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"abcdef");
+    drop(decoded);
+    assert_eq!(budget.used(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn gzip_expansion_enforces_the_decoded_limit_and_shared_disk_budget() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(200_000);
+    let wire = gzip(&vec![b'a'; 100_000])?;
+    for (limit, reserve, expected_budget_error) in [(99_999, 0, false), (100_000, 150_000, true)] {
+        let occupied = budget.try_reserve(reserve)?;
+        let input =
+            GitInput::receive(Body::from(wire.clone()), directory.path(), &budget, 200_000).await?;
+        let result = input.decode_gzip(directory.path(), &budget, limit).await;
+        assert!(if expected_budget_error {
+            matches!(result, Err(InputError::Budget(_)))
+        } else {
+            matches!(result, Err(InputError::TooLarge))
+        });
+        assert_eq!(budget.used(), occupied.bytes());
+        drop(occupied);
+    }
+    let input = GitInput::receive(Body::from(wire), directory.path(), &budget, 200_000).await?;
+    let decoded = input
+        .decode_gzip(directory.path(), &budget, 100_000)
+        .await?;
+    assert_eq!(decoded.size(), 100_000);
+    drop(decoded);
+    assert_eq!(budget.used(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_gzip_never_returns_a_partial_decoded_spool() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let valid = gzip(&vec![b'x'; 100_000])?;
+    let mut checksum = valid.clone();
+    let crc = checksum.len() - 8;
+    checksum[crc] ^= 1;
+    let truncated = valid[..valid.len() - 1].to_vec();
+    let mut trailing = valid.clone();
+    trailing.extend(b"trailing bytes");
+    let mut last_member = valid;
+    last_member.extend(&checksum);
+    for wire in [
+        vec![],
+        b"invalid".to_vec(),
+        checksum,
+        truncated,
+        trailing,
+        last_member,
+    ] {
+        let input = GitInput::receive(Body::from(wire), directory.path(), &budget, 1 << 20).await?;
+        assert!(matches!(
+            input.decode_gzip(directory.path(), &budget, 1 << 20).await,
+            Err(InputError::Gzip(_))
+        ));
+        assert_eq!(budget.used(), 0);
+    }
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn cancelled_decoder_stops_compressed_reads_before_consuming_more_input() -> Result<()> {
+    let mut file = tempfile::tempfile()?;
+    file.write_all(&gzip(b"data")?)?;
+    file.rewind()?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let mut decoder = flate2::read::MultiGzDecoder::new(DecodeReader {
+        file: &file,
+        cancelled: &cancelled,
+    });
+    assert_eq!(
+        decoder.read(&mut [0; 64]).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(file.stream_position()?, 0);
+    Ok(())
+}
+
+#[test]
+fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Result<()> {
+    use std::future::Future;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    runtime.block_on(async {
+        let directory = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(1024);
+        let wire = gzip(b"queued decoder")?;
+        let wire_len = wire.len() as u64;
+        let input = GitInput::receive(Body::from(wire), directory.path(), &budget, 1024).await?;
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            let _ = entered.send(());
+            held.recv()
+        });
+        ready.await?;
+        let mut decode = Box::pin(input.decode_gzip(directory.path(), &budget, 1024));
+        poll_fn(|cx| {
+            assert!(decode.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(decode);
+        let retained = budget.used();
+        release.send(())?;
+        blocker.await??;
+        assert_eq!(retained, wire_len);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while budget.used() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    })
+}

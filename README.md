@@ -52,6 +52,8 @@ responses stream with backpressure and have no 64 MiB response ceiling. LFS
 transfers and individual external Git blobs remain capped at 64 MiB.
 Ref advertisements use generation-checked pagination; sustained concurrent
 changes return a retryable 503. Gzip-compressed Git requests are supported.
+Gzip is fully validated before Git runs; decoded bytes have the same request
+size limits and share disk admission with the encoded upload.
 Disposable Git caches retain shared disk reservations. Hydration admits bytes
 before writing; native Git writes are measured before durable ref publication.
 Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.

@@ -11,7 +11,10 @@ use std::{
 };
 
 pub use crate::git_cache::CacheError;
-use crate::{git_cache::GitCache, git_input::GitInput};
+use crate::{
+    git_cache::GitCache,
+    git_input::{GitInput, MAX_FETCH_REQUEST_BYTES},
+};
 use bytes::Bytes;
 use cellule_ltx::DiskBudget;
 use futures_core::Stream;
@@ -49,6 +52,8 @@ pub enum GitHttpError {
     InvalidPath,
     #[error("Git response stream was interrupted")]
     Interrupted,
+    #[error("Git backend requires a decoded request body")]
+    EncodedInput,
 }
 
 /// One bounded smart HTTP request. The gateway authenticates before constructing it.
@@ -90,7 +95,7 @@ impl GitHttpBackend {
         })
     }
 
-    /// Runs Git and collects a bounded reply for durable push publication.
+    /// Runs Git on decoded input and collects a bounded reply for durable push publication.
     pub async fn run(&self, request: GitHttpRequest) -> Result<GitHttpResponse, GitHttpError> {
         let response = self.stream(request, ()).await?;
         let GitHttpResponse {
@@ -120,6 +125,9 @@ impl GitHttpBackend {
         request: GitHttpRequest,
         keep_alive: T,
     ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
+        if request.gzip {
+            return Err(GitHttpError::EncodedInput);
+        }
         if !request.path_info.starts_with("/repo.git/")
             || request.path_info.contains("..")
             || request.path_info.contains('\\')
@@ -148,9 +156,12 @@ impl GitHttpBackend {
             .env("PATH_INFO", &request.path_info)
             .env("QUERY_STRING", &request.query)
             .env("CONTENT_LENGTH", request.body.size().to_string())
+            .env("HTTP_CONTENT_ENCODING", "identity")
+            // CGI buffers upload-pack requests even when stdin is a completed file.
+            // Its ceiling must agree with admission after gzip has been decoded.
             .env(
-                "HTTP_CONTENT_ENCODING",
-                if request.gzip { "gzip" } else { "identity" },
+                "GIT_HTTP_MAX_REQUEST_BUFFER",
+                MAX_FETCH_REQUEST_BYTES.to_string(),
             )
             .env("SERVER_PROTOCOL", "HTTP/1.1")
             .stdin(request.body.stdin()?)

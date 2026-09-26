@@ -47,6 +47,7 @@ pub async fn verify(
     );
     let mut body = format!("{:04x}{command}0000", command.len() + 4).into_bytes();
     body.extend_from_slice(&pack);
+    encoded_input::reject_corruption_and_expansion(repository, budget, client, url, &body).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let request = || {
         client
@@ -136,17 +137,7 @@ pub async fn verify(
         .bytes()
         .await?;
     assert!(budget.used() > common.len() as u64 * 40);
-    run_git(
-        Some(&source),
-        &[
-            "-c",
-            "http.extraHeader=Authorization: Bearer local-test-token",
-            "push",
-            url,
-            ":refs/heads/quota",
-        ],
-    )
-    .await?;
+    encoded_input::delete_with_admission_retry(repository, budget, client, url, commit).await?;
     assert_eq!(budget.used(), 0);
     Ok(())
 }

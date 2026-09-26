@@ -333,3 +333,37 @@ replay. Its 80 MiB push completed in 17.60 seconds; v0/v2 clones restored
 seconds. The 256-file/300-ref recovery check completed in 1.48 seconds. Environment:
 Darwin arm64, Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, fresh bind-mounted
 provider data. These are correctness/workload observations, not capacity claims.
+
+
+## Bounded gzip input qualification
+
+Gzip requests now validate and decode completely into a disk-admitted spool
+before Git starts. Encoded and decoded bytes share admission and independently
+obey the request size limit. The original encoded bytes still define exact push
+replay. Corrupt checksums, truncation and trailing garbage return 400 without
+publishing Git objects or refs. Decoded overflow returns 413; decoded disk
+exhaustion returns 507, and retrying the identical push UUID succeeds after
+capacity is freed. Valid concatenated gzip members are supported.
+
+The decoder has a 120-second deadline and cancellation checks on compressed
+reads and decoded writes. A deterministic queued-worker test proves that
+cancellation retains admission until the worker exits. Other focused tests cover
+wire digest preservation, exact decoded-size boundaries, multiple members,
+corruption after partial output and reservation cleanup. The HTTP suite verifies
+64 MiB plus one decoded byte is rejected, and a compressed ref deletion retries
+and replays without advancing the ref generation twice.
+
+A valid 11 MiB decoded protocol-v2 request exposed Git CGI's smaller default
+input buffer. That failure was reproduced before aligning the subprocess buffer
+with Canopy's existing 64 MiB fetch admission limit; the same request now passes.
+The Git backend accepts only decoded input. Ten input tests, smart HTTP, stock
+Git/LFS, owner recovery, formatting, Clippy and the binary build pass.
+
+The RustFS process qualification with `--many-objects 256` also passes: 300 refs,
+both commits, the annotated tag and exact file bytes restore after owner death,
+lease expiry and disk loss, with clean `git fsck`. Git/LFS, ACL, mixed/atomic
+outcomes and dropped-reply replay pass. The recovery check took 0.68 seconds in
+this debug-build observation on Darwin arm64 with Apple Git 2.50.1 and RustFS
+`1.0.0-beta.8-glibc`; it is not production capacity evidence. This change adds no
+dependency, schema or request-digest format change. Native pack expansion, peak
+scratch usage and global request-concurrency admission remain open.

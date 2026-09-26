@@ -3,7 +3,7 @@
 use std::{
     fs::File,
     future::poll_fn,
-    io::{Read, Seek, Write},
+    io::{self, Read, Seek, Write},
     path::Path,
     pin::Pin,
     process::Stdio,
@@ -14,6 +14,7 @@ use std::{
 use axum::body::Body;
 use cellule_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAX_PUSH_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) const MAX_FETCH_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
@@ -27,6 +28,8 @@ pub enum InputError {
     Timeout,
     #[error("Git request body failed")]
     Body(#[from] axum::Error),
+    #[error("Git request gzip stream is invalid")]
+    Gzip(#[source] io::Error),
     #[error("Git request spool I/O failed")]
     Io(#[from] std::io::Error),
     #[error("Git request disk admission failed")]
@@ -100,6 +103,66 @@ impl GitInput {
         self.size
     }
 
+    /// Validates and expands gzip under the same byte and disk limits as plain input.
+    pub(crate) async fn decode_gzip(
+        self,
+        directory: &Path,
+        budget: &DiskBudget,
+        limit: u64,
+    ) -> Result<Self, InputError> {
+        let output = Arc::new(Spool {
+            file: tempfile::tempfile_in(directory)?,
+            reservation: budget.try_reserve(0)?,
+        });
+        let cancelled = CancellationToken::new();
+        let _cancel_on_drop = cancelled.clone().drop_guard();
+        let task = tokio::task::spawn_blocking(move || {
+            let mut file = &self.spool.file;
+            file.rewind()?;
+            let reader = DecodeReader {
+                file,
+                cancelled: &cancelled,
+            };
+            let mut decoder = flate2::read::MultiGzDecoder::new(reader);
+            let mut buffer = [0; CHUNK_BYTES];
+            let mut size = 0_u64;
+            loop {
+                if cancelled.is_cancelled() {
+                    return Err(InputError::Timeout);
+                }
+                let count = decoder
+                    .read(&mut buffer)
+                    .map_err(|error| match error.kind() {
+                        io::ErrorKind::InvalidInput
+                        | io::ErrorKind::InvalidData
+                        | io::ErrorKind::UnexpectedEof => InputError::Gzip(error),
+                        io::ErrorKind::TimedOut if cancelled.is_cancelled() => InputError::Timeout,
+                        _ => InputError::Io(error),
+                    })?;
+                if count == 0 {
+                    break;
+                }
+                size = size
+                    .checked_add(count as u64)
+                    .filter(|size| *size <= limit)
+                    .ok_or(InputError::TooLarge)?;
+                output.reservation.try_grow(count as u64)?;
+                (&output.file).write_all(&buffer[..count])?;
+            }
+            (&output.file).rewind()?;
+            Ok(Self {
+                spool: output,
+                size,
+            })
+        });
+        // A blocking decoder cannot be aborted. Cancellation stops its bounded
+        // read/write loop; the worker owns both files and charges until it exits.
+        tokio::time::timeout(Duration::from_secs(120), task)
+            .await
+            .map_err(|_| InputError::Timeout)?
+            .map_err(InputError::Task)?
+    }
+
     pub(crate) fn stdin(&self) -> Result<Stdio, std::io::Error> {
         Ok(Stdio::from(self.spool.file.try_clone()?))
     }
@@ -124,6 +187,22 @@ impl GitInput {
             Ok::<_, std::io::Error>(*hash.finalize().as_bytes())
         })
         .await??)
+    }
+}
+
+struct DecodeReader<'a> {
+    file: &'a File,
+    cancelled: &'a CancellationToken,
+}
+
+impl Read for DecodeReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        // Header-only gzip members may consume input without yielding output.
+        // Check cancellation at compressed reads as well as decoded writes.
+        if self.cancelled.is_cancelled() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.file.read(bytes)
     }
 }
 

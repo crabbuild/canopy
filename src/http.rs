@@ -494,6 +494,9 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         Err(GatewayError::Input(crate::git_input::InputError::Body(_))) => {
             plain(StatusCode::BAD_REQUEST, "Git request body failed")
         }
+        Err(GatewayError::Input(crate::git_input::InputError::Gzip(_))) => {
+            plain(StatusCode::BAD_REQUEST, "Invalid Git gzip stream")
+        }
         Err(GatewayError::Input(crate::git_input::InputError::Budget(_))) => plain(
             StatusCode::INSUFFICIENT_STORAGE,
             "Git upload disk budget exhausted",
