@@ -143,7 +143,7 @@ async fn serve(
         ),
     }
 }
-fn failed(error: ReadError) -> Response<Body> {
+pub(super) fn failed(error: ReadError) -> Response<Body> {
     let (status, message) = match error {
         ReadError::Missing => (StatusCode::NOT_FOUND, "Pull request or file is unavailable"),
         ReadError::Changed => (

@@ -236,3 +236,38 @@ CREATE TABLE merge_candidates (
     base_oid BLOB NOT NULL REFERENCES objects(oid),
     oid BLOB REFERENCES objects(oid)
 ) WITHOUT ROWID;
+
+CREATE TABLE pull_threads (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    resolved INTEGER NOT NULL CHECK(resolved IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL REFERENCES objects(oid),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL REFERENCES objects(oid),
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    merge_base BLOB NOT NULL REFERENCES objects(oid),
+    path BLOB NOT NULL CHECK(length(path) BETWEEN 1 AND 4096),
+    side TEXT NOT NULL CHECK(side IN ('before', 'after')),
+    line INTEGER NOT NULL CHECK(line BETWEEN 1 AND 20000),
+    blob_oid BLOB NOT NULL REFERENCES objects(oid),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX threads_by_pull ON pull_threads(pull_number, number);
+
+CREATE TABLE pull_thread_comments (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    thread_number INTEGER NOT NULL REFERENCES pull_threads(number),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
+);
+CREATE INDEX comments_by_thread ON pull_thread_comments(thread_number, number);

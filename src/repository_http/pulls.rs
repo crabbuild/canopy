@@ -98,7 +98,7 @@ pub(super) async fn input<T: DeserializeOwned>(
         )
     })
 }
-fn canonical_id(value: &str) -> Option<[u8; 16]> {
+pub(super) fn canonical_id(value: &str) -> Option<[u8; 16]> {
     let id = uuid::Uuid::parse_str(value).ok()?;
     (id.to_string() == value && validate_repository_id(id.into_bytes()).is_ok())
         .then(|| id.into_bytes())
@@ -362,16 +362,16 @@ fn changed(
         Err(error) => failed(error),
     }
 }
-fn missing() -> Response<Body> {
+pub(super) fn missing() -> Response<Body> {
     plain(StatusCode::NOT_FOUND, "Pull request is unavailable")
 }
-fn unavailable() -> Response<Body> {
+pub(super) fn unavailable() -> Response<Body> {
     plain(
         StatusCode::SERVICE_UNAVAILABLE,
         "Pull request service unavailable; read current state before retrying edits",
     )
 }
-fn failed(error: impl std::fmt::Display) -> Response<Body> {
+pub(super) fn failed(error: impl std::fmt::Display) -> Response<Body> {
     tracing::error!(error = %error, "pull request operation failed");
     unavailable()
 }

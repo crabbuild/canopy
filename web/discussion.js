@@ -40,13 +40,13 @@ const discussion = (() => {
     node.value = value; form.append(caption, node); return node;
   }
   function submit({ repository, form, signal, label, edit = false, payload: intent, send, published, cancel }) {
-    form.append(element("p", "Your draft and pending submission stay on this page until you leave or reload.", "hint"));
+    const controls = Array.from(form.querySelectorAll("input,textarea,select"));
+    form.append(element("p", controls.length ? "Your draft and pending submission stay on this page until you leave or reload." : "Your pending submission stays on this page until you leave or reload.", "hint"));
     const error = element("p", "", "error"); error.setAttribute("role", "alert");
     const actions = element("div", undefined, "actions");
     const save = element("button", label, "primary"); save.type = "submit";
     const reload = button("Reload current version", render); reload.hidden = true;
     if (cancel) actions.append(button("Cancel", cancel)); actions.append(reload, save); form.append(error, actions);
-    const controls = Array.from(form.querySelectorAll("input,textarea,select"));
     const locked = value => { for (const control of controls) {
       if (control.tagName === "SELECT" || control.type === "checkbox") control.disabled = value;
       else control.readOnly = value;
@@ -66,7 +66,7 @@ const discussion = (() => {
         if (!uncertain && [400, 403, 404, 413, 422].includes(failure.status)) {
           payload = null; locked(false); save.disabled = false; error.textContent = failure.message;
         } else if (edit) {
-          error.textContent = `${failure.message}\nYour changes were not confirmed. Copy your draft, then reload the current version before editing again.`;
+          error.textContent = `${failure.message}\nYour changes were not confirmed. ${controls.length ? "Copy your draft, then reload the current version before editing again." : "Reload the current version before trying again."}`;
           reload.hidden = false;
         } else {
           uncertain = true;

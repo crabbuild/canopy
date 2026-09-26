@@ -2,7 +2,7 @@
 
 pub(crate) mod browse;
 mod graph;
-mod patch;
+pub(crate) mod patch;
 mod trees;
 
 use crate::{
@@ -76,11 +76,12 @@ pub(crate) struct FileChange {
     before: Option<Entry>,
     after: Option<Entry>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub(crate) enum ComparisonTarget {
     Current { revision: PullRevision },
     Review { number: i64 },
+    Thread { number: i64 },
     // An empty struct rejects extra keys; serde's internally tagged unit
     // variant would silently discard a caller-supplied revision.
     Merged {},
@@ -92,7 +93,7 @@ pub(crate) struct Comparison {
     files: Vec<FileChange>,
     next_after: Option<String>,
 }
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Side {
     Before,
@@ -134,10 +135,16 @@ impl Reader {
         number: i64,
         target: &ComparisonTarget,
     ) -> Result<PullRevision, ReadError> {
-        if matches!(target, ComparisonTarget::Review { number } if *number < 1) {
+        if matches!(target, ComparisonTarget::Review { number } | ComparisonTarget::Thread { number } if *number < 1)
+        {
             return Err(ReadError::Invalid);
         }
         let revision = match target {
+            ComparisonTarget::Thread { number: thread } => self
+                .repository
+                .thread_revision(actor, number, *thread)
+                .await?
+                .ok_or(ReadError::Missing)?,
             ComparisonTarget::Review { number: review } => self
                 .repository
                 .reviewed_revision(actor, number, *review)

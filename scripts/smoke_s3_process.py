@@ -28,6 +28,7 @@ import smoke_s3_checks
 import smoke_s3_corpus
 import smoke_s3_issues
 import smoke_s3_pulls
+import smoke_s3_threads
 import smoke_s3_browse
 import smoke_s3_merge
 
@@ -549,6 +550,7 @@ def main():
             replay_id, lost_reply = push_with_lost_reply(base_url, other)
             pull_state = smoke_s3_pulls.seed(base_url, other_id, partial_oid.decode(), other_oid.decode())
             browse_state = smoke_s3_browse.seed(base_url, other_id, partial_oid.decode())
+            thread_state = smoke_s3_threads.seed(base_url, pull_state)
             merge_state = smoke_s3_merge.seed(base_url, other_id, other, partial_oid.decode(), other_oid.decode(), pull_state[1])
             reader_token = f"cnp_{secrets.token_hex(32)}"
             assert api_status(
@@ -580,6 +582,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_threads.verify(base_url, thread_state)
             smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_browse.verify(base_url, browse_state)
             smoke_s3_checks.verify(base_url, check_state)
@@ -621,6 +624,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_threads.verify(base_url, thread_state)
             smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_browse.verify(base_url, browse_state)
             smoke_s3_checks.verify(base_url, check_state)
@@ -643,6 +647,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_threads.verify(base_url, thread_state)
             smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_browse.verify(base_url, browse_state)
             smoke_s3_checks.verify(base_url, check_state)

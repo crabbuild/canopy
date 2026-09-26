@@ -3,6 +3,7 @@
 pub mod candidates;
 pub mod merge;
 mod mutations;
+pub(crate) mod threads;
 
 use crate::{
     RepositoryCell,

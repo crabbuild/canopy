@@ -45,6 +45,55 @@ struct Edit {
     index: usize,
 }
 
+#[derive(Serialize)]
+pub(crate) struct LineAnchor {
+    pub revision: PullRevision,
+    pub merge_base: String,
+    pub path_base64: String,
+    pub side: Side,
+    pub line: i64,
+    pub blob_oid: String,
+}
+impl Side {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+}
+
+impl Patch {
+    pub(crate) fn anchor(self, side: Side, line: i64) -> Result<LineAnchor, ReadError> {
+        if !(1..=MAX_LINES as i64).contains(&line) || self.status != "text" {
+            return Err(ReadError::Invalid);
+        }
+        let found = self.hunks.iter().any(|hunk| {
+            let (start, count) = match side {
+                Side::Before => (hunk.old_start, hunk.old_lines),
+                Side::After => (hunk.new_start, hunk.new_lines),
+            };
+            count > 0 && (start..start + count).contains(&(line as usize))
+        });
+        if !found {
+            return Err(ReadError::Invalid);
+        }
+        let entry = match side {
+            Side::Before => self.before,
+            Side::After => self.after,
+        }
+        .ok_or(ReadError::Invalid)?;
+        Ok(LineAnchor {
+            revision: self.revision,
+            merge_base: self.merge_base,
+            path_base64: self.path_base64,
+            side,
+            line,
+            blob_oid: entry.oid,
+        })
+    }
+}
+
 impl Reader {
     pub(crate) async fn patch(
         mut self,

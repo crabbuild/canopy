@@ -132,7 +132,16 @@ const pullsView = (() => {
         const content = element("div", undefined, "patch-content"); content.append(element("p", "Loading changes…", "file-message")); row.append(content);
         try {
           const { patch } = await compare({ kind: "patch", path_base64: file.path_base64 }); signal.throwIfAborted();
-          content.replaceChildren(patchView(patch, current));
+          const onLine = editable(repository) ? (side, line) => {
+            const existing = content.querySelector("form"); if (existing) { existing.querySelector("textarea").focus(); return; }
+            const node = form(`Discuss ${side === "before" ? "base" : "source"} line ${line}`), body = field(node, "body", "Comment", "", 16384, true);
+            submit({ repository, form: node, signal, label: "Start discussion",
+              payload: () => ({ target: snapshot, path_base64: file.path_base64, side, line, body: body.value }),
+              send: payload => api(`${path}/threads`, { method: "POST", body: payload, signal }),
+              published: result => { navigate({ ...target(current, pull.number, "threads"), thread: result.number }); notice("Line discussion started."); },
+              cancel: () => node.remove() }); content.append(node); body.focus();
+          } : null;
+          content.replaceChildren(patchView(patch, current, onLine));
         } catch (error) { if (!signal.aborted) { content.replaceChildren(element("p", error.message, "error")); loaded = false; row.addEventListener("toggle", () => content.remove(), { once: true }); } }
       }); rows.append(row);
     }
@@ -141,7 +150,7 @@ const pullsView = (() => {
     panel.append(pageLinks(current, comparison.next_after, "Files")); return panel;
   }
 
-  function patchView(patch, current) {
+  function patchView(patch, current, onLine = null, anchor = null) {
     const panel = element("div"), metadata = element("div", undefined, "patch-metadata");
     for (const [side, label, commit] of [["before", "Merge base", patch.merge_base], ["after", "Source", patch.revision.source_oid]]) {
       const entry = patch[side], info = element("p");
@@ -163,9 +172,16 @@ const pullsView = (() => {
       const range = element("td", `@@ -${hunk.old_start},${hunk.old_lines} +${hunk.new_start},${hunk.new_lines} @@`); range.colSpan = 4; header.append(range); body.append(header);
       let old = hunk.old_start, next = hunk.new_start;
       for (const line of hunk.lines) {
-        const row = element("tr", undefined, `patch-${line.kind}`);
-        row.append(element("td", line.kind === "add" ? "" : String(old++)), element("td", line.kind === "delete" ? "" : String(next++)),
-          element("td", { add: "+", delete: "−", context: " " }[line.kind]), element("td", line.text.replaceAll("\r", "␍")));
+        const anchored = anchor && (anchor.side === "before" ? line.kind !== "add" && old === anchor.line : line.kind !== "delete" && next === anchor.line);
+        const row = element("tr", undefined, `patch-${line.kind}${anchored ? " patch-anchor" : ""}`);
+        if (anchored) row.setAttribute("aria-label", "Discussion anchored here");
+        for (const [side, number] of [["before", line.kind === "add" ? null : old++], ["after", line.kind === "delete" ? null : next++]]) {
+          const cell = element("td");
+          if (number !== null && onLine) { const action = button(String(number), () => onLine(side, number)); action.setAttribute("aria-label", `Comment on ${side === "before" ? "base" : "source"} line ${number}`); cell.append(action); }
+          else cell.textContent = number === null ? "" : String(number);
+          row.append(cell);
+        }
+        row.append(element("td", { add: "+", delete: "−", context: " " }[line.kind]), element("td", line.text.replaceAll("\r", "␍")));
         body.append(row);
         if (line.no_newline) {
           const marker = element("tr", undefined, "patch-marker"), cell = element("td", "\\ No newline at end of file"); cell.colSpan = 4; marker.append(cell); body.append(marker);
@@ -173,7 +189,56 @@ const pullsView = (() => {
       }
       table.append(body);
     }
-    scroll.append(table); panel.append(scroll, element("p", "− Removed · + Added · ␍ Carriage return", "patch-legend")); return panel;
+    scroll.append(table); panel.append(scroll, element("p", `− Removed · + Added · ␍ Carriage return${onLine ? " · Select a line number to discuss it." : ""}`, "patch-legend")); return panel;
+  }
+
+  function anchorLabel(anchor) {
+    let name;
+    try { name = safe(new TextDecoder("utf-8", { fatal: true }).decode(bytes(anchor.path_base64))); }
+    catch { name = `Path bytes: ${anchor.path_base64}`; }
+    return `${name} · ${anchor.side === "before" ? "base" : "source"} line ${anchor.line}`;
+  }
+  async function threads(repository, current, pull, path, signal) {
+    const panel = element("section", undefined, "discussion"), endpoint = `${path}/threads`;
+    if (!current.thread) {
+      const data = await read(repository, `${endpoint}?after=${encodeURIComponent(current.after || "0")}`, signal); signal.throwIfAborted();
+      panel.append(element("h3", "Line discussions"), element("p", "Start a discussion by selecting a line number in Changed files. Each discussion stays on its original revision.", "hint"));
+      for (const thread of data.threads) {
+        const row = element("article", undefined, "discussion-post surface");
+        row.append(link(`#${thread.number} · ${anchorLabel(thread.anchor)}`, { ...target(current, pull.number, "threads"), thread: thread.number }, "subject"),
+          element("p", `${thread.resolved ? "Resolved" : "Unresolved"} · ${thread.author} · ${date(thread.created_at_ms)}`, "discussion-meta"), element("div", thread.body, "discussion-body")); panel.append(row);
+      }
+      if (!data.threads.length) panel.append(element("p", "No line discussions yet.", "muted"));
+      panel.append(pageLinks(current, data.next_after, "Discussions")); return panel;
+    }
+    const threadPath = `${endpoint}/${current.thread}`, { thread } = await read(repository, threadPath, signal); signal.throwIfAborted();
+    panel.append(link("← All line discussions", target(current, pull.number, "threads")), element("h3", `Discussion #${thread.number}`),
+      element("p", anchorLabel(thread.anchor), "pull-branches"), element("p", `${thread.resolved ? "Resolved" : "Unresolved"} · Anchored to source ${thread.anchor.revision.source_oid.slice(0, 12)} and base ${thread.anchor.revision.base_oid.slice(0, 12)}. Resolution does not change merge requirements.`, "hint"));
+    const context = element("details", undefined, "surface"); context.append(element("summary", "Show anchored diff"));
+    let loaded = false;
+    context.addEventListener("toggle", async () => {
+      if (!context.open || loaded) return; loaded = true; const content = element("div"); context.append(content);
+      try {
+        const { patch } = await api(`${path}/comparison`, { method: "POST", body: { repository_id: repository.repository_id, target: { kind: "thread", number: thread.number }, query: { kind: "patch", path_base64: thread.anchor.path_base64 } }, signal });
+        signal.throwIfAborted(); content.append(patchView(patch, current, null, thread.anchor));
+      } catch (error) { if (!signal.aborted) { content.append(element("p", error.message, "error")); loaded = false; context.addEventListener("toggle", () => content.remove(), { once: true }); } }
+    }); panel.append(context);
+    const post = (record, label) => { const node = element("article", undefined, "discussion-post surface"); node.append(element("p", `${record.author} · ${label} · ${date(record.created_at_ms)}`, "discussion-meta"), element("div", record.body, "discussion-body")); return node; };
+    panel.append(post(thread, "Started this discussion"));
+    if (owns(repository, thread) || editable(repository) && repository.viewer.account === pull.author) {
+      const node = form(thread.resolved ? "Reopen discussion" : "Resolve discussion");
+      submit({ repository, form: node, signal, edit: true, label: thread.resolved ? "Reopen discussion" : "Resolve discussion", payload: () => ({ expected_version: thread.version, resolved: !thread.resolved }),
+        send: payload => api(threadPath, { method: "PUT", body: payload, signal }), published: () => finished("Discussion state updated.") }); panel.append(node);
+    }
+    const data = await read(repository, `${threadPath}/comments?after=${encodeURIComponent(current.after || "0")}`, signal); signal.throwIfAborted();
+    for (const comment of data.comments) panel.append(post(comment, `Reply #${comment.number}`));
+    panel.append(pageLinks(current, data.next_after, "Replies"));
+    if (editable(repository)) {
+      const node = form("Reply to this discussion"), body = field(node, "body", "Reply", "", 16384, true);
+      submit({ repository, form: node, signal, label: "Post reply", payload: () => ({ body: body.value }),
+        send: payload => api(`${threadPath}/comments`, { method: "POST", body: payload, signal }), published: result => { navigate({ ...current, after: String(result.number - 1) }); notice("Reply posted."); } }); panel.append(node);
+    }
+    return panel;
   }
 
   async function checks(repository, oid, signal) {
@@ -260,11 +325,12 @@ const pullsView = (() => {
       branches.append(branch.oid ? link(`${name} @ ${branch.oid.slice(0, 10)}`, { repo: current.repo, commit: branch.oid, reference: branch.reference }) : element("span", `${name} (deleted)`));
     }
     panel.append(branches); const tabs = element("nav", undefined, "tabs"); tabs.setAttribute("aria-label", "Pull request views");
-    for (const [label, section] of [["Discussion", "discussion"], ["Changed files", "changes"], ["Merge", "merge"]]) {
+    for (const [label, section] of [["Discussion", "discussion"], ["Changed files", "changes"], ["Line discussions", "threads"], ["Merge", "merge"]]) {
       const tab = link(label, { ...target(current, pull.number, section), candidate: current.candidate, review: section === "changes" ? current.review : undefined }, "tab"); if (section === current.section) tab.setAttribute("aria-current", "page"); tabs.append(tab);
     }
     panel.append(tabs);
     if (current.section === "changes") panel.append(await changes(repository, current, pull, path, signal));
+    else if (current.section === "threads") panel.append(await threads(repository, current, pull, path, signal));
     else if (current.section === "merge") panel.append(await merge(repository, current, pull, path, signal));
     else panel.append(editorial(repository, pull, path, signal), await reviews(repository, current, pull, path, signal));
     return panel;

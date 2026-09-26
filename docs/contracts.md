@@ -901,7 +901,7 @@ No aggregate approval count, mergeability or diff computation runs on these read
 Fast-forward merge publication rechecks current review requirements, grant/ref/pull
 versions and branch checks in the transaction that advances the base ref and marks
 the pull merged, as specified below. Required-PR branches reject direct pushes.
-Inline threads, rebase, conflict-resolution UI,
+Rebase, conflict-resolution UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications remain open. A future collector must retain initial pull
 OIDs, historical review OIDs, merged source/base and result OIDs, and merge preparation roots in addition to live refs.
@@ -926,6 +926,7 @@ Unrelated histories and multiple best merge bases return distinct 409 messages.
 | `current` | `revision`: exact `PullRevision` | Observed editorial version and both live ref versions/OIDs |
 | `review` | `number`: positive repository review number | Immutable review revision belonging to this pull |
 | `merged` | none | Immutable source/base/editorial revision committed with merge publication |
+| `thread` | `number`: positive repository discussion number | Immutable revision retained by this pull’s line discussion |
 
 Current views support open, closed, draft and merged proposals with live refs.
 The reader checks the requested editorial/source/base OIDs and retained ref
@@ -939,7 +940,7 @@ Every target rechecks current repository membership after upload and again befor
 returning the result. Token revocation retains the request-admission boundary.
 Responses retain `revision` and computed `merge_base`, identifying the immutable
 objects compared. No general per-push history is recorded: saved historical
-snapshots are reviews and successful merges. Pagination, patches and file previews
+snapshots are reviews, line discussions and successful merges. Pagination, patches and file previews
 use the same target; each query applies its traversal/output budgets.
 
 Comparison uses verified immutable `commit_parents` rows, emitted only by object
@@ -1055,6 +1056,77 @@ runs on a blocking worker that retains the shared transfer permit even if its
 caller times out or disconnects. Authorization is checked again after computation.
 Graph/object/path bounds and the 120-second comparison deadline also apply.
 There is no persistent diff cache; every request computes from verified objects.
+
+### Line discussions
+
+Repository-local `pull_threads` and `pull_thread_comments` store immutable text,
+creation UUID bindings, anchors and resolution state. They use the existing
+registered SQL batch command: membership/eligibility decision, guarded write and
+result number share a transaction. The pinned Cellule SQL implementation executes
+statements inside the caller's command transaction and delegates rollback of any
+failure to its application savepoint. No runtime operation or codec is added.
+The unreleased schema 1 adds these tables; use a fresh development prefix.
+
+`GET/POST .../pulls/<number>/threads` lists or creates threads.
+`GET/PUT .../threads/<thread>` reads or resolves/reopens one.
+`GET/POST .../threads/<thread>/comments` lists or appends replies. All resource
+lookups bind repository and parent pull; comment lookups also bind the thread.
+Lists use exclusive numeric `after`, `next_after`, ascending repository-local
+numbers and 16-record pages. A thread includes `number`, UUID `id`, `author`,
+immutable `body`, `resolved`, `version`, timestamps and `anchor`. Replies have
+number, UUID, author, immutable body and creation timestamp.
+
+Thread creation requires repository UUID, a new UUID, `target`, `path_base64`,
+`side: before|after`, positive `line` and nonblank `body` (at most 16 KiB, no NUL).
+Targets may be current, review or merged. A thread target is read-only and is
+rejected for creation. The server runs the bounded verified patch query, confirms
+the requested line lies in a text hunk on that side and derives the blob identity.
+Context lines are eligible; omitted unchanged lines, binary/large files, Gitlinks,
+empty hunks and absent sides cannot be anchors. Neither arbitrary OIDs nor raw
+Git paths are accepted as authority. All patch traversal and work limits apply.
+
+The retained anchor has the exact pull/ref `revision`, `merge_base`, canonical
+`path_base64`, `side`, `line` and `blob_oid`. The final Cell transaction rechecks
+current access and either the live revision tuple or the selected saved review/
+merge record. A source/base/editorial change between validation and publication
+conflicts for a current target. Stored historical selectors remain immutable.
+Object foreign keys retain source, base, merge-base and blob roots; a future
+collector must also include these roots and their complete Git closure.
+
+A creation UUID is bound to actor, parent pull, target selector, path, side, line
+and original body. A current-access-protected lookup handles exact retry before
+revalidating live refs, so a lost response is recoverable after branch movement,
+delete/recreate or later thread resolution. The write transaction repeats the
+identity check for concurrent creators. A changed binding or actor returns 409.
+Replies likewise bind their UUID to author, parent pull/thread and original body.
+They do not alter resolution or approval state. Text is immutable, as with reviews;
+corrections can be appended. Editing/deletion/moderation is not delivered here.
+
+`PUT` carries repository UUID, `expected_version` and `resolved`. The current
+thread author, pull author or repository writer can resolve/reopen with a
+write-scoped token. Every accepted update increments the version; stale updates
+return 409 and never overwrite newer state. New replies are allowed on resolved,
+closed or merged discussions. Resolution is informational: merge admission still
+uses canonical reviews, checks and branch rules. No thread is automatically
+retargeted or treated as a current approval.
+
+Current repository membership is required for every read, creation/retry, reply
+and resolution. Read token scope permits reads; write scope permits participating,
+even for a repository read-role member. Resolve authority is narrower as above.
+Missing resources/access return 404; insufficient scope/authority 403; repository
+UUID, identity or revision/version mismatch 409; malformed or invalid anchors 422;
+traversal limits 413. Request bodies use the existing 128 KiB/30-second pull input
+limit. New anchor validation shares the eight Git/LFS/comparison permits and a
+120-second deadline; overload returns 503 with Retry-After. Detached creation and
+response bodies retain admission; blocking diff work keeps it after cancellation.
+
+Comparison `target: {"kind":"thread","number":N}` reads the original revision
+with current access checks and pull binding, even after both refs disappear.
+The browser highlights the anchored line in that snapshot and links immutable
+file views. Line buttons open the composer, and lists/details provide replies
+and versioned resolve/reopen controls. Text remains literal. Existing submission
+handling preserves UUID/payload on ambiguous replies; edit ambiguity requires
+reading current state. Read-scoped tokens expose no mutation controls.
 
 ### Required reviews and fast-forward merge publication
 
@@ -1392,7 +1464,7 @@ missing-final-newline markers and visible `␍` for carriage returns. The horizo
 scrollable diff region is keyboard focusable; both immutable file views are linked.
 Binary, large-file, submodule and empty-hunk states are explained. Non-UTF-8 paths
 retain their base64 representation. Renames appear as deletion/addition.
-Line comments remain pending.
+Line discussions are accessible from diff line numbers and their own paged tab.
 
 Merge preparation is a separate action from publication. A ready candidate
 exposes its file view, immutable Git fetch ref and check results for its exact

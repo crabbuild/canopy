@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs implemented; rebase, inline discussions and releases remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: rebase and conflict resolution; inline discussions;
+5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -1578,3 +1578,79 @@ features, account lifecycle, native resource bounds, backup/GC, routing,
 observability, hosted CI and production capacity gates remain open. Saved reviews
 and merges retain snapshots; independent per-push history and the earlier saved
 file-download verification gap remain outside this milestone.
+
+## Durable line discussions milestone — 2026-09-26
+
+Implemented line discussions across repository Cell storage, HTTP and the pull
+request interface. Select a base/source line number in a text diff to start one;
+read paged discussions/replies, reply, resolve/reopen, and inspect the highlighted
+original line after refs move or disappear. Discussion text is literal and
+immutable. Editing/deletion/moderation and range anchors are not implemented.
+
+Anchors come from the verified bounded patch reader, including context lines.
+They retain the exact pull/ref revision, merge base, raw-byte path, side, line and
+blob identity. Callers cannot choose authoritative OIDs. The final SQL transaction
+rechecks current access and live revision eligibility or the immutable selected
+review/merge record. All metadata and replies live in SQLite. Source/base/merge-base
+and blob object foreign keys add explicit retention roots for future collection.
+
+Thread/reply UUID bindings preserve exact retries under fresh runtime identities;
+thread retry lookup precedes live-ref validation but follows current access.
+Resolution uses expected versions and permits the thread author, pull author or
+repository writer with write token scope. New replies do not silently reopen a
+thread. Resolution does not change canonical review/check/merge requirements.
+The [contract](contracts.md#line-discussions) specifies endpoints, permissions,
+limits and status codes. The new tables change unreleased schema 1: use a fresh
+development prefix. No dependency, lockfile or runtime operation codec changed.
+
+Evidence:
+
+- Six real-server comparison integrations pass. The new thread scenario verifies
+  concurrent identical creation, invalid/out-of-hunk/binary/path anchors, read-only
+  token rejection, exact source blob/revision binding, deleted-file base anchors,
+  reply identity conflicts, author resolution, unauthorized resolution and stale
+  versions. Threads and replies paginate across 17 records each.
+- Old current-target creation retries survive source movement; a new UUID with
+  that stale target conflicts. Saved-review and merged-target discussions can be
+  created after both branches are deleted. Thread-target comparisons remain exact
+  and cannot be used with another parent pull. Revocation during a paused reply
+  body returns 404; revoked creators cannot replay creation. Fresh local state
+  restores thread metadata, replies and original patch responses exactly.
+- The shared-admission test includes discussion creation: eight paused LFS
+  transfers yield 503/Retry-After while metadata/health requests remain available.
+  Anchor workers and response frames retain their permit as in comparisons.
+- The pinned Cellule `sql.rs` and `sql/api.rs` confirm transactional batch execution,
+  rollback ownership, parameter-count checks, bounded results and typed command
+  publication. Existing pull mutation result decoding is reused. Git mutation and
+  review-policy ownership stay in their existing modules.
+- Real Chrome/RustFS: a deliberately discarded successful creation reply displays
+  Retry submission and preserves the original body/UUID. Retrying yields one
+  discussion. Posting a reply, resolve/reopen and stale-update refresh work.
+  The original line is highlighted; HTML stays text. At 390 px the document stays
+  390 px wide. Fresh-local-state recovery retains the discussion, reply and resolved
+  state; a read-only token sees the same anchor with no mutation forms and no
+  console errors. State-only forms now give refresh guidance without asking the
+  user to copy a nonexistent text draft. Temporary fixtures and viewport were
+  cleaned up after verification.
+
+The release RustFS process probe passes with `--sqlite-chunks --many-objects 256`.
+It now seeds a line discussion, reply and resolution, then checks exact records,
+creation/reply retries and anchored patch bytes after clean restart, disk loss and
+SIGKILL/lease takeover. Existing Git/LFS, issue/review, native merge/squash,
+fast-forward, lost replies, ACL/token changes, branch policy, embedded assets and
+chunk restoration pass too. The run exits zero; fresh RustFS startup reports
+missing internal metadata before qualification proceeds. Post-takeover clone took
+0.51s; exact large tree/commit/tag restoration took 0.57s. These local observations
+do not establish production throughput. Final copy/error-message changes were
+verified with the focused integration, browser reload and rebuilt binaries.
+
+Rust formatting, Clippy with warnings denied, JavaScript syntax and process-script
+parsing pass. Debug/release binaries build. Growth is the new discussion domain,
+transport, UI and behavior tests; existing verified Git reading, bounded SQL,
+submission retry handling and pull result decoding remain canonical.
+
+Completion audit: the full hosting goal remains active. Discussion editing and
+moderation, rebase/conflict resolution, administration, releases/assets, public
+service features, account lifecycle, native resource bounds, backup/GC, routing,
+observability, hosted CI and production capacity gates remain open. The separate
+saved-file-download proof gap and general per-push history also remain.

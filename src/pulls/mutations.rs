@@ -162,7 +162,7 @@ impl RepositoryCell {
             SqlStatement { sql: "SELECT number FROM pull_reviews WHERE id = ?1".into(), parameters: vec![SqlValue::Blob(input.id.to_vec())] },
         ]).await
     }
-    async fn pull_change(
+    pub(super) async fn pull_change(
         &self,
         identity: MutationIdentity,
         statements: Vec<SqlStatement>,

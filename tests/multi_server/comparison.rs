@@ -562,3 +562,6 @@ mod history;
 
 #[path = "comparison/patches.rs"]
 mod patches;
+
+#[path = "comparison/threads.rs"]
+mod threads;

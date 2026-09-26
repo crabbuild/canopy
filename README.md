@@ -49,8 +49,9 @@ version and both branch tips. Writers can fast-forward or prepare a merge/squash
 candidate, inspect its files, fetch it for testing, then explicitly publish it.
 Publication rechecks the revision, permissions, reviews and required checks.
 Stale or conflicting candidates cannot be published. Check reporting, branch
-policy configuration and access management remain API operations. Inline
-discussions and conflict resolution are pending. Merged requests retain
+policy configuration and access management remain API operations. Line discussions can be opened from diff line numbers, replied to and
+resolved/reopened. Their original file/line snapshots remain available after
+branch changes. Conflict resolution is pending. Merged requests retain
 their pre-merge comparison, and **View reviewed changes** opens the exact version
 bound to a review, including after branch movement or deletion.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
@@ -147,6 +148,9 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / PUT | `/api/repositories/<name>/pulls/<number>` | Read / edit, close or reopen |
 | GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
 | POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files, patches or file bytes |
+| GET / POST | `/api/repositories/<name>/pulls/<number>/threads` | List / start anchored line discussions |
+| GET / PUT | `/api/repositories/<name>/pulls/<number>/threads/<thread>` | Read / resolve or reopen at an expected version |
+| GET / POST | `/api/repositories/<name>/pulls/<number>/threads/<thread>/comments` | List / append discussion replies |
 | GET | `/api/repositories/<name>/pulls/<number>/review-policy` | Read current review requirements and counts |
 | POST | `/api/repositories/<name>/pulls/<number>/merge` | Publish a reviewed fast-forward, merge commit or squash |
 | POST | `/api/repositories/<name>/pulls/<number>/merge-candidates` | Prepare a merge commit or squash |
@@ -198,7 +202,8 @@ Comparison POSTs require a read-scoped token, current repository membership,
 `{"kind":"review","number":<review number>}` for a saved review, or
 `{"kind":"merged"}` for the published request's pre-merge revision. Historical
 selectors resolve immutable records belonging to this pull; callers cannot
-substitute arbitrary historical OIDs.
+substitute arbitrary historical OIDs. `{"kind":"thread","number":<thread number>}`
+reads the snapshot retained by a line discussion.
 
 ```json
 {"kind":"files","after":null}
@@ -237,6 +242,36 @@ Mode-only changes and empty files may also have no hunks. Text work/output budge
 return 413 without a partial diff; see [limits](docs/contracts.md#unified-text-patches).
 The web view displays hunks literally, marks missing final newlines and CRs,
 and links both immutable files. It never executes repository content.
+
+Start a line discussion by POSTing to `.../pulls/<number>/threads`:
+
+```json
+{
+  "repository_id": "<repository UUID>",
+  "id": "<new discussion UUID>",
+  "target": {"kind":"review","number":1},
+  "path_base64": "UkVBRE1FLm1k",
+  "side": "after",
+  "line": 12,
+  "body": "Could we explain this change?"
+}
+```
+
+Creation accepts current, review or merged targets. The side/line must occur in a
+text hunk returned by the patch query, including context lines. The server verifies
+the blob and coordinates; clients cannot supply an anchor OID. A thread keeps its
+original revision, merge base, byte path, side, line and blob identity.
+Current members with write-scoped tokens may start/reply; replies use a new UUID
+and `body`. Exact retries return the original number. Discussion text and replies
+are immutable; corrections can be added as replies. Lists page at 16 records with
+numeric `after`/`next_after`.
+
+Resolve/reopen with `repository_id`, `expected_version` and `resolved: true|false`.
+The thread author, pull author or repository writer may do so with a write-scoped
+token. Stale versions return 409. Resolution is informational and does not replace
+required approvals or checks. See [line discussion contracts](docs/contracts.md#line-discussions).
+This unreleased schema adds discussion tables and requires a fresh development
+storage prefix; there is no upgrade migration yet.
 
 Merge POSTs require a write-scoped token and current repository write access:
 
@@ -291,7 +326,7 @@ server-owned and rejects every push update, including owner pushes.
 
 Native Git handles three-way content merges, renames and multiple merge bases.
 Merge drivers and signing commands from host Git configuration are disabled.
-Rebase, conflict resolution, inline comments, forks and retargeting remain
+Rebase, conflict resolution, forks and retargeting remain
 to be delivered.
 
 Commit checks record results from a configured reporter; they do not execute CI

@@ -11,6 +11,7 @@ mod default_branch;
 mod issues;
 mod merge;
 mod pulls;
+mod threads;
 mod tokens;
 
 use authorization::authorized_route;
@@ -139,6 +140,18 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/pulls/{number}/comparison",
                 axum::routing::post(comparison::compare),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/threads",
+                get(threads::list).post(threads::create),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/threads/{thread}",
+                get(threads::read).put(threads::resolve),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/threads/{thread}/comments",
+                get(threads::comments).post(threads::reply),
             )
             .route(
                 "/api/repositories/{name}/pulls/{number}/reviews",

@@ -33,3 +33,10 @@
   .issue-filters { flex-wrap: wrap; }
   .issue-filters a { padding: 6px 10px; }
 }
+
+.patch-table td button { background: transparent; border: 0; border-radius: 0; padding: 0 4px; min-width: 26px; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.patch-table td button:hover { background: #fff8; }
+.patch-content .discussion-editor { margin: 16px; }
+.discussion > details > summary { cursor: pointer; padding: 16px; }
+
+.patch-anchor { outline: 2px solid var(--pine); outline-offset: -2px; }
