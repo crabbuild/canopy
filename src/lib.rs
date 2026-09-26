@@ -11,6 +11,7 @@ use cellule_runtime::{
 };
 use sha1::{Digest as _, Sha1};
 
+pub mod directory;
 pub mod git_gateway;
 pub mod git_http;
 pub mod http;
@@ -46,10 +47,15 @@ pub fn repository_target(
     application: ApplicationId,
     repository: [u8; 16],
 ) -> cellule_runtime::Result<CellTarget> {
+    validate_repository_id(repository)?;
+    CellTarget::new(tenant, application, REPOSITORIES, &repository)
+}
+
+pub(crate) fn validate_repository_id(repository: [u8; 16]) -> cellule_runtime::Result<()> {
     if !(1..=8).contains(&(repository[6] >> 4)) || repository[8] >> 6 != 2 {
         return Err(Error::Identity("repository UUID is not canonical"));
     }
-    CellTarget::new(tenant, application, REPOSITORIES, &repository)
+    Ok(())
 }
 
 /// Git object kind used when calculating the canonical object ID.
@@ -161,7 +167,9 @@ impl CellApplication for CanopyApplication {
     const NAME: &'static str = "canopy";
 
     fn register(builder: &mut ApplicationBuilder) -> cellule_runtime::Result<()> {
+        builder.register(directory::DirectoryModule)?;
         builder.register(RepositoryModule)?;
+        builder.cell_type(directory::cell_type()?)?;
         builder.cell_type(
             CellType::entity_uuid(RepositoryModule::NAME, "repository", REPOSITORIES)?
                 .with_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024)?,

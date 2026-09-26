@@ -17,6 +17,7 @@ use subtle::ConstantTimeEq;
 use url::Url;
 
 use crate::{
+    directory::validate_component,
     git_gateway::{GatewayError, GitGateway},
     git_http::GitHttpRequest,
     lfs::{LfsError, MAX_LFS_BYTES},
@@ -31,6 +32,7 @@ const LFS_JSON: &str = "application/vnd.git-lfs+json";
 pub struct GitHttpApi {
     gateway: Arc<GitGateway>,
     owner: String,
+    repository_path: String,
     token_digest: [u8; 32],
     public_url: Url,
     ready: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -40,6 +42,7 @@ impl GitHttpApi {
     pub fn new(
         gateway: Arc<GitGateway>,
         owner: String,
+        repository_name: &str,
         token: &str,
         public_url: &str,
         ready: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -47,6 +50,8 @@ impl GitHttpApi {
         if owner.is_empty() || token.is_empty() {
             return Err("Git owner and token are required");
         }
+        validate_component(&owner).map_err(|_| "invalid repository owner")?;
+        validate_component(repository_name).map_err(|_| "invalid repository name")?;
         let public_url = Url::parse(public_url).map_err(|_| "invalid public URL")?;
         let loopback = public_url.host_str().is_some_and(|host| {
             host.eq_ignore_ascii_case("localhost")
@@ -67,6 +72,7 @@ impl GitHttpApi {
         }
         Ok(Self {
             gateway,
+            repository_path: format!("/{owner}/{repository_name}.git"),
             owner,
             token_digest: Sha256::digest(token.as_bytes()).into(),
             public_url,
@@ -75,15 +81,15 @@ impl GitHttpApi {
     }
 
     pub fn router(self: Arc<Self>) -> Router {
+        let git_path = format!("{}/{{*path}}", self.repository_path);
+        let lfs_batch_path = format!("{}/info/lfs/objects/batch", self.repository_path);
+        let lfs_object_path = format!("{}/info/lfs/objects/{{oid}}", self.repository_path);
         Router::new()
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
-            .route("/repo.git/{*path}", any(git_request))
-            .route("/repo.git/info/lfs/objects/batch", post(lfs_batch))
-            .route(
-                "/repo.git/info/lfs/objects/{oid}",
-                get(lfs_get).put(lfs_put),
-            )
+            .route(&git_path, any(git_request))
+            .route(&lfs_batch_path, post(lfs_batch))
+            .route(&lfs_object_path, get(lfs_get).put(lfs_put))
             .with_state(self)
     }
 
@@ -236,8 +242,10 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
         };
         if let Some(action) = action {
             let href = format!(
-                "{}repo.git/info/lfs/objects/{}",
-                api.public_url, requested.oid
+                "{}{}/info/lfs/objects/{}",
+                api.public_url,
+                &api.repository_path[1..],
+                requested.oid
             );
             response["actions"] = json!({});
             response["actions"][action] = json!({
@@ -370,7 +378,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         return unauthorized();
     }
     let method = request.method().as_str().to_owned();
-    let path_info = request.uri().path().to_owned();
+    let Some(suffix) = request.uri().path().strip_prefix(&api.repository_path) else {
+        return plain(StatusCode::NOT_FOUND, "Repository does not exist");
+    };
+    let path_info = format!("/repo.git{suffix}");
     let query = request.uri().query().unwrap_or_default().to_owned();
     let content_type = request
         .headers()

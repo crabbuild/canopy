@@ -7,6 +7,9 @@ before admitting persistent customer repositories.
 | --- | --- | --- |
 | Application | `canopy` | `CanopyApplication` |
 | Repository namespace | sixteen bytes of value `0x47` | `REPOSITORIES` |
+| Directory namespace | sixteen bytes of value `0x48`, one fixed SQL shard per tenant | `DIRECTORY` |
+| Repository name | lowercase ASCII owner/name components, each at most 64 bytes | Directory Cell |
+| Name reservation | owner/name row stores one canonical UUID and pending/ready state | Directory Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
@@ -22,6 +25,12 @@ bytes against the SQLite record and recompute the Git OID or LFS SHA-256.
 The `refs` table stores name, OID and version. A successful push persists all
 new objects before `FinalizePush` publishes any ref. Rejected or interrupted
 pushes may leave unreferenced objects; collection is not implemented yet.
+
+A name reservation commits before its Repository Cell is provisioned. A retry
+reads the previously reserved UUID and completes the same Cell instead of
+assigning another identity. The server marks the row ready only after it has
+acquired that Cell. The current HTTP process still serves one configured name;
+runtime creation and routing of additional names remain open.
 
 Git packs and the bare repository cache are transport and acceleration
 artifacts. Neither is authoritative. The gateway can reconstruct cache objects

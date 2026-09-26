@@ -104,6 +104,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         let api = Arc::new(GitHttpApi::new(
             gateway,
             "canopy".into(),
+            "example",
             "local-test-token",
             &format!("http://{address}"),
             Arc::new(|| true),
@@ -116,7 +117,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 })
                 .await
         });
-        let url = format!("http://{address}/repo.git");
+        let url = format!("http://{address}/canopy/example.git");
         let unauthenticated = Command::new("git")
             .args(["-c", "credential.helper=", "ls-remote", &url])
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -212,6 +213,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         let api = Arc::new(GitHttpApi::new(
             gateway,
             "canopy".into(),
+            "example",
             "local-test-token",
             &format!("http://{address}"),
             Arc::new(|| true),
@@ -224,7 +226,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 })
                 .await
         });
-        let url = format!("http://{address}/repo.git");
+        let url = format!("http://{address}/canopy/example.git");
         let clone = scratch.path().join("clone");
         run_git(
             None,

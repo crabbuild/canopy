@@ -1,11 +1,12 @@
 # Canopy
 
 Canopy is an independent Git hosting service built on Cellule. The dedicated
-`canopy-server` crate owns its product schema, Git gateway and HTTP API. One
-repository UUID identifies one SQLite Repository Cell. Ordinary Git objects,
-refs and LFS metadata live in that Cell; large Git blob and LFS bytes use
-immutable repository-scoped external objects. Canopy has no Crab product or
-Xet dependency.
+`canopy-server` crate owns its product schema, Git gateway and HTTP API. A
+Directory Cell maps an owner and repository name to a stable UUID. Each UUID
+identifies its own SQLite Repository Cell. Ordinary Git objects, refs and LFS
+metadata live in that Cell; large Git blob and LFS bytes use immutable
+repository-scoped external objects. Canopy has no Crab product or Xet
+dependency.
 
 ## Current implementation
 
@@ -18,7 +19,11 @@ handling; the SQLite Cell is the durable authority, and a bare Git repository
 is only a rebuildable cache. Integration tests use stock `git` and `git-lfs`
 clients to push and clone, including a restart with a fresh local SQLite file.
 
-The current gateway serves one configured private repository at `/repo.git`.
+The current gateway serves one configured private repository at
+`/<owner>/<repository_name>.git`. On first start it reserves a UUID in the
+Directory Cell, provisions the Repository Cell, then marks the name ready.
+Later starts recover that UUID from the directory; the configuration does not
+pin an ID.
 It uses one static token, buffers requests and responses, and caps Git and LFS
 payloads at 64 MiB. Local recovery currently admits a 512 MiB SQLite database.
 There is no account or organization model, repository directory, multi-node
@@ -29,7 +34,8 @@ for development only.
 ## Run the current service
 
 Copy [config.example.json](config.example.json) and set the object storage URL,
-IDs, network addresses and data directory. The object store must support
+tenant and application IDs, repository name, network addresses and data
+directory. The object store must support
 conditional create/update and ranged reads; startup probes these operations.
 Configure credentials through the provider's environment variables. Set
 `CANOPY_GIT_TOKEN` and `CANOPY_NODE_SIGNING_KEY_HEX` (a 32-byte key encoded as

@@ -2,7 +2,7 @@
   "storage_url": "s3://canopy-data/example",
   "tenant_id": "5e17b1fb-1ea7-4891-b9c3-7ee319c41114",
   "application_id": "57e83d94-889c-4d0c-adee-6141a1b1a160",
-  "repository_id": "a948af5d-a210-4b5f-a9a4-359c9789a7ba",
+  "repository_name": "example",
   "node_id": "de656d4e-0555-4bc2-9a31-d5d898ad5f74",
   "fleet_digest": "1111111111111111111111111111111111111111111111111111111111111111",
   "image_digest": "2222222222222222222222222222222222222222222222222222222222",

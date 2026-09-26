@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Open: local paths remain |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Open |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable name reservation and ready state survive recovery; only one configured name is served, with no account or ACL API |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: small and 64 MiB buffered paths work |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: Cell ref CAS and stock push work |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: stock clone after gateway restart and clean Cell owner move works |
@@ -35,9 +35,9 @@ separate product decisions.
    and tags, plus a real corpus benchmark. Keep the bare repo disposable.
 3. Add durable push outcome records and reachable-closure verification to the
    Cell finalization contract. Make a lost response and retry deterministic.
-4. Add account, directory and ACL Cells, then route multiple repositories by
-   stable UUID and owner/name. Keep authorization at every read and write
-   boundary, including Git and LFS.
+4. Route multiple repositories through the Directory Cell by stable UUID and
+   owner/name, then add account identity, token scopes and ACL Cells. Keep
+   authorization at every read and write boundary, including Git and LFS.
 5. Implement collaboration as vertical slices: issues; checks and branch
    rules; pull requests, reviews and merge; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.

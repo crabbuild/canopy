@@ -91,7 +91,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         Arc::clone(&object_store),
     ));
     let (address, stop, server) = serve(first_gateway).await?;
-    let first_url = format!("http://{address}/repo.git");
+    let first_url = format!("http://{address}/canopy/example.git");
     let local = first_disk.path().join("local");
     run_git(None, &["init", "-b", "main", path_str(&local)?]).await?;
     run_git(Some(&local), &["config", "user.name", "Canopy Test"]).await?;
@@ -165,7 +165,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         object_store,
     ));
     let (address, stop, server) = serve(second_gateway).await?;
-    let second_url = format!("http://{address}/repo.git");
+    let second_url = format!("http://{address}/canopy/example.git");
     let clone = second_disk.path().join("clone");
     run_git(
         None,
@@ -268,6 +268,7 @@ async fn serve(
     let api = Arc::new(GitHttpApi::new(
         gateway,
         "canopy".into(),
+        "example",
         "local-test-token",
         &format!("http://{address}"),
         Arc::new(|| true),

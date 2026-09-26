@@ -12,7 +12,7 @@ async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
     let first_address = available_address().await?;
-    let first_url = format!("http://{first_address}/repo.git");
+    let first_url = format!("http://{first_address}/canopy/example.git");
     let first = SingleRepositoryServer::start(
         config(first_address, workspace.path().join("first")),
         Arc::clone(&store),
@@ -54,7 +54,7 @@ async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
     first.shutdown().await?;
 
     let second_address = available_address().await?;
-    let second_url = format!("http://{second_address}/repo.git");
+    let second_url = format!("http://{second_address}/canopy/example.git");
     let second = SingleRepositoryServer::start(
         config(second_address, workspace.path().join("second")),
         store,
@@ -97,13 +97,10 @@ async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
 }
 
 fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> SingleRepositoryConfig {
-    let mut repository = [53; 16];
-    repository[6] = 0x73;
-    repository[8] = 0x83;
     SingleRepositoryConfig {
         tenant: TenantId::from_bytes([51; 16]),
         application: ApplicationId::from_bytes([52; 16]),
-        repository,
+        repository_name: "example".into(),
         node: NodeId::from_bytes([54; 16]),
         fleet: Digest::from_bytes([55; 32]),
         image: Digest::from_bytes([56; 32]),

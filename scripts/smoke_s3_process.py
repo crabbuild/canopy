@@ -72,7 +72,7 @@ def start(binary, directory, settings, instance):
     process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output)
     output.close()
     wait_ready(process, address, log)
-    return process, f"http://{address}/repo.git"
+    return process, f"http://{address}/{settings['owner']}/{settings['repository_name']}.git"
 
 
 def clone_and_verify(url, directory, expected_oid, expected_lfs):
@@ -111,7 +111,7 @@ def main():
         "storage_url": f"{args.storage_url.rstrip('/')}/process-smoke/{run_id}",
         "tenant_id": str(uuid.uuid4()),
         "application_id": str(uuid.uuid4()),
-        "repository_id": str(uuid.uuid4()),
+        "repository_name": "example",
         "node_id": str(uuid.uuid4()),
         "fleet_digest": "11" * 32,
         "image_digest": "22" * 32,

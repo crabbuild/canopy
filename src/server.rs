@@ -11,9 +11,10 @@ use cellule_host::{CellNode, CellNodeBuilder};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits, LtxError};
 use cellule_runtime::{
     ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellStorageLayout, CellTarget, ControlState, Digest, Error, IncarnationId, NodeAdvertisement,
-    NodeCapacity, NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard, Owner,
-    RecoveryManifestStore, SessionId, SqlWorkerPool, TenantId, VersionedNodeAdvertisement,
+    CellStorageLayout, CellTarget, ControlState, Digest, Error, IncarnationId, InvocationError,
+    MutationIdentity, NodeAdvertisement, NodeCapacity, NodeDirectory, NodeFailureDomain, NodeId,
+    NodeLeaseGuard, Owner, RecoveryManifestStore, RequestId, SessionId, SqlResultSet,
+    SqlWorkerPool, TenantId, VersionedNodeAdvertisement,
 };
 use cellule_store::{StorageError, Store, probe_storage};
 use ed25519_dalek::SigningKey;
@@ -23,7 +24,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
-    build_descriptor, git_gateway::GitGateway, http::GitHttpApi, repository_target,
+    build_descriptor,
+    directory::{self, DirectoryCell, DirectoryModule},
+    git_gateway::GitGateway,
+    http::GitHttpApi,
+    repository_target,
 };
 
 const LEASE_MS: i64 = 10_000;
@@ -47,13 +52,15 @@ pub enum ServerError {
     Repository(&'static str),
     #[error("HTTP configuration is invalid: {0}")]
     Http(&'static str),
+    #[error("repository directory operation failed")]
+    Directory(#[from] InvocationError<Vec<SqlResultSet>>),
 }
 
 /// Required ownership and storage settings for a single-repository node.
 pub struct SingleRepositoryConfig {
     pub tenant: TenantId,
     pub application: ApplicationId,
-    pub repository: [u8; 16],
+    pub repository_name: String,
     pub node: NodeId,
     pub fleet: Digest,
     pub image: Digest,
@@ -120,7 +127,6 @@ impl SingleRepositoryServer {
         config: SingleRepositoryConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
-        repository_target(config.tenant, config.application, config.repository)?;
         std::fs::create_dir_all(&config.data_dir)?;
         let local = tempfile::TempDir::new_in(&config.data_dir)?;
         let store = Store::new(Arc::clone(&raw_store));
@@ -201,17 +207,57 @@ impl SingleRepositoryServer {
                 )
                 .await
             })?;
-            let target = repository_target(config.tenant, config.application, config.repository)?;
-            let handle = acquire_repository(
+            let directory_target = directory::directory_target(config.tenant, config.application)?;
+            let directory_handle = acquire_sql_cell(
                 &node,
                 &layout,
                 &directory,
-                &target,
+                SqlCellSpec {
+                    target: &directory_target,
+                    module: DirectoryModule::NAME,
+                    schema: directory::SCHEMA,
+                    max_database_bytes: 64 * 1024 * 1024,
+                    destination: local.path().join("directory.sqlite"),
+                },
                 session,
                 &config.peer_endpoint,
-                local.path().join("repository.sqlite"),
             )
             .await?;
+            let directory_application = node.application_handle::<CanopyApplication>(
+                CellClient::local(Arc::clone(&registry), directory_handle),
+                config.tenant,
+                config.application,
+            );
+            let directory_cell = DirectoryCell::new(&directory_application, directory_target)?;
+            let reserved = directory_cell
+                .reserve(
+                    mutation_identity()?,
+                    &config.owner,
+                    &config.repository_name,
+                    uuid::Uuid::new_v4().into_bytes(),
+                )
+                .await?
+                .output;
+            let target =
+                repository_target(config.tenant, config.application, reserved.repository_id)?;
+            let handle = acquire_sql_cell(
+                &node,
+                &layout,
+                &directory,
+                SqlCellSpec {
+                    target: &target,
+                    module: RepositoryModule::NAME,
+                    schema: include_str!("schema.sql"),
+                    max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
+                    destination: local.path().join("repository.sqlite"),
+                },
+                session,
+                &config.peer_endpoint,
+            )
+            .await?;
+            directory_cell
+                .activate(mutation_identity()?, &reserved)
+                .await?;
             let application_handle = node.application_handle::<CanopyApplication>(
                 CellClient::local(registry, handle),
                 config.tenant,
@@ -232,6 +278,7 @@ impl SingleRepositoryServer {
                 GitHttpApi::new(
                     gateway,
                     config.owner,
+                    &config.repository_name,
                     &config.token,
                     &config.public_url,
                     ready,
@@ -321,19 +368,33 @@ async fn renew_lease(
     }
 }
 
-async fn acquire_repository(
+struct SqlCellSpec<'a> {
+    target: &'a CellTarget,
+    module: &'static str,
+    schema: &'static str,
+    max_database_bytes: u64,
+    destination: PathBuf,
+}
+
+async fn acquire_sql_cell(
     node: &CellNode,
     layout: &CellStorageLayout,
     directory: &NodeDirectory,
-    target: &CellTarget,
+    spec: SqlCellSpec<'_>,
     session: SessionId,
     endpoint: &str,
-    destination: PathBuf,
 ) -> Result<cellule_runtime::CellHandle, ServerError> {
+    let SqlCellSpec {
+        target,
+        module,
+        schema,
+        max_database_bytes,
+        destination,
+    } = spec;
     let registry = node.application().registry();
     let code = registry
-        .module_code(RepositoryModule::NAME)
-        .ok_or(ServerError::Repository("repository module is absent"))?;
+        .module_code(module)
+        .ok_or(ServerError::Repository("SQL module is absent"))?;
     let proof = CellCatalog::new(layout.clone(), target.tenant())
         .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
         .await?;
@@ -355,7 +416,7 @@ async fn acquire_repository(
         }
     };
     let limits = Limits {
-        max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
+        max_database_bytes,
         ..Limits::default()
     };
     let replica = CellReplica::new(
@@ -375,7 +436,7 @@ async fn acquire_repository(
                     observed,
                     destination,
                     |transaction| {
-                        transaction.execute_batch(include_str!("schema.sql"))?;
+                        transaction.execute_batch(schema)?;
                         Ok(())
                     },
                 )
@@ -418,7 +479,7 @@ async fn acquire_repository(
                         destination,
                         owner,
                         |transaction| {
-                            transaction.execute_batch(include_str!("schema.sql"))?;
+                            transaction.execute_batch(schema)?;
                             Ok(())
                         },
                     )
@@ -439,4 +500,13 @@ fn unix_now_ms() -> Result<i64, ServerError> {
             .as_millis(),
     )
     .map_err(|_| ServerError::Clock)
+}
+
+fn mutation_identity() -> Result<MutationIdentity, ServerError> {
+    let now_ms = unix_now_ms()?;
+    Ok(MutationIdentity {
+        request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
+        issued_at_ms: now_ms,
+        expires_at_ms: now_ms.checked_add(60_000).ok_or(ServerError::Clock)?,
+    })
 }

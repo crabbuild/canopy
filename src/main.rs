@@ -14,7 +14,7 @@ struct FileConfig {
     storage_url: String,
     tenant_id: String,
     application_id: String,
-    repository_id: String,
+    repository_name: String,
     node_id: String,
     fleet_digest: String,
     image_digest: String,
@@ -76,7 +76,7 @@ async fn main() -> Result<(), StartupError> {
     let config = SingleRepositoryConfig {
         tenant: TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
         application: ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
-        repository: Uuid::parse_str(&file.repository_id)?.into_bytes(),
+        repository_name: file.repository_name,
         node: NodeId::from_bytes(Uuid::parse_str(&file.node_id)?.into_bytes()),
         fleet: Digest::from_bytes(decode_fixed(&file.fleet_digest)?),
         image: Digest::from_bytes(decode_fixed(&file.image_digest)?),
