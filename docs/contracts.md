@@ -1746,12 +1746,10 @@ there is no fallback to an unregistered release.
 
 This does not implement an upgrade controller or force resume. A node killed
 before releasing its Cells remains unfinished until fenced recovery completes.
-Backup remains separate work: Cellule `BackupPinStore::create` validates a Ready release
-and requires participation in maintenance drain, while its restore covers only
-runtime objects. Canopy still needs a backup coordinator enrolled through capture,
-external blob/LFS manifests and copies, operation retention, destination fencing,
-and verified restores from an isolated backup. Maintenance alone is not backup
-or recovery proof.
+Cellule `BackupPinStore::create` validates a Ready release and requires participation
+in maintenance drain, while its restore covers only runtime objects. Canopy's
+enrolled backup worker supplies capture, external body verification/copy and
+destination fencing as described below. Maintenance alone is not a backup copy.
 
 
 ## Recovering interrupted maintenance
@@ -1796,3 +1794,60 @@ to stderr so successful administration output remains a single JSON status objec
 
 Crash qualification at every individual publication/claim boundary, long restore
 lease failures and production-store power loss remain part of the fault matrix.
+
+
+## Independent backup copies and isolated restore
+
+The backup worker uses the pinned Cellule `BackupPinStore` API for immutable
+runtime graphs. It enrolls a signed, renewable ten-second node lease before
+capture and withdraws only after copying/verifying has settled. Caller cancellation
+does not cancel that supervised task. Maintenance closes its renewal admission;
+a fenced/expired worker cannot acknowledge successful completion.
+
+Capture requires Ready, reads all 256 catalog shard heads and their Controls,
+then re-reads every head and Control and the selected release. Exact equality
+with monotonic revisions provides an overlapping interval for the whole published
+cut. Changed controls/catalogs, unpublished roots and recovery overlays reject
+capture; there is no fuzzy snapshot or unbounded retry. Cleanly stopped nodes
+with the release still Ready provide a quiet capture window. A successful source
+pin UUID identifies one immutable cut; repeating create reuses it.
+
+`<prefix>/canopy-root-v1.json` is a bounded, conditional-write reservation with
+Service, Backup or Restore purpose. Backup/Restore bind the source prefix and
+pin UUID. Service initialization competes on this same key. Copies reject another
+purpose/operation and previously unmarked application identities. Backup roots
+never admit a service. Restore roots admit one only after a completion CAS;
+upstream runtime restoration may install Ready before external bodies finish,
+so the reservation is also checked on serving and maintenance admission. An older
+binary without that check must not access these destinations.
+
+Create copies the runtime pin/graph, then restores each pinned repository SQLite
+snapshot locally to enumerate external Git/LFS references. The pinned SQLite data
+is the body manifest: no second mutable index determines backup contents. Rows
+are paginated in batches of 256. Source and destination bytes must match the
+recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Bodies are
+conditionally copied before the completion CAS. Conflicting destination bodies
+must verify or the operation fails. Snapshot disk reservations cover each restored
+database and remain held until its scratch directory is removed. Capture admits
+at most 100,000 Cells; body verification retains the current 64 MiB object limit.
+
+Verify and restore enroll at the completed backup prefix and read no original
+source prefix. Restore copies into a disjoint, reserved prefix and preserves the
+pinned tenant/application and compiled release. Fresh service configuration must
+match them. Retrying an incomplete operation reconciles exact existing runtime
+state and verifies bodies. Retrying a completed restore skips authority installation
+and cannot roll back later service writes. The operation still verifies its pinned
+snapshot; its receipt does not describe the destination's latest live state.
+
+The executable owns provider construction for serving and administration. It
+preserves the URL/environment parser and explicitly selects S3 conditional
+multipart copy, matching the runtime's copy-if-absent contract. The generic URL
+builder otherwise leaves conditional copy disabled. There is no overwrite or
+client-download fallback. Multipart copy does not preserve provider tags/attributes;
+Canopy's restore contract verifies object bodies and SQLite metadata. Abandoned
+provider multipart uploads need provider lifecycle cleanup after process death.
+
+No collector currently deletes runtime pins or external bodies. Cross-provider
+export, old-release conversion, automatic retention, interrupted-copy/lease fault
+qualification and production resource/capacity evidence remain open. The copy
+survives original-prefix deletion, not loss of the shared bucket/provider.

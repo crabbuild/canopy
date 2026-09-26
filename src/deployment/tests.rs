@@ -43,6 +43,55 @@ async fn concurrent_initialization_selects_one_exact_release() -> TestResult {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn service_initialization_and_backup_reservation_are_exclusive() -> TestResult {
+    let deployment = fixture()?;
+    let purpose = root::RootPurpose::Backup {
+        source: "source".into(),
+        pin: uuid::Uuid::new_v4().to_string(),
+        complete: false,
+    };
+    let (service, backup) = tokio::join!(
+        deployment.initialize(),
+        root::reserve(deployment.layout.store(), &deployment.prefix, purpose),
+    );
+    assert_ne!(service.is_ok(), backup.is_ok());
+    if let Ok(claim) = backup {
+        claim
+            .finish(deployment.layout.store(), &deployment.prefix)
+            .await?;
+        assert!(deployment.initialize().await.is_err());
+    } else {
+        deployment.require_ready().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn backup_reservation_rejects_an_existing_unmarked_deployment() -> TestResult {
+    let deployment = fixture()?;
+    deployment
+        .identities
+        .initialize(deployment.identity)
+        .await?;
+    let purpose = root::RootPurpose::Backup {
+        source: "source".into(),
+        pin: uuid::Uuid::new_v4().to_string(),
+        complete: false,
+    };
+    assert!(
+        root::reserve(deployment.layout.store(), &deployment.prefix, purpose)
+            .await
+            .is_err()
+    );
+    assert!(
+        root::load(deployment.layout.store(), &deployment.prefix)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn interrupted_initial_activation_resumes_exact_phases() -> TestResult {
     for activate in [false, true] {
@@ -154,8 +203,8 @@ async fn expired_advertisement_is_not_drain_evidence() -> TestResult {
     Ok(())
 }
 
-fn recovery_config(data_dir: std::path::PathBuf) -> RecoveryConfig {
-    RecoveryConfig {
+fn recovery_config(data_dir: std::path::PathBuf) -> WorkerConfig {
+    WorkerConfig {
         node: cellule_runtime::NodeId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
         signing_key: ed25519_dalek::SigningKey::from_bytes(&[21; 32]),
         endpoint: "https://recovery.example.invalid".into(),

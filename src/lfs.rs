@@ -52,17 +52,11 @@ pub enum LfsError {
 pub struct LfsService {
     repository: Arc<RepositoryCell>,
     store: Arc<dyn ObjectStore>,
-    prefix: String,
 }
 
 impl LfsService {
     pub fn new(repository: Arc<RepositoryCell>, store: Arc<dyn ObjectStore>) -> Self {
-        let prefix = format!("repos/{}/lfs", hex::encode(repository.repository_id()));
-        Self {
-            repository,
-            store,
-            prefix,
-        }
+        Self { repository, store }
     }
 
     pub async fn lookup(&self, oid: [u8; 32]) -> Result<Option<LfsObject>, LfsError> {
@@ -130,25 +124,11 @@ impl LfsService {
     }
 
     async fn read_bytes(&self, object: LfsObject) -> Result<Vec<u8>, LfsError> {
-        if object.size > MAX_LFS_BYTES as u64 {
-            return Err(LfsError::TooLarge);
-        }
-        let result = self.store.get(&self.path(object.sha256)).await?;
-        if result.meta.size != object.size {
-            return Err(LfsError::Corrupt);
-        }
-        let body = result.bytes().await?;
-        if u64::try_from(body.len()).ok() != Some(object.size)
-            || Sha256::digest(&body).as_slice() != object.sha256
-            || blake3::hash(&body).as_bytes() != &object.blake3
-        {
-            return Err(LfsError::Corrupt);
-        }
-        Ok(body.to_vec())
+        read_lfs_object(self.store.as_ref(), self.repository.repository_id(), object).await
     }
 
     fn path(&self, oid: [u8; 32]) -> Path {
-        Path::from(format!("{}/{}", self.prefix, hex::encode(oid)))
+        lfs_path(self.repository.repository_id(), &oid)
     }
 }
 
@@ -293,4 +273,34 @@ fn mutation_identity() -> Result<MutationIdentity, LfsError> {
         issued_at_ms: now_ms,
         expires_at_ms: now_ms.checked_add(60_000).ok_or(LfsError::Clock)?,
     })
+}
+
+pub(crate) fn lfs_path(repository_id: [u8; 16], sha256: &[u8; 32]) -> Path {
+    Path::from(format!(
+        "repos/{}/lfs/{}",
+        hex::encode(repository_id),
+        hex::encode(sha256)
+    ))
+}
+
+pub(crate) async fn read_lfs_object(
+    store: &dyn ObjectStore,
+    repository_id: [u8; 16],
+    object: LfsObject,
+) -> Result<Vec<u8>, LfsError> {
+    if object.size > MAX_LFS_BYTES as u64 {
+        return Err(LfsError::TooLarge);
+    }
+    let result = store.get(&lfs_path(repository_id, &object.sha256)).await?;
+    if result.meta.size != object.size {
+        return Err(LfsError::Corrupt);
+    }
+    let body = result.bytes().await?;
+    if u64::try_from(body.len()).ok() != Some(object.size)
+        || Sha256::digest(&body).as_slice() != object.sha256
+        || blake3::hash(&body).as_bytes() != &object.blake3
+    {
+        return Err(LfsError::Corrupt);
+    }
+    Ok(body.to_vec())
 }

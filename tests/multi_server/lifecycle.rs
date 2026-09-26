@@ -2,7 +2,7 @@ use super::*;
 use cellule_runtime::{Control, ControlState};
 use futures_core::Stream;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStoreExt,
     PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use std::{
@@ -24,6 +24,7 @@ type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send 
 struct PausedStore {
     inner: InMemory,
     phase: Mutex<Option<ControlState>>,
+    read: Mutex<Option<(StorePath, usize)>>,
     entered: Notify,
     proceed: Notify,
     deny: AtomicBool,
@@ -98,6 +99,28 @@ impl ObjectStore for PausedStore {
         path: &StorePath,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        let pause = {
+            let mut read = self.read.lock().unwrap();
+            if let Some((selected, remaining)) = read.as_mut() {
+                if selected == path {
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        read.take();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if pause {
+            self.entered.notify_one();
+            self.proceed.notified().await;
+        }
         self.inner.get_opts(path, options).await
     }
     fn delete_stream(&self, paths: StoreStream<StorePath>) -> StoreStream<StorePath> {
@@ -341,7 +364,7 @@ async fn maintenance_waits_for_confirmed_cell_release() -> Result {
 async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() -> Result {
     use canopy_server::{
         CanopyApplication, RepositoryModule, build_descriptor,
-        deployment::{Deployment, RecoveryConfig},
+        deployment::{Deployment, WorkerConfig},
         repository_target,
     };
     use cellule_app::CellApplication;
@@ -376,7 +399,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         uuid::Uuid::new_v4().into_bytes(),
     )?;
     let worker_data = files.path().join("recovery");
-    let recovery = RecoveryConfig {
+    let recovery = WorkerConfig {
         node: settings.node,
         signing_key: settings.signing_key.clone(),
         endpoint: settings.peer_endpoint.clone(),
@@ -424,5 +447,80 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
     wait_for_cleanup(&worker_data).await?;
     assert!(deployment.status(now()?).await?.drained);
     deployment.end_maintenance(operation, now()?).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
+    use canopy_server::{
+        CanopyApplication, build_descriptor,
+        deployment::{Deployment, WorkerConfig},
+    };
+    use cellule_app::CellApplication;
+    use cellule_runtime::{
+        ApplicationIdentity, CellAuthority, CellStorageLayout, RequestId, Transition,
+    };
+    let store = Arc::new(PausedStore::default());
+    let files = tempfile::TempDir::new()?;
+    let settings = config(available_address().await?, files.path().join("node"));
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let layout = CellStorageLayout::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        *settings.application.as_bytes(),
+    );
+    let authority = CellAuthority::new(layout.clone());
+    let directory =
+        canopy_server::directory::directory_target(settings.tenant, settings.application)?;
+    let deployment = Deployment::new(
+        layout.store().clone(),
+        settings.store_prefix.clone(),
+        ApplicationIdentity::new(settings.tenant, settings.application),
+        settings.fleet,
+        settings.image,
+        application.registry(),
+    )?;
+    let worker = WorkerConfig {
+        node: settings.node,
+        signing_key: settings.signing_key.clone(),
+        endpoint: settings.peer_endpoint.clone(),
+        data_dir: files.path().join("backup"),
+        local_disk_limit_bytes: settings.local_disk_limit_bytes,
+    };
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    server.shutdown().await?;
+    let observed = authority
+        .load(directory.cell_id())
+        .await?
+        .ok_or("missing Directory")?;
+    *store.read.lock().unwrap() = Some((layout.control_path(directory.cell_id().as_bytes()), 2));
+    let id = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
+    let pending = tokio::spawn(async move {
+        deployment
+            .create_backup(id, StorePath::from("snapshot"), worker)
+            .await
+    });
+    store.wait().await?;
+    let mut changed = observed.value().clone();
+    changed.revision += 1;
+    changed.progress += 1;
+    authority
+        .transition(&observed, changed, Transition::Renew)
+        .await?;
+    store.proceed.notify_one();
+    let result = pending.await?;
+    assert!(matches!(
+        result,
+        Err(canopy_server::deployment::BackupError::Invalid(
+            "Cell changed during backup capture; retry"
+        ))
+    ));
+    assert!(matches!(
+        store.head(&layout.pin_path(id.as_bytes())).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
     Ok(())
 }

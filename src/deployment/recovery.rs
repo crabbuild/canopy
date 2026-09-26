@@ -22,8 +22,8 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// Local workspace and signing identity for a maintenance recovery worker.
-pub struct RecoveryConfig {
+/// Local workspace and signing identity for a deployment operation worker.
+pub struct WorkerConfig {
     pub node: NodeId,
     pub signing_key: SigningKey,
     pub endpoint: String,
@@ -37,7 +37,7 @@ impl Deployment {
     pub async fn recover_maintenance(
         &self,
         operation: RequestId,
-        config: RecoveryConfig,
+        config: WorkerConfig,
     ) -> std::result::Result<(), ServerError> {
         let deployment = self.clone();
         // The task owns every acquisition and its drain. Dropping the caller must
@@ -55,7 +55,7 @@ impl Deployment {
     async fn recover(
         &self,
         operation: RequestId,
-        config: RecoveryConfig,
+        config: WorkerConfig,
     ) -> std::result::Result<(), ServerError> {
         self.require_maintenance(operation).await?;
         let data_dir = config.data_dir;

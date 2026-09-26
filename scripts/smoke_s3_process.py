@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import smoke_s3_backup
 import smoke_s3_branch_rules
 import smoke_s3_checks
 import smoke_s3_corpus
@@ -798,6 +799,7 @@ def main():
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
             smoke_s3_peers.qualify(args.binary, directory, settings, processes)
+            smoke_s3_backup.qualify(args.binary, directory, settings, processes)
             assert {path.name for path in (directory / "host-git").iterdir()} == {"config"}
             print("PASS: native Git ignores host config, object paths, exec path, protocol and trace settings", flush=True)
             print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")

@@ -15,7 +15,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
-| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation conservative maintenance admission and enrolled owner recovery implemented; full maintenance/routing fault matrices, backup, GC and telemetry remain |
+| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 
 The **internal preview** requires gates 0–5, including real storage and
@@ -80,15 +80,15 @@ separate product decisions.
      restore and drain boundary; competing workers and long lease failures;
      no old writer can publish, and resume stays denied until every catalog entry
      is settled. A force-resume flag is not sufficient evidence.
-   - Add backup capture with a runtime pin and a verified manifest of every
-     external Git blob/LFS body reachable from the pinned SQLite roots. The
-     capture coordinator must participate in maintenance drain. Acceptance:
-     interrupt capture/copy, retry without exposing an incomplete backup, and
-     verify every recorded digest before declaring the backup usable.
-   - Restore into an isolated destination with explicit destination fencing and
-     identity/release validation. Acceptance: restore without source node disks,
-     stock Git clone and LFS pull reproduce exact bytes, and collaboration/ACL
-     state matches the pinned roots. Include missing/corrupt external bodies.
+   - Expand the implemented enrolled backup/restore into an interruption matrix:
+     SIGKILL at pin publication, runtime/body copy and completion; competing
+     workers; stalled storage and lease loss. Capture must reject concurrent
+     changes, incomplete destinations must never serve, and same-operation
+     retries must converge. Pinned SQLite roots provide the external body manifest.
+   - Extend independent same-provider copy qualification to the production store
+     and cross-provider export. Preserve identity/release validation, exact Git/LFS
+     bytes and collaboration/ACL state after source deletion. Add old-release
+     migration only with explicit format/version proof.
    - Add retention and collection only after roots include active transfers,
      pending operations, recovery roots and backup pins. Acceptance: concurrent
      fetch/merge/backup and injected collector failure never remove required
@@ -2137,3 +2137,57 @@ recovery evidence, not provider disk/power-loss qualification. Full claim,
 publication and long-restore lease fault coverage remains open, alongside backup,
 restore to an isolated destination, retention/GC, upgrades and production capacity.
 Gates 1 and 8 remain partial.
+
+
+## Independent backup and isolated restore
+
+On 2026-09-26, the backup CLI gained create, verify and restore operations.
+An enrolled worker captures a stable published cut using two complete catalog/
+control reads, creates a runtime pin and copies it to an independent prefix in
+the same provider. Pinned repository SQLite snapshots supply the external Git
+blob/LFS manifest. Both source and destination bytes are verified before the
+backup completion record is published. Verification and restore need no reads
+from the original deployment prefix.
+
+A conditional prefix reservation excludes service initialization from backup
+and pending restore destinations. Restore installs immutable runtime data and
+external bodies before allowing a fresh service to start. Same-operation retries
+reconcile interrupted work; replay after completed restore does not reinstall
+older authority over subsequent service writes. These commands require the
+matching release, a signing identity and an exclusive disk-accounted workspace.
+
+Evidence:
+
+- Ten deployment unit tests pass, including competing service/backup reservations
+  and rejection of an existing unmarked deployment.
+- Seven lifecycle integration tests pass, including changed-control capture
+  rejection and the existing startup/shutdown/maintenance cancellation invariants.
+- The stock Git/LFS backup integration deletes every original source object,
+  verifies the backup independently, restores to a fresh prefix and clones exact
+  external Git/LFS bytes with strict/full fsck and retained issue content.
+  Repeated create/restore operations succeed, and replaying a completed restore
+  preserves a newly created issue in the running service. Corrupt LFS bodies reject both
+  verify and restore; the incomplete destination cannot serve, and repairing the
+  source body permits the same restore to finish. Insufficient local disk budget
+  rejects verification.
+- All-target Clippy with warnings denied, Rust formatting, Python syntax,
+  whitespace checks and the release build pass.
+
+The RustFS `1.0.0-beta.8-glibc` process run passed its existing Git, collaboration,
+large SQLite-object, 256-file/300-ref, two-HTTPS-peer, privacy and maintenance
+recovery phases. Its new backup phase exposed disabled conditional S3 copy in
+the generic URL builder. Canopy now selects conditional multipart copy in its
+shared executable provider construction, with no dependency patch or overwrite
+fallback. A targeted final-release RustFS rerun passed the complete backup phase:
+create/retry, corrupt destination rejection without overwriting it, repair/retry,
+original-prefix deletion, independent verification, isolated restore, exact stock
+Git/LFS clone, issue recovery and clean process shutdown. The fixture uses Docker
+tmpfs; this is process/storage-API evidence, not provider disk or power-loss proof.
+
+The new coordinator owns snapshot capture, copy admission and body verification;
+shared blob/LFS paths and digest checks prevent a second storage policy. No schema,
+dependency or lockfile changes are introduced. The LFS source refactoring changes
+the compiled module digest, so existing preview prefixes require explicit future
+migration. Cross-provider export, every interruption/lease boundary, old-version
+restore, automated retention/GC and production capacity remain open. Gate 8 stays
+partial.

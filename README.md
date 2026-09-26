@@ -73,8 +73,58 @@ failed root verification return an error. Retry the same operation after the
 reported condition is resolved; recovery never resumes serving automatically.
 Do not remove authority records or force `drained` to bypass an error.
 
-Upgrade/migration, backups and object collection remain pending. Maintenance
-and owner recovery do not provide a separate backup copy.
+Upgrade/migration and object collection remain pending. Maintenance and owner
+recovery do not provide a separate backup copy.
+
+### Backup and restore
+
+Use a fresh pin UUID and disjoint prefixes in the same configured bucket/provider:
+
+```bash
+canopy backup config.json create <pin-uuid> backups/snapshot-1
+canopy backup config.json verify <pin-uuid> backups/snapshot-1
+canopy backup config.json restore <pin-uuid> backups/snapshot-1 restored/service-1
+```
+
+Prefixes are full object keys within the configured bucket, not URLs or paths
+relative to `storage_url`. Each command needs provider credentials, the node
+signing key and an exclusively available `data_dir`; no Git token or HTTP listener
+is required. Successful commands emit a JSON receipt with Cell/body counts.
+For S3, Canopy uses conditional multipart copy; the store and credentials must
+support that operation.
+
+Capture requires the selected release to remain Ready. It reads every catalog
+head and Cell control twice and rejects concurrent changes. On busy deployments,
+stop nodes cleanly without entering Maintenance, then capture. Retry an uncertain
+operation with the same UUID and destination; a new snapshot needs a new UUID.
+
+The copy includes runtime roots, SQLite state, external Git blobs and LFS bodies.
+Verification reads only the backup prefix, so the original prefix may be lost.
+Restore preserves the pinned identity and release and needs matching configuration
+and binary. Point a fresh node's `storage_url` at the completed destination.
+An atomic prefix reservation prevents serving backups or incomplete restores.
+Occupied destinations and different operations are rejected; retry the same
+failed operation after repairing its reported cause. Replaying a completed restore
+does not reset subsequently published service state.
+
+This is a same-provider copy, not protection from losing the entire bucket or
+provider. Cross-provider export, old-release migration, automated retention and
+the complete interruption fault matrix remain pending. Do not use older binaries
+that lack prefix reservations with these backup/restore destinations.
+
+### Git LFS storage
+
+Canopy provides the Git LFS batch/basic HTTP API itself. Stock `git-lfs` clients
+upload and download through Canopy; bytes live in the configured object store at
+`repos/<repository-uuid>/lfs/<sha256>`, while the repository's SQLite Cell stores
+their size and verified hashes. No separate LFS server is needed. Uploads verify
+SHA-256 and store immutable bytes before publishing the SQLite reference.
+
+Transfers currently pass through Canopy and are capped at 64 MiB per object.
+Presigned direct-to-storage transfers are not implemented. Git LFS also supports
+[client configuration for a separate LFS server](https://github.com/git-lfs/git-lfs/blob/main/docs/api/server-discovery.md#custom-configuration)
+using `lfs.url`; that server manages its own access and backups. Canopy does not
+proxy external LFS servers or include their bodies in its backup.
 
 ### Public repositories
 
@@ -563,8 +613,7 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account deletion API, organization model, backup
-or production capacity evidence.
+account deletion API, organization model or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.
 
@@ -703,6 +752,9 @@ A final phase runs two nodes behind local HTTPS proxies with a private test CA,
 pushes and clones eight Git/LFS repositories through the opposite owner, kills
 one node, and verifies Directory and repository takeover through the surviving gateway
 without restarting it. It writes under a unique prefix in the supplied bucket.
+The backup phase creates a separate fixture, copies it, deletes that fixture's
+original prefix, then verifies and restores Git/LFS bytes and issue data from the
+backup using the real CLI and a fresh server process.
 
 Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the
 repository using protocol v0 and v2 after takeover. Each clone must receive a

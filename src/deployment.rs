@@ -11,13 +11,17 @@ use cellule_store::Store;
 use object_store::path::Path;
 use serde::Serialize;
 
+mod backup;
+pub use backup::{BackupError, BackupReport};
 mod recovery;
-pub use recovery::RecoveryConfig;
+mod root;
+pub use recovery::WorkerConfig;
 
 /// Application-wide admission shared by nodes and offline administration.
 #[derive(Clone)]
 pub struct Deployment {
     identity: ApplicationIdentity,
+    prefix: Path,
     identities: ApplicationIdentityStore,
     layout: CellStorageLayout,
     releases: ReleaseStore,
@@ -54,7 +58,8 @@ impl Deployment {
         Ok(Self {
             releases: ReleaseStore::new(layout.clone(), identity)?,
             nodes: NodeDirectory::new(layout.clone(), fleet, image, registry.release_digest()),
-            identities: ApplicationIdentityStore::new(store, prefix),
+            identities: ApplicationIdentityStore::new(store, prefix.clone()),
+            prefix,
             layout,
             identity,
             registry,
@@ -66,6 +71,7 @@ impl Deployment {
     /// Initializes an empty deployment or resumes its exact first activation.
     /// Existing deployments require the same ready release; upgrades are explicit.
     pub(crate) async fn initialize(&self) -> Result<()> {
+        self.claim_service_root().await?;
         self.identities.initialize(self.identity).await?;
         let mut record = self.releases.load().await?.map(|r| r.record().clone());
         // A deterministic operation permits concurrent first nodes and process
@@ -138,6 +144,7 @@ impl Deployment {
 
     /// Rejects nodes when identity, selected release, image or phase differs.
     pub async fn require_ready(&self) -> Result<()> {
+        self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
         self.require_compiled(&record).await?;
@@ -148,6 +155,7 @@ impl Deployment {
     }
 
     async fn require_maintenance(&self, operation: RequestId) -> Result<()> {
+        self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
         self.require_compiled(&record).await?;
@@ -183,6 +191,7 @@ impl Deployment {
 
     /// Closes fleet admission under an explicit, retryable maintenance operation.
     pub async fn begin_maintenance(&self, operation: RequestId) -> Result<ReleaseRecord> {
+        self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
         self.require_compiled(&record).await?;
@@ -214,6 +223,7 @@ impl Deployment {
 
     /// Observes drain without treating expired advertisements as closed writers.
     pub async fn status(&self, now_ms: i64) -> Result<DeploymentStatus> {
+        self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let before = self.record().await?;
         self.require_compiled(&before).await?;
@@ -252,6 +262,7 @@ impl Deployment {
         operation: RequestId,
         now_ms: i64,
     ) -> Result<ReleaseRecord> {
+        self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
         self.require_compiled(&record).await?;

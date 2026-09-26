@@ -31,14 +31,14 @@ pub enum LargeBlobError {
 /// Repository-scoped content-addressed body store.
 pub struct LargeBlobStore {
     store: Arc<dyn ObjectStore>,
-    prefix: String,
+    repository_id: [u8; 16],
 }
 
 impl LargeBlobStore {
     pub fn new(store: Arc<dyn ObjectStore>, repository_id: [u8; 16]) -> Self {
         Self {
             store,
-            prefix: format!("repos/{}/git-blobs", hex::encode(repository_id)),
+            repository_id,
         }
     }
 
@@ -97,6 +97,14 @@ impl LargeBlobStore {
     }
 
     fn path(&self, sha256: &[u8; 32]) -> Path {
-        Path::from(format!("{}/{}", self.prefix, hex::encode(sha256)))
+        blob_path(self.repository_id, sha256)
     }
+}
+
+pub(crate) fn blob_path(repository_id: [u8; 16], sha256: &[u8; 32]) -> Path {
+    Path::from(format!(
+        "repos/{}/git-blobs/{}",
+        hex::encode(repository_id),
+        hex::encode(sha256)
+    ))
 }

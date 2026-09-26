@@ -2,12 +2,12 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use canopy_server::{
     CanopyApplication, build_descriptor,
-    deployment::{Deployment, RecoveryConfig},
+    deployment::{BackupError, Deployment, WorkerConfig},
     server::{CanopyServer, ServerConfig, ServerError},
 };
 use cellule_app::CellApplication;
 use cellule_runtime::{ApplicationId, ApplicationIdentity, Digest, NodeId, RequestId, TenantId};
-use cellule_store::{StorageError, Store, provider_store::build_url_object_store};
+use cellule_store::{StorageError, Store, provider_store::UrlObjectStore};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use thiserror::Error;
@@ -34,9 +34,13 @@ struct FileConfig {
 #[derive(Debug, Error)]
 enum StartupError {
     #[error(
-        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid>"
+        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid> | canopy backup <config.json> create|verify <pin-uuid> <backup-prefix> | canopy backup <config.json> restore <pin-uuid> <backup-prefix> <destination-prefix>"
     )]
     Usage,
+    #[error("backup operation failed")]
+    Backup(#[from] BackupError),
+    #[error("backup prefix is invalid")]
+    Prefix(#[from] object_store::path::Error),
     #[error("cannot read configuration")]
     ConfigIo(#[from] std::io::Error),
     #[error("configuration JSON is invalid")]
@@ -70,6 +74,38 @@ async fn main() -> Result<(), StartupError> {
     let Some(first) = args.next() else {
         return Err(StartupError::Usage);
     };
+    if first == "backup" {
+        let path = args.next().ok_or(StartupError::Usage)?;
+        let action = args.next().ok_or(StartupError::Usage)?;
+        let id = args.next().ok_or(StartupError::Usage)?;
+        let root = args.next().ok_or(StartupError::Usage)?;
+        let destination = args.next();
+        if args.next().is_some() {
+            return Err(StartupError::Usage);
+        }
+        let file: FileConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+        let id = RequestId::from_bytes(
+            Uuid::parse_str(id.to_str().ok_or(StartupError::Usage)?)?.into_bytes(),
+        );
+        let root = object_store::path::Path::parse(root.to_str().ok_or(StartupError::Usage)?)?;
+        let deployment = deployment(&file)?;
+        let worker = worker_config(file)?;
+        let report = match (action.to_str(), destination) {
+            (Some("create"), None) => deployment.create_backup(id, root, worker).await?,
+            (Some("verify"), None) => deployment.verify_backup(id, root, worker).await?,
+            (Some("restore"), Some(destination)) => {
+                let destination = object_store::path::Path::parse(
+                    destination.to_str().ok_or(StartupError::Usage)?,
+                )?;
+                deployment
+                    .restore_backup(id, root, destination, worker)
+                    .await?
+            }
+            _ => return Err(StartupError::Usage),
+        };
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
     if first == "maintenance" {
         let path = args.next().ok_or(StartupError::Usage)?;
         let action = args.next().ok_or(StartupError::Usage)?;
@@ -90,7 +126,7 @@ async fn main() -> Result<(), StartupError> {
         return Err(StartupError::MissingSecret("CANOPY_GIT_TOKEN"));
     }
     let signing_key = signing_key()?;
-    let provider = build_url_object_store(&file.storage_url)?;
+    let provider = storage(&file.storage_url)?;
     let config = ServerConfig {
         tenant: TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
         application: ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
@@ -154,22 +190,7 @@ async fn maintenance(
         )),
         _ => return Err(StartupError::Usage),
     };
-    let application = CanopyApplication::compile(build_descriptor(
-        include_bytes!("../Cargo.lock"),
-        env!("CARGO_PKG_VERSION"),
-    ))?;
-    let provider = build_url_object_store(&file.storage_url)?;
-    let deployment = Deployment::new(
-        Store::new(provider.store_arc()),
-        provider.prefix().clone(),
-        ApplicationIdentity::new(
-            TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
-            ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
-        ),
-        Digest::from_bytes(decode_fixed(&file.fleet_digest)?),
-        Digest::from_bytes(decode_fixed(&file.image_digest)?),
-        application.registry(),
-    )?;
+    let deployment = deployment(&file)?;
     let now = || -> Result<i64, StartupError> {
         let elapsed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -181,13 +202,7 @@ async fn maintenance(
             deployment.begin_maintenance(operation).await?;
         }
         (Some("recover"), Some(operation)) => {
-            let config = RecoveryConfig {
-                node: NodeId::from_bytes(Uuid::parse_str(&file.node_id)?.into_bytes()),
-                signing_key: signing_key()?,
-                endpoint: file.peer_endpoint,
-                data_dir: file.data_dir,
-                local_disk_limit_bytes: file.local_disk_limit_bytes,
-            };
+            let config = worker_config(file)?;
             deployment.recover_maintenance(operation, config).await?;
         }
         (Some("end"), Some(operation)) => {
@@ -201,4 +216,59 @@ async fn maintenance(
         serde_json::to_string(&deployment.status(now()?).await?)?
     );
     Ok(())
+}
+
+fn deployment(file: &FileConfig) -> Result<Deployment, StartupError> {
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let provider = storage(&file.storage_url)?;
+    Ok(Deployment::new(
+        Store::new(provider.store_arc()),
+        provider.prefix().clone(),
+        ApplicationIdentity::new(
+            TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
+            ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
+        ),
+        Digest::from_bytes(decode_fixed(&file.fleet_digest)?),
+        Digest::from_bytes(decode_fixed(&file.image_digest)?),
+        application.registry(),
+    )?)
+}
+
+fn worker_config(file: FileConfig) -> Result<WorkerConfig, StartupError> {
+    Ok(WorkerConfig {
+        node: NodeId::from_bytes(Uuid::parse_str(&file.node_id)?.into_bytes()),
+        signing_key: signing_key()?,
+        endpoint: file.peer_endpoint,
+        data_dir: file.data_dir,
+        local_disk_limit_bytes: file.local_disk_limit_bytes,
+    })
+}
+
+fn storage(value: &str) -> Result<UrlObjectStore, StorageError> {
+    let url = url::Url::parse(value).map_err(|source| StorageError::InvalidObjectStoreUrl {
+        url: value.to_owned(),
+        source,
+    })?;
+    let options = std::env::vars().flat_map(|(key, value)| {
+        [
+            (key.clone(), value.clone()),
+            (key.to_ascii_lowercase(), value),
+        ]
+    });
+    // S3 copy needs conditional multipart completion. The generic URL builder
+    // leaves it disabled; an ordinary copy would overwrite reserved data.
+    let options = options.chain(std::iter::once((
+        "aws_copy_if_not_exists".into(),
+        object_store::aws::S3CopyIfNotExists::Multipart.to_string(),
+    )));
+    let (store, prefix) = object_store::parse_url_opts(&url, options).map_err(|source| {
+        StorageError::UrlStoreConfig {
+            url: value.to_owned(),
+            source,
+        }
+    })?;
+    Ok(UrlObjectStore::new(std::sync::Arc::from(store), prefix))
 }
