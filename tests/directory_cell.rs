@@ -6,7 +6,7 @@ use std::{
 
 use canopy_server::{
     CanopyApplication, ObjectKind, RepositoryCell, RepositoryModule, build_descriptor,
-    directory::{self, DirectoryCell, DirectoryModule, RepositoryState},
+    directory::{self, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryState},
     object_id, repository_target,
 };
 use cellule_app::{ApplicationHandle, CellApplication};
@@ -116,6 +116,35 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         directory.lookup("alice", "alpha", None).await?.output,
         Some(first)
     );
+    assert_eq!(
+        directory
+            .rename(identity(7)?, "alice", "alpha", "beta", first_id)
+            .await?
+            .output,
+        RenameOutcome::NameTaken
+    );
+    assert_eq!(
+        directory
+            .rename(identity(8)?, "alice", "alpha", "gamma", second_id)
+            .await?
+            .output,
+        RenameOutcome::NotFound
+    );
+    let renamed = directory
+        .rename(identity(9)?, "alice", "alpha", "gamma", first_id)
+        .await?
+        .output;
+    assert!(
+        matches!(renamed, RenameOutcome::Renamed(ref entry) if entry.repository_id == first_id && entry.name == "gamma")
+    );
+    assert_eq!(directory.lookup("alice", "alpha", None).await?.output, None);
+    assert_eq!(
+        directory
+            .rename(identity(10)?, "alice", "alpha", "gamma", first_id)
+            .await?
+            .output,
+        renamed
+    );
     let body = b"stored only in alpha";
     let oid = first_repository
         .put_inline_object(identity(6)?, ObjectKind::Blob, body)
@@ -143,8 +172,10 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
     )?;
     let entries = directory.list("alice", "").await?.output;
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].repository_id, first_id);
-    assert_eq!(entries[1].repository_id, second_id);
+    assert_eq!(entries[0].repository_id, second_id);
+    assert_eq!(entries[0].name, "beta");
+    assert_eq!(entries[1].repository_id, first_id);
+    assert_eq!(entries[1].name, "gamma");
     assert!(
         entries
             .iter()

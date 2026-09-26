@@ -10,6 +10,7 @@ before admitting persistent customer repositories.
 | Directory namespace | sixteen bytes of value `0x48`, one fixed SQL shard per tenant | `DIRECTORY` |
 | Repository name | lowercase ASCII owner/name components, each at most 64 bytes | Directory Cell |
 | Name reservation | owner/name row stores one canonical UUID and pending/ready state | Directory Cell |
+| Repository rename | compare expected UUID, move one ready name atomically, keep Cell identity | Directory Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
@@ -29,7 +30,9 @@ pushes may leave unreferenced objects; collection is not implemented yet.
 A name reservation commits before its Repository Cell is provisioned. A retry
 reads the previously reserved UUID and completes the same Cell instead of
 assigning another identity. The server marks the row ready only after it has
-acquired that Cell. Ready names route through their UUID on demand; one node
+acquired that Cell. Rename updates only the ready Directory Cell row, so the
+same UUID and repository contents survive a URL change. Ready names route
+through their UUID on demand; one node
 can serve multiple repository Cells. Account identity and repository-specific
 authorization remain open.
 
@@ -44,5 +47,6 @@ before service readiness.
 
 Schema version 1 is still changing in this unreleased repository. The module
 descriptor and object paths will become compatibility boundaries at the first
-persistent preview. A release must pin an immutable Cellule revision rather
-than the current absolute local dependencies.
+persistent preview. The current build pins an immutable public Cellule
+revision; its UUID partition contract is proposed in
+[Cellule PR #5](https://github.com/crabbuild/cellule/pull/5).

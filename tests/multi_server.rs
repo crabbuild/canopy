@@ -66,6 +66,13 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
             .len(),
         2
     );
+    let first_id = listing["repositories"]
+        .as_array()
+        .ok_or("list missing")?
+        .iter()
+        .find(|entry| entry["name"] == "example")
+        .and_then(|entry| entry["repository_id"].as_str())
+        .ok_or("repository UUID missing")?;
 
     let local = workspace.path().join("local");
     run_git(None, &["init", "-b", "main", path_str(&local)?]).await?;
@@ -121,10 +128,76 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
     )
     .await?;
     let other_oid = run_git(Some(&other), &["rev-parse", "HEAD"]).await?;
+    let rename_url = format!("{listing_url}/example");
+    assert_eq!(
+        client
+            .patch(&rename_url)
+            .json(&serde_json::json!({"name": "renamed", "repository_id": first_id}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .patch(&rename_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"name": "other", "repository_id": first_id}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let renamed: serde_json::Value = client
+        .patch(&rename_url)
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({"name": "renamed", "repository_id": first_id}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(renamed["repository_id"], first_id);
+    let renamed_url = renamed["clone_url"].as_str().ok_or("clone URL missing")?;
+    assert_eq!(
+        client
+            .patch(&rename_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"name": "renamed", "repository_id": first_id}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("{first_url}/info/refs?service=git-upload-pack"))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let live_clone = workspace.path().join("renamed-live-clone");
+    run_git(
+        None,
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "clone",
+            renamed_url,
+            path_str(&live_clone)?,
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run_git(Some(&live_clone), &["rev-parse", "HEAD"]).await?,
+        original
+    );
     first.shutdown().await?;
 
     let second_address = available_address().await?;
-    let second_url = format!("http://{second_address}/canopy/example.git");
+    let second_url = format!("http://{second_address}/canopy/renamed.git");
     let second = CanopyServer::start(
         config(second_address, workspace.path().join("second")),
         store,

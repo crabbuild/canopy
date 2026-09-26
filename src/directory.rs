@@ -109,6 +109,13 @@ pub struct RepositoryEntry {
     pub state: RepositoryState,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenameOutcome {
+    Renamed(RepositoryEntry),
+    NotFound,
+    NameTaken,
+}
+
 pub struct DirectoryCell {
     sql: SqlCell<DirectoryModule>,
 }
@@ -217,6 +224,50 @@ impl DirectoryCell {
         Ok(Observed {
             output: entry,
             receipt: result.receipt,
+        })
+    }
+
+    /// Atomically moves a ready name while preserving its Repository Cell UUID.
+    pub async fn rename(
+        &self,
+        identity: MutationIdentity,
+        owner: &str,
+        old_name: &str,
+        new_name: &str,
+        repository_id: [u8; 16],
+    ) -> Result<Committed<RenameOutcome>, InvocationError<Vec<SqlResultSet>>> {
+        validate_name(owner, old_name).map_err(InvocationError::NotStarted)?;
+        validate_component(new_name).map_err(InvocationError::NotStarted)?;
+        validate_repository_id(repository_id).map_err(InvocationError::NotStarted)?;
+        let committed = self.sql.batch(identity, SqlBatch {
+            statements: vec![SqlStatement {
+                // The precondition and collision check are in the same Cell transaction.
+                sql: "UPDATE repositories SET name = ?3 WHERE owner = ?1 AND name = ?2 AND repository_id = ?4 AND state = 'ready' AND NOT EXISTS (SELECT 1 FROM repositories WHERE owner = ?1 AND name = ?3)".into(),
+                parameters: vec![
+                    SqlValue::Text(owner.into()),
+                    SqlValue::Text(old_name.into()),
+                    SqlValue::Text(new_name.into()),
+                    SqlValue::Blob(repository_id.to_vec()),
+                ],
+            }],
+        }).await?;
+        let destination = self
+            .lookup(owner, new_name, Some(committed.receipt))
+            .await?
+            .output;
+        let output = match destination {
+            Some(entry)
+                if entry.repository_id == repository_id
+                    && entry.state == RepositoryState::Ready =>
+            {
+                RenameOutcome::Renamed(entry)
+            }
+            Some(_) => RenameOutcome::NameTaken,
+            None => RenameOutcome::NotFound,
+        };
+        Ok(Committed {
+            output,
+            receipt: committed.receipt,
         })
     }
 

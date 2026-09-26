@@ -28,7 +28,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
     build_descriptor,
-    directory::{self, DirectoryCell, DirectoryModule, RepositoryEntry, RepositoryState},
+    directory::{
+        self, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryEntry, RepositoryState,
+    },
     git_gateway::GitGateway,
     http::{self, GitHttpApi},
     repository_http::RepositoryHttp,
@@ -139,7 +141,13 @@ pub(crate) struct RepositoryManager {
     token: String,
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
-    loaded: Mutex<HashMap<String, Router>>,
+    loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
+}
+
+struct LoadedRepository {
+    gateway: Arc<GitGateway>,
+    name: String,
+    router: Router,
 }
 
 impl RepositoryManager {
@@ -184,6 +192,25 @@ impl RepositoryManager {
         Ok(Some(self.load(&entry, &mut loaded).await?))
     }
 
+    pub(crate) async fn rename(
+        &self,
+        old_name: &str,
+        new_name: &str,
+        repository_id: [u8; 16],
+    ) -> Result<RenameOutcome, ServerError> {
+        Ok(self
+            .directory
+            .rename(
+                mutation_identity()?,
+                &self.owner,
+                old_name,
+                new_name,
+                repository_id,
+            )
+            .await?
+            .output)
+    }
+
     pub(crate) async fn list(
         &self,
         after: &str,
@@ -206,10 +233,14 @@ impl RepositoryManager {
     async fn load(
         &self,
         entry: &RepositoryEntry,
-        loaded: &mut HashMap<String, Router>,
+        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
     ) -> Result<Router, ServerError> {
-        if let Some(router) = loaded.get(&entry.name) {
-            return Ok(router.clone());
+        if let Some(existing) = loaded.get_mut(&entry.repository_id) {
+            if existing.name != entry.name {
+                existing.router = self.router_for(entry, Arc::clone(&existing.gateway))?;
+                existing.name.clone_from(&entry.name);
+            }
+            return Ok(existing.router.clone());
         }
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
         let handle = acquire_sql_cell(
@@ -240,7 +271,24 @@ impl RepositoryManager {
             self.local_root.clone(),
             Arc::clone(&self.external_store),
         ));
-        let api = Arc::new(
+        let router = self.router_for(entry, Arc::clone(&gateway))?;
+        loaded.insert(
+            entry.repository_id,
+            LoadedRepository {
+                gateway,
+                name: entry.name.clone(),
+                router: router.clone(),
+            },
+        );
+        Ok(router)
+    }
+
+    fn router_for(
+        &self,
+        entry: &RepositoryEntry,
+        gateway: Arc<GitGateway>,
+    ) -> Result<Router, ServerError> {
+        Ok(Arc::new(
             GitHttpApi::new(
                 gateway,
                 self.owner.clone(),
@@ -250,10 +298,8 @@ impl RepositoryManager {
                 Arc::clone(&self.ready),
             )
             .map_err(ServerError::Http)?,
-        );
-        let router = api.router();
-        loaded.insert(entry.name.clone(), router.clone());
-        Ok(router)
+        )
+        .router())
     }
 }
 

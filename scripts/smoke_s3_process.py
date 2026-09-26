@@ -86,7 +86,24 @@ def create_repository(base_url, name):
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)["clone_url"]
+        created = json.load(response)
+        return created["clone_url"], created["repository_id"]
+
+
+def rename_repository(base_url, old_name, new_name, repository_id):
+    request = urllib.request.Request(
+        f"{base_url}/api/repositories/{old_name}",
+        data=json.dumps({"name": new_name, "repository_id": repository_id}).encode(),
+        headers={
+            "Authorization": "Bearer local-test-token",
+            "Content-Type": "application/json",
+        },
+        method="PATCH",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        renamed = json.load(response)
+        assert renamed["repository_id"] == repository_id
+        return renamed["clone_url"]
 
 
 def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None):
@@ -140,7 +157,7 @@ def main():
         try:
             first, base_url = start(args.binary, directory, settings, "first")
             processes.append(first)
-            url = create_repository(base_url, "example")
+            url, repository_id = create_repository(base_url, "example")
             local = directory / "local"
             git("init", "-b", "main", str(local))
             git("config", "user.name", "Canopy Test", cwd=local)
@@ -161,7 +178,7 @@ def main():
                 cwd=local,
             )
             oid = git("rev-parse", "HEAD", cwd=local)
-            other_url = create_repository(base_url, "other")
+            other_url, _ = create_repository(base_url, "other")
             other = directory / "other"
             git("init", "-b", "main", str(other))
             git("config", "user.name", "Canopy Test", cwd=other)
@@ -179,13 +196,15 @@ def main():
                 cwd=other,
             )
             other_oid = git("rev-parse", "HEAD", cwd=other)
+            url = rename_repository(base_url, "example", "renamed", repository_id)
+            clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:
                 raise RuntimeError("Canopy did not shut down cleanly")
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
-            url = f"{base_url}/canopy/example.git"
+            url = f"{base_url}/canopy/renamed.git"
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
@@ -193,14 +212,14 @@ def main():
             time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
             third, base_url = start(args.binary, directory, settings, "third")
             processes.append(third)
-            url = f"{base_url}/canopy/example.git"
+            url = f"{base_url}/canopy/renamed.git"
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: two repositories survived process restart, local disk loss, and lease takeover")
+            print("PASS: two repositories and a rename survived restart, disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:

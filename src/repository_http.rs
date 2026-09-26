@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 
 use crate::{
-    directory::{self, RepositoryEntry},
+    directory::{self, RenameOutcome, RepositoryEntry},
     http,
     server::RepositoryManager,
+    validate_repository_id,
 };
 
 pub(crate) struct RepositoryHttp {
@@ -39,6 +40,10 @@ impl RepositoryHttp {
                 "/api/repositories",
                 get(list_repositories).post(create_repository),
             )
+            .route(
+                "/api/repositories/{name}",
+                axum::routing::patch(rename_repository),
+            )
             .route("/{owner}/{repository}/{*path}", any(dispatch_repository))
             .with_state(self)
     }
@@ -56,6 +61,13 @@ impl RepositoryHttp {
 #[serde(deny_unknown_fields)]
 struct CreateRepositoryRequest {
     name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameRepositoryRequest {
+    name: String,
+    repository_id: String,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +186,62 @@ async fn list_repositories(
         Err(error) => {
             tracing::error!(error = %error, "repository listing failed");
             plain(StatusCode::SERVICE_UNAVAILABLE, "Repository listing failed")
+        }
+    }
+}
+
+async fn rename_repository(
+    State(state): State<Arc<RepositoryHttp>>,
+    Path(old_name): Path<String>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    if !state.authorized(request.headers()) {
+        return unauthorized();
+    }
+    let Ok(body) = to_bytes(request.into_body(), 8192).await else {
+        return plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Repository request is too large",
+        );
+    };
+    let Ok(input) = serde_json::from_slice::<RenameRepositoryRequest>(&body) else {
+        return plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid repository request",
+        );
+    };
+    let Ok(repository_id) = uuid::Uuid::parse_str(&input.repository_id) else {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid repository UUID");
+    };
+    let repository_id = repository_id.into_bytes();
+    if directory::validate_component(&old_name).is_err()
+        || directory::validate_component(&input.name).is_err()
+        || validate_repository_id(repository_id).is_err()
+    {
+        return plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid repository rename",
+        );
+    }
+    match state
+        .manager
+        .rename(&old_name, &input.name, repository_id)
+        .await
+    {
+        Ok(RenameOutcome::Renamed(entry)) if (state.manager.ready)() => {
+            json_response(StatusCode::OK, &repository_response(&state.manager, entry))
+        }
+        Ok(RenameOutcome::Renamed(_)) => {
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
+        }
+        Ok(RenameOutcome::NotFound) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
+        Ok(RenameOutcome::NameTaken) => plain(StatusCode::CONFLICT, "Repository name is taken"),
+        Err(error) => {
+            tracing::error!(error = %error, "repository rename failed");
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Repository rename failed")
         }
     }
 }

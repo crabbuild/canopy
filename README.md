@@ -22,8 +22,12 @@ restart with a fresh local SQLite file.
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`
-lists ready repositories, with an `after` cursor for additional pages. Both
-endpoints require the configured token. Git and LFS use
+lists ready repositories, with an `after` cursor for additional pages.
+`PATCH /api/repositories/<old_name>` with
+`{"name":"new_name","repository_id":"<returned UUID>"}` atomically renames a ready
+repository. The UUID is a precondition and remains unchanged; a retry with
+the same UUID and new name returns the renamed repository. These endpoints
+require the configured token. Git and LFS use
 `/<owner>/<repository_name>.git`. Repository creation reserves a UUID in the
 Directory Cell, provisions its own Repository Cell, then marks the name ready.
 Later requests recover that Cell on demand from the directory.
@@ -80,7 +84,7 @@ python3 scripts/smoke_s3_process.py \
 ```
 
 The script requires `CANOPY_NODE_SIGNING_KEY_HEX` and provider credentials in
-the environment. It pushes two repositories with stock Git and LFS, restarts
-with fresh local databases, kills the new owner, waits for lease expiry, and
-clones both from a third process. It writes under a unique prefix in the
-supplied bucket.
+the environment. It pushes two repositories with stock Git and LFS, renames
+one, restarts with fresh local databases, kills the new owner, waits for lease
+expiry, and clones both from a third process. It writes under a unique prefix
+in the supplied bucket.
