@@ -464,8 +464,9 @@ after all server and Git processes have stopped.
 
 The server handle supervises startup and shutdown. Dropping it requests a drain;
 cancelling a startup or shutdown wait cannot interrupt admitted Cell work or
-release the workspace early. A failed node drain retains the workspace lock
-until process restart.
+release the workspace early. A failed node drain or destruction of the Tokio
+runtime before confirmed drain retains the workspace lock until process restart.
+Keep the runtime alive until shutdown finishes for graceful cleanup.
 
 Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories

@@ -141,7 +141,7 @@ struct RunningServer {
     ingress_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
     tasks: TaskTracker,
-    _local: Arc<workspace::Workspace>,
+    local: Arc<workspace::Workspace>,
 }
 
 pub(crate) struct RepositoryManager {
@@ -415,6 +415,9 @@ impl RunningServer {
                 .await
             })?;
             let directory_target = directory::directory_target(config.tenant, config.application)?;
+            // Acquisition can hand work to SQL threads that outlive this future.
+            // Only a successful node drain may authorize workspace reuse afterward.
+            local.require_drain();
             let directory_handle = acquire_sql_cell(
                 &node,
                 &layout,
@@ -484,10 +487,9 @@ impl RunningServer {
         let api = match startup {
             Ok(api) => api,
             Err(error) => {
-                if let Err(cleanup) = node.shutdown().await {
-                    tracing::error!(error = %cleanup, "startup drain failed; workspace retained until process restart");
-                    // A failed runtime drain does not prove every SQL worker closed.
-                    std::mem::forget(Arc::clone(&local));
+                match node.shutdown().await {
+                    Ok(()) => local.confirm_drained(),
+                    Err(cleanup) => tracing::error!(error = %cleanup, "startup drain failed"),
                 }
                 let observed = advertisement.lock().await;
                 let _ = directory.withdraw(&observed, unix_now_ms()?).await;
@@ -510,7 +512,7 @@ impl RunningServer {
             ingress_stop,
             serving,
             tasks,
-            _local: local,
+            local,
         })
     }
 }

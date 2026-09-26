@@ -64,10 +64,8 @@ impl RunningServer {
         self.tasks.close();
         self.tasks.wait().await;
         let drained = self.node.shutdown().await;
-        if drained.is_err() {
-            // Retain exclusion when worker closure is unproven. Reclaiming files
-            // after an unsuccessful drain could race a surviving SQL worker.
-            std::mem::forget(Arc::clone(&self._local));
+        if drained.is_ok() {
+            self.local.confirm_drained();
         }
         self.stop.cancel();
         let observed = self.advertisement.lock().await;

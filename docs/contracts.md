@@ -569,8 +569,12 @@ process death or panics graceful.
 Shutdown stops ingress, waits for tracked request work, drains Cellule, then
 withdraws the advertisement. If node drain returns an error, Canopy retains its
 workspace lock for the rest of the process lifetime: worker closure is unproven.
-The same rule applies to rollback after a failed startup. Restarting the process
-is required before reusing that data directory.
+The same rule applies to rollback after a failed startup. Before the first SQL
+Cell acquisition, the workspace marks drain as required. Only successful node
+shutdown clears that requirement. Its synchronous destructor retains the lock
+descriptor if drain is unconfirmed, including when Tokio destroys the supervisor
+during startup or serving. Restarting the process is required before reusing that
+data directory; creating another Tokio runtime in the same process is insufficient.
 
 Each native Git command holds a shared lock in its cache. On Unix the descriptor
 survives exec and is inherited by descendants. Startup acquires every abandoned
@@ -594,10 +598,11 @@ Windows lacks the inherited worker fence in this implementation. If a previous
 runtime contains a native worker lock, automatic recovery refuses it; operators
 must stop all server/Git processes before removing that runtime directory.
 Cancellation during Cell publication and release is qualified with the real
-runtime and a paused object store. OS power loss, unusual filesystems, abrupt
-Tokio runtime destruction and Windows process containment still require
-qualification. This cleanup does not enforce native peak disk usage or filesystem
-allocation overhead.
+runtime and a paused object store. Destroying Tokio during startup publication
+and after readiness is also qualified: a second runtime cannot reuse the same
+workspace without confirmed drain. OS power loss, unusual filesystems and Windows
+process containment still require qualification. This cleanup does not enforce
+native peak disk usage or filesystem allocation overhead.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
 HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,

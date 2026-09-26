@@ -4,6 +4,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 const MARKER: &str = ".canopy-runtime";
@@ -11,7 +12,8 @@ const FORMAT: &[u8] = b"canopy-runtime-v1\n";
 
 pub(super) struct Workspace {
     root: PathBuf,
-    _owner: File,
+    owner: Option<File>,
+    requires_drain: AtomicBool,
 }
 
 impl Workspace {
@@ -73,12 +75,34 @@ impl Workspace {
         }
         Ok(Self {
             root,
-            _owner: owner,
+            owner: Some(owner),
+            requires_drain: AtomicBool::new(false),
         })
     }
 
     pub(super) fn path(&self) -> &Path {
         &self.root
+    }
+
+    pub(super) fn require_drain(&self) {
+        self.requires_drain.store(true, Ordering::Release);
+    }
+
+    pub(super) fn confirm_drained(&self) {
+        self.requires_drain.store(false, Ordering::Release);
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        if self.requires_drain.load(Ordering::Acquire) {
+            // Runtime destruction and unwinding can bypass async cleanup. Keep
+            // exclusion until process exit unless SQL worker closure was proven.
+            tracing::error!(path = %self.root.display(), "unconfirmed Cell drain; workspace exclusion retained until process restart");
+            if let Some(owner) = self.owner.take() {
+                std::mem::forget(owner);
+            }
+        }
     }
 }
 

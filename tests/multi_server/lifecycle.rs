@@ -244,3 +244,51 @@ async fn failed_drain_retains_workspace_exclusion_until_process_restart() -> Res
     ));
     Ok(())
 }
+
+#[test]
+fn runtime_destruction_cannot_release_an_unconfirmed_sql_workspace() -> Result {
+    for during_startup in [false, true] {
+        let files = tempfile::TempDir::new()?;
+        let data = files.path().join("node");
+        let store = Arc::new(PausedStore::default());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let address = runtime.block_on(available_address())?;
+        let mut server = None;
+        let mut startup = None;
+        if during_startup {
+            store.arm(ControlState::Serving);
+            startup = Some(runtime.spawn(CanopyServer::start(
+                config(address, data.clone()),
+                store.clone(),
+            )));
+            runtime.block_on(store.wait())?;
+        } else {
+            server = Some(runtime.block_on(CanopyServer::start(
+                config(address, data.clone()),
+                store.clone(),
+            ))?);
+        }
+        runtime.shutdown_timeout(Duration::from_secs(1));
+        drop((server, startup));
+        assert!(
+            matches!(
+                workspace_lock(&data)?.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ),
+            "workspace was released without a confirmed drain; during_startup={during_startup}"
+        );
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let restarted = runtime.block_on(CanopyServer::start(config(address, data), store));
+        assert!(
+            matches!(restarted, Err(canopy_server::server::ServerError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        runtime.shutdown_timeout(Duration::from_secs(1));
+    }
+    Ok(())
+}

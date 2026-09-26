@@ -46,8 +46,9 @@ separate product decisions.
    on every native write; periodic sampling and per-file limits alone cannot
    prove aggregate peak usage. Managed runtime recovery now fences live nodes
    and Unix Git descendants before reclaiming crash-left files. Qualify OS power
-   loss, abrupt runtime destruction and Windows process containment next.
-   A node supervisor now retains startup and drain across caller cancellation.
+   loss and Windows process containment next. A node supervisor retains startup
+   and drain across caller cancellation; abrupt runtime destruction retains local
+   exclusion until process restart when SQL drain is unconfirmed.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -1777,3 +1778,36 @@ startup/drain path and no new dependency, configuration, schema or HTTP contract
 The Tokio runtime must remain alive until cleanup finishes. Runtime destruction,
 panics, power loss, Windows containment, native peak resource limits and the
 remaining service delivery gates are still open.
+
+## Workspace exclusion after runtime destruction
+
+On 2026-09-26, a regression test destroyed Tokio after server readiness and
+reproduced premature release of the local workspace lock. A second case destroys
+Tokio while the Directory Cell's Serving publication is paused. Both cases now
+retain exclusion, and a new runtime in the same process receives `WouldBlock`
+when it tries to start a server using that data directory.
+
+The workspace owns the release decision. Before SQL Cell acquisition it records
+that drain is required; only successful node shutdown clears that requirement.
+Its synchronous destructor retains the lock descriptor until process exit if
+closure is unconfirmed. This replaces separate startup/shutdown Arc-retention
+branches and covers destruction of their async supervisor. It does not promise
+graceful shutdown when the executor itself is destroyed.
+
+Proof:
+
+- The new test fails on the preceding implementation and passes with this guard.
+- All four lifecycle integrations pass, including cancellation during startup
+  and shutdown, ready-handle drop, and failed drain.
+- Same-directory graceful restart and all six residency/fault integrations pass.
+- All-target Clippy, formatting and the release build pass.
+- The release binary passes the RustFS process probe with `--sqlite-chunks
+  --many-objects 256`: graceful restart, SIGKILL/lease takeover and reuse of
+  corrupted local state preserve Git/LFS, collaboration, branch rules,
+  merge/squash and exact retries. Large SQLite tree/commit/tag bytes and OIDs,
+  both commits, the annotated tag and 300 additional refs restore exactly.
+
+The production code grows by 24 lines to move the invariant into the workspace
+owner. No dependency, schema, configuration or wire contract changes. OS power
+loss, unusual filesystems, Windows process containment and native peak resource
+limits remain open, along with the other service delivery gates above.
