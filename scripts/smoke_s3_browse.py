@@ -20,7 +20,7 @@ def seed(base_url, repository_id, commit):
 def verify(base_url, snapshots):
     for payload, expected in snapshots:
         assert request(base_url, f"{REPOSITORY}/browse", "POST", payload) == expected
-    for path, content_type in (("/", "text/html"), ("/assets/canopy.js", "text/javascript"), ("/assets/canopy.css", "text/css"), ("/assets/issues.js", "text/javascript"), ("/assets/issues.css", "text/css")):
+    for path, content_type in (("/", "text/html"), ("/assets/canopy.js", "text/javascript"), ("/assets/canopy.css", "text/css"), ("/assets/issues.js", "text/javascript"), ("/assets/issues.css", "text/css"), ("/assets/discussion.js", "text/javascript"), ("/assets/pulls.js", "text/javascript"), ("/assets/pulls.css", "text/css")):
         with urllib.request.urlopen(f"{base_url}{path}", timeout=30) as response:
             assert response.status == 200
             assert response.headers["Content-Type"].startswith(content_type)

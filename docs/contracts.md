@@ -1097,7 +1097,7 @@ Preparation and branch publication are separate actions. A writer POSTs
 canonical UUID `id`, exact pull `revision`, `strategy` (`merge_commit` or `squash`)
 and a nonblank UTF-8 `message` of at most 16 KiB, with no NUL. Fast-forward is
 invalid here. A read-scoped member can GET that path plus `/<id>`. Responses
-contain `candidate` and `fetch_ref` (null until ready). The candidate includes
+contain `repository_id`, `candidate` and `fetch_ref` (null until ready). The candidate includes
 its original request fields, pull `number`, `actor`, `created_at_ms`, and `result`:
 
 | Result state | Fields | Meaning |
@@ -1258,8 +1258,8 @@ inert. Names escape control/bidirectional characters; non-UTF-8 names display
 escaped bytes. The UI never opens repository-supplied links automatically.
 
 This adds no schema/command/dependency change. The canonical verified Git reader
-is shared by browsing and PR comparison. Pull/review editors, complete DAG
-history, syntax highlighting, large-file streaming downloads, rendered Markdown
+is shared by browsing and PR comparison. Complete DAG history, syntax
+highlighting, large-file streaming downloads, rendered Markdown
 and production browser/capacity matrices remain outside the current browser.
 
 
@@ -1302,3 +1302,44 @@ server checks remain authoritative.
 policy. The script is loaded after the base interface, reuses its authenticated
 request/session cancellation and navigation helpers, and exposes one issue-view
 entry point. No frontend dependency, schema or operation codec changes.
+
+### Pull-request collaboration interface
+
+The Pull requests tab uses the canonical pull, review, comparison, candidate,
+check and merge APIs. Lists use 32-record pages with open/closed/merged/all
+filters; reviews use 16-record pages. Creation chooses existing local branches
+from generation-bound ref pages and submits their observed OIDs. Editorial
+changes use expected versions; merged requests cannot be edited. Drafts can
+receive comments, but cannot receive approval/change decisions or be merged.
+Authors cannot approve or request changes on their own request. Read-scoped
+tokens have no mutation controls. The server and Cell authorize every action.
+
+Each review and merge intent freezes the pull editorial version, source/base
+OIDs and ref versions. Review applicability and policy snapshots are checked
+against the displayed revision. The interface never replaces a stale intent
+with current tips. Candidate responses include the resolved repository UUID,
+allowing reads to reject name reuse before combining state from different Cells.
+
+Changed files are paged and compare the current source against its merge base.
+Opening a file reads each side through the exact-revision comparison API.
+UTF-8 text up to 256 KiB is displayed literally, with binary, large-file and
+submodule states explained. Non-UTF-8 paths retain their base64 representation.
+Renames appear as deletion/addition. These are side-by-side file previews;
+unified patches, line comments and historical merged comparisons are pending.
+
+Merge preparation is a separate action from publication. A ready candidate
+exposes its file view, immutable Git fetch ref and check results for its exact
+OID. Pending preparation can be resumed by its creator with the same ID and
+intent. Conflicted/unrelated/stale candidates offer no publication control.
+Clearing a candidate is explicit; an unusable candidate never switches the
+publication form to fast-forward. Required review failures suppress publication;
+the server rechecks all current branch/check policy when publishing. The check
+list includes enabled contexts and their latest runs, and does not identify the
+required subset. Missing required checks produce a visible publication error.
+
+`discussion.js` now owns shared issue/pull field validation, paging, identity
+checks and form submission. UUID submissions retain exact payloads after an
+uncertain reply; versioned edits retain copyable drafts and require reload.
+All drafts/pending identities remain page-local. `pulls.js` and `pulls.css` share
+the existing authenticated session, cancellation, literal text, CSP and no-store
+asset behavior. No new publisher, schema, operation codec or dependency.

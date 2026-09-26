@@ -8,7 +8,7 @@
 .issue-list { list-style: none; padding: 0; margin: 0; }
 .issue-list li { display: flex; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); }
 .issue-list li:last-child { border-bottom: 0; }
-.issue-list .subject { color: var(--ink); font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
+.issue-list .subject { display: inline-block; color: var(--ink); font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
 .issue-list li > div { min-width: 0; }
 .issue-state { display: inline-block; font-size: 12px; font-weight: 600; white-space: nowrap; border-radius: 20px; padding: 4px 11px; align-self: flex-start; }
 .issue-state.open { color: var(--pine); background: var(--mist); }

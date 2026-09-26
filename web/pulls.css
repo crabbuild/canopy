@@ -1,0 +1,26 @@
+.pull-branches { overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; margin: 22px 0; }
+.issue-state.merged { color: #64438c; background: #f0eafa; }
+.discussion-editor .check-label { display: flex; align-items: center; gap: 9px; }
+.discussion-editor .check-label input { width: auto; margin: 0; }
+.changed-files { display: grid; gap: 15px; }
+.changed-files summary { padding: 16px; cursor: pointer; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.file-sides { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border-top: 1px solid var(--line); }
+.file-sides > section { min-width: 0; }
+.file-sides > section + section { border-left: 1px solid var(--line); }
+.file-sides h4, .file-sides .hash { margin: 12px 16px; }
+.file-sides .file-content { max-height: 55vh; }
+.merge-panel h3 { margin: 0 0 14px; }
+.merge-panel > button { margin: 15px 0; }
+.merge-panel > .hash, .conflict-path { overflow-wrap: anywhere; white-space: normal; }
+.check-runs { padding: 20px; margin: 22px 0; border-left: 3px solid var(--pine); background: var(--mist); border-radius: 6px; }
+.check-runs h4 { margin-top: 0; }
+.check-runs li { margin: 12px 0; overflow-wrap: anywhere; }
+.candidate-ref { overflow-x: auto; padding: 16px; background: var(--mist); border-radius: 7px; font-family: var(--mono); font-size: 12px; }
+@media(max-width:720px) {
+  .tabs { gap: 16px; overflow-x: auto; }
+  .tab { white-space: nowrap; }
+  .issue-filters { flex-wrap: wrap; }
+  .issue-filters a { padding: 6px 10px; }
+  .file-sides { grid-template-columns: minmax(0,1fr); }
+  .file-sides > section + section { border-left: 0; border-top: 1px solid var(--line); }
+}

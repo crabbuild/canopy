@@ -42,9 +42,12 @@ function route() {
   try {
     const value = JSON.parse(decodeURIComponent(location.hash.slice(1)));
     if (!value || typeof value.repo !== "string") return {};
-    return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue"].includes(value.view) ? value.view : "tree",
+    return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue", "pulls", "pull", "new-pull"].includes(value.view) ? value.view : "tree",
+      pull: Number.isSafeInteger(value.pull) && value.pull > 0 ? value.pull : undefined,
+      section: ["changes", "merge"].includes(value.section) ? value.section : "discussion",
+      candidate: typeof value.candidate === "string" ? value.candidate : undefined,
       issue: Number.isSafeInteger(value.issue) && value.issue > 0 ? value.issue : undefined,
-      state: ["open", "closed", "all"].includes(value.state) ? value.state : "open",
+      state: ["open", "closed", "merged", "all"].includes(value.state) ? value.state : "open",
       commit: typeof value.commit === "string" ? value.commit : undefined, path: typeof value.path === "string" ? value.path : "",
       reference: typeof value.reference === "string" ? value.reference : undefined,
       after: typeof value.after === "string" ? value.after : undefined };
@@ -109,9 +112,9 @@ function heading(repository) {
 }
 function tabs(current, commit) {
   const node = element("nav", undefined, "tabs"); node.setAttribute("aria-label", "Repository views");
-  for (const [text, view] of [["Files", "tree"], ["History", "history"], ["Issues", "issues"]]) {
+  for (const [text, view] of [["Files", "tree"], ["History", "history"], ["Issues", "issues"], ["Pull requests", "pulls"]]) {
     const tab = link(text, { repo: current.repo, view, commit, reference: current.reference }, "tab");
-    if (view === current.view || (view === "tree" && current.view === "file") || (view === "issues" && ["issue", "new-issue"].includes(current.view))) tab.setAttribute("aria-current", "page");
+    if (view === current.view || (view === "tree" && current.view === "file") || (view === "issues" && ["issue", "new-issue"].includes(current.view)) || (view === "pulls" && ["pull", "new-pull"].includes(current.view))) tab.setAttribute("aria-current", "page");
     node.append(tab);
   }
   return node;
@@ -225,7 +228,9 @@ async function render() {
     const repository = await api(`/api/repositories/${encodeURIComponent(current.repo)}`, { signal });
     const fragment = document.createDocumentFragment();
     fragment.append(heading(repository));
-    if (["issues", "issue", "new-issue"].includes(current.view)) {
+    if (["pulls", "pull", "new-pull"].includes(current.view)) {
+      fragment.append(tabs(current), await pullsView(repository, current, signal));
+    } else if (["issues", "issue", "new-issue"].includes(current.view)) {
       fragment.append(tabs(current), await issuesView(repository, current, signal));
     } else {
       const { resolved } = await browse(repository, { kind: "resolve", reference: current.reference }, signal);

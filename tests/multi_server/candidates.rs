@@ -224,6 +224,7 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
         )
         .await?;
 
+        assert_eq!(candidate["repository_id"], repository);
         assert_eq!(candidate["candidate"]["result"]["state"], "ready");
         let commit = candidate["candidate"]["result"]["oid"]
             .as_str()

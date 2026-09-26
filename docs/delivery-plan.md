@@ -1345,3 +1345,86 @@ Completion audit: verified progress on collaboration gate 7. Pull/review/check
 interfaces, patches/line discussions, rebase/conflict resolution, releases/assets,
 account lifecycle, public-service features and all outstanding operations and
 capacity gates remain open. The full hosting goal remains active.
+
+## Pull-request review and merge interface milestone — 2026-09-26
+
+Classification: verified progress on collaboration gate 7. The embedded browser
+now creates and edits pull requests, handles drafts, shows revision-bound review
+history and side-by-side changed files, displays check results, and publishes
+fast-forward or prepared native merge/squash results. Preparation and publication
+remain separate. The existing Cell operations own every durable side effect.
+
+The shared discussion module centralizes issue/pull authorization observations,
+UTF-8 validation, paging and submission recovery. UUID intents freeze their
+payload after uncertain replies; versioned edits require reload after conflict.
+Candidate GET/POST now return the resolved repository UUID so the browser can
+reject a mismatched Cell before combining reads. No schema, command codec,
+dependency or lockfile changes.
+
+Live qualification used Chrome, stock Git and the real server with RustFS
+`1.0.0-beta.8-glibc`, on Darwin arm64:
+
+- Approved a non-author request with an empty approval body, inspected the exact
+  before/after source file, and fast-forwarded its protected base through the UI.
+  A proxy discarded the successful merge reply. Retry recovered the same merge;
+  the API and stock Git agreed on the published source OID.
+- Approved a divergent request and prepared a native two-parent merge candidate.
+  Publication returned a visible 409 while its required check was missing.
+  Reported success for the candidate OID through the check API, refreshed the UI,
+  observed that result and published the candidate.
+- Prepared a conflicting request. The UI showed `src/main.rs` and exposed neither
+  candidate publication nor an implicit fast-forward action.
+- Created a draft request through the UI, edited it to ready, and prepared squash.
+  An independent API edit advanced its editorial version. The stale publication
+  failed with 409; reload identified the older candidate and removed both merge
+  controls. A fresh squash candidate published successfully.
+- Stock Git fetched the published branches: the merge had two parents; squash
+  had one; both result trees matched. The fast-forward ref matched its source.
+  `git fsck --full` passed on the fetched object database.
+- A pull author could comment but had no self-approval/change-request option.
+  A read-scoped member had no edit, review, prepare or publish control. Literal
+  script/image input produced no injected DOM nodes. Desktop and 390×844 mobile
+  views were inspected; the mobile document width remained 390 pixels.
+- Exercised the shared issue form after extraction: discarded a successful
+  create reply, retried to the same issue, edited its title and added a comment.
+  An independent list contained exactly the original seed and one new issue.
+- Restarted with a fresh local directory and the same durable store. Eleven API
+  snapshots covering pulls, reviews, candidates, checks, issue and comment records
+  matched exactly. The browser opened the recovered merged result as a read-only
+  member. No page console errors were observed.
+
+Focused candidate integration passes all three tests, including candidate UUID
+identity, fetchability, native graph/path semantics, policy enforcement, recovery,
+conflicts and stale publication. JavaScript syntax, Python probe parsing and
+Clippy with warnings denied pass. Static-asset process qualification now includes
+the discussion/pull scripts and pull stylesheet. Issue and pull lists share a
+larger wrapped-title hit target for mobile navigation; conflict paths preserve
+non-UTF-8 byte identities instead of substituting replacement characters.
+After rebuilding, a wrapped mobile title opened by click and the detail still
+had no horizontal overflow. All seven served scripts/styles matched source
+bytes after another fresh-directory restart, with no-store and nosniff headers.
+
+The release build and full process probe also pass with `--sqlite-chunks
+--many-objects 256`. Clean restart, fresh-disk recovery and SIGKILL/lease takeover
+retain collaboration records, candidate/check state, token rotation/revocation,
+ACL roster, default branch and all eight embedded assets. Git/LFS and dropped
+push/merge replies recover correctly. The 256-file incremental push took 3.52s;
+the post-takeover clone restored two commits, an annotated tag and 300 extra refs
+in 6.33s. Large tree/commit/tag chunks restored exact bytes/OIDs in 7.32s. These
+are local qualification measurements, not production capacity claims. RustFS
+logged missing internal metadata while formatting its new test store; all
+qualification assertions passed and the process exited successfully.
+
+Implementation growth is the new review/comparison/merge interface and its
+stylesheet. The shared form extraction removes duplicate retry policy; existing
+Git, review and merge mechanics remain canonical. Drafts and retry identities
+remain page-local. Pending-candidate resume is wired to the existing idempotent
+API; this milestone's live browser fixture exercised ready/conflicted/stale
+candidates, not a pending preparation interrupted mid-flight.
+
+Completion audit: this is not completion of the full hosting goal. Unified text
+patches, inline discussions, historical comparisons, rebase/conflict resolution,
+check/policy administration UI, releases/assets, public visibility, organizations,
+search, webhooks and account lifecycle remain. Native resource bounds, fault
+coverage, backup/GC, multi-node routing, observability, hosted CI and production
+capacity gates remain open. The earlier saved-download verification gap remains.

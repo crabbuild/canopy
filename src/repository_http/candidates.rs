@@ -41,7 +41,7 @@ pub(super) async fn read(
         .await
     {
         Ok(result) if (state.manager.ready)() => match result.output {
-            Some(candidate) => applied(candidate),
+            Some(candidate) => applied(route.repository.repository_id(), candidate),
             None => plain(StatusCode::NOT_FOUND, "Merge candidate is unavailable"),
         },
         Ok(_) => unavailable(),
@@ -130,7 +130,9 @@ async fn serve(
         }
     };
     match outcome {
-        CandidateOutcome::Applied(candidate) => applied(*candidate),
+        CandidateOutcome::Applied(candidate) => {
+            applied(route.repository.repository_id(), *candidate)
+        }
         CandidateOutcome::NotFound => plain(StatusCode::NOT_FOUND, "Pull request is unavailable"),
         CandidateOutcome::Forbidden => {
             plain(StatusCode::FORBIDDEN, "Repository write access is required")
@@ -141,7 +143,10 @@ async fn serve(
         ),
     }
 }
-fn applied(candidate: crate::pulls::candidates::MergeCandidate) -> Response<Body> {
+fn applied(
+    repository_id: [u8; 16],
+    candidate: crate::pulls::candidates::MergeCandidate,
+) -> Response<Body> {
     let fetch_ref = matches!(
         candidate.result,
         crate::pulls::candidates::CandidateResult::Ready { .. }
@@ -149,7 +154,7 @@ fn applied(candidate: crate::pulls::candidates::MergeCandidate) -> Response<Body
     .then(|| candidate.fetch_ref());
     json_response(
         StatusCode::OK,
-        &serde_json::json!({"candidate":candidate,"fetch_ref":fetch_ref}),
+        &serde_json::json!({"repository_id":uuid::Uuid::from_bytes(repository_id).to_string(),"candidate":candidate,"fetch_ref":fetch_ref}),
     )
 }
 fn unavailable() -> Response<Body> {

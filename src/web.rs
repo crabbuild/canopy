@@ -53,3 +53,19 @@ pub(crate) async fn issues() -> Response<Body> {
 pub(crate) async fn issue_styles() -> Response<Body> {
     asset(include_str!("../web/issues.css"), "text/css; charset=utf-8")
 }
+
+pub(crate) async fn discussion() -> Response<Body> {
+    asset(
+        include_str!("../web/discussion.js"),
+        "text/javascript; charset=utf-8",
+    )
+}
+pub(crate) async fn pulls() -> Response<Body> {
+    asset(
+        include_str!("../web/pulls.js"),
+        "text/javascript; charset=utf-8",
+    )
+}
+pub(crate) async fn pull_styles() -> Response<Body> {
+    asset(include_str!("../web/pulls.css"), "text/css; charset=utf-8")
+}

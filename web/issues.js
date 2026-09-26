@@ -1,18 +1,10 @@
 "use strict";
 
 const issuesView = (() => {
-  const editable = repository => repository.viewer.token_scope !== "read";
-  const owns = (repository, record) => editable(repository) &&
-    (repository.role !== "read" || repository.viewer.account === record.author);
+  const { editable, owns, date, read, pageLinks, field } = discussion;
   const endpoint = repository => `/api/repositories/${encodeURIComponent(repository.name)}/issues`;
-  const date = value => new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   const issueRoute = (current, issue) => ({ repo: current.repo, view: "issue", issue, state: current.state });
 
-  async function read(repository, path, signal) {
-    const data = await api(path, { signal });
-    if (data.repository_id !== repository.repository_id) throw new Error("Repository identity changed. Reload this page.");
-    return data;
-  }
   function stateLabel(state) {
     return element("span", state === "open" ? "○ Open" : "✓ Closed", `issue-state ${state}`);
   }
@@ -21,27 +13,6 @@ const issuesView = (() => {
     if (record.version > 1) line.append(element("span", ` · edited ${date(record.updated_at_ms)}`));
     return line;
   }
-  function pageLinks(current, next, label) {
-    const pager = element("nav", undefined, "pager"); pager.setAttribute("aria-label", `${label} pages`);
-    if (current.after) pager.append(link("First page", { ...current, after: undefined }));
-    if (next) pager.append(link(`More ${label.toLowerCase()} →`, { ...current, after: String(next) }));
-    return pager;
-  }
-  function field(form, name, label, value, limit, required = false) {
-    const node = element(name === "title" ? "input" : "textarea");
-    node.name = name; node.value = value; node.maxLength = limit; node.required = required;
-    if (name !== "title") node.rows = 7;
-    const wrapper = element("label", label); wrapper.append(node); form.append(wrapper);
-    const validate = () => {
-      const tooLong = new TextEncoder().encode(node.value).length > limit;
-      const invalid = name === "title" ? /\p{Cc}/u.test(node.value) : node.value.includes("\0");
-      node.setCustomValidity(tooLong ? `${label} must fit within ${limit.toLocaleString()} UTF-8 bytes.` :
-        invalid ? `${label} contains unsupported control characters.` :
-        required && !node.value.trim() ? `${label} cannot be empty.` : "");
-    };
-    node.addEventListener("input", validate); validate(); return node;
-  }
-
   function editor({ repository, signal, title, record, comment, send, published, cancel }) {
     const form = element("form", undefined, "discussion-editor surface");
     form.append(element("h3", title));
@@ -54,42 +25,11 @@ const issuesView = (() => {
       for (const value of ["open", "closed"]) { const option = element("option", value === "open" ? "Open" : "Closed"); option.value = value; state.append(option); }
       state.value = record.state; form.append(label, state);
     }
-    form.append(element("p", "Plain text · up to 16 KiB. Your draft stays on this page until you leave or reload.", "hint"));
-    const error = element("p", "", "error"); error.setAttribute("role", "alert");
-    const actions = element("div", undefined, "actions");
-    const save = element("button", record ? "Save changes" : comment ? "Add comment" : "Create issue", "primary"); save.type = "submit";
-    const reload = button("Reload current version", render); reload.hidden = true;
-    if (cancel) actions.append(button("Cancel", cancel)); actions.append(reload, save); form.append(error, actions);
-    const controls = [titleInput, body, state].filter(Boolean);
-    const locked = value => { for (const control of controls) { if (control.tagName === "SELECT") control.disabled = value; else control.readOnly = value; } };
-    let payload = null, inFlight = false, uncertain = false;
-    form.addEventListener("submit", async event => {
-      event.preventDefault(); if (inFlight || signal.aborted) return;
-      if (!form.reportValidity()) return;
-      inFlight = true; save.disabled = true; locked(true); error.textContent = "";
-      // Freeze creation identity and original bytes across ambiguous replies.
-      // Retrying an edited payload or new UUID could duplicate a published post.
-      try {
-        payload ||= { repository_id: repository.repository_id,
-        ...(record ? { expected_version: record.version } : { id: crypto.randomUUID() }),
+    discussion.submit({ repository, form, signal, edit: !!record,
+      label: record ? "Save changes" : comment ? "Add comment" : "Create issue",
+      payload: () => ({ ...(record ? { expected_version: record.version } : {}),
         ...(comment ? {} : { title: titleInput.value }), body: body.value,
-        ...(state ? { state: state.value } : {}) };
-        const result = await send(payload); signal.throwIfAborted();
-        published(result);
-      } catch (failure) {
-        if (signal.aborted) return;
-        if (!uncertain && [400, 403, 404, 413, 422].includes(failure.status)) {
-          payload = null; locked(false); save.disabled = false; error.textContent = failure.message;
-        } else if (record) {
-          error.textContent = `${failure.message}\nYour changes were not confirmed. Copy your draft, then reload the current version before editing again.`;
-          reload.hidden = false;
-        } else {
-          uncertain = true;
-          error.textContent = `${failure.message}\nWe couldn’t confirm this was saved. Retry the same submission to avoid duplicates. Keep this page open.`;
-          save.textContent = "Retry submission"; save.disabled = false;
-        }
-      } finally { inFlight = false; }
-    });
+        ...(state ? { state: state.value } : {}) }), send, published, cancel });
     return form;
   }
 

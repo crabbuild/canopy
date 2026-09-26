@@ -40,8 +40,17 @@ and repository writers can edit. Discussion text is displayed literally.
 If a submission reply is lost, keep the page open and use **Retry submission**
 to recover the same post. Edit conflicts preserve your draft for copying and
 require **Reload current version** before another edit. Drafts are not retained
-across navigation, disconnect or reload. Pull requests, checks, reviews and
-access management remain API operations.
+across navigation, disconnect or reload.
+
+The **Pull requests** tab opens, edits, closes and reopens requests between local
+branches. It includes draft state, paged reviews, changed-file previews, current
+approval requirements and commit check results. Reviews bind the displayed pull
+version and both branch tips. Writers can fast-forward or prepare a merge/squash
+candidate, inspect its files, fetch it for testing, then explicitly publish it.
+Publication rechecks the revision, permissions, reviews and required checks.
+Stale or conflicting candidates cannot be published. Check reporting, branch
+policy configuration and access management remain API operations. Text patches,
+inline discussions, historical comparisons and conflict resolution are pending.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
 paths, pagination, limits and authorization behavior.
 
