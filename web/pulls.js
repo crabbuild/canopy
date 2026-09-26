@@ -129,24 +129,51 @@ const pullsView = (() => {
       let loaded = false;
       row.addEventListener("toggle", async () => {
         if (!row.open || loaded) return; loaded = true;
-        const sides = element("div", undefined, "file-sides"); row.append(sides);
+        const content = element("div", undefined, "patch-content"); content.append(element("p", "Loading changes…", "file-message")); row.append(content);
         try {
-          for (const side of ["before", "after"]) {
-            const pane = element("section"); pane.append(element("h4", side === "before" ? "Merge base" : "Source")); sides.append(pane);
-            if (!file[side]) { pane.append(element("p", "No file on this side.", "file-message")); continue; }
-            const { file: preview } = await compare({ kind: "file", side, path_base64: file.path_base64 }); signal.throwIfAborted();
-            pane.append(element("p", `${preview.entry.mode} · ${preview.entry.oid.slice(0, 12)}`, "hash"));
-            if (preview.content_status !== "included") { pane.append(element("p", preview.content_status === "gitlink" ? "Submodule commit; content is not followed." : "File exceeds the 256 KiB preview limit. Read it with Git.", "file-message")); continue; }
-            const raw = bytes(preview.content_base64); let content = null;
-            try { if (!raw.includes(0)) content = new TextDecoder("utf-8", { fatal: true }).decode(raw); } catch {}
-            pane.append(content === null ? element("p", "Binary or non-UTF-8 content. Read it with Git.", "file-message") : element("pre", content, "file-content"));
-          }
-        } catch (error) { if (!signal.aborted) { sides.replaceChildren(element("p", error.message, "error")); loaded = false; row.addEventListener("toggle", () => sides.remove(), { once: true }); } }
+          const { patch } = await compare({ kind: "patch", path_base64: file.path_base64 }); signal.throwIfAborted();
+          content.replaceChildren(patchView(patch, current));
+        } catch (error) { if (!signal.aborted) { content.replaceChildren(element("p", error.message, "error")); loaded = false; row.addEventListener("toggle", () => content.remove(), { once: true }); } }
       }); rows.append(row);
     }
     panel.append(rows);
     if (!comparison.files.length) panel.append(empty("No changed files.", "The selected source and merge-base trees match."));
     panel.append(pageLinks(current, comparison.next_after, "Files")); return panel;
+  }
+
+  function patchView(patch, current) {
+    const panel = element("div"), metadata = element("div", undefined, "patch-metadata");
+    for (const [side, label, commit] of [["before", "Merge base", patch.merge_base], ["after", "Source", patch.revision.source_oid]]) {
+      const entry = patch[side], info = element("p");
+      info.append(element("span", `${label}: `));
+      if (entry) info.append(link(`${entry.mode} · ${entry.oid.slice(0, 12)} · Open file`, { repo: current.repo, view: "file", commit, path: patch.path_base64 }));
+      else info.append(element("span", "No file"));
+      metadata.append(info);
+    }
+    panel.append(metadata);
+    const messages = { binary: "Binary or non-UTF-8 content. Read it with Git.", too_large: "File exceeds the 256 KiB diff limit. Read it with Git.", gitlink: "Submodule commit changed; content is not followed." };
+    if (patch.status !== "text") { panel.append(element("p", messages[patch.status], "file-message")); return panel; }
+    if (!patch.hunks.length) { panel.append(element("p", "No text changes. File presence and modes are shown above.", "file-message")); return panel; }
+    const scroll = element("div", undefined, "patch-scroll"); scroll.tabIndex = 0; scroll.setAttribute("role", "region"); scroll.setAttribute("aria-label", "Unified file diff");
+    const table = element("table", undefined, "patch-table"), head = element("thead"), headings = element("tr");
+    for (const title of ["Old", "New", "Change", "Content"]) { const th = element("th", title); th.scope = "col"; headings.append(th); }
+    head.append(headings); table.append(head);
+    for (const hunk of patch.hunks) {
+      const body = element("tbody"), header = element("tr", undefined, "patch-hunk");
+      const range = element("td", `@@ -${hunk.old_start},${hunk.old_lines} +${hunk.new_start},${hunk.new_lines} @@`); range.colSpan = 4; header.append(range); body.append(header);
+      let old = hunk.old_start, next = hunk.new_start;
+      for (const line of hunk.lines) {
+        const row = element("tr", undefined, `patch-${line.kind}`);
+        row.append(element("td", line.kind === "add" ? "" : String(old++)), element("td", line.kind === "delete" ? "" : String(next++)),
+          element("td", { add: "+", delete: "−", context: " " }[line.kind]), element("td", line.text.replaceAll("\r", "␍")));
+        body.append(row);
+        if (line.no_newline) {
+          const marker = element("tr", undefined, "patch-marker"), cell = element("td", "\\ No newline at end of file"); cell.colSpan = 4; marker.append(cell); body.append(marker);
+        }
+      }
+      table.append(body);
+    }
+    scroll.append(table); panel.append(scroll, element("p", "− Removed · + Added · ␍ Carriage return", "patch-legend")); return panel;
   }
 
   async function checks(repository, oid, signal) {

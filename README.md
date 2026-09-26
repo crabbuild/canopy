@@ -43,14 +43,14 @@ require **Reload current version** before another edit. Drafts are not retained
 across navigation, disconnect or reload.
 
 The **Pull requests** tab opens, edits, closes and reopens requests between local
-branches. It includes draft state, paged reviews, changed-file previews, current
+branches. It includes draft state, paged reviews, unified text diffs, current
 approval requirements and commit check results. Reviews bind the displayed pull
 version and both branch tips. Writers can fast-forward or prepare a merge/squash
 candidate, inspect its files, fetch it for testing, then explicitly publish it.
 Publication rechecks the revision, permissions, reviews and required checks.
 Stale or conflicting candidates cannot be published. Check reporting, branch
-policy configuration and access management remain API operations. Text patches,
-inline discussions and conflict resolution are pending. Merged requests retain
+policy configuration and access management remain API operations. Inline
+discussions and conflict resolution are pending. Merged requests retain
 their pre-merge comparison, and **View reviewed changes** opens the exact version
 bound to a review, including after branch movement or deletion.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
@@ -146,7 +146,7 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / POST | `/api/repositories/<name>/pulls` | List summaries / open a pull |
 | GET / PUT | `/api/repositories/<name>/pulls/<number>` | Read / edit, close or reopen |
 | GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
-| POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files or file bytes |
+| POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files, patches or file bytes |
 | GET | `/api/repositories/<name>/pulls/<number>/review-policy` | Read current review requirements and counts |
 | POST | `/api/repositories/<name>/pulls/<number>/merge` | Publish a reviewed fast-forward, merge commit or squash |
 | POST | `/api/repositories/<name>/pulls/<number>/merge-candidates` | Prepare a merge commit or squash |
@@ -208,6 +208,10 @@ substitute arbitrary historical OIDs.
 {"kind":"file","path_base64":"UkVBRE1FLm1k","side":"after"}
 ```
 
+```json
+{"kind":"patch","path_base64":"UkVBRE1FLm1k"}
+```
+
 Changed files compare the unique merge-base tree to the source tree. Responses
 include `comparison` with `merge_base`, `revision`, up to 32 `files`, and
 `next_after`. Each file has a byte-preserving `path_base64`, optional UTF-8 `path`,
@@ -222,6 +226,17 @@ The `file` response includes the entry, size, and `content_status`: `included`,
 bytes when included; otherwise it is null. All base64 uses the URL-safe alphabet
 without padding. Symlinks return target text; Gitlinks and LFS pointers are never
 followed. Large blobs return metadata without fetching external content.
+
+A patch query returns `patch` with the selected `revision`, `merge_base`, path,
+nullable `before`/`after` entries, `status` and `hunks`. Text hunks use three context
+lines and Git-compatible `old_start`, `old_lines`, `new_start`, `new_lines`.
+Each line has `kind` (`context`, `delete`, `add`), `text` without its final LF,
+and `no_newline`. CR bytes are preserved. Non-text states are `binary`,
+`too_large` (either side exceeds 256 KiB) and `gitlink`, with empty hunks.
+Mode-only changes and empty files may also have no hunks. Text work/output budgets
+return 413 without a partial diff; see [limits](docs/contracts.md#unified-text-patches).
+The web view displays hunks literally, marks missing final newlines and CRs,
+and links both immutable files. It never executes repository content.
 
 Merge POSTs require a write-scoped token and current repository write access:
 
@@ -276,8 +291,8 @@ server-owned and rejects every push update, including owner pushes.
 
 Native Git handles three-way content merges, renames and multiple merge bases.
 Merge drivers and signing commands from host Git configuration are disabled.
-Text patches, rebase, conflict resolution, inline comments, forks, retargeting
-and a PR UI remain to be delivered.
+Rebase, conflict resolution, inline comments, forks and retargeting remain
+to be delivered.
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.

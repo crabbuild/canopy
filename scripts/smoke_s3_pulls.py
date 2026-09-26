@@ -42,15 +42,19 @@ def seed(base_url, repository_id, source_oid, base_oid):
     file_input = {**comparison_input, "query": {"kind": "file", "path_base64": path, "side": "after"}}
     preview = request(base_url, f"{api}/comparison", "POST", file_input, token=token)
     assert preview["file"]["content_status"] == "included"
-    return api, token, creation, old, request(base_url, api), reviews, comparison_input, comparison, file_input, preview
+    patch_input = {**comparison_input, "query": {"kind": "patch", "path_base64": path}}
+    patch = request(base_url, f"{api}/comparison", "POST", patch_input, token=token)
+    assert patch["patch"]["status"] == "text" and patch["patch"]["hunks"]
+    return api, token, creation, old, request(base_url, api), reviews, comparison_input, comparison, file_input, preview, patch_input, patch
 
 
 def verify(base_url, expected):
-    api, token, creation, old, pull, reviews, comparison_input, comparison, file_input, preview = expected
+    api, token, creation, old, pull, reviews, comparison_input, comparison, file_input, preview, patch_input, patch = expected
     assert request(base_url, f"{REPOSITORY}/pulls", "POST", creation, token=token) == {"number": pull["pull"]["number"]}
     request(base_url, f"{api}/reviews", "POST", old)
     assert request(base_url, api) == pull
     assert request(base_url, f"{api}/reviews") == reviews
     assert request(base_url, f"{api}/comparison", "POST", comparison_input, token=token) == comparison
     assert request(base_url, f"{api}/comparison", "POST", file_input, token=token) == preview
-    print("PASS: edited pull, bound reviews, comparisons, previews and old retries retain exact state across recovery", flush=True)
+    assert request(base_url, f"{api}/comparison", "POST", patch_input, token=token) == patch
+    print("PASS: edited pull, bound reviews, comparisons, patches, previews and old retries retain exact state across recovery", flush=True)

@@ -13,6 +13,7 @@ struct Input {
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 enum View {
     Files { after: Option<String> },
+    Patch { path_base64: String },
     File { path_base64: String, side: Side },
 }
 
@@ -110,6 +111,15 @@ async fn serve(
                 Ok(json_response(
                     StatusCode::OK,
                     &serde_json::json!({"repository_id":expected,"comparison":comparison}),
+                ))
+            }
+            View::Patch { path_base64 } => {
+                let patch = reader
+                    .patch(&actor.account, number, input.target, &path_base64)
+                    .await?;
+                Ok(json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({"repository_id":expected,"patch":patch}),
                 ))
             }
             View::File { path_base64, side } => {

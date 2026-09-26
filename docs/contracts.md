@@ -901,9 +901,9 @@ No aggregate approval count, mergeability or diff computation runs on these read
 Fast-forward merge publication rechecks current review requirements, grant/ref/pull
 versions and branch checks in the transaction that advances the base ref and marks
 the pull merged, as specified below. Required-PR branches reject direct pushes.
-Text patches, inline threads, rebase, conflict-resolution UI,
+Inline threads, rebase, conflict-resolution UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
-notifications and UI remain open. A future collector must retain initial pull
+notifications remain open. A future collector must retain initial pull
 OIDs, historical review OIDs, merged source/base and result OIDs, and merge preparation roots in addition to live refs.
 Aggregate retention/quotas and production throughput evidence remain open.
 
@@ -912,8 +912,9 @@ Aggregate retention/quotas and production throughput evidence remain open.
 
 `POST /api/repositories/<name>/pulls/<number>/comparison` is a read operation.
 It accepts canonical `repository_id`, tagged `target`, and tagged `query`:
-`files` with optional `after`, or `file` with `path_base64` and `side`
-(`before`/`after`). Read token scope suffices. JSON rejects unknown fields.
+`files` with optional `after`, `patch` with `path_base64`, or `file` with
+`path_base64` and `side` (`before`/`after`). Read token scope suffices. JSON
+rejects unknown fields.
 Input is bounded to 32 KiB and 30 seconds; computation to 120 seconds.
 Missing membership/pull/review/merge/file returns 404, invalid identity/target/path
 422, repository identity mismatch or moved current revision 409, budget
@@ -938,8 +939,8 @@ Every target rechecks current repository membership after upload and again befor
 returning the result. Token revocation retains the request-admission boundary.
 Responses retain `revision` and computed `merge_base`, identifying the immutable
 objects compared. No general per-push history is recorded: saved historical
-snapshots are reviews and successful merges. Pagination and file previews use
-the same target; the existing traversal/output budgets apply unchanged.
+snapshots are reviews and successful merges. Pagination, patches and file previews
+use the same target; each query applies its traversal/output budgets.
 
 Comparison uses verified immutable `commit_parents` rows, emitted only by object
 closure certification. Union ancestry is read in groups of 128 commits and SQL
@@ -958,7 +959,7 @@ modes depend only on the owner executable bit, and directory/link modes use type
 bits, matching Git's `canon_mode` in
 [object.h](https://github.com/git/git/blob/master/object.h) and its use by
 [tree-walk.c](https://github.com/git/git/blob/master/tree-walk.c).
-There is no rename similarity detection, patch computation or text conversion.
+There is no rename similarity detection or attribute-driven text conversion.
 Changed-file tests compare full modes/OIDs/raw paths with
 [git diff-tree](https://git-scm.com/docs/git-diff-tree) using `--raw -r -z --no-renames`.
 
@@ -1006,6 +1007,54 @@ requires a fresh development prefix. No dependency or lockfile change is needed.
 Fast-forward review policy and atomic publication are implemented below. Native
 rebase candidate preparation and line-based review remain open delivery gates.
 
+
+### Unified text patches
+
+`query: {"kind":"patch","path_base64":"..."}` resolves both merge-base/source
+leaves using the same path, revision and current-access checks as file previews.
+Directories are absent sides; two absent leaves return 404. Symlink targets are
+ordinary blob text. Any Gitlink yields `gitlink`, with no submodule traversal.
+Either side over 256 KiB yields `too_large` without loading that blob. Otherwise
+verified bytes are classified as `binary` if either contains NUL or invalid UTF-8.
+LFS pointers are ordinary text and never dereferenced.
+
+Text uses a bounded [Myers shortest edit script](https://doi.org/10.1007/BF01840446),
+with common prefix/suffix trimming and direct insertion/deletion for an empty
+middle side. Compact frontier traces retain only reachable diagonals. The result
+is a valid minimal line edit script; repeated-line choices need not match Git's
+presentation heuristics. No external diff/textconv command, native Git cache,
+working directory, attribute policy or new dependency participates in reads.
+
+The `patch` result carries `revision`, `merge_base`, `path_base64`, nullable UTF-8
+`path`, nullable `before`/`after` mode/OID entries, `status` and `hunks`.
+`status` is `text`, `binary`, `too_large` or `gitlink`. Non-text states have no
+hunks. Mode-only changes or empty-file additions/deletions also have empty hunks;
+entry metadata carries those changes. Three context lines surround changed runs;
+overlapping ranges are combined. Hunk coordinates are 1-based; zero-line ranges
+use Git's preceding-line anchor (including zero at the beginning).
+
+Each hunk has `old_start`, `old_lines`, `new_start`, `new_lines`, and ordered
+`lines`. A line has `kind: context|delete|add`, `text` with only its final LF
+removed, and `no_newline`. CR and all other valid UTF-8 bytes remain unchanged.
+An unterminated line sets `no_newline: true`. Prefixing text with space/minus/plus,
+adding LF and the standard missing-newline marker reconstructs a unified patch;
+integration tests pass these hunks through stock `git apply --check` and `apply`
+and verify byte-identical output.
+
+| Patch resource | Limit |
+| --- | --- |
+| Blob bytes / lines per side | 256 KiB / 20,000 |
+| Retained frontier coordinates | 1,048,576 (8 MiB on 64-bit hosts, plus vector overhead) |
+| Charged line comparison bytes | 128 MiB, plus bounded prefix/suffix scans |
+| Output hunk lines | 8192 |
+| Conservative JSON response bound | 2 MiB including reserved metadata/path space |
+
+Line/work/output exhaustion returns 413 for the whole request, never a partial
+patch. Blob-size status remains a successful metadata response. The algorithm
+runs on a blocking worker that retains the shared transfer permit even if its
+caller times out or disconnects. Authorization is checked again after computation.
+Graph/object/path bounds and the 120-second comparison deadline also apply.
+There is no persistent diff cache; every request computes from verified objects.
 
 ### Required reviews and fast-forward merge publication
 
@@ -1337,11 +1386,13 @@ Changed files are paged and compare the selected source against its merge base.
 Merged requests default to the stored pre-merge revision. Each review links to
 its historical comparison; its header states the review number, pull version and
 source/base OIDs. The separate branch header explicitly labels live tips.
-Opening a file reads each side through the exact-revision comparison API.
-UTF-8 text up to 256 KiB is displayed literally, with binary, large-file and
-submodule states explained. Non-UTF-8 paths retain their base64 representation.
-Renames appear as deletion/addition. These are side-by-side file previews;
-unified patches and line comments are pending.
+Opening a file reads one unified patch through the exact-revision comparison API.
+Text is rendered with text nodes, old/new line numbers, addition/deletion prefixes,
+missing-final-newline markers and visible `␍` for carriage returns. The horizontally
+scrollable diff region is keyboard focusable; both immutable file views are linked.
+Binary, large-file, submodule and empty-hunk states are explained. Non-UTF-8 paths
+retain their base64 representation. Renames appear as deletion/addition.
+Line comments remain pending.
 
 Merge preparation is a separate action from publication. A ready candidate
 exposes its file view, immutable Git fetch ref and check results for its exact

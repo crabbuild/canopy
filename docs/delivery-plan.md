@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser and issue UI implemented; rebase, releases and pull/review UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs implemented; rebase, inline discussions and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: rebase and conflict resolution; text patches;
+5. Continue collaboration as vertical slices: rebase and conflict resolution; inline discussions;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -1501,3 +1501,80 @@ Unified patches, inline discussions, rebase/conflict resolution, administration,
 releases/assets, public-service features, account lifecycle, native resource
 bounds, backup/GC, routing, observability, hosted CI and production capacity gates
 remain open. The saved-download verification gap also remains.
+
+## Unified pull request patches milestone — 2026-09-26
+
+Implemented a `patch` query on the existing comparison endpoint and made unified
+hunks the default expanded-file view. Current, reviewed and merged targets retain
+their existing authority, path, membership, graph and object verification rules.
+Patch reads compute from verified Cell objects; they do not hydrate a native Git
+cache. No schema, runtime codec, dependency or lockfile change is required.
+
+The bounded line algorithm emits three context lines, exact old/new coordinates,
+UTF-8 text with CR preserved and missing-final-newline flags. Added/deleted files,
+empty files, executable modes, symlinks, raw-byte paths and file/directory changes
+retain their entry metadata. Binary, oversized and Gitlink states have explicit
+responses. Work and output exhaustion fail the whole request with 413. The
+[contract](contracts.md#unified-text-patches) records the 256 KiB per-side limit,
+20,000 lines, bounded frontier/comparison work, 8192 output lines and conservative
+2 MiB response ceiling. A cancelled blocking worker retains transfer admission
+until its bounded work ends.
+
+The browser requests one patch per expanded file and renders text nodes, old/new
+line numbers, addition/deletion prefixes, CR markers and missing-newline markers.
+Immutable base/source file links reuse the existing browser. The old side-by-side
+preview rendering and its CSS were removed. Full file bytes remain available
+through the existing file API and browser. Inline discussions are still pending.
+
+Proof:
+
+- Five focused unit tests pass. The minimal edit count is checked against an
+  independent dynamic-programming oracle for all 3969 pairs of binary-alphabet
+  sequences up to five lines; hunks reconstruct the exact destination. Additional
+  cases cover separated hunks/offsets, CRLF, Unicode, missing LF, large contiguous
+  insert/delete runs and input/trace/comparison/output limits.
+- Five real-server comparison integrations pass. Structured hunks converted to
+  unified patches pass stock `git apply --check` and `git apply`, restoring exact
+  bytes for separated edits, additions, deletions, CRLF, Unicode/HTML, newline-only
+  changes and empty files. Existing changed-path fixtures also verify patch
+  metadata/status for mode changes, symlinks, Gitlinks, raw-byte paths, binary and
+  large files. A 20,001-line API request returns 413 without a partial result.
+- Reviewed and merged patches differ after source movement and restore exactly
+  after both refs are deleted and local state is replaced. Read-scoped membership
+  works; revocation while a patch body is paused returns 404.
+- Real Chrome/RustFS checks show merged and reviewed hunks, literal HTML (no script
+  element), CRLF, missing LF, binary/large/empty states and visible 413 errors.
+  The source file link opens the exact merged commit after both refs are deleted.
+  At 390 px the document stays 390 px wide; long lines scroll inside focusable
+  diff regions. After fresh-local-state restoration and reconnect, reviewed hunks
+  remain correct and the browser reports no console errors. Temporary browser
+  tabs, viewport override, server and storage fixture were cleaned up.
+- Rust formatting, Clippy with warnings denied, JavaScript syntax and Python
+  syntax pass. Debug and release binaries build successfully.
+
+The release RustFS probe with `--sqlite-chunks --many-objects 256` passes all
+assertions and exits zero. Exact patch responses survive clean restart,
+fresh-disk recovery and SIGKILL/lease takeover. Existing reviews, issues,
+fast-forward/merge/squash publication, dropped replies, Git/LFS, ACL, token
+rotation/revocation, branch policy, embedded assets and chunk restoration remain
+verified. The first probe attempt caught a fixture tuple-position error introduced
+while adding patch snapshots; restoring the token's existing position fixed that
+harness error, and the complete probe was rerun. Fresh RustFS startup logged
+missing internal metadata; the successful run completed all assertions.
+
+The post-takeover 256-file clone took 0.51s and exact large tree/commit/tag
+restoration took 0.74s. These are local observations, not production capacity
+claims. Patch limits intentionally reject high-edit-distance or oversized work;
+no persistent diff cache or large-history performance target is delivered here.
+
+Implementation growth is the bounded diff engine, its behavior tests and the
+unified rendering path. Existing authorization, immutable-object reads, full-file
+browsing and HTTP admission remain canonical. No second storage or Git protocol
+path was added.
+
+Completion audit: the full hosting goal remains active. Inline discussions,
+rebase/conflict resolution, administration, releases/assets, public-service
+features, account lifecycle, native resource bounds, backup/GC, routing,
+observability, hosted CI and production capacity gates remain open. Saved reviews
+and merges retain snapshots; independent per-push history and the earlier saved
+file-download verification gap remain outside this milestone.

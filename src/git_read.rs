@@ -2,6 +2,7 @@
 
 pub(crate) mod browse;
 mod graph;
+mod patch;
 mod trees;
 
 use crate::{

@@ -4,11 +4,22 @@
 .discussion-editor .check-label input { width: auto; margin: 0; }
 .changed-files { display: grid; gap: 15px; }
 .changed-files summary { padding: 16px; cursor: pointer; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
-.file-sides { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border-top: 1px solid var(--line); }
-.file-sides > section { min-width: 0; }
-.file-sides > section + section { border-left: 1px solid var(--line); }
-.file-sides h4, .file-sides .hash { margin: 12px 16px; }
-.file-sides .file-content { max-height: 55vh; }
+.changed-files > details { min-width: 0; }
+.patch-content { border-top: 1px solid var(--line); }
+.patch-metadata { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 16px; font-family: var(--mono); font-size: 12px; }
+.patch-metadata p { margin: 0; overflow-wrap: anywhere; }
+.patch-scroll { overflow-x: auto; max-height: 65vh; }
+.patch-table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.6; }
+.patch-table th { text-align: left; color: var(--muted); font-weight: 400; padding: 4px 10px; }
+.patch-table td { padding: 0 10px; vertical-align: top; }
+.patch-table td:nth-child(-n+3) { width: 1%; white-space: nowrap; text-align: right; user-select: none; }
+.patch-table td:nth-child(4) { white-space: pre; tab-size: 4; }
+.patch-table .patch-hunk td { text-align: left; padding: 8px 10px; background: var(--mist); color: var(--pine); }
+.patch-add { background: #e8f5ec; color: #205d38; }
+.patch-delete { background: #fceceb; color: #8e3030; }
+.patch-table .patch-marker td { text-align: left; padding: 3px 10px; font-style: italic; color: var(--muted); }
+.patch-legend { margin: 10px 16px; font-size: 12px; color: var(--muted); }
+.patch-content > .error { padding: 12px 16px; }
 .merge-panel h3 { margin: 0 0 14px; }
 .merge-panel > button { margin: 15px 0; }
 .merge-panel > .hash, .conflict-path { overflow-wrap: anywhere; white-space: normal; }
@@ -21,6 +32,4 @@
   .tab { white-space: nowrap; }
   .issue-filters { flex-wrap: wrap; }
   .issue-filters a { padding: 6px 10px; }
-  .file-sides { grid-template-columns: minmax(0,1fr); }
-  .file-sides > section + section { border-left: 0; border-top: 1px solid var(--line); }
 }

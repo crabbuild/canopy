@@ -150,6 +150,12 @@ async fn preview(
     Ok(value(client.post(api).bearer_auth(OWNER).json(&input)).await?["file"].clone())
 }
 
+async fn patch(client: &Client, api: &str, input: &Value, path: &[u8]) -> Result<Value> {
+    let mut input = input.clone();
+    input["query"] = json!({"kind":"patch","path_base64":URL_SAFE_NO_PAD.encode(path)});
+    Ok(value(client.post(api).bearer_auth(OWNER).json(&input)).await?["patch"].clone())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn comparison_matches_git_and_preserves_exact_views_across_recovery() -> Result {
     let workspace = tempfile::TempDir::new()?;
@@ -247,6 +253,22 @@ async fn comparison_matches_git_and_preserves_exact_views_across_recovery() -> R
         files(&client, &api, OWNER, &input, &common).await?,
         expected
     );
+    for (path, entries) in &expected {
+        let result = patch(&client, &api, &input, path).await?;
+        assert_eq!(result["before"], entries["before"]);
+        assert_eq!(result["after"], entries["after"]);
+        assert_eq!(result["path"], json!(String::from_utf8(path.clone()).ok()));
+        let state = match path.as_slice() {
+            b"binary" => "binary",
+            b"large" => "too_large",
+            b"submodule" => "gitlink",
+            _ => "text",
+        };
+        assert_eq!(result["status"], state);
+        if state != "text" || path == b"mode" {
+            assert_eq!(result["hunks"], json!([]));
+        }
+    }
     for (path, side, bytes) in [
         (b"edited".as_slice(), "before", b"before\n".as_slice()),
         (b"edited", "after", b"after\n"),
@@ -537,3 +559,6 @@ async fn comparison_rejects_oversized_change_sets_without_partial_results() -> R
 
 #[path = "comparison/history.rs"]
 mod history;
+
+#[path = "comparison/patches.rs"]
+mod patches;

@@ -29,6 +29,7 @@ async fn historical_comparisons_survive_branch_deletion_and_recheck_current_acce
     open(&client, &repo, &source, &base).await?;
     let live = request(&client, &repo).await?;
     let original = value(client.post(&compare).bearer_auth(OWNER).json(&live)).await?;
+    let original_patch = patch(&client, &compare, &live, b"edited").await?;
     let review = value(client.post(format!("{api}/reviews")).bearer_auth(OWNER).json(&json!({
         "repository_id":live["repository_id"],"id":uuid::Uuid::new_v4().to_string(),
         "revision":live["target"]["revision"],"kind":"comment","body":"Read this exact version"
@@ -69,6 +70,8 @@ async fn historical_comparisons_survive_branch_deletion_and_recheck_current_acce
     .await?;
     let current = request(&client, &repo).await?;
     let published = value(client.post(&compare).bearer_auth(OWNER).json(&current)).await?;
+    let published_patch = patch(&client, &compare, &current, b"edited").await?;
+    assert_ne!(original_patch["hunks"], published_patch["hunks"]);
     let merge_input = json!({"repository_id":live["repository_id"],"id":uuid::Uuid::new_v4().to_string(),"revision":current["target"]["revision"],"strategy":"fast_forward"});
     let result = value(
         client
@@ -117,7 +120,19 @@ async fn historical_comparisons_survive_branch_deletion_and_recheck_current_acce
         value(client.post(&compare).bearer_auth(&reader).json(&historical)).await?,
         original
     );
-    let body = serde_json::to_vec(&merged)?;
+    let mut merged_patch = merged.clone();
+    merged_patch["query"] = json!({"kind":"patch","path_base64":URL_SAFE_NO_PAD.encode(b"edited")});
+    assert_eq!(
+        value(
+            client
+                .post(&compare)
+                .bearer_auth(&reader)
+                .json(&merged_patch)
+        )
+        .await?["patch"],
+        published_patch
+    );
+    let body = serde_json::to_vec(&merged_patch)?;
     let paused = paused_upload(
         address,
         "/api/repositories/history/pulls/1/comparison",
@@ -161,6 +176,14 @@ async fn historical_comparisons_survive_branch_deletion_and_recheck_current_acce
             *expected
         );
     }
+    assert_eq!(
+        patch(&client, &compare, &historical, b"edited").await?,
+        original_patch
+    );
+    assert_eq!(
+        patch(&client, &compare, &merged, b"edited").await?,
+        published_patch
+    );
     assert_eq!(
         preview(&client, &compare, &historical, b"edited", "after").await?,
         reviewed_file
