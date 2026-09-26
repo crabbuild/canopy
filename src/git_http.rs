@@ -89,9 +89,10 @@ impl GitHttpBackend {
     pub async fn initialize(
         scratch_root: PathBuf,
         budget: DiskBudget,
+        head: &str,
     ) -> Result<Self, GitHttpError> {
         Ok(Self {
-            cache: GitCache::create(scratch_root, budget).await?,
+            cache: GitCache::create(scratch_root, budget, head).await?,
         })
     }
 
@@ -135,7 +136,7 @@ impl GitHttpBackend {
             return Err(GitHttpError::InvalidPath);
         }
         let mut process = Command::new("git");
-        // The cache's synthetic HEAD must not protect a branch by name.
+        // The cache's HEAD must not implicitly protect a branch by name.
         // Repository policy belongs in the Cell ref transaction.
         process
             .args([

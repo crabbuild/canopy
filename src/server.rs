@@ -675,7 +675,7 @@ fn unix_now_ms() -> Result<i64, ServerError> {
     .map_err(|_| ServerError::Clock)
 }
 
-fn mutation_identity() -> Result<MutationIdentity, ServerError> {
+pub(crate) fn mutation_identity() -> Result<MutationIdentity, ServerError> {
     let now_ms = unix_now_ms()?;
     Ok(MutationIdentity {
         request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),

@@ -5,7 +5,12 @@ async fn hydrated_files_remain_charged_until_the_last_reader_releases_them()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(root.path().into(), budget.clone()).await?;
+    let cache =
+        GitCache::create(root.path().into(), budget.clone(), "refs/heads/stable/next").await?;
+    assert_eq!(
+        fs::read(cache.git_dir().join("HEAD"))?,
+        b"ref: refs/heads/stable/next\n"
+    );
     let body = b"cache bytes are disposable, object identity is not\n";
     let oid = object_id(ObjectKind::Blob, body);
     cache
@@ -48,7 +53,7 @@ async fn hydration_stops_before_writing_unadmitted_bytes() -> Result<(), Box<dyn
 {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone()).await?;
+    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
     let initial = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - initial - 1)?;
     let body = b"cannot fit in one byte".to_vec();
@@ -69,7 +74,7 @@ async fn native_writes_require_admission_before_reconciliation_succeeds()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone()).await?;
+    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
     let initial = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - initial)?;
     fs::write(cache.git_dir().join("native-pack"), [0; 256])?;
@@ -94,7 +99,7 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone()).await?;
+    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
     let charged = budget.used();
     let git_dir = cache.git_dir();
     fs::set_permissions(&git_dir, fs::Permissions::from_mode(0o500))?;

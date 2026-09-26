@@ -17,6 +17,7 @@ pub(crate) const REF_PAGE_SIZE: usize = 256;
 /// A bounded ref page tied to one durable ref generation, including deletions.
 pub struct RefPage {
     pub generation: i64,
+    pub default_branch: String,
     pub refs: Vec<(String, RefExpectation)>,
 }
 
@@ -105,7 +106,7 @@ impl RepositoryCell {
                     statements: vec![SqlStatement {
                         // One SQLite statement binds the generation even to an empty
                         // final page. Separate observations could miss a concurrent push.
-                        sql: "SELECT g.generation, r.name, r.oid, r.version FROM ref_generation g LEFT JOIN (SELECT name, oid, version FROM refs WHERE name > ?1 ORDER BY name LIMIT ?2) r ON 1 = 1 WHERE g.singleton = 1 ORDER BY r.name".into(),
+                        sql: "SELECT g.generation, g.default_branch, r.name, r.oid, r.version FROM ref_generation g LEFT JOIN (SELECT name, oid, version FROM refs WHERE name > ?1 ORDER BY name LIMIT ?2) r ON 1 = 1 WHERE g.singleton = 1 ORDER BY r.name".into(),
                         parameters: vec![SqlValue::Text(after.into()), SqlValue::Integer(REF_PAGE_SIZE as i64)],
                     }],
                 },
@@ -115,14 +116,12 @@ impl RepositoryCell {
             .output
             .first()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing refs page")))?;
-        let current = match rows.rows.first().map(Vec::as_slice) {
-            Some([SqlValue::Integer(value), ..]) if *value >= 0 => *value,
-            _ => {
-                return Err(
-                    InvocationError::NotStarted(Error::Command("invalid ref generation")).into(),
-                );
-            }
-        };
+        let row = rows
+            .rows
+            .first()
+            .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing ref generation")))?;
+        let head = crate::default_branch::decode_head(row).map_err(InvocationError::NotStarted)?;
+        let current = head.generation;
         if generation.is_some_and(|expected| expected != current) {
             return Err(RefReadError::Changed);
         }
@@ -130,11 +129,11 @@ impl RepositoryCell {
         for row in &rows.rows {
             if matches!(
                 row.as_slice(),
-                [_, SqlValue::Null, SqlValue::Null, SqlValue::Null]
+                [_, _, SqlValue::Null, SqlValue::Null, SqlValue::Null]
             ) {
                 continue;
             }
-            let [_, SqlValue::Text(name), oid, version] = row.as_slice() else {
+            let [_, _, SqlValue::Text(name), oid, version] = row.as_slice() else {
                 return Err(
                     InvocationError::NotStarted(Error::Command("invalid stored ref row")).into(),
                 );
@@ -146,6 +145,7 @@ impl RepositoryCell {
         Ok(Observed {
             output: RefPage {
                 generation: current,
+                default_branch: head.reference,
                 refs,
             },
             receipt: result.receipt,

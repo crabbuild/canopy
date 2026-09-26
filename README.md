@@ -32,6 +32,17 @@ require the configured owner's token. Git and LFS use
 Directory Cell, provisions its own Repository Cell, then marks the name ready.
 Later requests recover that Cell on demand from the directory.
 
+`GET /api/repositories/<name>/default-branch` returns `repository_id`, the fully
+qualified `reference` (initially `refs/heads/main`), and `generation`.
+Repository readers can inspect it. An owner with an admin-scoped token can
+`PUT` the same URL with
+`{"repository_id":"<UUID>","reference":"refs/heads/trunk","expected_generation":7}`.
+Use the UUID and generation returned by GET. A concurrent ref or HEAD change
+returns 409; read current state before retrying. The target must exist unless
+there are no live branches. Stock Git discovery and clone use this durable HEAD,
+including after restart. Protocol v2 also reports an unborn target. Branch
+deletion preserves HEAD's name; recreating the branch makes it live again.
+
 The configured token bootstraps a durable owner account in the Directory Cell.
 `POST /api/accounts` creates another account with a client-generated `cnp_`
 token followed by 64 random hexadecimal digits and a `read`, `write`, or
@@ -190,5 +201,5 @@ turn storage publications into unresolved mutations even with free byte space.
 Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above
 1 MiB, then verify exact raw bytes and OIDs after takeover with a strict fsck.
 This exercises SQLite chunk storage independently of external large blobs.
-The chunk layout changes the unreleased schema; use a fresh development storage
-prefix when moving from builds that predate it.
+The chunk and default-branch layouts change the unreleased schema; use a fresh
+development storage prefix when moving from builds that predate either change.

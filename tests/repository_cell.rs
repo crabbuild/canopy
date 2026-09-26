@@ -2,6 +2,8 @@
 mod batches;
 #[path = "repository_cell/chunks.rs"]
 mod chunks;
+#[path = "repository_cell/default_branch.rs"]
+mod default_branch;
 #[path = "repository_cell/graph.rs"]
 mod graph;
 #[path = "support/objects.rs"]
@@ -159,6 +161,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 "canopy",
             )
             .await?;
+        default_branch::empty(&repository).await?;
         let committed = objects::put(&repository,
                 MutationIdentity {
                     request_id: RequestId::from_bytes([7; 16]),
@@ -414,6 +417,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 version: 5
             })
         );
+        default_branch::verify(&repository).await?;
         graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())

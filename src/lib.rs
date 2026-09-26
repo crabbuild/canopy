@@ -12,6 +12,7 @@ use cellule_runtime::{
 use sha1::{Digest as _, Sha1};
 
 mod access;
+mod default_branch;
 pub mod directory;
 mod git_cache;
 pub mod git_gateway;
@@ -30,6 +31,7 @@ mod repository_http;
 pub mod server;
 mod transfer;
 
+pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
 pub use object_chunks::{MAX_SQLITE_OBJECT_BYTES, ObjectStageError};
 pub use push::PushError;
@@ -155,6 +157,7 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
+                source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph.rs"));
                 source.update(include_bytes!("graph/preparation.rs"));
                 source.update(include_bytes!("object_batch.rs"));

@@ -7,6 +7,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
     let backend = GitHttpBackend::initialize(
         root.path().to_path_buf(),
         cellule_ltx::DiskBudget::new(1 << 20),
+        "refs/heads/main",
     )
     .await?;
     for (service, content_type) in [

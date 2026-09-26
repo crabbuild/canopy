@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts, per-repository Git/LFS roles and default-branch management survive recovery; account lifecycle, collaborator listing and repository get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
@@ -509,3 +509,49 @@ replay pass. Environment: Darwin arm64, Apple Git 2.50.1, RustFS
 `1.0.0-beta.8-glibc`, debug build. These observations do not isolate host load
 from code changes or establish production capacity. Formatting, scoped tests,
 Clippy and the binary build pass.
+
+## Durable default branch
+
+Repository Cells now persist symbolic HEAD alongside `ref_generation`, initially
+`refs/heads/main`. The SDK changes it through one SQL compare-and-set: immutable
+owner authorization, expected generation, and target existence are checked in
+the update itself. A repository with no live branches can choose an unborn
+target. Every accepted selection advances the generation, including selecting
+the same name; replaying the same SDK mutation does not advance it twice.
+
+`GET` and `PUT /api/repositories/<name>/default-branch` expose this state. GET
+requires repository read access. PUT requires an admin-scoped owner token and
+the repository UUID plus expected generation. UUID mismatch, stale state and
+an absent target with other live branches return 409. Invalid references return
+422. A failed/ambiguous publication asks the caller to read current state before
+retrying. Collaborators cannot change HEAD, even with an admin-scoped token.
+
+Ref pages now carry HEAD in their existing single-statement snapshot. The cache
+key includes HEAD and generation, and a new cache creates its accounted HEAD
+file before serving readers. Branch deletion remains allowed and leaves the
+symbolic target unchanged. No automatic first-push branch selection is added.
+Schema version 1 remains unreleased; use a fresh development storage prefix.
+
+Direct Cell tests cover invalid input, absent targets, owner checks, stale
+generations after pushes and HEAD ABA, exact mutation replay, pagination fencing
+and concurrent changes with one winner. Stock Git v0/v2 discovery and clones
+switch from a warm main cache to trunk and restore the expected checked-out
+bytes after owner restart on fresh local storage. Protocol-v2 empty clone and
+raw unborn `ls-refs` also pass; deletion/recreation of the default branch retains
+the chosen name. All ten multi-server tests, repository Cell, Git backend,
+smart HTTP, owner-restart and four disk-cache tests pass. Clippy with warnings
+denied, formatting and the binary build pass; dependencies are unchanged.
+
+The RustFS process smoke with `--sqlite-chunks --many-objects 256` also passes.
+It changes HEAD to trunk, renames the repository, and checks the exact saved
+HEAD/generation after clean restart and after SIGKILL, lease expiry and fresh
+local disk recovery. Owner and collaborator clones check out trunk and restore
+Git/LFS bytes. The same run preserves 300 refs, large SQLite objects, mixed and
+atomic push outcomes, and dropped-reply replay. Environment: Darwin arm64,
+Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, debug binary. This is recovery
+evidence; default-branch updates still rebuild a cache and have no production
+latency claim.
+
+Branch protection, account lifecycle, repository get/list permissions, backup,
+GC, native resource ceilings, representative capacity evidence and the broader
+publication fault matrix remain open gates.

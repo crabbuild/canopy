@@ -115,6 +115,23 @@ def rename_repository(base_url, old_name, new_name, repository_id):
         return renamed["clone_url"]
 
 
+def default_branch(base_url, name, reference=None):
+    url = f"{base_url}/api/repositories/{name}/default-branch"
+    headers = {"Authorization": "Bearer local-test-token", "Content-Type": "application/json"}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+        current = json.load(response)
+    if reference is None:
+        return current
+    payload = {"repository_id": current["repository_id"], "reference": reference,
+               "expected_generation": current["generation"]}
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="PUT")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        changed = json.load(response)
+        assert changed["reference"] == reference
+        assert changed["generation"] == current["generation"] + 1
+        return changed
+
+
 def api_status(base_url, path, token, method="GET", payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     request = urllib.request.Request(
@@ -133,7 +150,7 @@ def api_status(base_url, path, token, method="GET", payload=None):
         return error.code
 
 
-def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token"):
+def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token", branch="main"):
     git(
         "-c",
         f"http.extraHeader=Authorization: Bearer {token}",
@@ -150,6 +167,7 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
             "pull",
             cwd=directory,
         )
+    assert git("symbolic-ref", "HEAD", cwd=directory) == f"refs/heads/{branch}".encode()
     assert git("rev-parse", "HEAD", cwd=directory) == expected_oid
     assert (directory / "README.md").read_bytes() == expected_readme
     if expected_lfs is not None:
@@ -485,15 +503,19 @@ def main():
                 "PUT",
                 {"role": "read"},
             ) == 200
+            git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "push", url, "HEAD:refs/heads/trunk", cwd=local)
+            selected_head = default_branch(base_url, "example", "refs/heads/trunk")
             url = rename_repository(base_url, "example", "renamed", repository_id)
-            clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
-            clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
+            assert default_branch(base_url, "renamed") == selected_head
+            clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
+            clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             if large is not None and many is not None:
                 clone_and_verify(f"{base_url}/canopy/other.git", directory / "evicted-other", other_oid, other_readme)
-                clone_and_verify(url, directory / "evicted-renamed", oid, b"Canopy process smoke\n", lfs_body)
+                clone_and_verify(url, directory / "evicted-renamed", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
                 print("PASS: four repository Cells restored Git/LFS through resident eviction on one node", flush=True)
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
@@ -502,7 +524,8 @@ def main():
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
             url = f"{base_url}/canopy/renamed.git"
-            clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body)
+            assert default_branch(base_url, "renamed") == selected_head
+            clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
             second.wait(timeout=10)
@@ -510,8 +533,9 @@ def main():
             third, base_url = start(args.binary, directory, settings, "third")
             processes.append(third)
             url = f"{base_url}/canopy/renamed.git"
-            clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
-            clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token)
+            assert default_branch(base_url, "renamed") == selected_head
+            clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
+            clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
             assert git("rev-parse", "refs/remotes/origin/partial", cwd=directory / "takeover-other") == partial_oid
             assert git("show", "refs/remotes/origin/partial:accepted.txt", cwd=directory / "takeover-other") == b"Accepted part of a mixed push"
@@ -565,7 +589,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: Git/LFS, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
+            print("PASS: Git/LFS, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
         except Exception:
             for log in directory.glob("*.log"):
                 errors = [line for line in log.read_text(errors="replace").splitlines() if "ERROR" in line or "WARN" in line]

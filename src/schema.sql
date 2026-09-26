@@ -39,9 +39,10 @@ CREATE TABLE refs (
 
 CREATE TABLE ref_generation (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-    generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation >= 0)
+    generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation >= 0),
+    default_branch TEXT NOT NULL
 ) WITHOUT ROWID;
-INSERT INTO ref_generation (singleton, generation) VALUES (1, 0);
+INSERT INTO ref_generation (singleton, generation, default_branch) VALUES (1, 0, 'refs/heads/main');
 
 CREATE TABLE lfs_objects (
     sha256 BLOB PRIMARY KEY CHECK(length(sha256) = 32),

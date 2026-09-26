@@ -1,5 +1,7 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
+mod default_branch;
+
 use std::sync::Arc;
 
 use axum::{
@@ -52,6 +54,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}",
                 axum::routing::patch(rename_repository),
+            )
+            .route(
+                "/api/repositories/{name}/default-branch",
+                get(default_branch::read).put(default_branch::update),
             )
             .route(
                 "/api/repositories/{name}/collaborators/{account}",

@@ -15,6 +15,8 @@ use crate::{ObjectKind, RefExpectation, object_id, refs::valid_ref_name};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
+    #[error("Git cache HEAD must name a valid branch")]
+    InvalidHead,
     #[error("Git cache I/O failed")]
     Io(#[from] io::Error),
     #[error("Git cache disk admission failed")]
@@ -36,7 +38,15 @@ pub(crate) struct GitCache {
 }
 
 impl GitCache {
-    pub(crate) async fn create(root: PathBuf, budget: DiskBudget) -> Result<Arc<Self>, CacheError> {
+    pub(crate) async fn create(
+        root: PathBuf,
+        budget: DiskBudget,
+        head: &str,
+    ) -> Result<Arc<Self>, CacheError> {
+        if !crate::default_branch::valid_default_branch(head) {
+            return Err(CacheError::InvalidHead);
+        }
+        let head = format!("ref: {head}\n");
         tokio::task::spawn_blocking(move || {
             let cache = Arc::new(Self {
                 directory: tempfile::TempDir::new_in(root)?,
@@ -47,7 +57,7 @@ impl GitCache {
             }
             // Build an unpublished bare cache directly, without template hooks or
             // unaccounted init subprocess writes. Git remains the wire implementation.
-            cache.write_file("HEAD", b"ref: refs/heads/main\n")?;
+            cache.write_file("HEAD", head.as_bytes())?;
             cache.write_file("config", b"[core]\nrepositoryformatversion = 0\nbare = true\nlogallrefupdates = false\n[receive]\nautogc = false\n[gc]\nauto = 0\n")?;
             Ok(cache)
         }).await?

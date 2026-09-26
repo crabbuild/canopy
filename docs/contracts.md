@@ -28,6 +28,7 @@ before admitting persistent customer repositories.
 | LFS request deadline | 120 seconds for batch and object PUT body reception; timeout returns 408 | Git HTTP router |
 | Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
+| Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
 | Graph certificates | at most 128 candidate objects and 64 MiB SQLite object bytes per command; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
@@ -51,9 +52,10 @@ Rejected or interrupted pushes may leave unreferenced objects; collection is not
 implemented yet.
 
 The `ref_generation` singleton advances once in the same transaction as each
-accepted ref plan. Typed finalization and HTTP completion share this update;
-rejected plans, completed-request replay and object/ACL writes do not advance it.
-Ref queries return at most 256 rows with their generation in one SQLite
+accepted ref plan or default-branch update, including selecting the same branch.
+Typed finalization and HTTP completion share the ref-plan update; rejected plans,
+failed HEAD preconditions, completed-request replay and object/ACL writes do not
+advance it. Ref queries return at most 256 rows with HEAD and generation in one SQLite
 statement, including an empty terminal page. A continuation must supply the
 first page's generation. Changes invalidate the scan even when tips return to
 their previous OIDs or names are deleted and recreated. The gateway discards
@@ -61,6 +63,31 @@ partial scans and tries at most three scans, then returns HTTP 503.
 Successful scans therefore describe one coherent ref state. That state can
 become older while its disposable cache is hydrated; admitted readers retain
 the selected generation, and immutable objects remain readable without GC.
+
+HEAD must name a valid `refs/heads/` reference under Canopy's existing ASCII,
+255-byte ref policy. Changing it requires the owner, an expected ref generation,
+and either a live target branch or no live branches. Owner authorization, target
+existence and generation comparison occur in one Cell SQL update. Concurrent
+ref changes and HEAD ABA invalidate the precondition. The SDK's mutation identity
+replays its recorded result; the HTTP API uses an explicit generation and requires
+a fresh GET after an ambiguous reply. It does not silently retry updates.
+
+`GET /api/repositories/<name>/default-branch` requires a read-scoped token and
+repository access. It returns `repository_id`, `reference` and `generation`.
+`PUT` requires an admin-scoped token and repository ownership, with
+`repository_id`, `reference` and `expected_generation` in its JSON body. The UUID
+prevents name reuse from retargeting a stale administrative write. Malformed
+input returns 422; stale identity/generation or an absent target in a repository
+with live branches returns 409. Forbidden repository metadata is hidden as 404;
+an authorized collaborator attempting an owner operation receives 403.
+
+The cache key includes HEAD and the coherent ref generation. New generations
+get a new, disk-accounted HEAD file; active readers retain their original cache.
+Native Git supplies populated HEAD advertisements for protocols v0/v2 and the
+protocol-v2 [unborn HEAD response](https://git-scm.com/docs/protocol-v2#_ls_refs).
+Empty protocol-v0 clones cannot learn an unborn branch through that extension.
+Deleting the selected branch retains the symbolic target without auto-selecting
+another branch, consistent with Git's [HEAD layout](https://git-scm.com/docs/gitrepository-layout#_description).
 
 Git owns the [per-ref report and atomic capability](https://git-scm.com/docs/protocol-capabilities#_report_status).
 An ordinary push may accept some refs and reject others. The gateway publishes
@@ -150,7 +177,7 @@ ID permits identical bytes to represent a new operation. There is no expiry or
 GC for reservations, completed outcomes or abandoned response attempts yet.
 
 All branches currently permit deletion by an authorized writer. The gateway
-sets `receive.denyDeleteCurrent=ignore` because its synthetic HEAD must not
+sets `receive.denyDeleteCurrent=ignore` because its HEAD must not implicitly
 create a branch protection policy. Git's
 [receive-pack implementation](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L1428-L1454)
 otherwise rejects deletion of the branch named by HEAD even in this bare
@@ -407,8 +434,8 @@ Crash-left directories and cleanup-failure charges need startup reconciliation;
 native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
-Schema version 1 is still changing in this unreleased repository. The chunk
-layout and operation-5 codec change require a fresh development storage prefix;
+Schema version 1 is still changing in this unreleased repository. The chunk and
+HEAD layouts and operation-5 codec change require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule

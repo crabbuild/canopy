@@ -70,7 +70,14 @@ pub enum GatewayError {
 
 struct CachedRepository {
     backend: GitHttpBackend,
+    snapshot: RefSnapshot,
+}
+
+#[derive(PartialEq, Eq)]
+struct RefSnapshot {
     refs: BTreeMap<String, RefExpectation>,
+    head: String,
+    generation: i64,
 }
 
 /// Serves Git requests from a warm, disposable cache of durable Cell state.
@@ -155,7 +162,10 @@ impl GitGateway {
         let live_refs = self.cell_refs().await?;
         let cached = {
             let mut cache = self.cache.lock().await;
-            if cache.as_ref().is_none_or(|cached| cached.refs != live_refs) {
+            if cache
+                .as_ref()
+                .is_none_or(|cached| cached.snapshot != live_refs)
+            {
                 *cache = None;
                 *cache = Some(Arc::new(self.build_cache(live_refs).await?));
             }
@@ -228,7 +238,7 @@ impl GitGateway {
         id: [u8; 16],
         digest: [u8; 32],
     ) -> Result<GitHttpResponse, GatewayError> {
-        let before = cached.refs.clone();
+        let before = cached.snapshot.refs.clone();
         let response = cached.backend.run(request).await?;
         // Git may accept some refs and reject others unless atomic was requested.
         // Publish its actual changes before forwarding the unmodified per-ref report.
@@ -269,14 +279,15 @@ impl GitGateway {
         ))
     }
 
-    async fn build_cache(
-        &self,
-        refs: BTreeMap<String, RefExpectation>,
-    ) -> Result<CachedRepository, GatewayError> {
-        let backend =
-            GitHttpBackend::initialize(self.scratch_root.clone(), self.disk_budget.clone()).await?;
-        self.hydrate(&backend, &refs).await?;
-        Ok(CachedRepository { backend, refs })
+    async fn build_cache(&self, snapshot: RefSnapshot) -> Result<CachedRepository, GatewayError> {
+        let backend = GitHttpBackend::initialize(
+            self.scratch_root.clone(),
+            self.disk_budget.clone(),
+            &snapshot.head,
+        )
+        .await?;
+        self.hydrate(&backend, &snapshot.refs).await?;
+        Ok(CachedRepository { backend, snapshot })
     }
 
     async fn hydrate(
@@ -331,7 +342,7 @@ impl GitGateway {
         Ok(())
     }
 
-    async fn cell_refs(&self) -> Result<BTreeMap<String, RefExpectation>, GatewayError> {
+    async fn cell_refs(&self) -> Result<RefSnapshot, GatewayError> {
         for _ in 0..3 {
             let mut refs = BTreeMap::new();
             let mut after = String::new();
@@ -351,7 +362,11 @@ impl GitGateway {
                     refs.insert(name, state);
                 }
                 if complete {
-                    return Ok(refs);
+                    return Ok(RefSnapshot {
+                        refs,
+                        head: page.default_branch,
+                        generation: page.generation,
+                    });
                 }
             }
         }
