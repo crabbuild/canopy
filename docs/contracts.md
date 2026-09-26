@@ -143,9 +143,20 @@ External objects and durable Cell state remain intact. Later access acquires
 the idle Cell from its published root and rebuilds the disposable Git cache.
 
 If every repository is pinned or the runtime refuses release, the new request
-returns 503 without evicting active work. Failed or ambiguous release retains
-local state; recovery from release faults still needs qualification. Acquisition
-and release run in tracked tasks so a client disconnect cannot interrupt their
+returns 503 without evicting active work. Failed release retains local state and
+invalidates the manager's cached handles. Cellule transfer preflight may replace
+the old capability even when release is refused. A later request binds fresh
+handles only if the runtime confirms a serving resident owner. Otherwise it
+returns 503, including a repeated create request for that repository; a terminal
+owner-release failure requires a node restart and authoritative-root recovery.
+Other resident repositories remain available.
+
+After confirmed release, an entry remains marked released until local directory
+deletion succeeds. Access to that repository, or an admission needing its slot,
+retries deletion before restoring into the required empty destination. A missing
+directory already satisfies cleanup. Local cleanup never authorizes release or
+deletes durable objects. Acquisition and release run in tracked tasks so a
+client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
 the Cell node. Owner initialization retains an acquired entry on failure and
 retries its idempotent setup on later access. The residency bound does not yet

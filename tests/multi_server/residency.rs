@@ -11,6 +11,9 @@ use tokio::{
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+#[path = "residency/faults.rs"]
+mod faults;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

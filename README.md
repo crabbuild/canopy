@@ -54,7 +54,9 @@ Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories
 evict an inactive repository and restore from durable state when accessed again.
 Requests and streamed responses pin their repository; admission returns 503 when
-no repository can be safely released. There is no
+no repository can be safely released. A terminal ownership-release failure leaves
+that repository unavailable until node restart; confirmed-release cleanup errors
+are retried on later admission. There is no
 account lifecycle API, organization model, collaborator-visible repository
 listing, multi-node routing, backup, repository browser, issue or pull request
 API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific

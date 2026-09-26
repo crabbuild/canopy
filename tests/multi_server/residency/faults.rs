@@ -1,0 +1,373 @@
+use std::{fmt, pin::Pin, sync::Mutex};
+
+use cellule_runtime::Control;
+use futures_core::Stream;
+use object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
+use tokio::sync::Notify;
+
+use super::*;
+
+#[derive(Clone, Copy, Debug)]
+enum ReleaseFault {
+    Pause,
+    LostReply,
+    Denied,
+}
+
+#[derive(Debug, Default)]
+struct ReleaseStore {
+    inner: InMemory,
+    fault: Mutex<Option<(StorePath, ReleaseFault)>>,
+    entered: Notify,
+    proceed: Notify,
+}
+
+impl ReleaseStore {
+    fn arm(&self, path: StorePath, fault: ReleaseFault) {
+        *self.fault.lock().unwrap() = Some((path, fault));
+    }
+
+    async fn wait(&self) -> Result {
+        timeout(Duration::from_secs(5), self.entered.notified()).await?;
+        Ok(())
+    }
+}
+
+impl fmt::Display for ReleaseStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("release-fault-store")
+    }
+}
+
+type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send + 'static>>;
+
+#[async_trait::async_trait]
+impl ObjectStore for ReleaseStore {
+    async fn put_opts(
+        &self,
+        path: &StorePath,
+        payload: PutPayload,
+        options: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        let fault = {
+            let mut armed = self.fault.lock().unwrap();
+            if armed.as_ref().is_some_and(|(target, _)| target == path)
+                && Control::decode(
+                    &payload
+                        .iter()
+                        .flat_map(|bytes| bytes.iter().copied())
+                        .collect::<Vec<_>>(),
+                )
+                .is_ok_and(|control| control.state == ControlState::Idle)
+            {
+                armed.take().map(|(_, fault)| fault)
+            } else {
+                None
+            }
+        };
+        let Some(fault) = fault else {
+            return self.inner.put_opts(path, payload, options).await;
+        };
+        self.entered.notify_one();
+        self.proceed.notified().await;
+        if matches!(fault, ReleaseFault::Denied) {
+            return Err(object_store::Error::PermissionDenied {
+                path: path.to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected release denial",
+                )),
+            });
+        }
+        let result = self.inner.put_opts(path, payload, options).await?;
+        if matches!(fault, ReleaseFault::LostReply) {
+            return Err(object_store::Error::Generic {
+                store: "release-fault-store",
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "injected lost release reply",
+                )),
+            });
+        }
+        Ok(result)
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        path: &StorePath,
+        options: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(path, options).await
+    }
+
+    async fn get_opts(
+        &self,
+        path: &StorePath,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(path, options).await
+    }
+
+    fn delete_stream(&self, paths: StoreStream<StorePath>) -> StoreStream<StorePath> {
+        self.inner.delete_stream(paths)
+    }
+    fn list(&self, prefix: Option<&StorePath>) -> StoreStream<ObjectMeta> {
+        self.inner.list(prefix)
+    }
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&StorePath>,
+    ) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+    async fn copy_opts(
+        &self,
+        from: &StorePath,
+        to: &StorePath,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+struct Fixture {
+    workspace: tempfile::TempDir,
+    store: Arc<ReleaseStore>,
+    server: CanopyServer,
+    client: reqwest::Client,
+    address: std::net::SocketAddr,
+    layout: CellStorageLayout,
+    target: cellule_runtime::CellTarget,
+    repository_dir: std::path::PathBuf,
+    oid: Vec<u8>,
+}
+
+impl Fixture {
+    async fn new() -> Result<Self> {
+        let workspace = tempfile::TempDir::new()?;
+        let store = Arc::new(ReleaseStore::default());
+        let address = available_address().await?;
+        let settings = config(address, workspace.path().join("server"));
+        let tenant = settings.tenant;
+        let application = settings.application;
+        let layout = CellStorageLayout::new(
+            Store::new(store.clone()),
+            settings.store_prefix.clone(),
+            *application.as_bytes(),
+        );
+        let server = CanopyServer::start(settings, store.clone()).await?;
+        let client = reqwest::Client::new();
+        let (url, id) = create(&client, address, "original").await?;
+        let source = workspace.path().join("source");
+        run_git(None, &["init", "-b", "main", path_str(&source)?]).await?;
+        run_git(Some(&source), &["config", "user.name", "Canopy Test"]).await?;
+        run_git(
+            Some(&source),
+            &["config", "user.email", "canopy@example.invalid"],
+        )
+        .await?;
+        tokio::fs::write(
+            source.join("README.md"),
+            b"retained through failed eviction\n",
+        )
+        .await?;
+        run_git(Some(&source), &["add", "."]).await?;
+        run_git(Some(&source), &["commit", "-m", "Original"]).await?;
+        run_git(
+            Some(&source),
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+                &url,
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await?;
+        let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
+        create(&client, address, "second").await?;
+        create(&client, address, "third").await?;
+        let local = std::fs::read_dir(workspace.path().join("server"))?
+            .next()
+            .ok_or("node directory missing")??
+            .path();
+        Ok(Self {
+            workspace,
+            store,
+            server,
+            client,
+            address,
+            layout,
+            target: repository_target(tenant, application, id)?,
+            repository_dir: local.join(hex::encode(id)),
+            oid,
+        })
+    }
+
+    async fn interrupt_release(
+        &self,
+        fault: ReleaseFault,
+    ) -> Result<tokio::task::JoinHandle<reqwest::Result<reqwest::Response>>> {
+        self.store.arm(
+            self.layout.control_path(self.target.cell_id().as_bytes()),
+            fault,
+        );
+        let request = self
+            .client
+            .post(format!("http://{}/api/repositories", self.address))
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"name":"fourth"}));
+        let request = tokio::spawn(async move { request.send().await });
+        self.store.wait().await?;
+        assert!(self.repository_dir.join("repository.sqlite").exists());
+        let control = CellAuthority::new(self.layout.clone())
+            .load(self.target.cell_id())
+            .await?
+            .ok_or("authority missing")?;
+        assert_eq!(control.value().state, ControlState::Serving);
+        Ok(request)
+    }
+
+    async fn clone_original(&self, address: std::net::SocketAddr) -> Result {
+        let clone = self.workspace.path().join("restored");
+        run_git(
+            None,
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "clone",
+                &format!("http://{address}/canopy/original.git"),
+                path_str(&clone)?,
+            ],
+        )
+        .await?;
+        assert_eq!(
+            run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
+            self.oid
+        );
+        assert_eq!(
+            tokio::fs::read(clone.join("README.md")).await?,
+            b"retained through failed eviction\n"
+        );
+        run_git(Some(&clone), &["fsck", "--full"]).await?;
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lost_release_reply_is_resolved_before_local_cleanup() -> Result {
+    let fixture = Fixture::new().await?;
+    let pending = fixture.interrupt_release(ReleaseFault::LostReply).await?;
+    fixture.store.proceed.notify_one();
+    pending.await??.error_for_status()?;
+    assert!(!fixture.repository_dir.exists());
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnected_admission_finishes_release_and_allows_a_later_restore() -> Result {
+    let fixture = Fixture::new().await?;
+    let pending = fixture.interrupt_release(ReleaseFault::Pause).await?;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    fixture.store.proceed.notify_one();
+    create(&fixture.client, fixture.address, "fourth").await?;
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_local_cleanup_retries_before_restoring_the_released_repository() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new().await?;
+    let pending = fixture.interrupt_release(ReleaseFault::Pause).await?;
+    let original_permissions = std::fs::metadata(&fixture.repository_dir)?.permissions();
+    std::fs::set_permissions(
+        &fixture.repository_dir,
+        std::fs::Permissions::from_mode(0o500),
+    )?;
+    fixture.store.proceed.notify_one();
+    let response = pending.await?;
+    std::fs::set_permissions(&fixture.repository_dir, original_permissions)?;
+    assert_eq!(response?.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(fixture.repository_dir.join("repository.sqlite").exists());
+    let control = CellAuthority::new(fixture.layout.clone())
+        .load(fixture.target.cell_id())
+        .await?
+        .ok_or("authority missing")?;
+    assert_eq!(control.value().state, ControlState::Idle);
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn denied_release_retains_local_state_and_recovers_after_node_restart() -> Result {
+    let fixture = Fixture::new().await?;
+    let pending = fixture.interrupt_release(ReleaseFault::Denied).await?;
+    fixture.store.proceed.notify_one();
+    assert_eq!(
+        pending.await??.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert!(fixture.repository_dir.join("repository.sqlite").exists());
+    let response = fixture
+        .client
+        .post(format!("http://{}/api/repositories", fixture.address))
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({"name":"original"}))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    for (name, status) in [
+        ("original", reqwest::StatusCode::SERVICE_UNAVAILABLE),
+        ("second", reqwest::StatusCode::OK),
+    ] {
+        let response = fixture
+            .client
+            .get(format!(
+                "http://{}/canopy/{name}.git/info/refs?service=git-upload-pack",
+                fixture.address
+            ))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?;
+        assert_eq!(response.status(), status);
+        response.bytes().await?;
+    }
+    // Only a new node/session recovers an owner whose terminal release failed.
+    let address = available_address().await?;
+    let settings = config(address, fixture.workspace.path().join("restarted"));
+    fixture.server.shutdown().await?;
+    let server = CanopyServer::start(settings, fixture.store.clone()).await?;
+    let clone = fixture.workspace.path().join("restarted-clone");
+    run_git(
+        None,
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "clone",
+            &format!("http://{address}/canopy/original.git"),
+            path_str(&clone)?,
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
+        fixture.oid
+    );
+    assert_eq!(
+        tokio::fs::read(clone.join("README.md")).await?,
+        b"retained through failed eviction\n"
+    );
+    run_git(Some(&clone), &["fsck", "--full"]).await?;
+    server.shutdown().await?;
+    Ok(())
+}

@@ -211,3 +211,39 @@ repository transitions; no production concurrency target is claimed.
 The only dependency change exposes the already locked `http-body` package as
 a direct dependency so the response wrapper can preserve data frames, trailers
 and size hints. No package version or checksum changed.
+
+## Release and cleanup fault qualification
+
+Fault tests exposed and fixed two failures in the first residency build:
+removing the manager entry before local deletion lost the ability to retry a
+failed cleanup; a repeated create could report success for an existing repository
+after its Cell's release failed. The manager now distinguishes serving,
+handle-refresh-required and confirmed-released entries. Released entries retain
+their slot until cleanup completes. After any release error, requests require a
+fresh resident handle from Cellule before creating a route; absent authority to
+serve produces HTTP 503.
+
+The tests pause a specific repository's canonical `Idle` control write through
+a real object-store wrapper, after SQLite closure and before owner release.
+They use the production HTTP server, Cell runtime, Git clients and persisted
+control records, with these observed outcomes:
+
+| Injected event | Verified outcome |
+| --- | --- |
+| Idle write succeeds but its reply is lost | Cellule resolves the exact published control; admission succeeds, local files are removed, and stock Git restores the original commit and bytes |
+| Client disconnects while release is paused | Release and acquisition finish; retrying the pending creation succeeds; the evicted repository clones correctly |
+| Idle write is denied before storage accepts it | New admission, repeated creation of the affected repository and its Git advertisement return 503; local SQLite remains; another repository serves normally; a fresh node restores exact Git content |
+| Local directory deletion fails after successful release (Unix permissions) | HTTP 503 with durable control already Idle; SQLite files remain; repairing permissions lets the next clone retry cleanup and restore exact content |
+
+The four fault tests and the existing three multi-server tests pass. Both
+regressions were reproduced against the prior production code before applying
+the fixes. Clippy, formatting and the binary build pass. The
+test-only `async-trait` dependency reuses the already locked package; no package
+version or checksum changed.
+
+This qualifies those boundaries on the local object-store fixture. Automatic
+recovery of a terminal failed release within the same node is not implemented;
+restart remains required. Lease expiry during release, SQL worker close errors,
+acquisition failures, process death at each boundary and the production storage
+provider still need separate fault qualification. Cache byte accounting remains
+open.

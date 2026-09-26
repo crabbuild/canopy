@@ -13,7 +13,7 @@ use axum::{
     body::{Body, Bytes, HttpBody},
     http::{Request, Response},
 };
-use cellule_runtime::{CellClient, CellModule, Error};
+use cellule_runtime::{CatalogRole, CellClient, CellHandle, CellModule, CellTarget, Error};
 use http_body::{Frame, SizeHint};
 use tower::ServiceExt;
 
@@ -34,6 +34,14 @@ pub(super) struct LoadedRepository {
     pin: Arc<()>,
     last_used: Instant,
     initialized: bool,
+    state: ResidencyState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResidencyState {
+    Serving,
+    RefreshHandle,
+    Released,
 }
 
 #[cfg(test)]
@@ -112,6 +120,32 @@ impl RepositoryManager {
         entry: &RepositoryEntry,
         loaded: &mut HashMap<[u8; 16], LoadedRepository>,
     ) -> Result<RepositoryRoute, ServerError> {
+        match loaded
+            .get(&entry.repository_id)
+            .map(|repository| repository.state)
+        {
+            Some(ResidencyState::Released) => {
+                self.cleanup_released(entry.repository_id, loaded).await?;
+            }
+            Some(ResidencyState::RefreshHandle) => {
+                let target = repository_target(self.tenant, self.application, entry.repository_id)?;
+                // Transfer preflight can close the old capability even when release
+                // fails. Only the runtime may provide a fresh serving capability.
+                let handle = self
+                    .node
+                    .runtime()
+                    .resident_handle(&target, CatalogRole::Sql)
+                    .await?
+                    .ok_or(ServerError::Repository(
+                        "Cell release failed; restart the node to recover",
+                    ))?;
+                loaded.insert(
+                    entry.repository_id,
+                    self.bind_repository(entry, target, handle)?,
+                );
+            }
+            _ => {}
+        }
         if !loaded.contains_key(&entry.repository_id) {
             if loaded.len() >= RESIDENT_REPOSITORIES {
                 self.evict_repository(loaded).await?;
@@ -134,30 +168,9 @@ impl RepositoryManager {
                 &self.endpoint,
             )
             .await?;
-            let application = self.node.application_handle::<CanopyApplication>(
-                CellClient::local(self.node.application().registry(), handle),
-                self.tenant,
-                self.application,
-            );
-            let repository = Arc::new(RepositoryCell::new(&application, target)?);
-            let gateway = Arc::new(GitGateway::new(
-                Arc::clone(&repository),
-                self.local_root.clone(),
-                Arc::clone(&self.external_store),
-                self.disk_budget.clone(),
-            ));
-            let router = self.router_for(entry, Arc::clone(&gateway))?;
             loaded.insert(
                 entry.repository_id,
-                LoadedRepository {
-                    repository,
-                    gateway,
-                    name: entry.name.clone(),
-                    router,
-                    pin: Arc::new(()),
-                    last_used: Instant::now(),
-                    initialized: false,
-                },
+                self.bind_repository(entry, target, handle)?,
             );
         }
         let existing = loaded
@@ -188,6 +201,11 @@ impl RepositoryManager {
         &self,
         loaded: &mut HashMap<[u8; 16], LoadedRepository>,
     ) -> Result<(), ServerError> {
+        if let Some(id) = loaded.iter().find_map(|(id, repository)| {
+            (repository.state == ResidencyState::Released).then_some(*id)
+        }) {
+            return self.cleanup_released(id, loaded).await;
+        }
         let candidates = self.node.idle_transfer_candidates().await?;
         let mut eligible = Vec::new();
         for (id, repository) in loaded.iter() {
@@ -208,15 +226,71 @@ impl RepositoryManager {
                 "repository residency",
             )));
         };
-        self.node
+        let result = self
+            .node
             .release_idle_cell(cell, self.session, generation)
-            .await?;
+            .await;
+        let repository = loaded
+            .get_mut(&id)
+            .ok_or(ServerError::Repository("eviction candidate is absent"))?;
+        repository.state = if result.is_ok() {
+            ResidencyState::Released
+        } else {
+            ResidencyState::RefreshHandle
+        };
+        result?;
         // Only a confirmed release permits dropping handles and deleting local
         // SQLite artifacts. Failed or ambiguous releases retain the local state.
-        loaded.remove(&id);
-        tokio::fs::remove_dir_all(self.local_root.join(hex::encode(id))).await?;
+        self.cleanup_released(id, loaded).await?;
         tracing::debug!(repository = %hex::encode(id), "released idle repository Cell");
         Ok(())
+    }
+
+    async fn cleanup_released(
+        &self,
+        id: [u8; 16],
+        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
+    ) -> Result<(), ServerError> {
+        // Keep the released entry until deletion completes. A failed cleanup must
+        // be retried before restore, whose destination must not already exist.
+        match tokio::fs::remove_dir_all(self.local_root.join(hex::encode(id))).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        loaded.remove(&id);
+        Ok(())
+    }
+
+    fn bind_repository(
+        &self,
+        entry: &RepositoryEntry,
+        target: CellTarget,
+        handle: CellHandle,
+    ) -> Result<LoadedRepository, ServerError> {
+        let application = self.node.application_handle::<CanopyApplication>(
+            CellClient::local(self.node.application().registry(), handle),
+            self.tenant,
+            self.application,
+        );
+        let repository = Arc::new(RepositoryCell::new(&application, target)?);
+        let gateway = Arc::new(GitGateway::new(
+            Arc::clone(&repository),
+            self.local_root.clone(),
+            Arc::clone(&self.external_store),
+            self.disk_budget.clone(),
+        ));
+        let router = self.router_for(entry, Arc::clone(&gateway))?;
+        Ok(LoadedRepository {
+            repository,
+            gateway,
+            name: entry.name.clone(),
+            router,
+            pin: Arc::new(()),
+            last_used: Instant::now(),
+            initialized: false,
+            state: ResidencyState::Serving,
+        })
     }
 
     fn router_for(
