@@ -18,6 +18,7 @@ before admitting persistent customer repositories.
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
+| Object publication | at most 128 records and 768 KiB aggregate inline bytes per atomic command | `PutObjects`, operation 5, codec 1 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current object transfer path |
@@ -161,8 +162,25 @@ concurrently, retaining at most 64 KiB per process. Dropping the reader kills
 both direct children and aborts pipe tasks; normal completion requires both
 successful exits before publishing refs or recording the successful report.
 Previously published graph closure makes exclusions safe; the Cell transaction
-still verifies every new tip. Per-object SQLite queries/publications and complete
-cold-cache hydration remain performance costs.
+still verifies every new tip.
+
+Candidate existence queries group up to 128 IDs. Missing records accumulate in
+an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
+leaving room for metadata beneath the 1 MiB operation input limit. External
+blob records count toward the record limit; their bytes are verified and
+uploaded before publication. The decoder enforces both bounds before copying
+bodies. One typed Cell command publishes the batch and returns one receipt.
+It recomputes inline Git OIDs and BLAKE3 digests, then compares every inserted
+or existing row with the complete expected record. A mismatch rejects the
+command and rolls back all inserts in that batch. Repeating the same mutation
+identity and payload returns the recorded result through Cellule deduplication.
+
+Object batches remain separate from ref and push-outcome publication. A later
+failure can leave earlier batches unreferenced; a retry finds those records
+through the bounded existence query. The final transaction still validates
+graph closure before exposing new refs. Retention and collection of abandoned
+objects remain open. Per-object buffers, complete cold-cache hydration and
+large initial graph traversals still need capacity qualification.
 
 Git CGI responses use one subprocess/stream implementation. The HTTP gateway
 streams advertisements and fetch replies through four queued chunks of at most

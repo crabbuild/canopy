@@ -21,11 +21,13 @@ mod graph;
 pub mod http;
 pub mod large_blob;
 pub mod lfs;
+mod object_batch;
 mod push;
 mod refs;
 mod repository_http;
 pub mod server;
 
+pub use object_batch::ObjectBatch;
 pub use push::PushError;
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefUpdate};
 
@@ -34,7 +36,12 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 3] = [operation(1), operation_with_codec(3, 3), operation(4)];
+const COMMANDS: [OperationDescriptor; 4] = [
+    operation(1),
+    operation_with_codec(3, 3),
+    operation(4),
+    operation(5),
+];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
 const fn operation(id: u32) -> OperationDescriptor {
@@ -139,6 +146,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("graph.rs"));
+                source.update(include_bytes!("object_batch.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("lfs.rs"));
@@ -173,7 +181,8 @@ impl CellModule for RepositoryModule {
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<FinalizePush>()?;
-        registry.bind_command::<push::CompletePush>()
+        registry.bind_command::<push::CompletePush>()?;
+        registry.bind_command::<object_batch::PutObjects>()
     }
 }
 
@@ -227,49 +236,6 @@ impl RepositoryCell {
         self.application
             .command::<FinalizePush>(&self.target, identity, plan)
             .await
-    }
-
-    pub async fn put_inline_object(
-        &self,
-        identity: cellule_runtime::MutationIdentity,
-        kind: ObjectKind,
-        body: &[u8],
-    ) -> std::result::Result<
-        Committed<[u8; 20]>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::SqlResultSet>>,
-    > {
-        if body.len() > INLINE_OBJECT_LIMIT {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("object exceeds inline limit"),
-            ));
-        }
-        let oid = object_id(kind, body);
-        let digest = blake3::hash(body);
-        let committed = self.sql.batch(identity, SqlBatch {
-            statements: vec![SqlStatement {
-                sql: "INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, ?2, ?3, ?4, 'inline', ?5) ON CONFLICT(oid) DO NOTHING".into(),
-                parameters: vec![
-                    SqlValue::Blob(oid.to_vec()),
-                    SqlValue::Text(kind.git_name().into()),
-                    SqlValue::Integer(i64::try_from(body.len()).map_err(|_| cellule_runtime::InvocationError::NotStarted(Error::Command("object size overflows")))?),
-                    SqlValue::Blob(digest.as_bytes().to_vec()),
-                    SqlValue::Blob(body.to_vec()),
-                ],
-            }],
-        }).await?;
-        match self.object(oid, Some(committed.receipt)).await?.output {
-            Some((stored_kind, stored_body)) if stored_kind == kind && stored_body == body => {}
-            _ => {
-                return Err(cellule_runtime::InvocationError::InvalidPublishedResult {
-                    receipt: committed.receipt,
-                    source: Box::new(Error::Command("conflicting stored object")),
-                });
-            }
-        }
-        Ok(Committed {
-            output: oid,
-            receipt: committed.receipt,
-        })
     }
 
     pub async fn object(
@@ -327,106 +293,6 @@ impl RepositoryCell {
         Ok(Observed {
             output: Some((kind, body.clone())),
             receipt: result.receipt,
-        })
-    }
-
-    /// Checks whether a Git object ID is already recorded.
-    pub async fn object_exists(
-        &self,
-        oid: [u8; 20],
-    ) -> std::result::Result<
-        Observed<bool>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::SqlResultSet>>,
-    > {
-        let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT 1 FROM objects WHERE oid = ?1 LIMIT 1".into(),
-                        parameters: vec![SqlValue::Blob(oid.to_vec())],
-                    }],
-                },
-            )
-            .await?;
-        Ok(Observed {
-            output: result
-                .output
-                .first()
-                .is_some_and(|set| !set.rows.is_empty()),
-            receipt: result.receipt,
-        })
-    }
-
-    /// Records a previously uploaded immutable large Git blob.
-    pub async fn put_external_blob(
-        &self,
-        identity: cellule_runtime::MutationIdentity,
-        oid: [u8; 20],
-        size: u64,
-        blake3: [u8; 32],
-        sha256: [u8; 32],
-    ) -> std::result::Result<
-        Committed<()>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::SqlResultSet>>,
-    > {
-        let size = i64::try_from(size).map_err(|_| {
-            cellule_runtime::InvocationError::NotStarted(Error::Command(
-                "blob size overflows SQLite",
-            ))
-        })?;
-        let committed = self
-            .sql
-            .batch(
-                identity,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "INSERT INTO objects (oid, kind, size, digest, storage, external_sha256) VALUES (?1, 'blob', ?2, ?3, 'external', ?4) ON CONFLICT(oid) DO NOTHING".into(),
-                        parameters: vec![
-                            SqlValue::Blob(oid.to_vec()),
-                            SqlValue::Integer(size),
-                            SqlValue::Blob(blake3.to_vec()),
-                            SqlValue::Blob(sha256.to_vec()),
-                        ],
-                    }],
-                },
-            )
-            .await?;
-        let record = self
-            .sql
-            .query(
-                Some(committed.receipt),
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT kind, size, digest, storage, external_sha256 FROM objects WHERE oid = ?1".into(),
-                        parameters: vec![SqlValue::Blob(oid.to_vec())],
-                    }],
-                },
-            )
-            .await?;
-        let expected = [
-            SqlValue::Text("blob".into()),
-            SqlValue::Integer(size),
-            SqlValue::Blob(blake3.to_vec()),
-            SqlValue::Text("external".into()),
-            SqlValue::Blob(sha256.to_vec()),
-        ];
-        if record
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(Vec::as_slice)
-            != Some(expected.as_slice())
-        {
-            return Err(cellule_runtime::InvocationError::InvalidPublishedResult {
-                receipt: committed.receipt,
-                source: Box::new(Error::Command("conflicting Git object identity")),
-            });
-        }
-        Ok(Committed {
-            output: (),
-            receipt: committed.receipt,
         })
     }
 

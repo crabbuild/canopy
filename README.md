@@ -65,8 +65,11 @@ must be commits. Submodule gitlinks may name commits in another repository.
 SQLite certificates let later pushes reuse validated history. Push ingestion streams
 candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
-are checked before allocation and canonical OIDs before storage. Recovery tests
-include annotated tags, submodules and `git fsck` on the restored clone.
+are checked before allocation and canonical OIDs before storage. SQLite lookups
+group up to 128 candidate IDs; object publication groups up to 128 records and
+768 KiB of inline bytes in one Cell transaction. A conflicting record rejects
+the whole batch. Recovery tests include annotated tags, submodules and
+`git fsck` on the restored clone.
 
 ## Recover a lost push reply
 

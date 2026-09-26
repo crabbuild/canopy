@@ -1,5 +1,9 @@
+#[path = "repository_cell/batches.rs"]
+mod batches;
 #[path = "repository_cell/graph.rs"]
 mod graph;
+#[path = "support/objects.rs"]
+mod objects;
 
 use std::{
     sync::Arc,
@@ -132,6 +136,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         );
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
         let repository = RepositoryCell::new(&application_handle, target)?;
+        batches::exercise(&repository, &graph_sql).await?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
         let identity = |byte| MutationIdentity {
@@ -149,8 +154,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 "canopy",
             )
             .await?;
-        let committed = repository
-            .put_inline_object(
+        let committed = objects::put(&repository,
                 MutationIdentity {
                     request_id: RequestId::from_bytes([7; 16]),
                     issued_at_ms: now_ms,
@@ -168,16 +172,13 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .output,
             Some((ObjectKind::Blob, body.to_vec()))
         );
-        let tree = repository
-            .put_inline_object(identity(26), ObjectKind::Tree, b"")
+        let tree = objects::put(&repository, identity(26), ObjectKind::Tree, b"")
             .await?.output;
         let first_commit = format!("tree {}\nauthor Canopy <test@example.invalid> 0 +0000\ncommitter Canopy <test@example.invalid> 0 +0000\n\nFirst\n", hex::encode(tree));
-        let committed = repository
-            .put_inline_object(identity(27), ObjectKind::Commit, first_commit.as_bytes())
+        let committed = objects::put(&repository, identity(27), ObjectKind::Commit, first_commit.as_bytes())
             .await?;
         let second_commit = format!("tree {}\nparent {}\nauthor Canopy <test@example.invalid> 1 +0000\ncommitter Canopy <test@example.invalid> 1 +0000\n\nSecond\n", hex::encode(tree), hex::encode(committed.output));
-        let next = repository
-            .put_inline_object(
+        let next = objects::put(&repository,
                 MutationIdentity {
                     request_id: RequestId::from_bytes([8; 16]),
                     issued_at_ms: now_ms,

@@ -28,8 +28,7 @@ fn plan(name: &str, oid: [u8; 20]) -> PushPlan {
 }
 
 async fn put(repository: &RepositoryCell, kind: ObjectKind, body: &[u8]) -> Result<[u8; 20]> {
-    Ok(repository
-        .put_inline_object(identity()?, kind, body)
+    Ok(super::objects::put(repository, identity()?, kind, body)
         .await?
         .output)
 }

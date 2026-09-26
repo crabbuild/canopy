@@ -10,7 +10,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes and incremental batch object reads work; per-object buffers and 64 MiB blob ceiling remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads and bounded atomic SQLite object batches work; per-object buffers and 64 MiB blob ceiling remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; consistent ref snapshot, cache admission and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
@@ -33,15 +33,16 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Account bare-cache disk usage, add resident Cell eviction, and reduce
-   per-object Cell publication overhead. The current SQL worker admits four
-   active Cells total: the directory plus three repositories. A fourth
+2. Account bare-cache disk usage and add resident Cell eviction. The current
+   SQL worker admits four active Cells total: the directory plus three
+   repositories. A fourth
    repository currently returns 503; this is not a service capacity target.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
-   batch reader. Add SQLite chunks for large trees, commits and tags, plus a
-   real corpus benchmark and bounded graph certification for large initial
-   pushes. Keep the bare repo disposable.
+   batch reader. Bounded object batches now share a Cell publication receipt,
+   and existence queries group up to 128 IDs. Add SQLite chunks for large
+   trees, commits and tags, plus a real corpus benchmark and bounded graph
+   certification for large initial pushes. Keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
    publishes the complete response with ref changes. Typed graph connectivity
@@ -126,3 +127,37 @@ fencing under concurrent host load; lease/storage fault qualification remains
 open. Canopy must continue to fail closed when a mutation lacks durable proof.
 Run `--many-objects 256` and `--large-clone` separately until resident Cell
 admission/eviction supports both extra fixture repositories in one process.
+
+## Atomic object batch qualification
+
+The SQLite batch build passed the same two process workloads on Darwin arm64
+with Apple Git 2.50.1 and RustFS `1.0.0-beta.8-glibc`, using fresh bind-mounted
+provider data and logs. The 256-file workload crosses the 128-record publication
+limit, then makes an incremental update and annotated tag. Recovery verified
+both commit OIDs, the tag, all file bytes and `git fsck`.
+
+| Action | Observed debug-build time |
+| --- | --- |
+| Initial 256-file push | 0.55 seconds |
+| One-file update and annotated tag | 0.64 seconds |
+| Clone and verification after takeover | 1.00 seconds |
+| One push containing two 40 MiB random blobs | 36.90 seconds |
+| v0 clone and verification, cold after takeover | 54.84 seconds |
+| v2 clone and verification, warm | 9.45 seconds |
+
+Both large clones restored an 83,912,145-byte pack with matching file hashes
+and clean `git fsck` results. Both process runs passed Git/LFS, ACL, mixed and
+atomic ref outcomes, dropped-reply replay, clean restart, disk loss and lease
+takeover. These observations are not a controlled comparison with earlier
+builds or production throughput evidence; the host had substantial concurrent
+load during qualification.
+
+Cell tests separately prove one receipt for 128 records, exact command replay,
+the aggregate 768 KiB inline boundary, and whole-batch rollback after a later
+invalid OID, corrupt existing inline row or conflicting external record.
+Codec tests cover the count and byte limits, bounded decoding and a maximal
+payload beneath the 1 MiB wire ceiling. Focused directory, repository, smart
+HTTP and owner-restart integration tests, formatting, Clippy and the binary
+build pass. No dependency or schema migration was introduced. The old
+single-object publication APIs were removed; `PutObjects` owns validation and
+publication for the canonical path.

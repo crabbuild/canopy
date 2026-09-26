@@ -1,3 +1,6 @@
+#[path = "support/objects.rs"]
+mod objects;
+
 use std::{
     path::Path,
     sync::Arc,
@@ -181,12 +184,17 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         renamed
     );
     let body = b"stored only in alpha";
-    let oid = first_repository
-        .put_inline_object(identity(6)?, ObjectKind::Blob, body)
+    let oid = objects::put(&first_repository, identity(6)?, ObjectKind::Blob, body)
         .await?
         .output;
     assert_eq!(oid, object_id(ObjectKind::Blob, body));
-    assert!(!second_repository.object_exists(oid).await?.output);
+    assert!(
+        second_repository
+            .existing_objects(&[oid])
+            .await?
+            .output
+            .is_empty()
+    );
     first_runtime.shutdown().await?;
 
     let second_session = SessionId::from_bytes([74; 16]);
@@ -265,7 +273,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         alpha.object(oid, None).await?.output,
         Some((ObjectKind::Blob, body.to_vec()))
     );
-    assert!(!beta.object_exists(oid).await?.output);
+    assert!(beta.existing_objects(&[oid]).await?.output.is_empty());
     second_runtime.shutdown().await?;
     Ok(())
 }

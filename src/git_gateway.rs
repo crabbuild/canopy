@@ -19,14 +19,15 @@ use object_store::ObjectStore;
 use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 
 use crate::{
-    INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, PushPlan, RefExpectation, RefUpdate,
-    RepositoryCell,
+    INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
+    RefUpdate, RepositoryCell, StoredObject,
     directory::TokenScope,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
     git_objects::GitObjects,
     large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore},
     lfs::LfsService,
+    object_batch::MAX_OBJECTS,
     object_id,
     push::{PushCompletion, PushError},
 };
@@ -341,44 +342,58 @@ impl GitGateway {
         // re-reading old history; the final Cell transaction still verifies every new tip.
         let excluded = before.values().filter_map(|state| state.oid).collect();
         let mut objects = GitObjects::start(&backend.git_dir(), included, excluded)?;
-        while let Some(oid) = objects.next().await? {
-            if self
+        let mut batch = ObjectBatch::default();
+        loop {
+            let mut candidates = Vec::with_capacity(MAX_OBJECTS);
+            for _ in 0..MAX_OBJECTS {
+                let Some(oid) = objects.next().await? else {
+                    break;
+                };
+                candidates.push(oid);
+            }
+            if candidates.is_empty() {
+                break;
+            }
+            let present = self
                 .repository
-                .object_exists(oid)
+                .existing_objects(&candidates)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                .output
-            {
-                continue;
-            }
-            let (kind, body) = objects.read(oid).await?;
-            if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
-                let uploaded = self.large_blobs.put(&body).await?;
-                if uploaded.oid != oid {
-                    return Err(GatewayError::MalformedCache);
-                }
-                self.repository
-                    .put_external_blob(
-                        new_identity()?,
-                        oid,
-                        uploaded.size,
-                        uploaded.blake3,
-                        uploaded.sha256,
-                    )
-                    .await
-                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            } else {
-                let stored = self
-                    .repository
-                    .put_inline_object(new_identity()?, kind, &body)
-                    .await
-                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-                if stored.output != oid {
-                    return Err(GatewayError::MalformedCache);
+                .output;
+            for oid in candidates.into_iter().filter(|oid| !present.contains(oid)) {
+                let (kind, body) = objects.read(oid).await?;
+                let storage = if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
+                    let uploaded = self.large_blobs.put(&body).await?;
+                    if uploaded.oid != oid {
+                        return Err(GatewayError::MalformedCache);
+                    }
+                    ObjectStorage::External {
+                        size: uploaded.size,
+                        blake3: uploaded.blake3,
+                        sha256: uploaded.sha256,
+                    }
+                } else {
+                    ObjectStorage::Inline(body)
+                };
+                let object = StoredObject { oid, kind, storage };
+                if let Err(object) = batch.try_push(object) {
+                    self.repository
+                        .put_objects(new_identity()?, std::mem::take(&mut batch))
+                        .await
+                        .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                    batch
+                        .try_push(object)
+                        .map_err(|_| GatewayError::MalformedCache)?;
                 }
             }
         }
         objects.finish().await?;
+        if !batch.is_empty() {
+            self.repository
+                .put_objects(new_identity()?, batch)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+        }
         Ok(())
     }
 }
