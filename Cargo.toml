@@ -20,6 +20,7 @@ cellule-runtime = { git = "https://github.com/crabbuild/cellule.git", rev = "56b
 cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "56b35ab376ff93ec85d502c70bb436c918463958" }
 ed25519-dalek = "2"
 flate2 = "1.1"
+futures-core = "0.3"
 hex = "0.4"
 object_store = "0.14.1"
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +36,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1.24", features = ["v4"] }
 url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

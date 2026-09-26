@@ -141,6 +141,27 @@ and preserves a later ref deletion. Crashes during
 individual staging/publication boundaries, simultaneous multi-node routing and
 backup restore still need proof before service readiness.
 
+Git CGI responses use one subprocess/stream implementation. The HTTP gateway
+streams advertisements and fetch replies through four queued chunks of at most
+64 KiB each. Backpressure stops stdout reads when that queue fills. The worker
+retains the selected bare-cache generation until Git has finished with it, so a
+concurrent cache replacement cannot delete files beneath an admitted reader.
+Receive-pack collects its response with the existing 64 MiB limit, then persists
+objects, validates refs and records the outcome before sending HTTP success.
+
+CGI headers and stderr are each bounded at 64 KiB. The existing 120-second
+subprocess deadline includes output backpressure. Once headers are sent, a
+process failure or timeout produces an HTTP body error rather than successful
+EOF; before headers it fails the request. Dropping the response cancels its
+worker. Unix subprocesses use a dedicated process group so cancellation also
+kills upload-pack/pack-objects descendants; other platforms currently use
+Tokio's direct-child kill-on-drop behavior and still need lifecycle qualification.
+
+Only the read response is streamed so far. Requests, push reports, LFS transfers
+and individual object hydration still allocate bounded whole buffers. Cold
+fetches still rebuild the complete bare cache, and there is no global transfer
+admission limit or production throughput qualification yet.
+
 Schema version 1 is still changing in this unreleased repository. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule

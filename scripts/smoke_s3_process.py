@@ -7,6 +7,7 @@ environment. This script writes only below a unique prefix in that bucket.
 
 import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -205,11 +206,55 @@ def push_with_lost_reply(base_url, local):
     return push_id, captured
 
 
+def seed_large_repository(base_url, directory):
+    url, _ = create_repository(base_url, "large")
+    local = directory / "large-source"
+    git("init", "-b", "main", str(local))
+    git("config", "user.name", "Canopy Test", cwd=local)
+    git("config", "user.email", "canopy@example.invalid", cwd=local)
+    hashes = {}
+    for index in range(2):
+        name = f"random-{index}.bin"
+        path = local / name
+        with path.open("wb") as output:
+            for _ in range(40):
+                output.write(os.urandom(1024 * 1024))
+        with path.open("rb") as data:
+            hashes[name] = hashlib.file_digest(data, "sha256").hexdigest()
+        git("add", name, cwd=local)
+        git("commit", "-m", f"Large object {index}", cwd=local)
+        git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+            "push", url, "HEAD:refs/heads/main", cwd=local)
+    return git("rev-parse", "HEAD", cwd=local), hashes
+
+
+def verify_large_clone(base_url, directory, expected):
+    oid, hashes = expected
+    for protocol in (0, 2):
+        clone = directory / f"large-clone-v{protocol}"
+        started = time.monotonic()
+        # Keep even a small object count packed so the size assertion measures
+        # the received transfer rather than Git's loose-object unpack policy.
+        git("-c", f"protocol.version={protocol}", "-c", "fetch.unpackLimit=1", "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token", "clone",
+            f"{base_url}/canopy/large.git", str(clone))
+        assert git("rev-parse", "HEAD", cwd=clone) == oid
+        for name, digest in hashes.items():
+            with (clone / name).open("rb") as data:
+                assert hashlib.file_digest(data, "sha256").hexdigest() == digest
+        git("fsck", "--full", cwd=clone)
+        packs = list((clone / ".git/objects/pack").glob("*.pack"))
+        size = sum(pack.stat().st_size for pack in packs)
+        assert size > 64 * 1024 * 1024, "qualification pack must exceed the old response limit"
+        print(f"PASS: protocol v{protocol} clone restored {size} pack bytes in {time.monotonic() - started:.2f}s", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--storage-url", required=True, help="S3 bucket URL, e.g. s3://test-bucket")
     parser.add_argument("--work-parent", type=Path, required=True)
+    parser.add_argument("--large-clone", action="store_true", help="Qualify v0/v2 clones above 64 MiB after takeover")
     args = parser.parse_args()
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
         if not os.environ.get(name):
@@ -323,6 +368,7 @@ def main():
             url = rename_repository(base_url, "example", "renamed", repository_id)
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
+            large = seed_large_repository(base_url, directory) if args.large_clone else None
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:
@@ -383,6 +429,8 @@ def main():
                 "/canopy/renamed.git/info/refs?service=git-upload-pack",
                 reader_token,
             ) == 404
+            if large is not None:
+                verify_large_clone(base_url, directory, large)
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:

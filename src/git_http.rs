@@ -1,15 +1,29 @@
 //! Git smart HTTP wire handling through Git's reference CGI implementation.
 
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    future::poll_fn,
+    path::PathBuf,
+    pin::Pin,
+    process::Stdio,
+    task::{Context, Poll},
+    time::Duration,
+};
+
+use bytes::Bytes;
+use futures_core::Stream;
+use tokio_util::task::AbortOnDropHandle;
 
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    process::Command,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
+    process::{Child, Command},
+    sync::{mpsc, oneshot},
 };
 
 const MAX_CGI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CGI_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CGI_STDERR_BYTES: usize = 64 * 1024;
+const CHUNK_BYTES: usize = 64 * 1024;
+const MAX_CGI_HEADER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHttpError {
@@ -28,6 +42,8 @@ pub enum GitHttpError {
     Timeout,
     #[error("Git URL is outside this repository")]
     InvalidPath,
+    #[error("Git response stream was interrupted")]
+    Interrupted,
 }
 
 /// One bounded smart HTTP request. The gateway authenticates before constructing it.
@@ -41,11 +57,11 @@ pub struct GitHttpRequest {
     pub authenticated: bool,
 }
 
-/// CGI response; receive-pack results remain buffered until Cell publication.
-pub struct GitHttpResponse {
+/// CGI response with a streamed or collected body.
+pub struct GitHttpResponse<B = Vec<u8>> {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: B,
 }
 
 /// Disposable bare repository used only while serving Git wire requests.
@@ -90,8 +106,35 @@ impl GitHttpBackend {
         Ok(Self { project_root })
     }
 
-    /// Runs Git's smart HTTP backend with the repository cache as its project root.
+    /// Runs Git and collects a bounded reply for durable push publication.
     pub async fn run(&self, request: GitHttpRequest) -> Result<GitHttpResponse, GitHttpError> {
+        let response = self.stream(request, ()).await?;
+        let GitHttpResponse {
+            status,
+            headers,
+            mut body,
+        } = response;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await {
+            let chunk = chunk?;
+            if bytes.len() + chunk.len() > MAX_CGI_OUTPUT_BYTES {
+                return Err(GitHttpError::TooLarge);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(GitHttpResponse {
+            status,
+            headers,
+            body: bytes,
+        })
+    }
+
+    /// Streams Git output while retaining the caller's disposable cache owner.
+    pub(crate) async fn stream<T: Send + 'static>(
+        &self,
+        request: GitHttpRequest,
+        keep_alive: T,
+    ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
         if !request.path_info.starts_with("/repo.git/")
             || request.path_info.contains("..")
             || request.path_info.contains('\\')
@@ -127,40 +170,196 @@ impl GitHttpBackend {
         if request.authenticated {
             process.env("REMOTE_USER", "canopy-gateway");
         }
-        let mut child = process.spawn()?;
-        let Some(mut stdin) = child.stdin.take() else {
-            return Err(GitHttpError::MalformedCgi);
-        };
-        let Some(stdout) = child.stdout.take() else {
-            return Err(GitHttpError::MalformedCgi);
-        };
-        let Some(stderr) = child.stderr.take() else {
-            return Err(GitHttpError::MalformedCgi);
-        };
-        let run = async {
-            let (_, stdout, stderr, status) = tokio::try_join!(
-                async {
-                    stdin
-                        .write_all(&request.body)
-                        .await
-                        .map_err(GitHttpError::from)
-                },
-                read_bounded(stdout, MAX_CGI_OUTPUT_BYTES),
-                read_bounded(stderr, MAX_CGI_STDERR_BYTES),
-                async { child.wait().await.map_err(GitHttpError::from) },
-            )?;
-            Ok::<_, GitHttpError>((status, stdout, stderr))
-        };
-        let (status, stdout, stderr) = tokio::time::timeout(Duration::from_secs(120), run)
-            .await
-            .map_err(|_| GitHttpError::Timeout)??;
-        if !status.success() {
-            return Err(GitHttpError::GitExit {
-                status,
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            });
+        start_stream(process, request.body, keep_alive, Duration::from_secs(120)).await
+    }
+}
+
+/// Backpressured Git output; dropping it cancels the subprocess and releases the cache owner.
+pub(crate) struct GitBody {
+    receiver: mpsc::Receiver<Output>,
+    _task: AbortOnDropHandle<()>,
+    finished: bool,
+}
+
+enum Output {
+    Chunk(Bytes),
+    End(Result<(), GitHttpError>),
+}
+
+impl Stream for GitBody {
+    type Item = Result<Bytes, GitHttpError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.finished {
+            return Poll::Ready(None);
         }
-        parse_cgi(&stdout)
+        match self.receiver.poll_recv(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Output::Chunk(bytes))) => Poll::Ready(Some(Ok(bytes))),
+            Poll::Ready(Some(Output::End(result))) => {
+                self.finished = true;
+                Poll::Ready(result.err().map(Err))
+            }
+            Poll::Ready(None) => {
+                self.finished = true;
+                Poll::Ready(Some(Err(GitHttpError::Interrupted)))
+            }
+        }
+    }
+}
+
+async fn start_stream<T: Send + 'static>(
+    mut command: Command,
+    input: Vec<u8>,
+    keep_alive: T,
+    deadline: Duration,
+) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
+    let mut process = GitProcess::spawn(&mut command)?;
+    let mut stdin = process
+        .child
+        .stdin
+        .take()
+        .ok_or(GitHttpError::MalformedCgi)?;
+    let stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or(GitHttpError::MalformedCgi)?;
+    let stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or(GitHttpError::MalformedCgi)?;
+    let (head_sender, head_receiver) = oneshot::channel();
+    let (sender, receiver) = mpsc::channel(4);
+    let task = tokio::spawn(async move {
+        // A cache may be replaced while this client is still reading its snapshot.
+        // Retain the caller's owner until every subprocess has finished using it.
+        let _keep_alive = keep_alive;
+        let mut head_sender = Some(head_sender);
+        let run = async {
+            let read_stdout = async {
+                let mut reader = BufReader::with_capacity(CHUNK_BYTES, stdout);
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    if header.len() == MAX_CGI_HEADER_BYTES {
+                        return Err(GitHttpError::TooLarge);
+                    }
+                    header.push(reader.read_u8().await?);
+                }
+                let head = parse_headers(&header)?;
+                head_sender
+                    .take()
+                    .ok_or(GitHttpError::Interrupted)?
+                    .send((head.status, head.headers))
+                    .map_err(|_| GitHttpError::Interrupted)?;
+                let mut buffer = vec![0; CHUNK_BYTES];
+                loop {
+                    let count = reader.read(&mut buffer).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    sender
+                        .send(Output::Chunk(Bytes::copy_from_slice(&buffer[..count])))
+                        .await
+                        .map_err(|_| GitHttpError::Interrupted)?;
+                }
+                Ok::<_, GitHttpError>(())
+            };
+            let (_, (), stderr) = tokio::try_join!(
+                async move {
+                    stdin.write_all(&input).await?;
+                    drop(stdin);
+                    Ok::<_, GitHttpError>(())
+                },
+                read_stdout,
+                read_bounded(stderr, MAX_CGI_STDERR_BYTES),
+            )?;
+            // Keep the group leader unreaped while descendants still own pipes;
+            // cancellation can then signal its group without PID reuse ambiguity.
+            let status = process.child.wait().await?;
+            process.disarm();
+            if !status.success() {
+                return Err(GitHttpError::GitExit {
+                    status,
+                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                });
+            }
+            Ok(())
+        };
+        let result = tokio::time::timeout(deadline, run)
+            .await
+            .map_err(|_| GitHttpError::Timeout)
+            .and_then(|result| result);
+        // Cleanup precedes any blocked delivery of the final error.
+        drop(process);
+        drop(head_sender);
+        let _ = sender.send(Output::End(result)).await;
+    });
+    let mut body = GitBody {
+        receiver,
+        _task: AbortOnDropHandle::new(task),
+        finished: false,
+    };
+    let (status, headers) = match head_receiver.await {
+        Ok(head) => head,
+        Err(_) => {
+            return Err(
+                match poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await {
+                    Some(Err(error)) => error,
+                    _ => GitHttpError::Interrupted,
+                },
+            );
+        }
+    };
+    Ok(GitHttpResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+struct GitProcess {
+    child: Child,
+    #[cfg(unix)]
+    group: Option<i32>,
+}
+
+impl GitProcess {
+    fn spawn(command: &mut Command) -> Result<Self, GitHttpError> {
+        #[cfg(unix)]
+        command.process_group(0);
+        let child = command.kill_on_drop(true).spawn()?;
+        #[cfg(unix)]
+        let group = Some(
+            i32::try_from(child.id().ok_or(GitHttpError::Interrupted)?)
+                .map_err(|_| GitHttpError::Interrupted)?,
+        );
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            group,
+        })
+    }
+
+    fn disarm(&mut self) {
+        #[cfg(unix)]
+        {
+            self.group = None;
+        }
+    }
+}
+
+impl Drop for GitProcess {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            // SAFETY: spawn created a separate process group with this positive PID.
+            // Its leader is not reaped until pipes close, preventing PID reuse here.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+        }
     }
 }
 
@@ -179,7 +378,7 @@ async fn read_bounded<R: AsyncRead + Unpin>(
     Ok(body)
 }
 
-fn parse_cgi(output: &[u8]) -> Result<GitHttpResponse, GitHttpError> {
+fn parse_headers(output: &[u8]) -> Result<GitHttpResponse<()>, GitHttpError> {
     let Some(separator) = output.windows(4).position(|window| window == b"\r\n\r\n") else {
         return Err(GitHttpError::MalformedCgi);
     };
@@ -206,7 +405,7 @@ fn parse_cgi(output: &[u8]) -> Result<GitHttpResponse, GitHttpError> {
     Ok(GitHttpResponse {
         status,
         headers,
-        body: output[separator + 4..].to_vec(),
+        body: (),
     })
 }
 
@@ -226,3 +425,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "git_http/stream_tests.rs"]
+mod stream_tests;

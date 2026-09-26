@@ -457,7 +457,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             let Ok(status) = StatusCode::from_u16(cgi.status) else {
                 return plain(StatusCode::BAD_GATEWAY, "Invalid Git backend status");
             };
-            let mut response = Response::new(Body::from(cgi.body));
+            let mut response = Response::new(cgi.body);
             *response.status_mut() = status;
             for (name, value) in cgi.headers {
                 let (Ok(name), Ok(value)) =

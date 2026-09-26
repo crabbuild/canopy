@@ -12,7 +12,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: small and 64 MiB buffered paths work |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
-| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: stock clone after gateway restart and clean Cell owner move works |
+| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; request streaming, consistent ref snapshot and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
@@ -33,9 +33,10 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Replace the buffered CGI and per-object subprocess path with bounded
-   streaming pack ingest/fetch. Add SQLite chunks for large trees, commits
-   and tags, plus a real corpus benchmark and bounded graph certification for
+2. Complete streaming pack ingress and replace the per-object subprocess path.
+   CGI read responses now stream through a bounded queue. Add SQLite chunks
+   for large trees, commits and tags, plus a real corpus benchmark and bounded
+   graph certification for
    large initial pushes. Keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
@@ -54,3 +55,23 @@ separate product decisions.
 Keep LFS bodies and unreferenced Git objects under conservative retention
 until a fenced collector can prove the complete root set. No automatic GC
 should remove bytes while fetch, backup or a pending merge can still read them.
+
+## Transfer-size qualification
+
+The 2026-09-25 local debug build on Darwin arm64, using Apple Git 2.50.1,
+passed `smoke_s3_process.py --large-clone` against RustFS
+`1.0.0-beta.8-glibc`. Two separate 40 MiB random-blob pushes
+remained within the current ingress limit. After clean restart, owner death,
+lease expiry and local database loss, each stock Git clone received an
+83,912,143-byte pack, reproduced both SHA-256 file hashes and passed `git fsck`.
+
+| Client protocol | Cache state | Clone plus verification time |
+| --- | --- | --- |
+| v0 | Cold after takeover | 33.63 seconds |
+| v2 | Warm from the preceding clone | 7.24 seconds |
+
+These times include client checks and use different cache states. They prove
+transfer size and recovery behavior, not comparative protocol speed or service
+capacity. The same run passed Git/LFS, ACL, mixed/atomic ref outcomes and exact
+replay of a dropped push reply. Unix subprocess tests separately verify bounded
+output backpressure, disconnect cleanup, and errors after HTTP headers.

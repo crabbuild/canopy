@@ -11,6 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use axum::body::Body;
 use cellule_runtime::{MutationIdentity, RequestId};
 use flate2::{Compression, write::ZlibEncoder};
 use object_store::ObjectStore;
@@ -108,7 +109,7 @@ impl GitGateway {
         request: GitHttpRequest,
         actor: &str,
         push_id: Option<[u8; 16]>,
-    ) -> Result<GitHttpResponse, GatewayError> {
+    ) -> Result<GitHttpResponse<Body>, GatewayError> {
         if !request.authenticated {
             return Err(GatewayError::Unauthorized);
         }
@@ -118,13 +119,16 @@ impl GitGateway {
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
             let digest = request_digest(&request);
             if let Some(response) = self.repository.begin_push(id, actor, digest).await? {
-                return Ok(with_push_id(
+                return Ok(http_body(with_push_id(
                     self.repository.push_response(response).await?,
                     id,
-                ));
+                )));
             }
             let cache = self.build_cache(self.cell_refs().await?).await?;
-            return self.handle_push(&cache, request, actor, id, digest).await;
+            return self
+                .handle_push(&cache, request, actor, id, digest)
+                .await
+                .map(http_body);
         }
         let live_refs = self.cell_refs().await?;
         let cached = {
@@ -134,7 +138,12 @@ impl GitGateway {
             }
             Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
         };
-        Ok(cached.backend.run(request).await?)
+        let response = cached.backend.stream(request, Arc::clone(&cached)).await?;
+        Ok(GitHttpResponse {
+            status: response.status,
+            headers: response.headers,
+            body: Body::from_stream(response.body),
+        })
     }
 
     async fn handle_push(
@@ -346,6 +355,14 @@ impl GitGateway {
             }
         }
         Ok(())
+    }
+}
+
+fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
+    GitHttpResponse {
+        status: response.status,
+        headers: response.headers,
+        body: Body::from(response.body),
     }
 }
 
