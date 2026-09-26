@@ -120,7 +120,11 @@ upload and download through Canopy; bytes live in the configured object store at
 their size and verified hashes. No separate LFS server is needed. Uploads verify
 SHA-256 and store immutable bytes before publishing the SQLite reference.
 
-Transfers currently pass through Canopy and are capped at 64 MiB per object.
+Transfers pass through Canopy with 8 MiB upload parts and read ranges, up to
+5 GiB per LFS object. Uploads hash bytes incrementally in temporary multipart
+storage, then conditionally copy the verified object to its immutable key.
+Downloads verify both hashes before delivering their final range. The node's
+eight-transfer admission covers these operations, cleanup and outstanding output.
 Presigned direct-to-storage transfers are not implemented. Git LFS also supports
 [client configuration for a separate LFS server](https://github.com/git-lfs/git-lfs/blob/main/docs/api/server-discovery.md#custom-configuration)
 using `lfs.url`; that server manages its own access and backups. Canopy does not
@@ -572,15 +576,16 @@ Incoming Git requests stream to temporary files charged to the same disk budget
 as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
-transfers and individual external Git blobs remain capped at 64 MiB.
+streams objects up to 5 GiB; individual external Git blobs remain capped at 64 MiB.
 Trees, commits and tags above 768 KiB use 512 KiB SQLite chunks, up to 64 MiB
 per object. Publication verifies every chunk and the complete object identity;
 partial uploads stay invisible to Git.
 Each node admits eight Git/LFS transfers across all repositories. Overload
 returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
-readiness and management routes remain outside this transfer limit. LFS body
-reception has a 120-second deadline (408 on timeout). Eight is an initial
-operational bound, not a measured production capacity target.
+readiness and management routes remain outside this transfer limit. LFS
+batch reception has a 120-second deadline. LFS object uploads have a 120-second
+input idle timeout and a 30-minute transfer deadline (408 on timeout). Eight is
+an initial operational bound, not a measured production capacity target.
 Ref advertisements use generation-checked pagination; sustained concurrent
 changes return a retryable 503. Gzip-compressed Git requests are supported.
 Gzip is fully validated before Git runs; decoded bytes have the same request
@@ -754,7 +759,8 @@ one node, and verifies Directory and repository takeover through the surviving g
 without restarting it. It writes under a unique prefix in the supplied bucket.
 The backup phase creates a separate fixture, copies it, deletes that fixture's
 original prefix, then verifies and restores Git/LFS bytes and issue data from the
-backup using the real CLI and a fresh server process.
+backup using the real CLI and a fresh server process. Its LFS fixture includes
+an 80 MiB tracked file and an empty object.
 
 Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the
 repository using protocol v0 and v2 after takeover. Each clone must receive a

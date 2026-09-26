@@ -4,7 +4,9 @@ import json
 import os
 import signal
 import subprocess
+import time
 import urllib.parse
+import urllib.request
 import uuid
 
 
@@ -24,17 +26,26 @@ def qualify(binary, directory, settings, processes):
     git("config", "user.email", "backup@example.invalid", cwd=local)
     git("lfs", "install", "--local", cwd=local)
     git("lfs", "track", "*.lfs", cwd=local)
-    readme, lfs = b"independent Git backup\n" * 50_000, b"independent LFS backup\n" * 30_000
+    readme, lfs = b"independent Git backup\n" * 50_000, b"canopy-lfs" * (8 * 1024 * 1024)
     (local / "README.md").write_bytes(readme)
     (local / "asset.lfs").write_bytes(lfs)
     git("add", ".", cwd=local)
     git("commit", "-m", "Independent snapshot", cwd=local)
+    started = time.monotonic()
     git("-c", "http.extraHeader=Authorization: Bearer local-test-token", "push", url, "main", cwd=local)
+    push_seconds = time.monotonic() - started
     oid = git("rev-parse", "HEAD", cwd=local)
     request(base, "/api/repositories/saved/issues", "POST", {
         "repository_id": repository, "id": str(uuid.uuid4()),
         "title": "Retain collaboration", "body": "Backup without original Cell storage"})
     issue = request(base, "/api/repositories/saved/issues/1")
+    empty_oid = hashlib.sha256(b"").hexdigest()
+    empty_url = f"{url}/info/lfs/objects/{empty_oid}"
+    for method, body in (("PUT", b""), ("GET", None)):
+        empty = urllib.request.Request(empty_url, data=body, method=method,
+                                       headers={"Authorization": "Bearer local-test-token"})
+        with urllib.request.urlopen(empty, timeout=30) as response:
+            assert response.status == 200 and response.read() == b""
     source.send_signal(signal.SIGTERM)
     source.wait(timeout=30)
     assert source.returncode == 0
@@ -59,7 +70,7 @@ def qualify(binary, directory, settings, processes):
         return json.loads(result.stdout)
 
     saved = administer("create", backup_prefix)
-    assert saved["cells"] == 2 and saved["external_objects"] == 2
+    assert saved["cells"] == 2 and saved["external_objects"] == 3
     assert administer("create", backup_prefix) == saved
     aws = ["aws"]
     if os.environ.get("AWS_ENDPOINT"):
@@ -83,13 +94,16 @@ def qualify(binary, directory, settings, processes):
     assert json.loads(listing.stdout).get("KeyCount", 0) == 0
     assert administer("verify", backup_prefix) == saved
     restored = administer("restore", backup_prefix, restore_prefix)
-    assert restored["cells"] == 2 and restored["external_objects"] == 2
+    assert restored["cells"] == 2 and restored["external_objects"] == 3
     node, restored_base = start(binary, directory, {**settings, "storage_url": restored_url,
                                                   "node_id": str(uuid.uuid4())}, "backup-new-node")
     processes.append(node)
+    started = time.monotonic()
     clone_and_verify(f"{restored_base}/canopy/saved.git", directory / "backup-clone", oid, readme, lfs)
+    clone_seconds = time.monotonic() - started
     assert request(restored_base, "/api/repositories/saved/issues/1") == issue
     node.send_signal(signal.SIGTERM)
     node.wait(timeout=30)
     assert node.returncode == 0
-    print("PASS: real backup CLI copies SQLite, external Git blobs and LFS; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)
+    print(f"LFS qualification: bytes={len(lfs)}, stock push={push_seconds:.2f}s, restored clone+verification={clone_seconds:.2f}s", flush=True)
+    print("PASS: stock 80 MiB and empty LFS transfers, then real backup CLI copies SQLite, external Git blobs and LFS; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)

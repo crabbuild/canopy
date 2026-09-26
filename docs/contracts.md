@@ -26,9 +26,9 @@ before admitting persistent customer repositories.
 | Object publication | at most 128 records, 768 KiB inline payload and 64 MiB SQLite verification bytes per atomic command | `PutObjects`, operation 5, codec 2 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
-| External byte ceiling | 64 MiB per Git blob or LFS object | current object transfer path |
+| External byte ceiling | 64 MiB per Git blob; 5 GiB per LFS object | Git body limit and conditional S3 copy part limit |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
-| LFS request deadline | 120 seconds for batch and object PUT body reception; timeout returns 408 | Git HTTP router |
+| LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout and 30-minute transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
@@ -553,8 +553,9 @@ releases the permit. This bounds admitted transfers, not subprocess descendants,
 peak RAM, or native Git scratch bytes. The standalone lower-layer `GitHttpApi`
 fixtures do not apply the node's admission policy.
 
-LFS batch and PUT bodies retain their existing byte ceilings and now have a
-120-second reception deadline; timeout returns 408 (JSON for batch requests).
+LFS batch bodies have a 120-second reception deadline. Streaming object PUTs
+have a 120-second input idle timeout and a 30-minute transfer deadline; timeout
+returns 408 (JSON for batch requests).
 This is separate from Git input, decode and subprocess deadlines. Outgoing LFS
 socket stall limits and fair scheduling between accounts remain unqualified.
 The limit of eight is an initial operational policy, not a throughput claim.
@@ -1829,7 +1830,8 @@ recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Bodies ar
 conditionally copied before the completion CAS. Conflicting destination bodies
 must verify or the operation fails. Snapshot disk reservations cover each restored
 database and remain held until its scratch directory is removed. Capture admits
-at most 100,000 Cells; body verification retains the current 64 MiB object limit.
+at most 100,000 Cells; body verification retains the Git blob ceiling of 64 MiB and streams LFS objects
+up to 5 GiB through the shared verified reader.
 
 Verify and restore enroll at the completed backup prefix and read no original
 source prefix. Restore copies into a disjoint, reserved prefix and preserves the
@@ -1851,3 +1853,44 @@ No collector currently deletes runtime pins or external bodies. Cross-provider
 export, old-release conversion, automatic retention, interrupted-copy/lease fault
 qualification and production resource/capacity evidence remain open. The copy
 survives original-prefix deletion, not loss of the shared bucket/provider.
+
+
+## Streaming LFS bodies
+
+The LFS batch/basic API and repository-scoped immutable body keys are unchanged.
+LFS size is limited to 5 GiB: the configured object_store S3 conditional copy
+implementation copies one multipart part, whose [provider ceiling is 5 GiB](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
+This is an acceptance ceiling, not production capacity evidence. Direct object
+storage URLs, transfer resume and account quotas remain separate work.
+
+An upload is supervised through reception, cleanup and SQLite publication. It
+holds shared node transfer admission even if the awaiting client disconnects.
+The body is consumed with backpressure into 8 MiB parts, hashing SHA-256/BLAKE3
+in blocking jobs that retain admission. Input size and known Content-Length are
+checked before completion. A hash mismatch, body error, excess length or timeout
+cannot complete a canonical object or publish its metadata. Received parts use
+a unique `repos/<uuid>/lfs-staging/<operation-uuid>` key. After verification, the
+multipart object completes, conditional copy creates/adopts the canonical key,
+and bounded reads verify the stored result. Staging deletion precedes the SQLite
+reference transaction, which still rechecks repository write access.
+
+Failed transfers abort unfinished multipart uploads and delete their staging
+keys. Cleanup has bounded waits; a provider error or process death can leave
+unreferenced staging data or incomplete multipart uploads. Provider lifecycle
+cleanup and a future fenced collector remain necessary; no automatic collector
+is enabled. Canonical bytes are never deleted by failed-transfer cleanup.
+
+Downloads first check stored object size, then request at most 8 MiB per range
+with the observed ETag/version when present. Every response must match the
+requested range and full object size; collection rejects excess/truncated data.
+The reader hashes each range, withholding the final range until SHA-256 and
+BLAKE3 match SQLite. Thus a same-length corruption cannot satisfy HTTP's declared
+Content-Length before verification. Earlier ranges may already have been sent;
+a late error terminates the transfer, and stock LFS additionally verifies its OID.
+Empty objects verify at stream opening. Read requests have 120-second deadlines.
+
+The same reader verifies backup source/destination LFS bodies, so increasing
+transfer size does not introduce an unbounded backup allocation. There is no
+whole-object Canopy buffer or local disk spool on this path. The upstream backend
+may have its own buffers; total process RSS, outgoing socket timeouts, fairness
+and production throughput still need broader qualification.

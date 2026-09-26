@@ -10,10 +10,10 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB Git object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
-| 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
+| 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS with a 5 GiB acceptance ceiling, shared transfer admission and deadlines implemented; stock push/pull after restart works; quotas and full-scale capacity proof remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
@@ -2191,3 +2191,78 @@ the compiled module digest, so existing preview prefixes require explicit future
 migration. Cross-provider export, every interruption/lease boundary, old-version
 restore, automated retention/GC and production capacity remain open. Gate 8 stays
 partial.
+
+
+## Bounded streaming LFS
+
+On 2026-09-26, LFS object PUT/GET and backup verification moved from whole-object
+buffers to bounded streaming. The batch/basic API, SHA-256 object identities and
+SQLite metadata remain the same. The acceptance ceiling increases from 64 MiB
+to 5 GiB, matching the one-part S3 conditional-copy ceiling in the current storage
+library. Git blob limits are unchanged; quotas and full-limit capacity proof remain
+open.
+
+Uploads use 8 MiB multipart parts at a unique temporary object key. Hashing runs
+in blocking workers under shared transfer admission. Verified bytes are completed,
+conditionally copied to the immutable key and read back through the bounded
+verifier before temporary-key cleanup and SQLite publication. Hash, length,
+body, provider or timeout failures cannot publish a new SQLite reference. The
+final reference transaction still rechecks repository write access. Supervision
+keeps cleanup and publication alive across caller cancellation; ordinary failures
+abort multipart work and remove its temporary key.
+
+Downloads request at most 8 MiB per range, using the observed ETag/version and
+checking returned range/size. The final range is withheld until SHA-256 and BLAKE3
+match, so HTTP Content-Length cannot indicate a completed corrupt response.
+The same reader verifies source and destination bodies during backup/restore.
+No schema, dependency or lockfile change is required. The new reader/upload
+modules replace buffered transfer work and own its deadlines, admission and
+cleanup; their additional code is the transfer state machine, not another data
+layout or compatibility path.
+
+Evidence:
+
+- Six focused tests pass: oversize/truncated input, disconnect cleanup, input idle
+  timeout, empty/conflicting objects, replacement between ranges and withholding
+  corrupt final bytes.
+- Both node transfer integration tests pass. Eight stalled uploads retain shared
+  admission; disconnect permits retry. A real HTTP download of a corrupted 9 MiB
+  object advertises its length but fails before delivering the complete body.
+- Stock Git/LFS smart-HTTP authorization/recovery and independent backup/restore
+  integrations pass, including corruption rejection and preservation of writes
+  made after restore.
+- All-target Clippy with warnings denied and the release build pass.
+
+Uploads have a 120-second input idle timeout and a 30-minute transfer deadline.
+Each download storage read has a 120-second deadline. Process death/provider
+failure can still leave multipart/staging data for lifecycle cleanup; automatic
+retention/GC, outgoing socket stall limits, account fairness and production RSS/
+throughput qualification remain open. Gate 6 remains partial.
+
+
+The first process qualification and an isolated reproduction exhausted the original
+1 GiB RustFS data tmpfs during repeated copies of the 80 MiB LFS object. `df`
+confirmed 100% usage; provider logs reported `No space left on device`. The runtime
+reported heartbeat-refresh failure and refused a successful backup receipt. The
+fixture was increased to a bounded 4 GiB data tmpfs; no product admission, copy,
+lease or test expectation was relaxed. Provider storage amplification and abandoned
+multipart/staging retention must be included in production capacity planning.
+
+
+The final release process qualification passed against RustFS
+`1.0.0-beta.8-glibc` with `--sqlite-chunks --many-objects 256` and the 4 GiB data
+tmpfs. Stock Git pushed an 83,886,080-byte LFS file in 2.55 seconds; a fresh node
+restored from the independent backup and completed stock clone plus exact-byte
+verification in 9.70 seconds. The same fixture passed empty LFS PUT/GET,
+create/retry, corrupt destination rejection without overwrite, repair/retry,
+complete source-prefix deletion, independent verify/restore, issue recovery and
+clean shutdown. These are localhost fixture samples, not 5 GiB or production
+throughput/RSS qualification.
+
+The same final run retained two live HTTPS peers, eight repositories beyond
+resident capacity, anonymous reads and privacy revocation, maintenance drain and
+SIGKILL recovery, large SQLite tree/commit/tag objects, 256 files and 300 extra
+refs, collaboration/ACL/token state, exact dropped-reply replay, native Git
+configuration isolation, restart, disk loss and lease takeover. Formatting,
+Python syntax and whitespace checks also pass. No product limit or verification
+was weakened to accommodate the fixture's earlier storage exhaustion.

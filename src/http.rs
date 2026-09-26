@@ -235,7 +235,7 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
                 json!({"message": "Invalid LFS object ID"}),
             );
         };
-        if requested.size > MAX_LFS_BYTES as u64 {
+        if requested.size > MAX_LFS_BYTES {
             objects.push(lfs_object_error(&requested, 422, "LFS object is too large"));
             continue;
         }
@@ -318,9 +318,17 @@ async fn lfs_get(
     let Some(oid) = parse_lfs_oid(&oid) else {
         return plain(StatusCode::NOT_FOUND, "LFS object does not exist");
     };
-    match api.gateway.lfs().get(oid).await {
+    let admission = request
+        .extensions()
+        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .cloned();
+    match api.gateway.lfs().get(oid, admission).await {
         Ok(body) if (api.ready)() => {
-            let mut response = Response::new(Body::from(body));
+            let size = body.size();
+            let mut response = Response::new(Body::from_stream(body));
+            response
+                .headers_mut()
+                .insert(header::CONTENT_LENGTH, HeaderValue::from(size));
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
@@ -353,17 +361,20 @@ async fn lfs_put(
     let Some(oid) = parse_lfs_oid(&oid) else {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid LFS object ID");
     };
-    let body = match lfs_body(request.into_body(), MAX_LFS_BYTES).await {
-        Ok(body) => body,
-        Err(StatusCode::REQUEST_TIMEOUT) => {
-            return plain(StatusCode::REQUEST_TIMEOUT, "LFS request timed out");
-        }
-        Err(status) => return plain(status, "LFS object is too large"),
-    };
+    let admission = request
+        .extensions()
+        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .cloned();
+    let body = request.into_body();
     let Some(principal) = principal.principal() else {
         return lfs_unauthorized();
     };
-    match api.gateway.lfs().put(&principal.account, oid, &body).await {
+    match api
+        .gateway
+        .lfs()
+        .put(&principal.account, oid, body, admission)
+        .await
+    {
         Ok(_) if (api.ready)() => plain(StatusCode::OK, ""),
         Ok(_) => unavailable(),
         Err(LfsError::Corrupt) => plain(
@@ -371,6 +382,8 @@ async fn lfs_put(
             "LFS object digest mismatch",
         ),
         Err(LfsError::TooLarge) => plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large"),
+        Err(LfsError::Timeout) => plain(StatusCode::REQUEST_TIMEOUT, "LFS request timed out"),
+        Err(LfsError::Body(_)) => plain(StatusCode::BAD_REQUEST, "LFS request body failed"),
         Err(LfsError::Forbidden) => plain(StatusCode::FORBIDDEN, "LFS access denied"),
         Err(error) => {
             tracing::error!(error = %error, "LFS upload failed");
@@ -653,9 +666,9 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stalled_lfs_body_times_out() {
+    async fn stalled_lfs_batch_times_out() {
         let started = tokio::time::Instant::now();
-        let result = lfs_body(Body::from_stream(Stalled), MAX_LFS_BYTES).await;
+        let result = lfs_body(Body::from_stream(Stalled), MAX_LFS_BATCH_BYTES).await;
         assert_eq!(result, Err(StatusCode::REQUEST_TIMEOUT));
         assert_eq!(started.elapsed(), std::time::Duration::from_secs(120));
     }

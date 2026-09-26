@@ -7,6 +7,52 @@ use tokio::{
 };
 
 #[tokio::test(flavor = "multi_thread")]
+async fn corrupt_lfs_download_cannot_complete_its_http_content_length()
+-> Result<(), Box<dyn std::error::Error>> {
+    use object_store::ObjectStoreExt;
+    let files = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let settings = config(address, files.path().join("server"));
+    let prefix = settings.store_prefix.clone();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    let url = create_repository(address, "corruption").await?;
+    let client = reqwest::Client::new();
+    let repository: serde_json::Value = client
+        .get(format!("http://{address}/api/repositories/corruption"))
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let id = uuid::Uuid::parse_str(repository["repository_id"].as_str().ok_or("missing id")?)?;
+    let mut bytes = vec![11; 9 * 1024 * 1024];
+    let oid = hex::encode(Sha256::digest(&bytes));
+    let endpoint = format!("{url}/info/lfs/objects/{oid}");
+    client
+        .put(&endpoint)
+        .bearer_auth("local-test-token")
+        .body(bytes.clone())
+        .send()
+        .await?
+        .error_for_status()?;
+    let key = StorePath::from(format!("{prefix}/repos/{}/lfs/{oid}", id.simple()));
+    bytes[8 * 1024 * 1024] = 12;
+    store.put(&key, bytes.into()).await?;
+    let response = client
+        .get(&endpoint)
+        .bearer_auth("local-test-token")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.content_length(), Some(9 * 1024 * 1024));
+    assert!(response.bytes().await.is_err());
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn transfers_share_node_admission_and_disconnect_allows_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = tempfile::TempDir::new()?;

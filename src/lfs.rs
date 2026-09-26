@@ -6,13 +6,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use bytes::Bytes;
+use axum::body::Body;
 use cellule_runtime::{
     Error, InvocationError, MutationIdentity, Observed, RequestId, SqlBatch, SqlResultSet,
     SqlStatement, SqlValue,
 };
-use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, path::Path};
-use sha2::{Digest, Sha256};
+use object_store::{ObjectStore, path::Path};
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::{
     RepositoryCell,
@@ -20,7 +20,17 @@ use crate::{
     directory::{TokenScope, validate_component},
 };
 
-pub const MAX_LFS_BYTES: usize = 64 * 1024 * 1024;
+mod read;
+#[cfg(test)]
+mod tests;
+mod upload;
+pub use read::LfsRead;
+pub(crate) use read::verify_lfs_object;
+
+// Conditional S3 multipart copy uses one copied part, whose ceiling is 5 GiB.
+pub const MAX_LFS_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Verified external LFS object described by its repository Cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +46,12 @@ pub enum LfsError {
     Cell(#[source] Box<dyn StdError + Send + Sync>),
     #[error("LFS object store failed")]
     Store(#[from] object_store::Error),
+    #[error("LFS request body failed")]
+    Body(#[from] axum::Error),
+    #[error("LFS transfer timed out")]
+    Timeout,
+    #[error("LFS transfer task failed")]
+    Task(#[from] tokio::task::JoinError),
     #[error("LFS object is not recorded")]
     NotFound,
     #[error("LFS write access denied")]
@@ -68,67 +84,53 @@ impl LfsService {
             .output)
     }
 
-    /// Uploads immutable bytes before publishing their SQLite reference.
+    /// Streams verified immutable bytes before publishing their SQLite reference.
+    /// The supervised transfer retains admission through cleanup and publication.
     pub async fn put(
         &self,
         actor: &str,
         oid: [u8; 32],
-        body: &[u8],
+        body: Body,
+        admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<LfsObject, LfsError> {
-        if body.len() > MAX_LFS_BYTES {
-            return Err(LfsError::TooLarge);
-        }
-        if Sha256::digest(body).as_slice() != oid {
-            return Err(LfsError::Corrupt);
-        }
-        let object = LfsObject {
-            sha256: oid,
-            size: u64::try_from(body.len()).map_err(|_| LfsError::TooLarge)?,
-            blake3: *blake3::hash(body).as_bytes(),
-        };
-        match self
-            .store
-            .put_opts(
-                &self.path(oid),
-                Bytes::copy_from_slice(body).into(),
-                PutOptions {
-                    mode: PutMode::Create,
-                    ..PutOptions::default()
-                },
+        let repository = self.repository.clone();
+        let store = self.store.clone();
+        let actor = actor.to_owned();
+        tokio::spawn(async move {
+            let object = upload::receive(
+                store,
+                repository.repository_id(),
+                oid,
+                body,
+                admission.clone(),
             )
-            .await
-        {
-            Ok(_) => {}
-            Err(object_store::Error::AlreadyExists { .. }) => {
-                if self.read_bytes(object).await? != body {
-                    return Err(LfsError::Corrupt);
-                }
+            .await?;
+            let committed = repository
+                .record_lfs_object(mutation_identity()?, &actor, object)
+                .await
+                .map_err(|error| LfsError::Cell(Box::new(error)))?;
+            if !committed.output {
+                return Err(LfsError::Forbidden);
             }
-            Err(error) => return Err(error.into()),
-        }
-        let identity = mutation_identity()?;
-        let committed = self
-            .repository
-            .record_lfs_object(identity, actor, object)
-            .await
-            .map_err(|error| LfsError::Cell(Box::new(error)))?;
-        if !committed.output {
-            return Err(LfsError::Forbidden);
-        }
-        Ok(object)
+            Ok(object)
+        })
+        .await?
     }
 
-    pub async fn get(&self, oid: [u8; 32]) -> Result<Vec<u8>, LfsError> {
+    /// Opens a bounded stream that verifies identity before yielding its last bytes.
+    pub async fn get(
+        &self,
+        oid: [u8; 32],
+        admission: Option<Arc<OwnedSemaphorePermit>>,
+    ) -> Result<LfsRead, LfsError> {
         let object = self.lookup(oid).await?.ok_or(LfsError::NotFound)?;
-        self.read_bytes(object).await
-    }
-
-    async fn read_bytes(&self, object: LfsObject) -> Result<Vec<u8>, LfsError> {
-        read_lfs_object(self.store.as_ref(), self.repository.repository_id(), object).await
-    }
-
-    fn path(&self, oid: [u8; 32]) -> Path {
-        lfs_path(self.repository.repository_id(), &oid)
+        LfsRead::open(
+            self.store.clone(),
+            self.repository.repository_id(),
+            object,
+            admission,
+        )
+        .await
     }
 }
 
@@ -281,26 +283,4 @@ pub(crate) fn lfs_path(repository_id: [u8; 16], sha256: &[u8; 32]) -> Path {
         hex::encode(repository_id),
         hex::encode(sha256)
     ))
-}
-
-pub(crate) async fn read_lfs_object(
-    store: &dyn ObjectStore,
-    repository_id: [u8; 16],
-    object: LfsObject,
-) -> Result<Vec<u8>, LfsError> {
-    if object.size > MAX_LFS_BYTES as u64 {
-        return Err(LfsError::TooLarge);
-    }
-    let result = store.get(&lfs_path(repository_id, &object.sha256)).await?;
-    if result.meta.size != object.size {
-        return Err(LfsError::Corrupt);
-    }
-    let body = result.bytes().await?;
-    if u64::try_from(body.len()).ok() != Some(object.size)
-        || Sha256::digest(&body).as_slice() != object.sha256
-        || blake3::hash(&body).as_bytes() != &object.blake3
-    {
-        return Err(LfsError::Corrupt);
-    }
-    Ok(body.to_vec())
 }

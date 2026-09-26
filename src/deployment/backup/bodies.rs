@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     large_blob::{LargeBlobReference, LargeBlobStore, blob_path},
-    lfs::{LfsObject, lfs_path, read_lfs_object},
+    lfs::{LfsObject, lfs_path, verify_lfs_object},
 };
 use cellule_ltx::rusqlite::{Connection, OpenFlags, params};
 use cellule_runtime::{CatalogRole, NodeLeaseGuard};
@@ -142,7 +142,7 @@ async fn verify(
             LargeBlobStore::new(store, repository_id).get(value).await?;
         }
         Reference::Lfs(value) => {
-            read_lfs_object(store.as_ref(), repository_id, *value).await?;
+            verify_lfs_object(store, repository_id, *value, None).await?;
         }
     }
     Ok(())

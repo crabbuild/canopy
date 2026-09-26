@@ -112,7 +112,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         assert!(matches!(
             gateway
                 .lfs()
-                .put("canopy", invalid_oid, b"wrong digest")
+                .put("canopy", invalid_oid, Body::from("wrong digest"), None)
                 .await,
             Err(LfsError::Corrupt)
         ));
@@ -120,14 +120,30 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         let denied_body = b"reader LFS object";
         let denied_oid: [u8; 32] = Sha256::digest(denied_body).into();
         assert!(matches!(
-            gateway.lfs().put("reader", denied_oid, denied_body).await,
+            gateway
+                .lfs()
+                .put(
+                    "reader",
+                    denied_oid,
+                    Body::from(denied_body.as_slice()),
+                    None
+                )
+                .await,
             Err(LfsError::Forbidden)
         ));
         assert!(repository.lfs_object(denied_oid).await?.output.is_none());
         repository
             .grant_member(support::identity()?, "canopy", "reader", TokenScope::Write)
             .await?;
-        gateway.lfs().put("reader", denied_oid, denied_body).await?;
+        gateway
+            .lfs()
+            .put(
+                "reader",
+                denied_oid,
+                Body::from(denied_body.as_slice()),
+                None,
+            )
+            .await?;
         assert!(repository.lfs_object(denied_oid).await?.output.is_some());
         repository
             .revoke_member(support::identity()?, "canopy", "reader")
@@ -135,7 +151,15 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         let revoked_body = b"revoked LFS object";
         let revoked_oid: [u8; 32] = Sha256::digest(revoked_body).into();
         assert!(matches!(
-            gateway.lfs().put("reader", revoked_oid, revoked_body).await,
+            gateway
+                .lfs()
+                .put(
+                    "reader",
+                    revoked_oid,
+                    Body::from(revoked_body.as_slice()),
+                    None
+                )
+                .await,
             Err(LfsError::Forbidden)
         ));
         assert!(repository.lfs_object(revoked_oid).await?.output.is_none());
@@ -479,3 +503,4 @@ async fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, Box<dyn s
     }
     Ok(output.stdout)
 }
+use axum::body::Body;
