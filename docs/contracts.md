@@ -21,15 +21,29 @@ before admitting persistent customer repositories.
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current buffered ingress |
-| Ref mutation | check actor's write role, compare expected OID and monotonic version; apply all updates in one Cell transaction | `FinalizePush` |
+| Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
 digest per Git OID. External objects also store SHA-256. Readers verify the
 bytes against the SQLite record and recompute the Git OID or LFS SHA-256.
-The `refs` table stores name, OID and version. A successful push persists all
+The `refs` table stores name, optional OID and version. Deletion sets the OID
+to NULL and advances the version; recreation advances it again. Never-seen
+names and deleted names have different expectations, so stale plans fail even
+after a ref returns to the same OID or to a deleted state. Deleted rows remain
+in SQLite and are excluded from Git advertisements and namespace conflicts.
+They must not be collected without a replacement mechanism for fencing stale
+ref plans. `FinalizePush` uses codec version 3 for this expectation shape.
+A successful push persists all
 new objects before `FinalizePush` publishes any ref. Rejected or interrupted
 pushes may leave unreferenced objects; collection is not implemented yet.
+
+All branches currently permit deletion by an authorized writer. The gateway
+sets `receive.denyDeleteCurrent=ignore` because its synthetic HEAD must not
+create a branch protection policy. Git's
+[receive-pack implementation](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L1428-L1454)
+otherwise rejects deletion of the branch named by HEAD even in this bare
+cache. Future branch rules belong in the Repository Cell transaction.
 
 A name reservation commits before its Repository Cell is provisioned. A retry
 reads the previously reserved UUID and completes the same Cell instead of

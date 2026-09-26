@@ -101,4 +101,6 @@ the environment. It pushes two repositories with stock Git and LFS, grants a
 collaborator access, renames one repository, restarts with fresh local databases,
 kills the new owner, waits for lease expiry, and clones from a third process.
 It verifies collaborator access after takeover and denial after revocation.
+It also verifies that a deleted branch stays absent through takeover and can
+then be recreated through stock Git.
 It writes under a unique prefix in the supplied bucket.

@@ -220,9 +220,8 @@ impl GitGateway {
         let mut input = Vec::new();
         input.extend_from_slice(b"start\n");
         for (name, state) in refs {
-            input.extend_from_slice(
-                format!("update {name} {}\n", hex::encode(state.oid)).as_bytes(),
-            );
+            let Some(oid) = state.oid else { continue };
+            input.extend_from_slice(format!("update {name} {}\n", hex::encode(oid)).as_bytes());
         }
         input.extend_from_slice(b"prepare\ncommit\n");
         git_with_stdin(&git_dir, &["update-ref", "--stdin"], input).await?;
@@ -423,7 +422,7 @@ fn diff_refs(
         .filter_map(|name| {
             let expected = before.get(&name).cloned();
             let new_oid = after.get(&name).copied();
-            if expected.as_ref().map(|state| state.oid) == new_oid {
+            if expected.as_ref().and_then(|state| state.oid) == new_oid {
                 None
             } else {
                 Some(RefUpdate {

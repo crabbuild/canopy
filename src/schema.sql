@@ -15,7 +15,7 @@ CREATE TABLE objects (
 
 CREATE TABLE refs (
     name TEXT PRIMARY KEY,
-    oid BLOB NOT NULL CHECK(length(oid) = 20),
+    oid BLOB CHECK(oid IS NULL OR length(oid) = 20),
     version INTEGER NOT NULL CHECK(version > 0)
 ) WITHOUT ROWID;
 

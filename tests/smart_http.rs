@@ -211,7 +211,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 .ref_state("refs/heads/main", None)
                 .await?
                 .output
-                .map(|state| state.oid),
+                .and_then(|state| state.oid),
             Some(expected_oid)
         );
         let mut cursor = None;
@@ -229,6 +229,48 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 .output
                 .map(|object| object.size),
             Some(lfs_body.len() as u64)
+        );
+        run_git(
+            Some(&local),
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+                &url,
+                ":refs/heads/main",
+            ],
+        )
+        .await?;
+        assert!(
+            run_git(
+                Some(&local),
+                &[
+                    "-c",
+                    "http.extraHeader=Authorization: Bearer local-test-token",
+                    "ls-remote",
+                    &url,
+                ]
+            )
+            .await?
+            .is_empty()
+        );
+        run_git(
+            Some(&local),
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+                &url,
+                "HEAD:refs/heads/main",
+            ],
+        )
+        .await?;
+        assert!(
+            repository
+                .ref_state("refs/heads/main", None)
+                .await?
+                .output
+                .is_some_and(|state| state.version == 3)
         );
         let _ = stop_tx.send(());
         server.await??;

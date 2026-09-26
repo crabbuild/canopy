@@ -13,10 +13,10 @@ use crate::{
 const MAX_UPDATES: usize = 64;
 const MAX_REF_NAME_BYTES: usize = 255;
 
-/// Expected published tip and version, captured before a push starts.
+/// Expected ref version and optional tip; a missing tip is a retained deletion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefExpectation {
-    pub oid: [u8; 20],
+    pub oid: Option<[u8; 20]>,
     pub version: i64,
 }
 
@@ -36,7 +36,7 @@ pub struct PushPlan {
 }
 
 impl RepositoryCell {
-    /// Reads one ref and the version required for an exact compare-and-swap.
+    /// Reads a live or deleted ref and its version; None means the name has never existed.
     pub async fn ref_state(
         &self,
         name: &str,
@@ -68,7 +68,7 @@ impl RepositoryCell {
         })
     }
 
-    /// Reads at most 256 refs after a stable lexical cursor.
+    /// Reads at most 256 live or deleted refs after a lexical cursor.
     pub async fn refs_page(
         &self,
         after: &str,
@@ -124,7 +124,10 @@ impl WireValue for PushPlan {
             encoder.write_text(&update.name)?;
             encoder.write_bool(update.expected.is_some())?;
             if let Some(expected) = &update.expected {
-                encoder.write_bytes(&expected.oid)?;
+                encoder.write_bool(expected.oid.is_some())?;
+                if let Some(oid) = expected.oid {
+                    encoder.write_bytes(&oid)?;
+                }
                 encoder.write_i64(expected.version)?;
             }
             encoder.write_bool(update.new_oid.is_some())?;
@@ -149,7 +152,11 @@ impl WireValue for PushPlan {
             let name = decoder.read_text()?.to_owned();
             let expected = if decoder.read_bool()? {
                 Some(RefExpectation {
-                    oid: read_oid(decoder)?,
+                    oid: if decoder.read_bool()? {
+                        Some(read_oid(decoder)?)
+                    } else {
+                        None
+                    },
                     version: decoder.read_i64()?,
                 })
             } else {
@@ -183,7 +190,7 @@ pub struct FinalizePush;
 impl Command for FinalizePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 3;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = PushPlan;
     type Output = bool;
 
@@ -214,7 +221,9 @@ impl Command for FinalizePush {
             {
                 return Ok(CommandResult::Rejected(false));
             }
-            if update.new_oid.is_none() && update.expected.is_none() {
+            if update.new_oid.is_none()
+                && update.expected.as_ref().and_then(|old| old.oid).is_none()
+            {
                 return Ok(CommandResult::Rejected(false));
             }
             if let Some(new_oid) = update.new_oid
@@ -251,23 +260,14 @@ impl Command for FinalizePush {
                         ],
                     }],
                 })?,
-                (Some(old), Some(new_oid)) => context.sql(&SqlBatch {
+                (Some(old), new_oid) => context.sql(&SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "UPDATE refs SET oid = ?1, version = version + 1 WHERE name = ?2 AND oid = ?3 AND version = ?4".into(),
+                        // Retain deleted names so recreation cannot reset a stale push's version.
+                        // The complete expected state was checked in this same transaction above.
+                        sql: "UPDATE refs SET oid = ?1, version = version + 1 WHERE name = ?2 AND version = ?3".into(),
                         parameters: vec![
-                            SqlValue::Blob(new_oid.to_vec()),
+                            new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
                             SqlValue::Text(update.name.clone()),
-                            SqlValue::Blob(old.oid.to_vec()),
-                            SqlValue::Integer(old.version),
-                        ],
-                    }],
-                })?,
-                (Some(old), None) => context.sql(&SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "DELETE FROM refs WHERE name = ?1 AND oid = ?2 AND version = ?3".into(),
-                        parameters: vec![
-                            SqlValue::Text(update.name.clone()),
-                            SqlValue::Blob(old.oid.to_vec()),
                             SqlValue::Integer(old.version),
                         ],
                     }],
@@ -309,13 +309,18 @@ fn current_ref(
 }
 
 fn decode_ref_row(row: &[SqlValue]) -> cellule_runtime::Result<RefExpectation> {
-    let [SqlValue::Blob(oid), SqlValue::Integer(version)] = row else {
+    let [oid, SqlValue::Integer(version)] = row else {
         return Err(Error::Command("invalid stored ref"));
     };
-    let oid = oid
-        .as_slice()
-        .try_into()
-        .map_err(|_| Error::Command("invalid stored ref object ID"))?;
+    let oid = match oid {
+        SqlValue::Null => None,
+        SqlValue::Blob(oid) => Some(
+            oid.as_slice()
+                .try_into()
+                .map_err(|_| Error::Command("invalid stored ref object ID"))?,
+        ),
+        _ => return Err(Error::Command("invalid stored ref object ID")),
+    };
     if *version <= 0 {
         return Err(Error::Command("invalid stored ref version"));
     }
@@ -332,7 +337,7 @@ fn existing_namespace_conflict(
 ) -> cellule_runtime::Result<bool> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
-            sql: "SELECT name FROM refs WHERE name != ?1 AND (substr(name, 1, length(?2)) = ?2 OR substr(?1, 1, length(name) + 1) = name || '/') LIMIT 65".into(),
+            sql: "SELECT name FROM refs WHERE oid IS NOT NULL AND name != ?1 AND (substr(name, 1, length(?2)) = ?2 OR substr(?1, 1, length(name) + 1) = name || '/') LIMIT 65".into(),
             parameters: vec![
                 SqlValue::Text(name.into()),
                 SqlValue::Text(format!("{name}/")),

@@ -102,7 +102,10 @@ impl GitHttpBackend {
             return Err(GitHttpError::TooLarge);
         }
         let mut process = Command::new("git");
+        // The cache's synthetic HEAD must not protect a branch by name.
+        // Repository policy belongs in the Cell ref transaction.
         process
+            .args(["-c", "receive.denyDeleteCurrent=ignore"])
             .arg("http-backend")
             .env("GIT_PROJECT_ROOT", &self.project_root)
             .env("GIT_HTTP_EXPORT_ALL", "1")

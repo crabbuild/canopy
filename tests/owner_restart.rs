@@ -5,17 +5,17 @@ use std::{
 };
 
 use canopy_server::{
-    CanopyApplication, RepositoryCell, RepositoryModule, build_descriptor, git_gateway::GitGateway,
-    http::GitHttpApi, repository_target,
+    CanopyApplication, PushPlan, RefUpdate, RepositoryCell, RepositoryModule, build_descriptor,
+    git_gateway::GitGateway, http::GitHttpApi, repository_target,
 };
 use cellule_app::{CellApplication, CompiledApplication};
 use cellule_host::{CellNode, CellNodeBuilder};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
 use cellule_runtime::{
     ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellStorageLayout, ControlState, Digest, Error, IncarnationId, NodeAdvertisement, NodeCapacity,
-    NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard, Owner, SessionId, SqlWorkerPool,
-    TenantId, VersionedNodeAdvertisement,
+    CellStorageLayout, ControlState, Digest, Error, IncarnationId, InvocationError,
+    NodeAdvertisement, NodeCapacity, NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard,
+    Owner, SessionId, SqlWorkerPool, TenantId, VersionedNodeAdvertisement,
 };
 use cellule_store::Store;
 use ed25519_dalek::SigningKey;
@@ -116,10 +116,35 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
             "push",
             &first_url,
             "HEAD:refs/heads/main",
+            "HEAD:refs/heads/reused",
         ],
     )
     .await?;
     let original = run_git(Some(&local), &["rev-parse", "HEAD"]).await?;
+    let original_ref = repository
+        .ref_state("refs/heads/reused", None)
+        .await?
+        .output;
+    run_git(
+        Some(&local),
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "push",
+            &first_url,
+            ":refs/heads/reused",
+        ],
+    )
+    .await?;
+    let deleted_ref = repository
+        .ref_state("refs/heads/reused", None)
+        .await?
+        .output;
+    assert!(
+        deleted_ref
+            .as_ref()
+            .is_some_and(|state| state.oid.is_none() && state.version == 2)
+    );
     let _ = stop.send(());
     server.await??;
     drop(repository);
@@ -164,8 +189,15 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         application_id,
     );
     let repository = Arc::new(RepositoryCell::new(&app_handle, target)?);
+    assert_eq!(
+        repository
+            .ref_state("refs/heads/reused", None)
+            .await?
+            .output,
+        deleted_ref
+    );
     let second_gateway = Arc::new(GitGateway::new(
-        repository,
+        Arc::clone(&repository),
         second_disk.path().to_path_buf(),
         object_store,
     ));
@@ -190,6 +222,63 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
     assert_eq!(
         run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
         original
+    );
+    assert!(
+        run_git(
+            Some(&clone),
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "ls-remote",
+                &second_url,
+                "refs/heads/reused",
+            ]
+        )
+        .await?
+        .is_empty()
+    );
+    run_git(
+        Some(&clone),
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "push",
+            &second_url,
+            "HEAD:refs/heads/reused",
+        ],
+    )
+    .await?;
+    let recreated = repository
+        .ref_state("refs/heads/reused", None)
+        .await?
+        .output;
+    assert!(
+        recreated
+            .as_ref()
+            .is_some_and(|state| state.oid.is_some() && state.version == 3)
+    );
+    assert!(matches!(
+        repository
+            .finalize_push(
+                support::identity()?,
+                PushPlan {
+                    actor: "canopy".into(),
+                    updates: vec![RefUpdate {
+                        name: "refs/heads/reused".into(),
+                        expected: original_ref,
+                        new_oid: None
+                    }],
+                }
+            )
+            .await,
+        Err(InvocationError::Rejected(_))
+    ));
+    assert_eq!(
+        repository
+            .ref_state("refs/heads/reused", None)
+            .await?
+            .output,
+        recreated
     );
     let _ = stop.send(());
     server.await??;

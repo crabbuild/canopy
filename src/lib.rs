@@ -29,7 +29,7 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation_with_codec(3, 2)];
+const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation_with_codec(3, 3)];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
 const fn operation(id: u32) -> OperationDescriptor {

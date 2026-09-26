@@ -194,9 +194,14 @@ def main():
                 "push",
                 url,
                 "HEAD:refs/heads/main",
+                "HEAD:refs/heads/reused",
                 cwd=local,
             )
             oid = git("rev-parse", "HEAD", cwd=local)
+            git(
+                "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "push", url, ":refs/heads/reused", cwd=local,
+            )
             other_url, _ = create_repository(base_url, "other")
             other = directory / "other"
             git("init", "-b", "main", str(other))
@@ -251,6 +256,18 @@ def main():
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
+            assert not git(
+                "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "ls-remote", url, "refs/heads/reused",
+            )
+            git(
+                "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "push", url, "HEAD:refs/heads/reused", cwd=local,
+            )
+            assert git(
+                "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "ls-remote", url, "refs/heads/reused",
+            ) == oid + b"\trefs/heads/reused"
             assert api_status(
                 base_url,
                 "/api/repositories/renamed/collaborators/reader",
@@ -266,7 +283,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: two repositories, rename, and collaborator ACL survived restart, disk loss, and lease takeover")
+            print("PASS: repositories, rename, ACL, and deleted branch recreation survived restart, disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:

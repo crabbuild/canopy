@@ -196,7 +196,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
             .await?;
         assert!(published.output);
         let expected_main = RefExpectation {
-            oid: committed.output,
+            oid: Some(committed.output),
             version: 1,
         };
         assert_eq!(
@@ -219,7 +219,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                         RefUpdate {
                             name: "refs/heads/main".into(),
                             expected: Some(RefExpectation {
-                                oid: committed.output,
+                                oid: Some(committed.output),
                                 version: 2,
                             }),
                             new_oid: Some(next.output),
@@ -307,6 +307,94 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .await?
                 .output
                 .is_none()
+        );
+        let original_state = repository.ref_state("refs/heads/main", None).await?.output;
+        let plan = |expected, new_oid| PushPlan {
+            actor: "canopy".into(),
+            updates: vec![RefUpdate {
+                name: "refs/heads/main".into(),
+                expected,
+                new_oid,
+            }],
+        };
+        repository
+            .finalize_push(identity(18), plan(original_state.clone(), None))
+            .await?;
+        let deleted_state = repository.ref_state("refs/heads/main", None).await?.output;
+        repository
+            .finalize_push(
+                identity(19),
+                plan(deleted_state.clone(), Some(committed.output)),
+            )
+            .await?;
+        assert!(matches!(
+            repository
+                .finalize_push(identity(20), plan(original_state, Some(next.output)))
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        let recreated = repository.ref_state("refs/heads/main", None).await?.output;
+        assert_eq!(
+            recreated,
+            Some(RefExpectation {
+                oid: Some(committed.output),
+                version: 3
+            })
+        );
+        repository
+            .finalize_push(identity(21), plan(recreated, None))
+            .await?;
+        assert!(matches!(
+            repository
+                .finalize_push(identity(22), plan(deleted_state, Some(next.output)))
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        let deleted = repository.ref_state("refs/heads/main", None).await?.output;
+        assert_eq!(
+            deleted,
+            Some(RefExpectation {
+                oid: None,
+                version: 4
+            })
+        );
+        let child = RefUpdate {
+            name: "refs/heads/main/topic".into(),
+            expected: None,
+            new_oid: Some(next.output),
+        };
+        repository
+            .finalize_push(
+                identity(23),
+                PushPlan {
+                    actor: "canopy".into(),
+                    updates: vec![child],
+                },
+            )
+            .await?;
+        assert!(matches!(
+            repository
+                .finalize_push(identity(24), plan(deleted.clone(), Some(committed.output)))
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        let child = repository
+            .ref_state("refs/heads/main/topic", None)
+            .await?
+            .output;
+        let mut replacement = plan(deleted, Some(committed.output));
+        replacement.updates.push(RefUpdate {
+            name: "refs/heads/main/topic".into(),
+            expected: child,
+            new_oid: None,
+        });
+        repository.finalize_push(identity(25), replacement).await?;
+        assert_eq!(
+            repository.ref_state("refs/heads/main", None).await?.output,
+            Some(RefExpectation {
+                oid: Some(committed.output),
+                version: 5
+            })
         );
         Ok(())
     }
