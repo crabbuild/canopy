@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates and repository browser implemented; rebase, releases and collaboration UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser and issue UI implemented; rebase, releases and pull/review UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -1288,3 +1288,60 @@ resolution, releases/assets, public visibility, organizations, search and
 webhooks remain. Operations work still includes native peak resource bounds,
 fault injection, retention/quotas, backup/GC, multi-node routing, audit/metrics
 and production capacity. Hosted CI still needs a Canopy remote.
+
+
+## Issue collaboration interface qualification
+
+The embedded interface now supports issue creation, open/closed/all lists,
+32-issue pages, 16-comment pages, issue/comment edits and close/reopen. New posts
+use the existing immutable creation UUID contract; edits use expected versions.
+The repository metadata response supplies the current viewer account and token
+scope for appropriate controls. API/Cell checks remain authoritative.
+
+Verified on Darwin arm64 with Chrome and the real Canopy server backed by RustFS
+`1.0.0-beta.8-glibc`:
+
+- Seeded 35 issues and 18 comments. The UI showed 32 then 3 issues, and 16 then
+  2 comments. Filter navigation and empty closed-state rendering work.
+- Edited an issue title, closed it, edited an existing comment and posted a new
+  comment beyond page one. Each appeared through fresh API reads. The new comment
+  was immediately visible at its returned position.
+- Published a competing API edit while the form held an older version. Saving
+  returned 409, preserved the local draft read-only, and offered a reload. The
+  newer issue remained unchanged and became visible on reload.
+- Restarted the server with a fresh local directory and the same durable store.
+  UI-created issue/comment changes remained visible. API checks retained original
+  body/identity fields and exact paged comments; the UI subsequently reopened
+  the recovered issue with the next version.
+- A test reverse proxy forwarded an issue create, then deliberately discarded
+  the successful reply. The UI froze the original payload for retry. Revoked the
+  author's grant, retried to 404, restored it and retried again. The original
+  issue #36 was returned; an independent API list contained exactly one new issue.
+- A repository reader with write scope could create and edit authored discussion
+  records but could not edit another author's comment. A read-scoped token had
+  no New issue, Edit issue or Add comment control.
+- A 300-byte Unicode title triggered the 256-byte validation before submission.
+  Repository-supplied script/image markup remained literal text with no generated
+  script/image elements. Session clearing and existing navigation are reused.
+- Desktop and 390×844 mobile issue/detail views inspected. Mobile details have no
+  document-level horizontal overflow. No page console errors observed.
+
+Focused Rust issue integration passes, including new viewer account/scope
+assertions, durable versions, ACLs and recovery. The repository discovery/ACL
+pagination integration also passes; its expected residency/movement retries
+completed. Clippy with warnings denied, Rust formatting, JavaScript syntax,
+Python probe parsing and the release binary build pass. Recovered issue assets
+return the correct content types, no-store, nosniff and the existing CSP.
+The checked-in process probe now includes both issue assets; the live UI recovery
+qualification above was run separately from the full process fault suite.
+
+Implementation adds a small issue UI module and stylesheet, metadata for the
+viewer, and static asset routes. Existing issue mutations are unchanged. No
+schema, dependency or lockfile change. Saved-download verification from the
+previous browser milestone remains a gap. Drafts and uncertain submission IDs
+are page-local; leaving the page discards them, as stated by the editor.
+
+Completion audit: verified progress on collaboration gate 7. Pull/review/check
+interfaces, patches/line discussions, rebase/conflict resolution, releases/assets,
+account lifecycle, public-service features and all outstanding operations and
+capacity gates remain open. The full hosting goal remains active.

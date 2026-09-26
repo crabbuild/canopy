@@ -34,8 +34,14 @@ Markdown, symlinks, submodules and LFS pointers are never executed or followed.
 Views pin an immutable object ID after selecting a reference. Use **Refresh
 branch** to resolve its latest tip. Directory/history pages contain up to 32
 entries; previews/downloads contain at most 256 KiB. Larger files require Git.
-This interface currently covers repository creation and browsing; issues, pull
-requests, checks, reviews and access management remain API operations.
+The **Issues** tab supports open/closed filters, paged discussions, issue/comment
+creation, edits and close/reopen. Write-scoped tokens may participate; authors
+and repository writers can edit. Discussion text is displayed literally.
+If a submission reply is lost, keep the page open and use **Retry submission**
+to recover the same post. Edit conflicts preserve your draft for copying and
+require **Reload current version** before another edit. Drafts are not retained
+across navigation, disconnect or reload. Pull requests, checks, reviews and
+access management remain API operations.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
 paths, pagination, limits and authorization behavior.
 
@@ -49,7 +55,8 @@ UUID-ordered candidates and can be short or empty with a non-null cursor,
 including when access was revoked or Cell movement capacity runs out.
 A page that cannot make progress returns 503 with `Retry-After: 1`.
 `GET /api/repositories/<name>` returns the UUID, clone URL, repository role,
-default branch and ref generation; missing or inaccessible names return 404.
+default branch and ref generation, plus `viewer.account` and `viewer.token_scope`
+for the authenticated request; missing or inaccessible names return 404.
 `PATCH /api/repositories/<old_name>` with
 `{"name":"new_name","repository_id":"<returned UUID>"}` atomically renames a ready
 repository. The UUID is a precondition and remains unchanged; a retry with

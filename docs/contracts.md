@@ -1258,6 +1258,47 @@ inert. Names escape control/bidirectional characters; non-UTF-8 names display
 escaped bytes. The UI never opens repository-supplied links automatically.
 
 This adds no schema/command/dependency change. The canonical verified Git reader
-is shared by browsing and PR comparison. Collaboration editors, complete DAG
+is shared by browsing and PR comparison. Pull/review editors, complete DAG
 history, syntax highlighting, large-file streaming downloads, rendered Markdown
 and production browser/capacity matrices remain outside the current browser.
+
+
+### Issue collaboration interface
+
+The Issues tab uses the existing issue/comment routes and mutation contracts;
+there is no second publisher or browser-owned issue state. Repository discovery
+now returns `viewer` with the authenticated `account` and `token_scope`, alongside
+the existing repository `role`. These are observations for choosing UI controls;
+HTTP and the Cell still independently authorize every operation. The UI checks
+that issue/comment read responses match the discovered repository UUID before
+combining them. Name reuse cannot display a different Cell under stale metadata.
+
+Open/closed/all lists retain the API's 32-issue pages. Details retain 16-comment
+pages. New comments navigate to the position before their returned repository-wide
+number, making the confirmed post visible even beyond the first page. Authors
+with repository read access and a write-scoped token may edit their own records;
+repository writers can edit others. Read-scoped tokens have no create/edit/reply
+controls. Close/reopen uses the same expected-version issue editor. Text uses
+text nodes with preserved whitespace, without HTML/Markdown interpretation.
+
+A form freezes its creation UUID and exact title/body after submission. Pending
+fields are read-only. An ambiguous network/server reply retains that UUID and
+payload for **Retry submission**; no automatic retry, new identity or changed
+payload is generated. Even a later permission rejection cannot thaw an already
+uncertain submission. A definite initial validation/permission rejection lets
+the user correct the form. Versioned edits are never silently rebased: conflicts
+or uncertain replies keep a copyable draft and require loading current state.
+The UI reports publication only after a successful API reply, then reads it back.
+
+Drafts and pending identities live only on the current page. Navigating away,
+reloading or disconnecting discards them; the form explains this lifetime.
+An aborted request may already have published and must be checked in current
+state. This UI does not provide offline draft storage or cross-session retry
+recovery. Creation UUID generation requires a secure browser context (HTTPS,
+or loopback for local development). UTF-8 byte validation follows API limits;
+server checks remain authoritative.
+
+`/assets/issues.js` and `/assets/issues.css` share the static asset CSP and cache
+policy. The script is loaded after the base interface, reuses its authenticated
+request/session cancellation and navigation helpers, and exposes one issue-view
+entry point. No frontend dependency, schema or operation codec changes.

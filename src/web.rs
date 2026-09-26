@@ -42,3 +42,14 @@ pub(crate) async fn script() -> Response<Body> {
 pub(crate) async fn styles() -> Response<Body> {
     asset(include_str!("../web/canopy.css"), "text/css; charset=utf-8")
 }
+
+pub(crate) async fn issues() -> Response<Body> {
+    asset(
+        include_str!("../web/issues.js"),
+        "text/javascript; charset=utf-8",
+    )
+}
+
+pub(crate) async fn issue_styles() -> Response<Body> {
+    asset(include_str!("../web/issues.css"), "text/css; charset=utf-8")
+}

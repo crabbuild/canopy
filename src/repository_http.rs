@@ -59,6 +59,8 @@ impl RepositoryHttp {
         Router::new()
             .route("/", get(crate::web::index))
             .route("/assets/canopy.js", get(crate::web::script))
+            .route("/assets/issues.js", get(crate::web::issues))
+            .route("/assets/issues.css", get(crate::web::issue_styles))
             .route("/assets/canopy.css", get(crate::web::styles))
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
@@ -458,6 +460,7 @@ async fn get_repository(
                     "repository_id": repository.repository_id,
                     "clone_url": repository.clone_url,
                     "role": details.role.as_str(),
+                    "viewer": {"account": principal.account, "token_scope": principal.scope.as_str()},
                     "default_branch": details.head.reference,
                     "ref_generation": details.head.generation,
                 }),

@@ -1,0 +1,39 @@
+.issue-tools, .issue-filters, .issue-title { display: flex; align-items: center; gap: 14px; }
+.issue-tools { justify-content: space-between; margin: 24px 0; flex-wrap: wrap; }
+.issue-filters { gap: 5px; }
+.issue-filters a { padding: 7px 14px; color: var(--muted); border-radius: 7px; }
+.issue-filters a[aria-current=page] { background: var(--mist); color: var(--pine); font-weight: 600; }
+.button-link { display: inline-block; padding: 8px 15px; border-radius: 7px; font-weight: 600; }
+.button-link:hover { color: white; text-decoration: none; }
+.issue-list { list-style: none; padding: 0; margin: 0; }
+.issue-list li { display: flex; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); }
+.issue-list li:last-child { border-bottom: 0; }
+.issue-list .subject { color: var(--ink); font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
+.issue-list li > div { min-width: 0; }
+.issue-state { display: inline-block; font-size: 12px; font-weight: 600; white-space: nowrap; border-radius: 20px; padding: 4px 11px; align-self: flex-start; }
+.issue-state.open { color: var(--pine); background: var(--mist); }
+.issue-state.closed { color: var(--blue); background: #e9eef8; }
+.issue-title { align-items: baseline; margin: 22px 0 15px; }
+.issue-title h2 { font-size: 27px; overflow-wrap: anywhere; }
+.issue-number { font-family: var(--mono); color: var(--muted); font-size: 20px; }
+.discussion-meta { color: var(--muted); font-size: 12px; margin: 5px 0 9px; }
+.discussion-post { margin: 22px 0; padding: 22px; }
+.discussion-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.discussion-post > button { margin-top: 15px; }
+.discussion { margin: 30px 0; border-left: 2px solid var(--line); padding-left: 23px; }
+.discussion h3, .discussion-editor h3 { margin: 0; font-size: 16px; }
+.discussion-editor { padding: 24px; margin: 20px 0; }
+.discussion-editor .hint { max-width: none; }
+.discussion-post .discussion-editor { border: 0; margin: 0; padding: 0; }
+.discussion-editor input, .discussion-editor textarea, .discussion-editor select { display: block; margin-top: 8px; font-weight: 400; }
+.discussion-editor textarea { width: 100%; resize: vertical; min-height: 140px; font: inherit; line-height: 1.65; border: 1px solid var(--line); border-radius: 7px; padding: 12px; color: var(--ink); background: var(--paper); }
+.discussion-editor textarea:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+.discussion-editor [readonly] { background: var(--cloud); }
+@media (max-width: 720px) {
+  .issue-list li { gap: 12px; padding: 16px 12px; }
+  .issue-title h2 { font-size: 23px; }
+  .issue-title { flex-wrap: wrap; gap: 6px; }
+  .discussion-post, .discussion-editor { padding: 17px; }
+  .discussion { padding-left: 12px; }
+  .discussion-editor .actions { flex-wrap: wrap; }
+}

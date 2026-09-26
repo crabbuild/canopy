@@ -32,7 +32,7 @@ async function api(path, { method = "GET", body, signal } = {}) {
     if (!response.ok) {
       const message = await response.text(); currentSession(epoch);
       if (response.status === 401) { disconnect(); notice("Your access token was rejected. Connect with an active token."); }
-      throw new Error(`${message || "Request failed"} (${response.status})`);
+      const error = new Error(`${message || "Request failed"} (${response.status})`); error.status = response.status; throw error;
     }
     const data = response.status === 204 ? null : await response.json(); currentSession(epoch);
     return data;
@@ -42,7 +42,9 @@ function route() {
   try {
     const value = JSON.parse(decodeURIComponent(location.hash.slice(1)));
     if (!value || typeof value.repo !== "string") return {};
-    return { repo: value.repo, view: value.view === "history" ? "history" : value.view === "file" ? "file" : "tree",
+    return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue"].includes(value.view) ? value.view : "tree",
+      issue: Number.isSafeInteger(value.issue) && value.issue > 0 ? value.issue : undefined,
+      state: ["open", "closed", "all"].includes(value.state) ? value.state : "open",
       commit: typeof value.commit === "string" ? value.commit : undefined, path: typeof value.path === "string" ? value.path : "",
       reference: typeof value.reference === "string" ? value.reference : undefined,
       after: typeof value.after === "string" ? value.after : undefined };
@@ -107,9 +109,9 @@ function heading(repository) {
 }
 function tabs(current, commit) {
   const node = element("nav", undefined, "tabs"); node.setAttribute("aria-label", "Repository views");
-  for (const [text, view] of [["Files", "tree"], ["History", "history"]]) {
+  for (const [text, view] of [["Files", "tree"], ["History", "history"], ["Issues", "issues"]]) {
     const tab = link(text, { repo: current.repo, view, commit, reference: current.reference }, "tab");
-    if ((current.view === "history") === (view === "history")) tab.setAttribute("aria-current", "page");
+    if (view === current.view || (view === "tree" && current.view === "file") || (view === "issues" && ["issue", "new-issue"].includes(current.view))) tab.setAttribute("aria-current", "page");
     node.append(tab);
   }
   return node;
@@ -221,14 +223,19 @@ async function render() {
   if (!current.repo) { welcome(); return; }
   try {
     const repository = await api(`/api/repositories/${encodeURIComponent(current.repo)}`, { signal });
-    const { resolved } = await browse(repository, { kind: "resolve", reference: current.reference }, signal);
-    current.reference = resolved.reference; current.commit ||= resolved.oid;
-    const fragment = document.createDocumentFragment(); fragment.append(heading(repository), tabs(current, current.commit));
-    fragment.append(await toolbar(repository, current, resolved, signal, ticket));
-    if (!current.commit) fragment.append(empty("This reference has no commits yet.", "Copy the clone URL above to push a branch, or select another reference. Refresh the branch when you’re ready."));
-    else {
-      if (current.view !== "history") fragment.append(breadcrumbs(current));
-      fragment.append(await (current.view === "history" ? historyView(repository, current, signal) : current.view === "file" ? fileView(repository, current, signal) : treeView(repository, current, signal)));
+    const fragment = document.createDocumentFragment();
+    fragment.append(heading(repository));
+    if (["issues", "issue", "new-issue"].includes(current.view)) {
+      fragment.append(tabs(current), await issuesView(repository, current, signal));
+    } else {
+      const { resolved } = await browse(repository, { kind: "resolve", reference: current.reference }, signal);
+      current.reference = resolved.reference; current.commit ||= resolved.oid;
+      fragment.append(tabs(current, current.commit), await toolbar(repository, current, resolved, signal, ticket));
+      if (!current.commit) fragment.append(empty("This reference has no commits yet.", "Copy the clone URL above to push a branch, or select another reference. Refresh the branch when you’re ready."));
+      else {
+        if (current.view !== "history") fragment.append(breadcrumbs(current));
+        fragment.append(await (current.view === "history" ? historyView(repository, current, signal) : current.view === "file" ? fileView(repository, current, signal) : treeView(repository, current, signal)));
+      }
     }
     if (ticket !== generation) return;
     $("view").replaceChildren(fragment); document.title = `${repository.name} · Canopy`;

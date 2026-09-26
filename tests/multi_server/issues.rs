@@ -67,6 +67,13 @@ async fn issues_and_comments_are_versioned_authorized_and_recoverable() -> Resul
             )
             .await?;
         }
+        if role.is_some() {
+            let details = value(client.get(&repo).bearer_auth(&token)).await?;
+            assert_eq!(
+                details["viewer"],
+                json!({"account":account,"token_scope":scope})
+            );
+        }
         credentials.push(token);
     }
     let [alice, bob, maintainer, outsider, viewer] = credentials.as_slice() else {
