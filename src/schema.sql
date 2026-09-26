@@ -13,6 +13,10 @@ CREATE TABLE objects (
     )
 ) WITHOUT ROWID;
 
+CREATE TABLE object_closure (
+    oid BLOB PRIMARY KEY REFERENCES objects(oid) CHECK(length(oid) = 20)
+) WITHOUT ROWID;
+
 CREATE TABLE refs (
     name TEXT PRIMARY KEY,
     oid BLOB CHECK(oid IS NULL OR length(oid) = 20),

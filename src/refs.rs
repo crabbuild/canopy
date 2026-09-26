@@ -236,11 +236,6 @@ pub(crate) fn apply_push(
         if update.new_oid.is_none() && update.expected.as_ref().and_then(|old| old.oid).is_none() {
             return Ok(false);
         }
-        if let Some(new_oid) = update.new_oid
-            && !object_exists(context, new_oid)?
-        {
-            return Ok(false);
-        }
         if current_ref(context, &update.name)? != update.expected {
             return Ok(false);
         }
@@ -258,6 +253,9 @@ pub(crate) fn apply_push(
         {
             return Ok(false);
         }
+    }
+    if !crate::graph::certify(context, plan)? {
+        return Ok(false);
     }
     for update in &plan.updates {
         let result = match (&update.expected, update.new_oid) {
@@ -289,16 +287,6 @@ pub(crate) fn apply_push(
         }
     }
     Ok(true)
-}
-
-fn object_exists(context: &CommandContext<'_, '_>, oid: [u8; 20]) -> cellule_runtime::Result<bool> {
-    let result = context.sql(&SqlBatch {
-        statements: vec![SqlStatement {
-            sql: "SELECT 1 FROM objects WHERE oid = ?1 LIMIT 1".into(),
-            parameters: vec![SqlValue::Blob(oid.to_vec())],
-        }],
-    })?;
-    Ok(result.first().is_some_and(|set| !set.rows.is_empty()))
 }
 
 fn current_ref(

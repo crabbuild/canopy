@@ -1,3 +1,6 @@
+#[path = "repository_cell/graph.rs"]
+mod graph;
+
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -127,9 +130,15 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 )?)
                 .is_err()
         );
+        let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
         let repository = RepositoryCell::new(&application_handle, target)?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        let identity = |byte| MutationIdentity {
+            request_id: RequestId::from_bytes([byte; 16]),
+            issued_at_ms: now_ms,
+            expires_at_ms: now_ms + 60_000,
+        };
         repository
             .ensure_owner(
                 MutationIdentity {
@@ -159,6 +168,14 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .output,
             Some((ObjectKind::Blob, body.to_vec()))
         );
+        let tree = repository
+            .put_inline_object(identity(26), ObjectKind::Tree, b"")
+            .await?.output;
+        let first_commit = format!("tree {}\nauthor Canopy <test@example.invalid> 0 +0000\ncommitter Canopy <test@example.invalid> 0 +0000\n\nFirst\n", hex::encode(tree));
+        let committed = repository
+            .put_inline_object(identity(27), ObjectKind::Commit, first_commit.as_bytes())
+            .await?;
+        let second_commit = format!("tree {}\nparent {}\nauthor Canopy <test@example.invalid> 1 +0000\ncommitter Canopy <test@example.invalid> 1 +0000\n\nSecond\n", hex::encode(tree), hex::encode(committed.output));
         let next = repository
             .put_inline_object(
                 MutationIdentity {
@@ -166,8 +183,8 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                     issued_at_ms: now_ms,
                     expires_at_ms: now_ms + 60_000,
                 },
-                ObjectKind::Blob,
-                b"second object",
+                ObjectKind::Commit,
+                second_commit.as_bytes(),
             )
             .await?;
         let published = repository
@@ -245,11 +262,6 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .output,
             None
         );
-        let identity = |byte| MutationIdentity {
-            request_id: RequestId::from_bytes([byte; 16]),
-            issued_at_ms: now_ms,
-            expires_at_ms: now_ms + 60_000,
-        };
         assert!(
             repository
                 .grant_member(identity(12), "canopy", "reader", TokenScope::Read)
@@ -396,6 +408,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 version: 5
             })
         );
+        graph::verify(&repository, &graph_sql).await?;
         Ok(())
     }
     .await;

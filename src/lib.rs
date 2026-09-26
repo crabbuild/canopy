@@ -15,6 +15,7 @@ mod access;
 pub mod directory;
 pub mod git_gateway;
 pub mod git_http;
+mod graph;
 pub mod http;
 pub mod large_blob;
 pub mod lfs;
@@ -135,6 +136,7 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
+                source.update(include_bytes!("graph.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("lfs.rs"));

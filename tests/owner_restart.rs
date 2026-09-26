@@ -107,7 +107,20 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
     .await?;
     tokio::fs::write(local.join("README.md"), b"published Cell root\n").await?;
     run_git(Some(&local), &["add", "README.md"]).await?;
+    let submodule = "74".repeat(20);
+    run_git(
+        Some(&local),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{submodule},submodule"),
+        ],
+    )
+    .await?;
     run_git(Some(&local), &["commit", "-m", "Initial commit"]).await?;
+    run_git(Some(&local), &["tag", "-a", "v1", "-m", "Annotated tag"]).await?;
+    let original_tag = run_git(Some(&local), &["rev-parse", "refs/tags/v1"]).await?;
     run_git(
         Some(&local),
         &[
@@ -117,6 +130,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
             &first_url,
             "HEAD:refs/heads/main",
             "HEAD:refs/heads/reused",
+            "refs/tags/v1",
         ],
     )
     .await?;
@@ -296,6 +310,15 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
         original
     );
+    assert_eq!(
+        run_git(Some(&clone), &["rev-parse", "refs/tags/v1"]).await?,
+        original_tag
+    );
+    assert_eq!(
+        run_git(Some(&clone), &["ls-tree", "HEAD", "submodule"]).await?,
+        format!("160000 commit {submodule}\tsubmodule\n").as_bytes()
+    );
+    run_git(Some(&clone), &["fsck", "--full"]).await?;
     assert_eq!(
         run_git(Some(&clone), &["rev-parse", "refs/remotes/origin/partial"]).await?,
         partial_oid

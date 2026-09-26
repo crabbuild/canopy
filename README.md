@@ -53,6 +53,12 @@ API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
 Git revision, so a
 fresh Canopy checkout builds without a local Cellule checkout.
 
+Ref publication checks the durable Git graph: commit trees and parents, tree
+entries and tag targets must exist with the correct object type. Branch tips
+must be commits. Submodule gitlinks may name commits in another repository.
+SQLite certificates let later pushes reuse validated history. Recovery tests
+include annotated tags, submodules and `git fsck` on the restored clone.
+
 ## Recover a lost push reply
 
 For a receive-pack POST, a client or proxy can supply `Idempotency-Key` as one

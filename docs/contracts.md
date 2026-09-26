@@ -24,6 +24,7 @@ before admitting persistent customer repositories.
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
+| Git connectivity | typed commit/tree/tag edges, required local objects, commit-only branch tips; completed subgraphs cached in SQLite | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
@@ -48,6 +49,35 @@ the actual accepted changes in one Cell transaction before forwarding Git's
 report unchanged. A rejected atomic push changes no refs. Malformed packs
 retain Git's unpack failure report and publish no refs. The gateway does not
 infer transaction success by searching diagnostic text for status fragments.
+
+Both ref commands validate the reachable Git graph in the ref transaction.
+Commit trees and parents, tree entries, and annotated tag targets must exist
+with the required object kind. Branch tips must be commits. Tree symlinks and
+regular files require blobs; gitlinks refer to another repository and do not
+require a local object. The traversal follows Git's
+[commit headers](https://github.com/git/git/blob/v2.50.1/commit.c#L435),
+[tag targets](https://github.com/git/git/blob/v2.50.1/tag.c#L142), and
+[tree connectivity rules](https://github.com/git/git/blob/v2.50.1/fsck.c#L334).
+It checks graph structure and content hashes; it is not a replacement for all
+of `git fsck`'s metadata, filename and portability checks.
+
+An iterative postorder traversal checks inline OIDs and BLAKE3 digests, then
+inserts an `object_closure` certificate only after all required descendants
+are certified. Repeated pushes stop at existing certificates, while still
+checking edge types. Certificates and ref changes commit together; rejection
+rolls both back. New objects can be staged in any order, but missing descendants
+prevent publication. An external blob's certificate relies on the gateway's
+verified immutable upload before recording its SQLite reference; it does not
+perform network I/O in the Cell transaction.
+
+Certificates rely on immutable object records and retained object bytes. There
+is currently no object mutation or collector through the product API. Any
+future collector or repair that removes or changes objects must invalidate all
+affected ancestor certificates before ref publication resumes; clearing the
+entire certificate table is the conservative implementation. Backup and restore
+must preserve the database and its referenced external bodies together. Large
+first-time traversals still run in one transaction; capacity qualification and
+bounded certification work remain in the streaming/performance gate.
 
 For receive-pack POSTs, `Idempotency-Key` must be one canonical lowercase,
 hyphenated UUID. Missing IDs are generated, and recorded responses include
