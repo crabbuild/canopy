@@ -529,8 +529,8 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge and membership-version layouts, operations 7–9,
-and the operation-5/8 codec changes
+HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,
+and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
@@ -746,7 +746,7 @@ Only the immutable repository owner may replace a rule, with its expected
 version (zero for a new name). Enabled rules require all named contexts to exist
 and be enabled. Disabled rules can retain names of unavailable contexts. Every
 replacement increments the version; disabling never releases a name/version.
-The typed `SetBranchRule` command is operation 8, codec 1.
+The typed `SetBranchRule` command is operation 8, codec 2.
 
 `GET /api/repositories/<name>/branch-rules?after=<ref>` requires read membership
 and a read-scoped token. It returns `repository_id`, `rules`, and `next_after`;
@@ -901,7 +901,7 @@ No aggregate approval count, mergeability or diff computation runs on these read
 Fast-forward merge publication rechecks current review requirements, grant/ref/pull
 versions and branch checks in the transaction that advances the base ref and marks
 the pull merged, as specified below. Required-PR branches reject direct pushes.
-Text patches, general file browsing, inline threads, merge commits/squash/rebase, conflict UI,
+Text patches, general file browsing, inline threads, rebase, conflict-resolution UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications and UI remain open. A future collector must retain initial pull
 OIDs, historical review OIDs, merge result OIDs and merge preparation roots in addition to live refs.
@@ -991,7 +991,7 @@ object traversal safe; future collection must fence active comparison roots.
 
 No schema, Cell command registration, dependency or lockfile change is needed.
 Fast-forward review policy and atomic publication are implemented below. Native
-merge candidate preparation and line-based review remain open delivery gates.
+rebase candidate preparation and line-based review remain open delivery gates.
 
 
 ### Required reviews and fast-forward merge publication
@@ -1042,7 +1042,7 @@ moves refs. Source must descend from base for this strategy even when the branch
 rule does not require fast-forward pushes. Non-ancestor or unrelated histories
 conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
-Operation 9, codec 1 publishes the merge in one Repository Cell command:
+Operation 9, codec 2 publishes the merge in one Repository Cell command:
 
 1. Check current write authority. For an existing application UUID, compare its
    binding to actor, pull number, full requested revision and strategy; an exact
@@ -1084,7 +1084,94 @@ ref and pull writes, then proves the ref, ref generation and pull state remain
 unchanged. Removing only the injected record permits a subsequent merge. Other
 tests prove direct `FinalizePush` cannot use approvals as a policy bypass.
 
-This is the fast-forward strategy. Merge commit/squash/rebase candidate objects,
-conflict resolution, candidate-check policy, merge queues and line review remain
-open. The owner-loss matrix at every merge publication boundary and production
-capacity qualification also remain open. No dependency or lockfile changed.
+The candidate extension below adds merge commits and squash. Rebase, conflict
+resolution, merge queues and line review remain open. The owner-loss matrix at
+every merge publication boundary and production capacity qualification also
+remain open. No dependency or lockfile changed.
+
+
+### Native merge and squash candidates
+
+Preparation and branch publication are separate actions. A writer POSTs
+`/api/repositories/<name>/pulls/<number>/merge-candidates` with `repository_id`,
+canonical UUID `id`, exact pull `revision`, `strategy` (`merge_commit` or `squash`)
+and a nonblank UTF-8 `message` of at most 16 KiB, with no NUL. Fast-forward is
+invalid here. A read-scoped member can GET that path plus `/<id>`. Responses
+contain `candidate` and `fetch_ref` (null until ready). The candidate includes
+its original request fields, pull `number`, `actor`, `created_at_ms`, and `result`:
+
+| Result state | Fields | Meaning |
+| --- | --- | --- |
+| `pending` | none | Intent persisted; retry the original preparation request |
+| `ready` | `oid`, `tree_oid` | Certified native result with an immutable fetch ref |
+| `conflicted` | `paths_base64` | Native Git reported conflicts; cannot publish |
+| `unrelated` | none | Native Git found no common ancestor; cannot publish |
+
+Operation 10, codec 1 reserves the UUID against actor, pull and complete intent.
+It retains the first timestamp. Retrying completed preparation returns the
+original result, even if the pull later changes or merges; current write access
+is still required for POST. GET requires current read membership. For pending
+work, reservation and completion check the current open, nondraft pull and full
+source/base/editorial versions. Reviews and checks may be completed afterward.
+A changed intent or actor cannot reuse an ID. Concurrent completions retain the
+first result. A pending candidate whose revision moved remains historical;
+prepare the new revision with a new ID. There is no cleanup/expiry yet.
+
+A fresh disposable bare cache hydrates verified repository objects. Native
+[`git merge-tree --write-tree`](https://git-scm.com/docs/git-merge-tree) computes
+the three-way tree, handles renames and consolidates multiple merge bases.
+Exit status 1 means conflict even when the conflict path list is empty. Paths
+are transported as raw NUL-separated bytes, then encoded as URL-safe base64
+without padding. Unrelated histories are detected through `merge-base` exit
+status, without parsing localized diagnostics or enabling unrelated merges.
+[`git commit-tree`](https://git-scm.com/docs/git-commit-tree) creates a commit
+with base/source parents for merge commits and only base for squash. Its author
+and committer are the preparing account at `<account>@users.canopy.invalid`;
+the reserved time is truncated to UTC seconds, and a missing message newline is
+appended. The HTTP caller cannot choose the resulting OID or tree.
+
+The native subprocess environment is cleared, preserving only executable lookup
+and Windows system root. Global/system Git configuration and system attributes
+are disabled. Home paths point into the disposable cache, replacement objects
+are disabled, and protocol access is denied. No repository worktree/index,
+user merge drivers, hooks or signing commands are used by preparation. The
+native worker is trusted to compute the merge tree; the Cell validates exact
+canonical commit bytes and certified graph closure before recording readiness.
+It does not independently recompute the merge algorithm.
+
+Generated objects use the same verified SQLite/chunk/external-blob ingestion as
+pushes. A ready result and `refs/canopy/merge-candidates/<UUID>` commit in one
+transaction, advancing the ref generation for cache invalidation and coherent
+pagination. The entire `refs/canopy` namespace, including its root, is reserved.
+The authoritative publisher rejects direct creation, replacement and deletion
+there; native receive hooks give per-ref rejection reports. Mixed pushes may
+still publish permitted siblings, while atomic pushes reject the group. Ready
+candidate refs stay immutable after publication, so stock Git and CI can fetch
+and test the exact commit before or after a merge.
+
+For publication, `/merge` accepts `strategy: "merge_commit"` or `"squash"` with
+`candidate_id`. Fast-forward requires candidate_id absent or null. The command
+requires a ready candidate belonging to the same pull, strategy and original
+revision, validates its bytes/closure again, and uses its OID for the canonical
+ref update. Current approvals and checks still apply; successful source checks
+do not satisfy required checks on a synthesized commit. Base-to-candidate
+ancestry is certified before publication. The ordinary atomic merge transaction
+updates the base, pull and retry record; candidate ID is also part of the merge
+retry binding. A stale candidate cannot be rebound to a newer revision.
+
+Preparation shares the eight node transfer permits, tracked disconnect lifetime,
+30-second/128-KiB request reception and 120-second work deadline. Native stdout
+is bounded to 128 KiB, stderr to 64 KiB, and the encoded result to 256 KiB.
+Overflow returns 413 without a partial candidate result. Missing resources are
+404, insufficient authority 403, invalid input 422, and identity/revision conflict
+409. Conflicted/unrelated preparation is a successful 200 domain result.
+Native/service failure is 503; timeout is 504 with an uncertain-result retry
+instruction. Cancellation and overflow kill the subprocess group while retaining
+its cache lifetime. Completed scratch writes are charged before object ingestion;
+native peak disk/memory/CPU bounds and crash-left cleanup remain release gates.
+
+Candidate input/result objects and their ancestor closure are retention roots.
+No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
+historic candidates need quota/retention policy before persistent public use.
+Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
+codec 2 require a fresh development prefix. No dependency or lockfile changes.

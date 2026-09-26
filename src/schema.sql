@@ -218,3 +218,16 @@ CREATE TABLE pull_merges (
     oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
     merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0)
 ) WITHOUT ROWID;
+
+CREATE TABLE merge_candidates (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    binding BLOB NOT NULL CHECK(length(binding) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    actor TEXT NOT NULL,
+    request TEXT NOT NULL CHECK(length(CAST(request AS BLOB)) <= 131072),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    result TEXT NOT NULL CHECK(length(CAST(result AS BLOB)) <= 262144),
+    source_oid BLOB NOT NULL REFERENCES objects(oid),
+    base_oid BLOB NOT NULL REFERENCES objects(oid),
+    oid BLOB REFERENCES objects(oid)
+) WITHOUT ROWID;

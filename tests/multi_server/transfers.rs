@@ -51,7 +51,7 @@ async fn transfers_share_node_admission_and_disconnect_allows_retry()
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()["retry-after"], "1");
     }
-    for operation in ["comparison", "merge"] {
+    for operation in ["comparison", "merge", "merge-candidates"] {
         let response = client
             .post(format!(
                 "http://{address}/api/repositories/first/pulls/1/{operation}"

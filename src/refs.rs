@@ -266,7 +266,8 @@ pub(crate) fn apply_refs(
         return Ok(false);
     }
     for (index, update) in plan.updates.iter().enumerate() {
-        if !valid_ref_name(&update.name)
+        if server_owned_ref(&update.name)
+            || !valid_ref_name(&update.name)
             || update
                 .expected
                 .as_ref()
@@ -334,6 +335,15 @@ pub(crate) fn apply_refs(
     }
     // Both typed pushes and HTTP completion pass here. Advance only with the
     // ref transaction so paginated readers reject mixed generations, including ABA.
+    advance_generation(context)?;
+    Ok(true)
+}
+
+pub(crate) fn server_owned_ref(name: &str) -> bool {
+    name == "refs/canopy" || name.starts_with("refs/canopy/")
+}
+
+pub(crate) fn advance_generation(context: &CommandContext<'_, '_>) -> cellule_runtime::Result<()> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "UPDATE ref_generation SET generation = generation + 1 WHERE singleton = 1 AND generation < 9223372036854775807".into(),
@@ -343,7 +353,7 @@ pub(crate) fn apply_refs(
     if result.first().is_none_or(|set| set.rows_affected != 1) {
         return Err(Error::Command("ref generation cannot advance"));
     }
-    Ok(true)
+    Ok(())
 }
 
 fn current_ref(

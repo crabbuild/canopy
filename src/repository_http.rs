@@ -2,6 +2,7 @@
 
 mod authorization;
 mod branch_rules;
+mod candidates;
 mod checks;
 mod collaborators;
 mod comparison;
@@ -113,6 +114,14 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/pulls/{number}/merge",
                 axum::routing::post(merge::publish),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/merge-candidates",
+                axum::routing::post(candidates::prepare),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/merge-candidates/{id}",
+                get(candidates::read),
             )
             .route(
                 "/api/repositories/{name}/pulls/{number}/comparison",

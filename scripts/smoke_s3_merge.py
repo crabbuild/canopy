@@ -53,11 +53,12 @@ def seed(base_url, repository_id, local, source, base, author_token):
         connection.close()
     result = request(base_url, f"{api}/merge", "POST", payload)
     assert result["merge"]["oid"] == source
-    return api, payload, result, request(base_url, api)
+    candidates = seed_candidates(base_url, repository_id, local, source, base, author_token)
+    return api, payload, result, request(base_url, api), candidates
 
 
 def verify(base_url, local, expected):
-    api, payload, result, pull = expected
+    api, payload, result, pull, candidates = expected
     assert request(base_url, f"{api}/merge", "POST", payload) == result
     assert request(base_url, api) == pull
     with tempfile.TemporaryDirectory(prefix="merged-clone-", dir=local.parent) as directory:
@@ -67,4 +68,76 @@ def verify(base_url, local, expected):
                              check=True, capture_output=True).stdout.strip().decode()
         assert oid == result["merge"]["oid"]
         subprocess.run(["git", "fsck", "--strict"], cwd=directory, check=True, capture_output=True)
+    verify_candidates(base_url, local, candidates)
     print("PASS: discarded merge reply replays the same result and stock Git sees the merged commit after recovery", flush=True)
+
+
+def seed_candidates(base_url, repository_id, local, source, base, author_token):
+    request(base_url, f"{REPOSITORY}/check-contexts/candidate-tests", "PUT", {
+        "repository_id": repository_id, "expected_version": 0,
+        "reporter": "canopy", "enabled": True,
+    })
+    states = []
+    for strategy in ("merge_commit", "squash"):
+        branch = f"candidate-{strategy}"
+        subprocess.run(["git", "-c", AUTH, "push", f"{base_url}/canopy/other.git",
+                        f"{base}:refs/heads/{branch}"], cwd=local, check=True, capture_output=True)
+        request(base_url, f"{REPOSITORY}/branch-rules", "PUT", {
+            "repository_id": repository_id,
+            "rule": {"reference": f"refs/heads/{branch}", "expected_version": 0,
+                     "enabled": True, "deny_deletions": True, "fast_forward_only": True,
+                     "required_checks": ["candidate-tests"], "require_pull_request": True, "required_approvals": 1},
+        })
+        created = request(base_url, f"{REPOSITORY}/pulls", "POST", {
+            "repository_id": repository_id, "id": str(uuid.uuid4()), "title": f"Durable {strategy}",
+            "body": "Check the native candidate", "draft": False,
+            "source_ref": "refs/heads/review-source", "source_oid": source,
+            "base_ref": f"refs/heads/{branch}", "base_oid": base,
+        }, token=author_token)
+        api = f"{REPOSITORY}/pulls/{created['number']}"
+        current = revision(request(base_url, api)["pull"])
+        payload = {"repository_id": repository_id, "id": str(uuid.uuid4()),
+                   "revision": current, "strategy": strategy, "message": f"Checked {strategy}"}
+        candidate = request(base_url, f"{api}/merge-candidates", "POST", payload)
+        assert candidate["candidate"]["result"]["state"] == "ready"
+        request(base_url, f"{api}/reviews", "POST", {
+            "repository_id": repository_id, "id": str(uuid.uuid4()), "revision": current,
+            "kind": "approve", "body": "Candidate approved",
+        })
+        oid = candidate["candidate"]["result"]["oid"]
+        check = str(uuid.uuid4())
+        request(base_url, f"{REPOSITORY}/commits/{oid}/checks", "POST", {
+            "repository_id": repository_id, "id": check, "context": "candidate-tests", "context_version": 1,
+        })
+        request(base_url, f"{REPOSITORY}/checks/{check}", "PUT", {
+            "repository_id": repository_id, "expected_version": 1, "state": "success", "summary": "Native candidate passed",
+        })
+        merge = {"repository_id": repository_id, "id": str(uuid.uuid4()), "revision": current,
+                 "strategy": strategy, "candidate_id": payload["id"]}
+        states.append({"api": api, "payload": payload, "candidate": candidate, "merge": merge, "result": None})
+    return states
+
+
+def verify_candidates(base_url, local, states):
+    for state in states:
+        api, payload, candidate = state["api"], state["payload"], state["candidate"]
+        assert request(base_url, f"{api}/merge-candidates/{payload['id']}") == candidate
+        assert request(base_url, f"{api}/merge-candidates", "POST", payload) == candidate
+        with tempfile.TemporaryDirectory(prefix="candidate-fetch-", dir=local.parent) as directory:
+            subprocess.run(["git", "init", "--bare", directory], check=True, capture_output=True)
+            subprocess.run(["git", "-c", AUTH, "fetch", f"{base_url}/canopy/other.git", candidate["fetch_ref"]],
+                           cwd=directory, check=True, capture_output=True)
+            actual = subprocess.run(["git", "rev-parse", "FETCH_HEAD"], cwd=directory,
+                                    check=True, capture_output=True).stdout.strip().decode()
+            assert actual == candidate["candidate"]["result"]["oid"]
+            subprocess.run(["git", "fsck", "--strict", actual], cwd=directory, check=True, capture_output=True)
+        # First verification runs after clean restart: candidates, approvals and
+        # candidate-specific checks must all restore before publication succeeds.
+        merged = request(base_url, f"{api}/merge", "POST", state["merge"])
+        assert merged["merge"]["oid"] == candidate["candidate"]["result"]["oid"]
+        if state["result"] is None:
+            state["result"] = merged
+        else:
+            assert merged == state["result"]
+        assert request(base_url, api)["pull"]["merge"] == merged["merge"]
+    print("PASS: native merge/squash candidates fetch and publish after recovery, then replay after owner loss", flush=True)

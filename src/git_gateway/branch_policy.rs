@@ -15,14 +15,15 @@ impl GitGateway {
         if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
             return Ok(());
         }
-        // Unprotected repositories retain native Git's complete error reports.
-        // Rules enabled after this observation still gate final Cell publication.
+        // Unprotected pushes keep native command parsing and per-ref reports.
+        // The Cell publisher independently enforces the reserved namespace.
         if !self
             .repository
             .has_branch_rules()
             .await
             .map_err(|source| GatewayError::Cell(Box::new(source)))?
         {
+            cached.backend.cache.store_update_hook(b"#!/bin/sh\ncase \"$1\" in\nrefs/canopy|refs/canopy/*) printf '%s\\n' 'Canopy server-owned ref is immutable' >&2; exit 1 ;;\n*) exit 0 ;;\nesac\n".to_vec()).await?;
             return Ok(());
         }
         let prefix = request.body.prefix(PREFIX_LIMIT).await?;
@@ -45,7 +46,12 @@ impl GitGateway {
                 "{})\n[ \"$2\" = '{old}' ] && [ \"$3\" = '{new}' ] || exit 1\n",
                 quote(&update.name)
             ));
-            if let Some(policy) = policy {
+            if crate::refs::server_owned_ref(&update.name) {
+                protected = true;
+                script.push_str(
+                    "printf '%s\\n' 'Canopy server-owned ref is immutable' >&2\nexit 1\n",
+                );
+            } else if let Some(policy) = policy {
                 protected = true;
                 if !policy.allows(&update, false) {
                     script.push_str(

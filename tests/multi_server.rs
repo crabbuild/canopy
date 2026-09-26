@@ -1,3 +1,5 @@
+#[path = "multi_server/candidates.rs"]
+mod candidates;
 #[path = "multi_server/comparison.rs"]
 mod comparison;
 #[path = "multi_server/merge.rs"]

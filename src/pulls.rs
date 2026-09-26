@@ -1,5 +1,6 @@
 //! Repository-local pull requests and immutable reviews tied to live ref versions.
 
+pub mod candidates;
 pub mod merge;
 mod mutations;
 

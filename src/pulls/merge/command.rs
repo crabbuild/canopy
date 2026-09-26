@@ -61,14 +61,13 @@ pub(crate) struct MergePull;
 impl Command for MergePull {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = MergeInput;
     type Output = MergeOutcome;
     fn execute(
         context: &mut CommandContext<'_, '_>,
         input: MergeInput,
     ) -> cellule_runtime::Result<CommandResult<MergeOutcome>> {
-        let MergeStrategy::FastForward = input.request.strategy;
         let role = decode_access(&context.sql(&SqlBatch {
             statements: vec![access_statement(&input.actor)],
         })?)?;
@@ -91,7 +90,12 @@ impl Command for MergePull {
             &input.request.revision.source_version.to_string(),
             &input.request.revision.base_oid,
             &input.request.revision.base_version.to_string(),
-            "fast_forward",
+            match input.request.strategy {
+                MergeStrategy::FastForward => "fast_forward",
+                MergeStrategy::MergeCommit => "merge_commit",
+                MergeStrategy::Squash => "squash",
+            },
+            input.request.candidate_id.as_deref().unwrap_or(""),
         ]);
         let previous = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
@@ -135,7 +139,19 @@ impl Command for MergePull {
             return rejected(MergeOutcome::ReviewsRequired);
         }
         let base = oid(&input.request.revision.base_oid)?;
-        let source = oid(&input.request.revision.source_oid)?;
+        let source = match input.request.strategy {
+            MergeStrategy::FastForward => oid(&input.request.revision.source_oid)?,
+            MergeStrategy::MergeCommit | MergeStrategy::Squash => {
+                match super::super::candidates::publication_oid(
+                    context,
+                    input.number,
+                    &input.request,
+                )? {
+                    Some(oid) => oid,
+                    None => return rejected(MergeOutcome::Conflict),
+                }
+            }
+        };
         let ancestry = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
                 sql: "SELECT 1 FROM commit_ancestry WHERE ancestor = ?1 AND descendant = ?2".into(),

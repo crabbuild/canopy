@@ -49,6 +49,7 @@ mod tests;
 
 pub(crate) struct RepositoryRoute {
     pub(crate) repository: Arc<RepositoryCell>,
+    pub(crate) gateway: Arc<GitGateway>,
     router: Router,
     pin: Arc<()>,
 }
@@ -198,6 +199,7 @@ impl RepositoryManager {
         existing.last_used = Instant::now();
         Ok(RepositoryRoute {
             repository: Arc::clone(&existing.repository),
+            gateway: Arc::clone(&existing.gateway),
             router: existing.router.clone(),
             pin: Arc::clone(&existing.pin),
         })

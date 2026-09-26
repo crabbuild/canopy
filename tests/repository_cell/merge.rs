@@ -22,6 +22,14 @@ pub async fn verify(
         .output;
     let base = commit(repo, tree, &[], "Merge base").await?;
     let source = commit(repo, tree, &[base], "Merge source").await?;
+    for name in ["refs/canopy", "refs/canopy/merge-candidates/forged"] {
+        let plan = plan(repo, name, Some(source)).await?;
+        assert!(matches!(
+            app.command::<FinalizePush>(target, identity()?, plan).await,
+            Err(InvocationError::Rejected(_))
+        ));
+        assert!(repo.ref_state(name, None).await?.output.is_none());
+    }
     let base_ref = "refs/heads/merge-base";
     let source_ref = "refs/heads/merge-source";
     repo.finalize_push(identity()?, plan(repo, base_ref, Some(base)).await?)
@@ -72,6 +80,7 @@ pub async fn verify(
         id: uuid::Uuid::new_v4().to_string(),
         revision: revision.clone(),
         strategy: MergeStrategy::FastForward,
+        candidate_id: None,
     };
     assert!(
         matches!(repo.merge_pull(identity()?,"outsider",number,request.clone()).await,Err(InvocationError::Rejected(rejected)) if rejected.output == MergeOutcome::NotFound)

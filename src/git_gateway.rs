@@ -33,6 +33,7 @@ use crate::{
 };
 
 mod branch_policy;
+mod candidates;
 
 pub use crate::git_objects::ObjectReadError;
 

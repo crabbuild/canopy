@@ -3,10 +3,10 @@ use super::*;
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-const OWNER: &str = "local-test-token";
-const AUTH: &str = "http.extraHeader=Authorization: Bearer local-test-token";
-async fn value(request: reqwest::RequestBuilder) -> Result<Value> {
+pub(super) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub(super) const OWNER: &str = "local-test-token";
+pub(super) const AUTH: &str = "http.extraHeader=Authorization: Bearer local-test-token";
+pub(super) async fn value(request: reqwest::RequestBuilder) -> Result<Value> {
     let response = request.send().await?;
     assert_eq!(
         response.status(),
@@ -16,19 +16,19 @@ async fn value(request: reqwest::RequestBuilder) -> Result<Value> {
     );
     Ok(response.json().await?)
 }
-async fn status(request: reqwest::RequestBuilder, expected: StatusCode) -> Result {
+pub(super) async fn status(request: reqwest::RequestBuilder, expected: StatusCode) -> Result {
     let response = request.send().await?;
     assert_eq!(response.status(), expected, "{}", response.text().await?);
     Ok(())
 }
-async fn oid(local: &Path, rev: &str) -> Result<String> {
+pub(super) async fn oid(local: &Path, rev: &str) -> Result<String> {
     Ok(
         String::from_utf8(run_git(Some(local), &["rev-parse", rev]).await?)?
             .trim()
             .into(),
     )
 }
-async fn push(local: &Path, url: &str, refs: &[&str], accepted: bool) -> Result {
+pub(super) async fn push(local: &Path, url: &str, refs: &[&str], accepted: bool) -> Result {
     let result = Command::new("git")
         .current_dir(local)
         .args(["-c", "credential.helper=", "-c", AUTH, "push", url])
@@ -43,10 +43,10 @@ async fn push(local: &Path, url: &str, refs: &[&str], accepted: bool) -> Result 
     );
     Ok(())
 }
-async fn current(client: &Client, api: &str) -> Result<Value> {
+pub(super) async fn current(client: &Client, api: &str) -> Result<Value> {
     Ok(value(client.get(api).bearer_auth(OWNER)).await?["pull"].clone())
 }
-fn revision(p: &Value) -> Value {
+pub(super) fn revision(p: &Value) -> Value {
     json!({"pull_version":p["version"],"source_oid":p["source"]["oid"],"source_version":p["source"]["version"],"base_oid":p["base"]["oid"],"base_version":p["base"]["version"]})
 }
 async fn intent(client: &Client, api: &str, repository: &Value) -> Result<Value> {
@@ -80,7 +80,7 @@ async fn policy(client: &Client, api: &str) -> Result<Value> {
     .await?["policy"]
         .clone())
 }
-async fn new_pull(
+pub(super) async fn new_pull(
     client: &Client,
     repo: &str,
     repository: &Value,
@@ -91,7 +91,7 @@ async fn new_pull(
     let created=value(client.post(format!("{repo}/pulls")).bearer_auth(OWNER).json(&json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"title":"Merge this","body":"Description","draft":false,"source_ref":source_ref,"source_oid":source,"base_ref":"refs/heads/main","base_oid":base}))).await?;
     Ok(format!("{repo}/pulls/{}", created["number"]))
 }
-async fn init(local: &Path) -> Result {
+pub(super) async fn init(local: &Path) -> Result {
     run_git(None, &["init", "-b", "main", path_str(local)?]).await?;
     run_git(Some(local), &["config", "user.name", "Merge Test"]).await?;
     run_git(

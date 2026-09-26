@@ -109,7 +109,9 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
 | POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files or file bytes |
 | GET | `/api/repositories/<name>/pulls/<number>/review-policy` | Read current review requirements and counts |
-| POST | `/api/repositories/<name>/pulls/<number>/merge` | Atomically publish a reviewed fast-forward |
+| POST | `/api/repositories/<name>/pulls/<number>/merge` | Publish a reviewed fast-forward, merge commit or squash |
+| POST | `/api/repositories/<name>/pulls/<number>/merge-candidates` | Prepare a merge commit or squash |
+| GET | `/api/repositories/<name>/pulls/<number>/merge-candidates/<id>` | Read the frozen candidate and fetch ref |
 
 To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
 `source_ref`, `source_oid`, `base_ref`, and `base_oid`. Use fully qualified branch
@@ -194,7 +196,7 @@ Merge POSTs require a write-scoped token and current repository write access:
 }
 ```
 
-The source must descend from the current base. Current reviews, required checks
+For `fast_forward`, the source must descend from the current base. Current reviews, required checks
 and exact ref versions are checked in the transaction that advances the base and
 marks the pull `merged`. The response contains `merge` with `id`, `number`, `oid`
 and `merged_at_ms`; pull details retain that record. Exact retries with the same
@@ -206,8 +208,31 @@ or edited; `state=merged` is available on the list endpoint.
 The review-policy response reports its observed `revision`, `ready`, rule version,
 required approvals, eligible approval count, outstanding requested changes and
 `reviews_satisfied`. It does not claim checks have passed or history can merge.
-Text patches, merge commits, squash/rebase, conflict handling, inline comments,
-forks, retargeting and a PR UI remain to be delivered.
+For `merge_commit` or `squash`, first POST `/merge-candidates` with the same
+`repository_id` and `revision`, a new UUID `id`, the selected `strategy`, and a
+nonblank `message` (up to 16 KiB UTF-8). It returns `candidate` and `fetch_ref`.
+The candidate result is `ready` with `oid` and `tree_oid`, `conflicted` with
+URL-safe unpadded `paths_base64`, or `unrelated`. GET may also show `pending`
+after interrupted preparation. Exact preparation retries return the same result.
+Only a ready candidate advertises a fetch ref:
+
+```sh
+git fetch origin refs/canopy/merge-candidates/<candidate-UUID>
+git checkout --detach FETCH_HEAD
+```
+
+Run checks on that candidate OID. Then POST `/merge` with a new merge UUID,
+original `revision`, the same `strategy`, and `candidate_id`. A merge commit
+has ordered base/source parents; a squash has only the base parent. Publication
+rechecks current reviews and required checks against the candidate commit.
+Source or base movement invalidates publication, including movement away and
+back. Conflicted candidates cannot publish. The `refs/canopy` namespace is
+server-owned and rejects every push update, including owner pushes.
+
+Native Git handles three-way content merges, renames and multiple merge bases.
+Merge drivers and signing commands from host Git configuration are disabled.
+Text patches, rebase, conflict resolution, inline comments, forks, retargeting
+and a PR UI remain to be delivered.
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.
@@ -340,7 +365,7 @@ no repository can be safely released. A terminal ownership-release failure leave
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account disable/delete API, organization model, multi-node routing, backup,
-repository browser, merge API, or production capacity evidence.
+repository browser or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.
 
@@ -389,6 +414,10 @@ to 64 KiB. Completed records and abandoned staging chunks currently have no
 expiry or collector and consume the repository database allowance.
 
 ## Run the current service
+
+The server requires Git with `http-backend`, modern `merge-tree --write-tree`
+(`-z --name-only --no-messages`) and `commit-tree` on `PATH`. This slice was
+qualified with Git 2.50.1; an unsupported native command fails preparation.
 
 Copy [config.example.json](config.example.json) and set the object storage URL,
 tenant and application IDs, owner name, network addresses and data

@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements and atomic fast-forward merges implemented; synthesized merge strategies, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates implemented; rebase, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: native merge/squash/rebase candidates and conflicts; text patches;
+5. Continue collaboration as vertical slices: rebase and conflict resolution; text patches;
    issue labels/assignees; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -1161,3 +1161,68 @@ Remaining collaboration work keeps the full hosting scope intact:
 Other delivery gates above, including routing, backup/GC, production limits and
 public-service functionality, remain open. Fast-forward success does not satisfy
 the synthesized-merge or full hosting gates.
+
+
+## Native merge and squash preparation
+
+Canopy now prepares durable native Git candidates for merge commits and squash.
+Operation 10 owns reservation and completion. One application UUID fixes the
+creator, original pull/ref versions, strategy, message and first timestamp.
+Generated objects enter the existing verified storage path. Canonical commit
+bytes and graph closure gate the ready result. Ready metadata and an immutable
+`refs/canopy/merge-candidates/<UUID>` ref commit together, enabling stock Git/CI
+fetches before publication. The reserved namespace is enforced in the Cell
+publisher and native push reports, including owner and mixed/atomic pushes.
+
+Operation 9 codec 2 publishes these candidates through the existing reviewed
+merge transaction. It rechecks the original revision, current reviews, candidate
+identity/strategy, ancestry and required checks on the exact candidate OID.
+Checks on the source alone are insufficient. Base/pull/retry updates remain
+atomic. Fast-forward uses the same path without a candidate. There is no
+implicit strategy fallback. Conflicted and unrelated results never publish.
+
+Verified locally:
+
+- Native merge/squash: divergent edits, exact Git merge-tree equivalence, parent
+  ordering, renamed files, binary content and a generated large blob using the
+  external storage path. Stock Git fetches candidates before publication.
+- Prepare before approvals/checks, then enforce each at publication. Current
+  token/ACL checks reject unauthorized and read-only preparation; revocation
+  during a paused request rejects preparation. Candidate reads allow members.
+- Exact/concurrent preparation retries retain one result. Changed actor/intent
+  conflicts. Candidate strategy/pull mismatches, source movement and ABA reject
+  publication. Readability and retryability do not imply current eligibility.
+- Conflict paths preserve raw bytes, including non-UTF-8 and newlines. Unrelated
+  histories produce an explicit result. Criss-cross histories with two best
+  merge bases succeed through native consolidation.
+- Fresh-local-storage recovery retains candidate/ref/check/review state; later
+  publication, exact merge replay, stock clone and fsck all pass.
+- Raw typed ref publication rejects the reserved namespace. Existing direct-Cell
+  atomicity, fast-forward HTTP merges, branch policies, native hook parsing and
+  shared transfer admission pass. Clippy with warnings denied and release build
+  pass. The Python process recovery probe parses.
+
+The release-binary process probe also passes against RustFS
+`1.0.0-beta.8-glibc` with `--sqlite-chunks --many-objects 256`, on Darwin arm64
+with Apple Git 2.50.1. It prepares both native strategies, restarts with fresh
+local storage, fetches their immutable refs with stock Git, and publishes using
+restored approvals and candidate-specific checks. After SIGKILL, lease takeover
+and another fresh local directory, it fetches the same objects and replays the
+same merge results. Existing dropped-reply fast-forward publication, comparisons,
+reviews, checks/rules, issues, Git/LFS, token/ACL recovery, SQLite chunks and 300
+refs also pass. The runner exits successfully; the provider's fresh-volume
+initialization diagnostics are unchanged.
+
+The new Rust surface is approximately 1,000 implementation lines across native
+Git execution, bounded domain records/commands and HTTP ownership/admission.
+The existing object ingestion and final branch publisher remain canonical.
+No dependency or lockfile changed. The unreleased schema requires a fresh prefix.
+
+Completion audit: this advances collaboration gate 7; it does not close the full
+hosting goal. Rebase, conflict resolution, text patches, line discussions,
+releases/assets and repository UI remain. Operations gates still include native
+peak resource limits, preparation/publication owner-loss fault injection,
+retention/quotas, backup/GC, multi-node routing, audit/observability and measured
+capacity. Public visibility, organizations, search, webhooks and account
+lifecycle remain. Hosted CI needs a Canopy remote. All gates above remain open
+until their full acceptance proof is recorded.

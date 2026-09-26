@@ -1,4 +1,4 @@
-//! Revision-bound review requirements and atomic fast-forward merge publication.
+//! Revision-bound review requirements and atomic merge publication.
 
 pub(crate) mod command;
 use super::*;
@@ -8,6 +8,8 @@ use crate::{RefExpectation, RefUpdate, directory::TokenScope};
 #[serde(rename_all = "snake_case")]
 pub enum MergeStrategy {
     FastForward,
+    MergeCommit,
+    Squash,
 }
 /// Retry identity and exact reviewed branches for a selected merge strategy.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -16,6 +18,7 @@ pub struct MergeRequest {
     pub id: String,
     pub revision: PullRevision,
     pub strategy: MergeStrategy,
+    pub candidate_id: Option<String>,
 }
 /// Durable merge result, replayed unchanged for an exact application request ID.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -60,8 +63,8 @@ impl ReviewedMerge {
         self.update == *update
     }
 }
-struct ReviewState {
-    policy: ReviewPolicy,
+pub(super) struct ReviewState {
+    pub(super) policy: ReviewPolicy,
     base: String,
     writable: bool,
 }
@@ -74,6 +77,17 @@ pub(crate) fn valid_request(request: &MergeRequest) -> bool {
         && (1..i64::MAX).contains(&request.revision.base_version)
         && parse_oid(&request.revision.source_oid).is_some()
         && parse_oid(&request.revision.base_oid).is_some()
+        && match request.strategy {
+            MergeStrategy::FastForward => request.candidate_id.is_none(),
+            MergeStrategy::MergeCommit | MergeStrategy::Squash => {
+                request.candidate_id.as_ref().is_some_and(|id| {
+                    uuid::Uuid::parse_str(id).ok().is_some_and(|value| {
+                        value.to_string() == *id
+                            && validate_repository_id(value.into_bytes()).is_ok()
+                    })
+                })
+            }
+        }
 }
 
 impl RepositoryCell {
@@ -100,7 +114,7 @@ impl RepositoryCell {
             receipt: result.receipt,
         })
     }
-    /// Prepares ancestry facts and atomically merges an exact reviewed fast-forward.
+    /// Prepares ancestry facts and atomically publishes an exact reviewed merge.
     ///
     /// Current write authority, reviews, checks and ref versions are rechecked at
     /// publication. Exact request retries preserve the original merge record.
@@ -134,10 +148,31 @@ impl RepositoryCell {
                 && state.policy.revision.as_ref() == Some(&request.revision)
         }) {
             let base = oid(&request.revision.base_oid).map_err(InvocationError::NotStarted)?;
-            let source = oid(&request.revision.source_oid).map_err(InvocationError::NotStarted)?;
-            self.prepare_ancestry(base, source)
-                .await
-                .map_err(preparation)?;
+            let source = match &request.candidate_id {
+                None => {
+                    Some(oid(&request.revision.source_oid).map_err(InvocationError::NotStarted)?)
+                }
+                Some(id) => self
+                    .merge_candidate(actor, number, id)
+                    .await
+                    .map_err(preparation)?
+                    .output
+                    .filter(|candidate| {
+                        candidate.request.revision == request.revision
+                            && candidate.request.strategy == request.strategy
+                    })
+                    .and_then(|candidate| match candidate.result {
+                        super::candidates::CandidateResult::Ready { oid: commit, .. } => {
+                            parse_oid(&commit).and_then(|bytes| bytes.try_into().ok())
+                        }
+                        _ => None,
+                    }),
+            };
+            if let Some(source) = source {
+                self.prepare_ancestry(base, source)
+                    .await
+                    .map_err(preparation)?;
+            }
         }
         self.application
             .command::<command::MergePull>(
@@ -161,12 +196,12 @@ fn preparation(
         source: Box::new(error),
     })
 }
-fn oid(text: &str) -> cellule_runtime::Result<[u8; 20]> {
+pub(super) fn oid(text: &str) -> cellule_runtime::Result<[u8; 20]> {
     parse_oid(text)
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))
 }
-fn policy_statement(actor: &str, number: i64) -> SqlStatement {
+pub(super) fn policy_statement(actor: &str, number: i64) -> SqlStatement {
     // Heads bound this aggregation to one decision per reviewer. Historical
     // retries and comments cannot increase the count or restore old decisions.
     SqlStatement {
@@ -176,7 +211,7 @@ fn policy_statement(actor: &str, number: i64) -> SqlStatement {
         parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
     }
 }
-fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<ReviewState>> {
+pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<ReviewState>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing review policy result"))?;

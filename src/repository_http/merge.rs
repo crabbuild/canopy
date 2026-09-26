@@ -15,6 +15,7 @@ struct Input {
     id: String,
     revision: PullRevision,
     strategy: MergeStrategy,
+    candidate_id: Option<String>,
 }
 
 pub(super) async fn policy(
@@ -90,6 +91,7 @@ async fn serve(
         id: input.id,
         revision: input.revision,
         strategy: input.strategy,
+        candidate_id: input.candidate_id,
     };
     if number < 1 || !valid_request(&request) {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge request");

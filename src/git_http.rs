@@ -316,8 +316,8 @@ async fn start_stream<T: Send + 'static>(
     })
 }
 
-struct GitProcess<T> {
-    child: Child,
+pub(crate) struct GitProcess<T> {
+    pub(crate) child: Child,
     #[cfg(unix)]
     group: Option<i32>,
     // Drop signals the process group before fields release cache and input owners.
@@ -325,7 +325,7 @@ struct GitProcess<T> {
 }
 
 impl<T> GitProcess<T> {
-    fn spawn(command: &mut Command, keep_alive: T) -> Result<Self, GitHttpError> {
+    pub(crate) fn spawn(command: &mut Command, keep_alive: T) -> Result<Self, GitHttpError> {
         #[cfg(unix)]
         command.process_group(0);
         let child = command.kill_on_drop(true).spawn()?;
@@ -342,7 +342,7 @@ impl<T> GitProcess<T> {
         })
     }
 
-    fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         #[cfg(unix)]
         {
             self.group = None;
@@ -363,7 +363,7 @@ impl<T> Drop for GitProcess<T> {
     }
 }
 
-async fn read_bounded<R: AsyncRead + Unpin>(
+pub(crate) async fn read_bounded<R: AsyncRead + Unpin>(
     reader: R,
     limit: usize,
 ) -> Result<Vec<u8>, GitHttpError> {

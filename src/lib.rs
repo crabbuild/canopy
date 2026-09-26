@@ -50,7 +50,7 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 8] = [
+const COMMANDS: [OperationDescriptor; 9] = [
     operation(1),
     operation_with_codec(3, 3),
     operation(4),
@@ -58,7 +58,8 @@ const COMMANDS: [OperationDescriptor; 8] = [
     operation(6),
     operation(7),
     operation_with_codec(8, 2),
-    operation(9),
+    operation_with_codec(9, 2),
+    operation(10),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
@@ -183,6 +184,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("checks/mutations.rs"));
                 source.update(include_bytes!("pulls.rs"));
                 source.update(include_bytes!("pulls/merge.rs"));
+                source.update(include_bytes!("pulls/candidates.rs"));
+                source.update(include_bytes!("pulls/candidates/command.rs"));
                 source.update(include_bytes!("pulls/merge/command.rs"));
                 source.update(include_bytes!("pulls/mutations.rs"));
                 source.update(include_bytes!("issues.rs"));
@@ -224,7 +227,8 @@ impl CellModule for RepositoryModule {
         registry.bind_command::<graph::CertifyObjects>()?;
         registry.bind_command::<ancestry::CertifyAncestry>()?;
         registry.bind_command::<branch_rules::command::SetBranchRule>()?;
-        registry.bind_command::<pulls::merge::command::MergePull>()
+        registry.bind_command::<pulls::merge::command::MergePull>()?;
+        registry.bind_command::<pulls::candidates::command::PrepareCandidate>()
     }
 }
 
