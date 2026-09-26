@@ -13,7 +13,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads and bounded atomic SQLite object batches work; per-object buffers and 64 MiB blob ceiling remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
-| 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
+| 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
@@ -367,3 +367,48 @@ this debug-build observation on Darwin arm64 with Apple Git 2.50.1 and RustFS
 `1.0.0-beta.8-glibc`; it is not production capacity evidence. This change adds no
 dependency, schema or request-digest format change. Native pack expansion, peak
 scratch usage and global request-concurrency admission remain open.
+
+
+## Node transfer admission
+
+Each node now admits eight Git/LFS repository requests across its entire
+repository set. Excess requests receive 503 and `Retry-After: 1` immediately.
+Admission begins before cold repository resolution and lasts through tracked
+handler work, blocking input workers, native Git and outstanding HTTP data
+frames. Gzip workers retain their permits after timeout until cancellation has
+actually stopped the worker. A disconnected client does not interrupt an
+already authorized push publication; its durable identity resolves retries.
+Shutdown waits for tracked request work before draining Cells.
+
+LFS batch and object PUT body reception now has a 120-second deadline, returning
+408 on timeout. Existing request-size limits are unchanged. The lower-layer Git
+fixtures explicitly omit node admission; the composed server always supplies it.
+The existing Tokio dependency gains only the `test-util` development feature
+for a deterministic virtual-time timeout test. No lockfile, schema, request-digest
+or runtime dependency revision changes are needed.
+
+A real TCP test holds eight uploads across two repositories. Both a Git request
+and an LFS request receive 503 with the retry header, while health, readiness and
+repository listing remain available. Disconnecting one upload permits a Git
+advertisement; the other seven uploads finish and download with identical bytes.
+Response-body tests cover trailers, errors, unread body disposal and cloned
+frames retained after EOF. The queued gzip cancellation test also proves permit
+retention; the subprocess cancellation test proves admission is released with
+process cleanup. All 35 library tests, eight multi-server tests, the stock Git
+smart HTTP suite and the direct Git backend test pass. Formatting, Clippy and
+the binary build pass.
+
+The additional production code provides one shared admission path and a body
+owner that cover background work and outstanding response bytes beyond the
+handler lifetime. Eight is an initial bound, not a measured concurrency target. Native Git
+peak scratch/RAM, slow outgoing LFS sockets, fairness across accounts,
+management/authentication capacity and production throughput remain open.
+
+
+The RustFS process smoke with `--many-objects 256` also passes for this build:
+initial push 0.64 seconds, incremental push 0.93 seconds, and recovery of both
+commits, the annotated tag, all 300 additional refs and exact file bytes in
+1.09 seconds with clean `git fsck`. Stock Git/LFS, ACL checks, mixed/atomic push
+outcomes and dropped-reply replay survive restart, disk loss and lease takeover.
+These are debug-build observations on Darwin arm64 with Apple Git 2.50.1 and
+RustFS `1.0.0-beta.8-glibc`, not production performance targets.

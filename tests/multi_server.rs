@@ -8,6 +8,8 @@ use tokio::{net::TcpListener, process::Command};
 
 #[path = "multi_server/residency.rs"]
 mod residency;
+#[path = "multi_server/transfers.rs"]
+mod transfers;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leased_server_recovers_two_repositories_with_git_and_lfs()

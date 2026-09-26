@@ -105,10 +105,12 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
             }
         }
     }
+    let transfers = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = Arc::clone(&transfers).try_acquire_owned()?;
     let (released, receiver) = oneshot::channel();
     let mut response = start_stream(
         shell("sleep 30 & child=$!; printf 'Content-Type: text/plain\r\n\r\n%s %s\n' \"$$\" \"$child\"; wait"),
-        Cache(Some(released)), Duration::from_secs(30),
+        (Cache(Some(released)), permit), Duration::from_secs(30),
     ).await?;
     let mut ids = Vec::new();
     while !ids.contains(&b'\n') {
@@ -124,6 +126,7 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
         .map(str::parse)
         .collect::<std::result::Result<_, _>>()?;
     assert_eq!(ids.len(), 2);
+    assert_eq!(transfers.available_permits(), 0);
     drop(response);
     tokio::time::timeout(Duration::from_secs(5), receiver).await??;
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -138,7 +141,7 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
                 // An orphan may briefly remain a zombie until the host's init reaps it.
                 running |= !status.trim().is_empty() && !status.trim().starts_with('Z');
             }
-            if !running {
+            if !running && transfers.available_permits() == 1 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

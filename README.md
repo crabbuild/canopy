@@ -50,6 +50,11 @@ as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
 transfers and individual external Git blobs remain capped at 64 MiB.
+Each node admits eight Git/LFS transfers across all repositories. Overload
+returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
+readiness and management routes remain outside this transfer limit. LFS body
+reception has a 120-second deadline (408 on timeout). Eight is an initial
+operational bound, not a measured production capacity target.
 Ref advertisements use generation-checked pagination; sustained concurrent
 changes return a retryable 503. Gzip-compressed Git requests are supported.
 Gzip is fully validated before Git runs; decoded bytes have the same request

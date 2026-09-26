@@ -106,8 +106,8 @@ impl RepositoryManager {
     ) -> Result<RepositoryRoute, ServerError> {
         let manager = Arc::clone(self);
         // Client cancellation must not abandon a release or acquisition halfway
-        // through. Shutdown waits for these tracked transitions before draining.
-        self.transitions
+        // through. Shutdown waits for these tracked tasks before draining.
+        self.tasks
             .spawn(async move {
                 let mut loaded = manager.loaded.lock().await;
                 manager.load_locked(&entry, &mut loaded).await

@@ -126,7 +126,7 @@ pub struct CanopyServer {
     stop: CancellationToken,
     ingress_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
-    transitions: TaskTracker,
+    tasks: TaskTracker,
     _local: tempfile::TempDir,
 }
 
@@ -146,7 +146,7 @@ pub(crate) struct RepositoryManager {
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
-    transitions: TaskTracker,
+    tasks: TaskTracker,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -370,11 +370,11 @@ impl CanopyServer {
                 .build()?,
         );
         let stop = CancellationToken::new();
-        let tasks = node.install_task_group(stop.clone(), stop.clone())?;
+        let node_tasks = node.install_task_group(stop.clone(), stop.clone())?;
         node.require_storage_capabilities(&probe)?;
         let observed = directory.create(identity.sign(1, now_ms)?, now_ms).await?;
         let advertisement = Arc::new(Mutex::new(observed));
-        let transitions = TaskTracker::new();
+        let tasks = TaskTracker::new();
         let startup = async {
             let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
             node.install_node_lease_for_startup(guard.clone())?;
@@ -382,7 +382,7 @@ impl CanopyServer {
             let renewal_observed = Arc::clone(&advertisement);
             let renewal_stop = stop.clone();
             let renewal_guard = guard.clone();
-            tasks.spawn(async move {
+            node_tasks.spawn(async move {
                 renew_lease(
                     renewal_directory,
                     renewal_observed,
@@ -453,9 +453,9 @@ impl CanopyServer {
                 public_url: config.public_url,
                 ready,
                 loaded: Mutex::new(HashMap::new()),
-                transitions: transitions.clone(),
+                tasks: tasks.clone(),
             });
-            let api = Arc::new(RepositoryHttp::new(manager));
+            let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));
             Ok::<_, ServerError>(api)
         }
         .await;
@@ -483,7 +483,7 @@ impl CanopyServer {
             stop,
             ingress_stop,
             serving,
-            transitions,
+            tasks,
             _local: local,
         })
     }
@@ -497,8 +497,8 @@ impl CanopyServer {
     pub async fn shutdown(self) -> Result<(), ServerError> {
         self.ingress_stop.cancel();
         let serving = self.serving.await;
-        self.transitions.close();
-        self.transitions.wait().await;
+        self.tasks.close();
+        self.tasks.wait().await;
         let drained = self.node.shutdown().await;
         self.stop.cancel();
         let observed = self.advertisement.lock().await;

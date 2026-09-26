@@ -32,6 +32,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                     root.path(),
                     &cellule_ltx::DiskBudget::new(1 << 20),
                     1 << 20,
+                    None,
                 )
                 .await?,
                 authenticated: true,

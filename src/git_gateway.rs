@@ -12,7 +12,10 @@ use axum::body::Body;
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{MutationIdentity, RequestId};
 use object_store::ObjectStore;
-use tokio::{process::Command, sync::Mutex};
+use tokio::{
+    process::Command,
+    sync::{Mutex, OwnedSemaphorePermit},
+};
 
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
@@ -120,6 +123,7 @@ impl GitGateway {
         request: GitHttpRequest<Body>,
         actor: &str,
         push_id: Option<[u8; 16]>,
+        admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<GitHttpResponse<Body>, GatewayError> {
         if !request.authenticated {
             return Err(GatewayError::Unauthorized);
@@ -127,7 +131,7 @@ impl GitGateway {
         let is_push = request.method == "POST" && request.path_info == "/repo.git/git-receive-pack";
         if is_push {
             let _push = self.push.lock().await;
-            let request = self.receive(request, MAX_PUSH_BYTES).await?;
+            let request = self.receive(request, MAX_PUSH_BYTES, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
             let digest = request_digest(&request).await?;
             if let Some(response) = self.repository.begin_push(id, actor, digest).await? {
@@ -144,7 +148,9 @@ impl GitGateway {
                 .await
                 .map(http_body);
         }
-        let request = self.receive(request, MAX_FETCH_REQUEST_BYTES).await?;
+        let request = self
+            .receive(request, MAX_FETCH_REQUEST_BYTES, admission)
+            .await?;
         let request = self.decode(request, MAX_FETCH_REQUEST_BYTES).await?;
         let live_refs = self.cell_refs().await?;
         let cached = {
@@ -167,6 +173,7 @@ impl GitGateway {
         &self,
         request: GitHttpRequest<Body>,
         limit: u64,
+        admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<GitHttpRequest, GatewayError> {
         let GitHttpRequest {
             method,
@@ -178,7 +185,14 @@ impl GitGateway {
             body,
             authenticated,
         } = request;
-        let body = GitInput::receive(body, &self.scratch_root, &self.disk_budget, limit).await?;
+        let body = GitInput::receive(
+            body,
+            &self.scratch_root,
+            &self.disk_budget,
+            limit,
+            admission,
+        )
+        .await?;
         Ok(GitHttpRequest {
             method,
             path_info,

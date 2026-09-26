@@ -27,6 +27,7 @@ mod push;
 mod refs;
 mod repository_http;
 pub mod server;
+mod transfer;
 
 pub use object_batch::ObjectBatch;
 pub use push::PushError;

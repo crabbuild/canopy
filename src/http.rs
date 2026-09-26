@@ -4,7 +4,7 @@ use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Path, State},
     http::{HeaderName, HeaderValue, Request, Response, StatusCode, header},
     routing::{any, get, post},
@@ -154,11 +154,15 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
     let Ok(authorization) = authorization.to_str().map(str::to_owned) else {
         return lfs_unauthorized();
     };
-    let Ok(body) = to_bytes(request.into_body(), MAX_LFS_BATCH_BYTES).await else {
-        return lfs_json(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            json!({"message": "Batch request is too large"}),
-        );
+    let body = match lfs_body(request.into_body(), MAX_LFS_BATCH_BYTES).await {
+        Ok(body) => body,
+        Err(StatusCode::REQUEST_TIMEOUT) => {
+            return lfs_json(
+                StatusCode::REQUEST_TIMEOUT,
+                json!({"message": "LFS request timed out"}),
+            );
+        }
+        Err(status) => return lfs_json(status, json!({"message": "Batch request is too large"})),
     };
     let Ok(batch) = serde_json::from_slice::<LfsBatchRequest>(&body) else {
         return lfs_json(
@@ -314,8 +318,12 @@ async fn lfs_put(
     let Some(oid) = parse_lfs_oid(&oid) else {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid LFS object ID");
     };
-    let Ok(body) = to_bytes(request.into_body(), MAX_LFS_BYTES).await else {
-        return plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large");
+    let body = match lfs_body(request.into_body(), MAX_LFS_BYTES).await {
+        Ok(body) => body,
+        Err(StatusCode::REQUEST_TIMEOUT) => {
+            return plain(StatusCode::REQUEST_TIMEOUT, "LFS request timed out");
+        }
+        Err(status) => return plain(status, "LFS object is too large"),
     };
     match api.gateway.lfs().put(&principal.account, oid, &body).await {
         Ok(_) if (api.ready)() => plain(StatusCode::OK, ""),
@@ -449,6 +457,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     } else {
         None
     };
+    let admission = request
+        .extensions()
+        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .cloned();
     match api
         .gateway
         .handle(
@@ -464,6 +476,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             },
             &principal.account,
             push_id,
+            admission,
         )
         .await
     {
@@ -566,4 +579,38 @@ fn plain(status: StatusCode, message: &'static str) -> Response<Body> {
 
 fn unavailable() -> Response<Body> {
     plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
+}
+
+async fn lfs_body(body: Body, limit: usize) -> Result<Bytes, StatusCode> {
+    tokio::time::timeout(std::time::Duration::from_secs(120), to_bytes(body, limit))
+        .await
+        .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_core::Stream;
+    use std::{
+        convert::Infallible,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    struct Stalled;
+    impl Stream for Stalled {
+        type Item = Result<Bytes, Infallible>;
+        fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_lfs_body_times_out() {
+        let started = tokio::time::Instant::now();
+        let result = lfs_body(Body::from_stream(Stalled), MAX_LFS_BYTES).await;
+        assert_eq!(result, Err(StatusCode::REQUEST_TIMEOUT));
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(120));
+    }
 }

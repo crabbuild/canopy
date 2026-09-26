@@ -11,6 +11,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_util::task::TaskTracker;
 
 use crate::{
     directory::{
@@ -23,11 +25,19 @@ use crate::{
 
 pub(crate) struct RepositoryHttp {
     manager: Arc<RepositoryManager>,
+    transfers: Arc<Semaphore>,
+    tasks: TaskTracker,
 }
 
+const MAX_ACTIVE_TRANSFERS: usize = 8;
+
 impl RepositoryHttp {
-    pub(crate) fn new(manager: Arc<RepositoryManager>) -> Self {
-        Self { manager }
+    pub(crate) fn new(manager: Arc<RepositoryManager>, tasks: TaskTracker) -> Self {
+        Self {
+            manager,
+            transfers: Arc::new(Semaphore::new(MAX_ACTIVE_TRANSFERS)),
+            tasks,
+        }
     }
 
     pub(crate) fn router(self: Arc<Self>) -> Router {
@@ -486,22 +496,52 @@ async fn dispatch_repository(
     if directory::validate_component(name).is_err() {
         return plain(StatusCode::NOT_FOUND, "Repository does not exist");
     }
-    tracing::debug!(owner, name, path = %request.uri().path(), "routing repository request");
-    match state.manager.resolve(&owner, name).await {
-        Ok(Some(route)) => {
-            let (mut parts, body) = request.into_parts();
-            // The inner router must extract only its own captures, especially the LFS OID.
-            parts.extensions = axum::http::Extensions::new();
-            parts.extensions.insert(principal);
-            let request = Request::from_parts(parts, body);
-            let response = route.dispatch(request).await;
-            tracing::debug!(owner, name, status = %response.status(), "repository response completed");
-            response
-        }
-        Ok(None) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
+    let Ok(permit) = Arc::clone(&state.transfers).try_acquire_owned() else {
+        let mut response = plain(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Canopy transfer capacity is full; retry the request",
+        );
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+        return response;
+    };
+    let permit = Arc::new(permit);
+    let name = name.to_owned();
+    let manager = Arc::clone(&state.manager);
+    // Detached requests retain admission while Cell transitions and blocking
+    // workers finish. Shutdown tracks this task before draining the Cell node.
+    let task = state.tasks.spawn(async move {
+        tracing::debug!(owner, name, path = %request.uri().path(), "routing repository request");
+        let response = match manager.resolve(&owner, &name).await {
+            Ok(Some(route)) => {
+                let (mut parts, body) = request.into_parts();
+                // The inner router must extract only its own captures, especially the LFS OID.
+                parts.extensions = axum::http::Extensions::new();
+                parts.extensions.insert(principal);
+                parts.extensions.insert(Arc::<OwnedSemaphorePermit>::clone(&permit));
+                let request = Request::from_parts(parts, body);
+                let response = route.dispatch(request).await;
+                tracing::debug!(owner, name, status = %response.status(), "repository response completed");
+                response
+            }
+            Ok(None) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
+            Err(error) => {
+                tracing::error!(error = %error, "repository routing failed");
+                plain(StatusCode::SERVICE_UNAVAILABLE, "Repository is unavailable")
+            }
+        };
+        response.map(|body| crate::transfer::response_body(body, permit))
+    });
+    match task.await {
+        Ok(response) => response,
         Err(error) => {
-            tracing::error!(error = %error, "repository routing failed");
-            plain(StatusCode::SERVICE_UNAVAILABLE, "Repository is unavailable")
+            tracing::error!(error = %error, "repository request task failed");
+            plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Repository request failed",
+            )
         }
     }
 }

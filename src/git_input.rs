@@ -14,6 +14,7 @@ use std::{
 use axum::body::Body;
 use cellule_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAX_PUSH_BYTES: u64 = 512 * 1024 * 1024;
@@ -39,10 +40,11 @@ pub enum InputError {
 }
 
 struct Spool {
-    // Close the file before releasing its accounting. Blocking I/O jobs retain
-    // this entire owner, so cancellation cannot release their reservation early.
+    // Close the file before releasing disk and transfer admission. Blocking I/O
+    // jobs retain this owner through cancellation until their work exits.
     file: File,
     reservation: DiskReservation,
+    admission: Option<Arc<OwnedSemaphorePermit>>,
 }
 
 /// An immutable request spool, deleted when its last file handle closes.
@@ -58,10 +60,11 @@ impl GitInput {
         directory: &Path,
         budget: &DiskBudget,
         limit: u64,
+        admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<Self, InputError> {
         tokio::time::timeout(
             Duration::from_secs(120),
-            Self::spool(body, directory, budget, limit),
+            Self::spool(body, directory, budget, limit, admission),
         )
         .await
         .map_err(|_| InputError::Timeout)?
@@ -72,10 +75,12 @@ impl GitInput {
         directory: &Path,
         budget: &DiskBudget,
         limit: u64,
+        admission: Option<Arc<OwnedSemaphorePermit>>,
     ) -> Result<Self, InputError> {
         let spool = Arc::new(Spool {
             file: tempfile::tempfile_in(directory)?,
             reservation: budget.try_reserve(0)?,
+            admission,
         });
         let mut body = body.into_data_stream();
         let mut size = 0u64;
@@ -113,6 +118,7 @@ impl GitInput {
         let output = Arc::new(Spool {
             file: tempfile::tempfile_in(directory)?,
             reservation: budget.try_reserve(0)?,
+            admission: self.spool.admission.clone(),
         });
         let cancelled = CancellationToken::new();
         let _cancel_on_drop = cancelled.clone().drop_guard();

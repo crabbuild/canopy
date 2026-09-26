@@ -23,6 +23,8 @@ before admitting persistent customer repositories.
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current object transfer path |
+| Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
+| LFS request deadline | 120 seconds for batch and object PUT body reception; timeout returns 408 | Git HTTP router |
 | Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
@@ -291,8 +293,40 @@ Git for a previously completed operation.
 
 Push reports, LFS transfers and individual object hydration still allocate
 bounded whole buffers. Cold fetches still rebuild the complete bare cache.
-Process/client concurrency and production throughput remain unqualified.
+Production throughput and native process resource usage remain unqualified.
 Spooling adds a local-file pass before Git can begin pack ingestion.
+
+### Node transfer admission
+
+The composed `CanopyServer` admits eight repository Git/LFS requests per node,
+after authentication and before repository lookup/loading. A full semaphore
+returns 503 with `Retry-After: 1` immediately; there is no waiting admission
+queue. All repositories and both transports share the same semaphore. Health,
+readiness, account and repository management routes bypass this transfer limit.
+Authentication and management work need separate capacity qualification.
+
+An admitted handler runs in a tracked task. Client disconnect does not abandon
+Cell transitions, cache hydration or push publication halfway through. Shutdown
+waits for tracked tasks before draining the Cell node. An authorized push may
+therefore finish after its client disconnects; use the existing push identity and
+replay contract to resolve its outcome. Input spools retain admission through
+blocking writes, hashing, gzip decoding and the native Git worker. A timed-out
+or cancelled blocking decoder keeps its permit until its worker exits.
+
+HTTP response bodies retain admission, and emitted `Bytes` frames own a shared
+permit until their final clone is dropped. This covers queued response data even
+when the body has already reported EOF. The native worker retains its permit
+until completion or process-group cleanup signaling on cancellation; OS process
+teardown may trail that signal. Capacity is returned only after the last owner
+releases the permit. This bounds admitted transfers, not subprocess descendants,
+peak RAM, or native Git scratch bytes. The standalone lower-layer `GitHttpApi`
+fixtures do not apply the node's admission policy.
+
+LFS batch and PUT bodies retain their existing byte ceilings and now have a
+120-second reception deadline; timeout returns 408 (JSON for batch requests).
+This is separate from Git input, decode and subprocess deadlines. Outgoing LFS
+socket stall limits and fair scheduling between accounts remain unqualified.
+The limit of eight is an initial operational policy, not a throughput claim.
 
 ### Disposable Git cache admission
 
