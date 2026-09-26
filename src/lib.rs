@@ -23,6 +23,7 @@ pub mod http;
 pub mod large_blob;
 pub mod lfs;
 mod object_batch;
+mod object_chunks;
 mod push;
 mod refs;
 mod repository_http;
@@ -30,6 +31,7 @@ pub mod server;
 mod transfer;
 
 pub use object_batch::ObjectBatch;
+pub use object_chunks::{MAX_SQLITE_OBJECT_BYTES, ObjectStageError};
 pub use push::PushError;
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
@@ -42,7 +44,7 @@ const COMMANDS: [OperationDescriptor; 4] = [
     operation(1),
     operation_with_codec(3, 3),
     operation(4),
-    operation(5),
+    operation_with_codec(5, 2),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
@@ -101,6 +103,11 @@ impl ObjectKind {
 /// Byte location for a verified Git object record.
 pub enum ObjectStorage {
     Inline(Vec<u8>),
+    Chunked {
+        upload: [u8; 16],
+        size: u64,
+        blake3: [u8; 32],
+    },
     External {
         size: u64,
         blake3: [u8; 32],
@@ -149,6 +156,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("graph.rs"));
                 source.update(include_bytes!("object_batch.rs"));
+                source.update(include_bytes!("object_chunks.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("lfs.rs"));
@@ -254,7 +262,9 @@ impl RepositoryCell {
                 minimum,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT kind, body, digest FROM objects WHERE oid = ?1".into(),
+                        sql:
+                            "SELECT kind, body, digest, size, chunk_id FROM objects WHERE oid = ?1"
+                                .into(),
                         parameters: vec![SqlValue::Blob(oid.to_vec())],
                     }],
                 },
@@ -268,8 +278,10 @@ impl RepositoryCell {
         };
         let [
             SqlValue::Text(kind),
-            SqlValue::Blob(body),
+            body,
             SqlValue::Blob(digest),
+            SqlValue::Integer(size),
+            upload,
         ] = row.as_slice()
         else {
             return Err(cellule_runtime::InvocationError::NotStarted(
@@ -287,13 +299,40 @@ impl RepositoryCell {
                 ));
             }
         };
-        if object_id(kind, body) != oid || blake3::hash(body).as_bytes() != digest.as_slice() {
+        let body = match (body, upload) {
+            (SqlValue::Blob(bytes), SqlValue::Null)
+                if usize::try_from(*size).ok() == Some(bytes.len()) =>
+            {
+                bytes.clone()
+            }
+            (SqlValue::Null, SqlValue::Blob(upload)) => {
+                let invalid = || {
+                    cellule_runtime::InvocationError::NotStarted(Error::Command(
+                        "invalid object chunk reference",
+                    ))
+                };
+                self.chunked_body(
+                    oid,
+                    kind,
+                    upload.as_slice().try_into().map_err(|_| invalid())?,
+                    u64::try_from(*size).map_err(|_| invalid())?,
+                    digest.as_slice().try_into().map_err(|_| invalid())?,
+                )
+                .await?
+            }
+            _ => {
+                return Err(cellule_runtime::InvocationError::NotStarted(
+                    Error::Command("invalid stored object body"),
+                ));
+            }
+        };
+        if object_id(kind, &body) != oid || blake3::hash(&body).as_bytes() != digest.as_slice() {
             return Err(cellule_runtime::InvocationError::NotStarted(
                 Error::Command("corrupt stored object"),
             ));
         }
         Ok(Observed {
-            output: Some((kind, body.clone())),
+            output: Some((kind, body)),
             receipt: result.receipt,
         })
     }
@@ -312,7 +351,7 @@ impl RepositoryCell {
                 None,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT oid, kind, size, digest, storage, body, external_sha256 FROM objects WHERE oid > ?1 ORDER BY oid LIMIT 1".into(),
+                        sql: "SELECT oid, kind, size, digest, storage, body, external_sha256, chunk_id FROM objects WHERE oid > ?1 ORDER BY oid LIMIT 1".into(),
                         parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec()))],
                     }],
                 },
@@ -332,6 +371,7 @@ impl RepositoryCell {
             SqlValue::Text(storage),
             body,
             external_sha256,
+            chunk_id,
         ] = row.as_slice()
         else {
             return Err(cellule_runtime::InvocationError::NotStarted(
@@ -352,8 +392,8 @@ impl RepositoryCell {
                 ));
             }
         };
-        let storage = match (storage.as_str(), body, external_sha256) {
-            ("inline", SqlValue::Blob(body), SqlValue::Null)
+        let storage = match (storage.as_str(), body, external_sha256, chunk_id) {
+            ("inline", SqlValue::Blob(body), SqlValue::Null, SqlValue::Null)
                 if *size >= 0
                     && usize::try_from(*size).ok() == Some(body.len())
                     && object_id(kind, body) == oid
@@ -361,7 +401,7 @@ impl RepositoryCell {
             {
                 ObjectStorage::Inline(body.clone())
             }
-            ("external", SqlValue::Null, SqlValue::Blob(sha256))
+            ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
                 if kind == ObjectKind::Blob && *size >= 0 =>
             {
                 let blake3 = digest.as_slice().try_into().map_err(|_| {
@@ -382,6 +422,22 @@ impl RepositoryCell {
                     })?,
                     blake3,
                     sha256,
+                }
+            }
+            ("chunked", SqlValue::Null, SqlValue::Null, SqlValue::Blob(upload))
+                if kind != ObjectKind::Blob
+                    && *size > INLINE_OBJECT_LIMIT as i64
+                    && *size <= MAX_SQLITE_OBJECT_BYTES as i64 =>
+            {
+                let invalid = || {
+                    cellule_runtime::InvocationError::NotStarted(Error::Command(
+                        "invalid object chunk reference",
+                    ))
+                };
+                ObjectStorage::Chunked {
+                    upload: upload.as_slice().try_into().map_err(|_| invalid())?,
+                    size: *size as u64,
+                    blake3: digest.as_slice().try_into().map_err(|_| invalid())?,
                 }
             }
             _ => {

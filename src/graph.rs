@@ -75,19 +75,28 @@ pub(crate) fn certify(
         }
         let result = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT storage, body, digest FROM objects WHERE oid = ?1".into(),
+                sql: "SELECT storage, body, digest, size, chunk_id FROM objects WHERE oid = ?1"
+                    .into(),
                 parameters: vec![SqlValue::Blob(oid.to_vec())],
             }],
         })?;
-        let Some([SqlValue::Text(storage), body, SqlValue::Blob(digest)]) = result
+        let Some(
+            [
+                SqlValue::Text(storage),
+                body,
+                SqlValue::Blob(digest),
+                SqlValue::Integer(size),
+                upload,
+            ],
+        ) = result
             .first()
             .and_then(|set| set.rows.first())
             .map(Vec::as_slice)
         else {
             return Err(Error::Command("invalid stored graph object"));
         };
-        let edges = match (storage.as_str(), body) {
-            ("inline", SqlValue::Blob(body)) => {
+        let edges = match (storage.as_str(), body, upload) {
+            ("inline", SqlValue::Blob(body), SqlValue::Null) => {
                 if object_id(kind, body) != oid
                     || blake3::hash(body).as_bytes() != digest.as_slice()
                 {
@@ -100,7 +109,23 @@ pub(crate) fn certify(
             }
             // The immutable upload is verified before its SQLite record is published.
             // Blobs have no outgoing Git edges; no network I/O belongs in this transaction.
-            ("external", SqlValue::Null) if kind == ObjectKind::Blob => Vec::new(),
+            ("external", SqlValue::Null, SqlValue::Null) if kind == ObjectKind::Blob => Vec::new(),
+            ("chunked", SqlValue::Null, SqlValue::Blob(upload)) => {
+                let invalid = || Error::Command("invalid stored graph object chunks");
+                let body = crate::object_chunks::body(
+                    context,
+                    oid,
+                    kind,
+                    upload.as_slice().try_into().map_err(|_| invalid())?,
+                    u64::try_from(*size).map_err(|_| invalid())?,
+                    digest.as_slice().try_into().map_err(|_| invalid())?,
+                )?
+                .ok_or_else(invalid)?;
+                let Some(edges) = edges(kind, &body) else {
+                    return Ok(false);
+                };
+                edges
+            }
             _ => return Err(Error::Command("invalid stored graph object")),
         };
         pending.push(Visit::Leave(oid));

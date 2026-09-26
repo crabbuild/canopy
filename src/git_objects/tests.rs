@@ -139,9 +139,9 @@ async fn malformed_and_oversized_batches_fail_before_publication() {
     }
     for (kind, limit) in [
         ("blob", MAX_EXTERNAL_BLOB_BYTES),
-        ("tree", INLINE_OBJECT_LIMIT),
-        ("commit", INLINE_OBJECT_LIMIT),
-        ("tag", INLINE_OBJECT_LIMIT),
+        ("tree", MAX_SQLITE_OBJECT_BYTES),
+        ("commit", MAX_SQLITE_OBJECT_BYTES),
+        ("tag", MAX_SQLITE_OBJECT_BYTES),
     ] {
         // No body supplied: the size must be rejected before attempting a body read.
         let data = format!("{hex} {kind} {}\n", limit + 1);

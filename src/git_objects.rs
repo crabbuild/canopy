@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::{INLINE_OBJECT_LIMIT, ObjectKind, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id};
+use crate::{MAX_SQLITE_OBJECT_BYTES, ObjectKind, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_LIMIT: usize = 128;
@@ -213,7 +213,12 @@ async fn read_object(
         .parse()
         .map_err(|_| ObjectReadError::Malformed)?;
     // Check the declared size before allocating or reading the object's body.
-    if size > MAX_EXTERNAL_BLOB_BYTES || (kind != ObjectKind::Blob && size > INLINE_OBJECT_LIMIT) {
+    let limit = if kind == ObjectKind::Blob {
+        MAX_EXTERNAL_BLOB_BYTES
+    } else {
+        MAX_SQLITE_OBJECT_BYTES
+    };
+    if size > limit {
         return Err(ObjectReadError::TooLarge);
     }
     let mut body = vec![0; size];

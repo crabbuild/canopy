@@ -313,6 +313,58 @@ def verify_many_objects(base_url, directory, count, expected):
     print(f"PASS: {count}-file clone restored both commits, annotated tag and 300 refs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
+def seed_sqlite_chunks(base_url, directory):
+    url, _ = create_repository(base_url, "sqlite-chunks")
+    local = directory / "chunk-source"
+    git("init", "--bare", str(local))
+    expected = {}
+
+    def write(kind, body):
+        path = directory / f"chunk-{kind}"
+        path.write_bytes(body)
+        oid = git("hash-object", "-w", "-t", kind, str(path), cwd=local).decode()
+        expected[kind] = (oid, path)
+        return oid
+
+    blob = write("blob", b"chunk recovery leaf\n")
+    tree = write("tree", b"".join(
+        f"100644 file-{index:05}\0".encode() + bytes.fromhex(blob)
+        for index in range(32_000)
+    ))
+    commit = write("commit", (
+        f"tree {tree}\nauthor Canopy <test@example.invalid> 0 +0000\n"
+        "committer Canopy <test@example.invalid> 0 +0000\n\n"
+    ).encode() + b"c" * 1_100_000 + b"\n")
+    tag = write("tag", (
+        f"object {commit}\ntype commit\ntag release\n"
+        "tagger Canopy <test@example.invalid> 0 +0000\n\n"
+    ).encode() + b"t" * 1_100_000 + b"\n")
+    git("update-ref", "refs/heads/main", commit, cwd=local)
+    git("symbolic-ref", "HEAD", "refs/heads/main", cwd=local)
+    git("update-ref", "refs/tags/release", tag, cwd=local)
+    started = time.monotonic()
+    git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+        "push", url, "refs/heads/main", "refs/tags/release", cwd=local)
+    print(f"PASS: large tree, commit and tag pushed into SQLite chunks in {time.monotonic() - started:.2f}s", flush=True)
+    return expected
+
+
+def verify_sqlite_chunks(base_url, directory, expected):
+    clone = directory / "chunk-restored"
+    started = time.monotonic()
+    git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+        "clone", "--bare", f"{base_url}/canopy/sqlite-chunks.git", str(clone))
+    for kind, (oid, path) in expected.items():
+        # run()/git() strip whitespace for command output. Compare raw object bytes here.
+        actual = subprocess.run(["git", "cat-file", kind, oid], cwd=clone,
+                                capture_output=True, check=True).stdout
+        assert actual == path.read_bytes(), f"{kind} changed during recovery"
+    assert git("rev-parse", "refs/heads/main", cwd=clone).decode() == expected["commit"][0]
+    assert git("rev-parse", "refs/tags/release", cwd=clone).decode() == expected["tag"][0]
+    git("fsck", "--strict", "--full", cwd=clone)
+    print(f"PASS: SQLite chunks restored exact tree/commit/tag bytes and OIDs after takeover in {time.monotonic() - started:.2f}s", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -320,6 +372,7 @@ def main():
     parser.add_argument("--work-parent", type=Path, required=True)
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
+    parser.add_argument("--sqlite-chunks", action="store_true", help="Qualify large tree, commit and tag objects stored in SQLite and restored after takeover")
     args = parser.parse_args()
     if args.many_objects < 0:
         parser.error("--many-objects must be nonnegative")
@@ -435,6 +488,7 @@ def main():
             url = rename_repository(base_url, "example", "renamed", repository_id)
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
+            chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             if large is not None and many is not None:
@@ -503,6 +557,8 @@ def main():
             ) == 404
             if large is not None:
                 verify_large_clone(base_url, directory, large)
+            if chunks is not None:
+                verify_sqlite_chunks(base_url, directory, chunks)
             if many is not None:
                 verify_many_objects(base_url, directory, args.many_objects, many)
             third.send_signal(signal.SIGTERM)

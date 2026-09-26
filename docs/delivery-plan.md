@@ -10,7 +10,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads and bounded atomic SQLite object batches work; per-object buffers and 64 MiB blob ceiling remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
@@ -44,8 +44,8 @@ separate product decisions.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
-   and existence queries group up to 128 IDs. Add SQLite chunks for large
-   trees, commits and tags, plus a real corpus benchmark and bounded graph
+   and existence queries group up to 128 IDs. Large trees, commits and tags now
+   use verified SQLite chunks. Add a real corpus benchmark and bounded graph
    certification for large initial pushes. Keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
@@ -412,3 +412,44 @@ commits, the annotated tag, all 300 additional refs and exact file bytes in
 outcomes and dropped-reply replay survive restart, disk loss and lease takeover.
 These are debug-build observations on Darwin arm64 with Apple Git 2.50.1 and
 RustFS `1.0.0-beta.8-glibc`, not production performance targets.
+
+
+## Large Git metadata objects in SQLite
+
+Trees, commits and annotated tags above 768 KiB now use SQLite chunks, with a
+64 MiB per-object ceiling. Each staging command writes at most 512 KiB; ordinary
+object reads and fetch hydration reconstruct and verify those parts. Objects
+remain invisible until the existing typed `PutObjects` command verifies their
+chunk count, every part length, canonical Git OID and BLAKE3 in its publication
+transaction. Its codec advances to 2. It limits aggregate SQLite verification
+work to 64 MiB per batch in addition to the existing 128-record and 768 KiB
+inline-payload ceilings. Large blobs and LFS retain their external body path.
+
+The new module owns staging and shared chunk reconstruction. The code growth
+implements a missing storage capability and keeps publication and reads on one
+validation path. It does not add a second ref-publication path. The current
+unreleased schema changes; use a fresh development storage prefix, with no
+compatibility reader or dependency revision change.
+
+Cell checks prove staged objects are invisible, exact staging retries replay,
+duplicate uploads converge, malformed chunks reject the entire object batch,
+and corruption is detected during reads. Missing dependencies in chunked trees,
+commits and tags still reject ref publication. A stock-Git server test pushes a
+32,000-entry tree and commit/tag messages above 1 MiB, then starts a fresh node,
+clones, compares raw bytes and OIDs, and passes `git fsck --strict --full`.
+The existing server, smart HTTP and object-batch checks pass with this layout.
+
+`scripts/smoke_s3_process.py --sqlite-chunks` adds the same large-object fixture
+to real-process owner-death and cold-recovery qualification. Whole-object buffers,
+large initial graph traversals, durable staging retention and production-scale
+performance remain open; this removes the previous 768 KiB non-blob rejection.
+
+
+The process smoke with `--sqlite-chunks --many-objects 256` passes against
+RustFS `1.0.0-beta.8-glibc`: chunked metadata push 4.93 seconds and recovery
+1.17 seconds, exact raw object bytes/OIDs and strict fsck confirmed after owner
+death, lease expiry and local disk loss. The 256-file initial/incremental pushes
+took 0.71/0.96 seconds; the 300-ref recovery check took 0.97 seconds. Stock Git/LFS,
+ACL, mixed/atomic ref outcomes and dropped-reply replay also pass. These are
+debug-build observations on Darwin arm64 with Apple Git 2.50.1. Scoped tests,
+formatting, Clippy, Python syntax validation and the binary build pass.

@@ -19,7 +19,8 @@ before admitting persistent customer repositories.
 | Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
-| Object publication | at most 128 records and 768 KiB aggregate inline bytes per atomic command | `PutObjects`, operation 5, codec 1 |
+| Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB and at most 64 MiB | `object_chunks`, verified before object publication |
+| Object publication | at most 128 records, 768 KiB inline payload and 64 MiB SQLite verification bytes per atomic command | `PutObjects`, operation 5, codec 2 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current object transfer path |
@@ -224,12 +225,37 @@ Candidate existence queries group up to 128 IDs. Missing records accumulate in
 an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
 leaving room for metadata beneath the 1 MiB operation input limit. External
 blob records count toward the record limit; their bytes are verified and
-uploaded before publication. The decoder enforces both bounds before copying
-bodies. One typed Cell command publishes the batch and returns one receipt.
+uploaded before publication. Chunk references count toward the record limit and
+a separate 64 MiB aggregate verification budget shared with inline bytes. The
+decoder enforces these bounds before publication. One typed Cell command publishes the batch and returns one receipt.
 It recomputes inline Git OIDs and BLAKE3 digests, then compares every inserted
 or existing row with the complete expected record. A mismatch rejects the
 command and rolls back all inserts in that batch. Repeating the same mutation
 identity and payload returns the recorded result through Cellule deduplication.
+
+Trees, commits and tags larger than 768 KiB are staged in `object_uploads` and
+`object_chunks`; their bodies stay in SQLite. Each part is at most 512 KiB and
+one object is at most 64 MiB (128 parts). Part command identities derive from
+the caller's upload identity and part index, so retrying the same staging
+operation replays committed parts. Staging does not create an `objects` row:
+queries and ref validation cannot see incomplete uploads.
+
+`PutObjects` codec 2 accepts a chunk reference containing upload ID, size and
+BLAKE3. In the publication transaction it requires the exact chunk count and
+part lengths, reconstructs the body, verifies the canonical Git OID and BLAKE3,
+and then inserts the immutable object record. A failure rolls back every object
+in that batch. Inline and external-blob records use the same publication command.
+Repeated identical objects converge on the existing record; unused duplicate
+uploads remain staged until a collector can prove they are unreferenced.
+
+Hydration and direct SQLite object reads use the same chunk count, length and
+hash checks. Every SQL result contains at most one chunk, fitting Cellule's
+1 MiB result limit. Reads reconstruct a bounded whole object in memory. Ref
+finalization reconstructs chunked objects before applying the same typed graph
+checks as inline objects; chunking does not certify missing edges. Part data is
+immutable through product APIs, and no collector exists yet. Any future collector
+must preserve chunks reachable from objects and invalidate graph certificates
+before removing their dependencies.
 
 Object batches remain separate from ref and push-outcome publication. A later
 failure can leave earlier batches unreferenced; a retry finds those records
@@ -357,7 +383,9 @@ Crash-left directories and cleanup-failure charges need startup reconciliation;
 native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
-Schema version 1 is still changing in this unreleased repository. The module
+Schema version 1 is still changing in this unreleased repository. The chunk
+layout and operation-5 codec change require a fresh development storage prefix;
+there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule
 revision; its UUID partition contract is proposed in

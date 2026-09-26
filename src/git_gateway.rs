@@ -298,6 +298,15 @@ impl GitGateway {
             after = Some(object.oid);
             let body = match object.storage {
                 ObjectStorage::Inline(body) => body,
+                ObjectStorage::Chunked {
+                    upload,
+                    size,
+                    blake3,
+                } => self
+                    .repository
+                    .chunked_body(object.oid, object.kind, upload, size, blake3)
+                    .await
+                    .map_err(|error| GatewayError::Cell(Box::new(error)))?,
                 ObjectStorage::External {
                     size,
                     blake3,
@@ -387,20 +396,27 @@ impl GitGateway {
                 .output;
             for oid in candidates.into_iter().filter(|oid| !present.contains(oid)) {
                 let (kind, body) = objects.read(oid).await?;
-                let storage = if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
-                    let uploaded = self.large_blobs.put(&body).await?;
-                    if uploaded.oid != oid {
-                        return Err(GatewayError::MalformedCache);
-                    }
-                    ObjectStorage::External {
-                        size: uploaded.size,
-                        blake3: uploaded.blake3,
-                        sha256: uploaded.sha256,
-                    }
+                let object = if kind != ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
+                    self.repository
+                        .stage_object(new_identity()?, kind, &body)
+                        .await
+                        .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 } else {
-                    ObjectStorage::Inline(body)
+                    let storage = if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
+                        let uploaded = self.large_blobs.put(&body).await?;
+                        if uploaded.oid != oid {
+                            return Err(GatewayError::MalformedCache);
+                        }
+                        ObjectStorage::External {
+                            size: uploaded.size,
+                            blake3: uploaded.blake3,
+                            sha256: uploaded.sha256,
+                        }
+                    } else {
+                        ObjectStorage::Inline(body)
+                    };
+                    StoredObject { oid, kind, storage }
                 };
-                let object = StoredObject { oid, kind, storage };
                 if let Err(object) = batch.try_push(object) {
                     self.repository
                         .put_objects(new_identity()?, std::mem::take(&mut batch))

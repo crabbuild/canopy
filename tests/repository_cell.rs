@@ -1,5 +1,7 @@
 #[path = "repository_cell/batches.rs"]
 mod batches;
+#[path = "repository_cell/chunks.rs"]
+mod chunks;
 #[path = "repository_cell/graph.rs"]
 mod graph;
 #[path = "support/objects.rs"]
@@ -413,6 +415,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
             })
         );
         graph::verify(&repository, &graph_sql).await?;
+        chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }
     .await;

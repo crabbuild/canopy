@@ -50,6 +50,9 @@ as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
 transfers and individual external Git blobs remain capped at 64 MiB.
+Trees, commits and tags above 768 KiB use 512 KiB SQLite chunks, up to 64 MiB
+per object. Publication verifies every chunk and the complete object identity;
+partial uploads stay invisible to Git.
 Each node admits eight Git/LFS transfers across all repositories. Overload
 returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
 readiness and management routes remain outside this transfer limit. LFS body
@@ -83,7 +86,8 @@ candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
 are checked before allocation and canonical OIDs before storage. SQLite lookups
 group up to 128 candidate IDs; object publication groups up to 128 records and
-768 KiB of inline bytes in one Cell transaction. A conflicting record rejects
+768 KiB of inline bytes in one Cell transaction, with at most 64 MiB of SQLite
+object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.
 
@@ -179,3 +183,10 @@ verify Git/LFS recovery on the same node before restart. For local container
 stores, place data and logs on the mounted workspace and verify free
 inodes as well as bytes before qualification. A full container filesystem can
 turn storage publications into unresolved mutations even with free byte space.
+
+
+Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above
+1 MiB, then verify exact raw bytes and OIDs after takeover with a strict fsck.
+This exercises SQLite chunk storage independently of external large blobs.
+The chunk layout changes the unreleased schema; use a fresh development storage
+prefix when moving from builds that predate it.

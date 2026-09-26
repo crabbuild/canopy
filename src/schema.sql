@@ -1,15 +1,29 @@
+CREATE TABLE object_uploads (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16)
+) WITHOUT ROWID;
+
+CREATE TABLE object_chunks (
+    upload_id BLOB NOT NULL REFERENCES object_uploads(id),
+    part INTEGER NOT NULL CHECK(part BETWEEN 0 AND 127),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
+    PRIMARY KEY(upload_id, part)
+) WITHOUT ROWID;
+
 CREATE TABLE objects (
     oid BLOB PRIMARY KEY CHECK(length(oid) = 20),
     kind TEXT NOT NULL CHECK(kind IN ('blob', 'tree', 'commit', 'tag')),
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32),
-    storage TEXT NOT NULL CHECK(storage IN ('inline', 'external')),
+    storage TEXT NOT NULL CHECK(storage IN ('inline', 'external', 'chunked')),
     body BLOB,
     external_sha256 BLOB,
+    chunk_id BLOB UNIQUE REFERENCES object_uploads(id) CHECK(chunk_id IS NULL OR length(chunk_id) = 16),
     CHECK(
-        (storage = 'inline' AND body IS NOT NULL AND external_sha256 IS NULL AND size = length(body))
+        (storage = 'inline' AND body IS NOT NULL AND external_sha256 IS NULL AND chunk_id IS NULL AND size = length(body))
         OR
-        (storage = 'external' AND kind = 'blob' AND body IS NULL AND length(external_sha256) = 32)
+        (storage = 'external' AND kind = 'blob' AND body IS NULL AND chunk_id IS NULL AND length(external_sha256) = 32)
+        OR
+        (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size BETWEEN 786433 AND 67108864)
     )
 ) WITHOUT ROWID;
 

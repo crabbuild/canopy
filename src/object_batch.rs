@@ -9,17 +9,18 @@ use cellule_runtime::{
 };
 
 use crate::{
-    INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, RepositoryCell, RepositoryModule, StoredObject,
-    large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id,
+    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, ObjectStorage, RepositoryCell,
+    RepositoryModule, StoredObject, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id,
 };
 
 pub(crate) const MAX_OBJECTS: usize = 128;
 
-/// At most 128 object records with at most 768 KiB of aggregate inline bytes.
+/// At most 128 records, 768 KiB inline payload, and 64 MiB of SQLite bytes to verify.
 #[derive(Default)]
 pub struct ObjectBatch {
     objects: Vec<StoredObject>,
     inline_bytes: usize,
+    verified_bytes: u64,
 }
 
 impl ObjectBatch {
@@ -27,12 +28,21 @@ impl ObjectBatch {
     pub fn try_push(&mut self, object: StoredObject) -> Result<(), StoredObject> {
         let bytes = match &object.storage {
             ObjectStorage::Inline(body) => body.len(),
+            ObjectStorage::External { .. } | ObjectStorage::Chunked { .. } => 0,
+        };
+        let verified = match &object.storage {
+            ObjectStorage::Inline(body) => body.len() as u64,
+            ObjectStorage::Chunked { size, .. } => *size,
             ObjectStorage::External { .. } => 0,
         };
-        if self.objects.len() == MAX_OBJECTS || bytes > INLINE_OBJECT_LIMIT - self.inline_bytes {
+        if self.objects.len() == MAX_OBJECTS
+            || bytes > INLINE_OBJECT_LIMIT - self.inline_bytes
+            || verified > MAX_SQLITE_OBJECT_BYTES as u64 - self.verified_bytes
+        {
             return Err(object);
         }
         self.inline_bytes += bytes;
+        self.verified_bytes += verified;
         self.objects.push(object);
         Ok(())
     }
@@ -61,6 +71,16 @@ impl WireValue for ObjectBatch {
                 ObjectStorage::Inline(body) => {
                     encoder.write_u8(0)?;
                     encoder.write_bytes(body)?;
+                }
+                ObjectStorage::Chunked {
+                    upload,
+                    size,
+                    blake3,
+                } => {
+                    encoder.write_u8(2)?;
+                    encoder.write_bytes(upload)?;
+                    encoder.write_u64(*size)?;
+                    encoder.write_bytes(blake3)?;
                 }
                 ObjectStorage::External {
                     size,
@@ -107,6 +127,11 @@ impl WireValue for ObjectBatch {
                     blake3: fixed(decoder)?,
                     sha256: fixed(decoder)?,
                 },
+                2 => ObjectStorage::Chunked {
+                    upload: fixed(decoder)?,
+                    size: decoder.read_u64()?,
+                    blake3: fixed(decoder)?,
+                },
                 _ => return Err(CodecError::Invalid("invalid Git object storage")),
             };
             batch
@@ -129,7 +154,7 @@ pub(crate) struct PutObjects;
 impl Command for PutObjects {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 5;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = ObjectBatch;
     type Output = ();
 
@@ -138,7 +163,7 @@ impl Command for PutObjects {
         batch: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<()>> {
         for object in batch.objects {
-            let (size, digest, storage, body, sha256) = match object.storage {
+            let (size, digest, storage, body, sha256, chunk_id) = match object.storage {
                 ObjectStorage::Inline(body) => {
                     if object_id(object.kind, &body) != object.oid {
                         return Ok(CommandResult::Rejected(()));
@@ -148,6 +173,7 @@ impl Command for PutObjects {
                         blake3::hash(&body).as_bytes().to_vec(),
                         "inline",
                         SqlValue::Blob(body),
+                        SqlValue::Null,
                         SqlValue::Null,
                     )
                 }
@@ -165,6 +191,33 @@ impl Command for PutObjects {
                         "external",
                         SqlValue::Null,
                         SqlValue::Blob(sha256.to_vec()),
+                        SqlValue::Null,
+                    )
+                }
+                ObjectStorage::Chunked {
+                    upload,
+                    size,
+                    blake3,
+                } => {
+                    if crate::object_chunks::body(
+                        context,
+                        object.oid,
+                        object.kind,
+                        upload,
+                        size,
+                        blake3,
+                    )?
+                    .is_none()
+                    {
+                        return Ok(CommandResult::Rejected(()));
+                    }
+                    (
+                        size as i64,
+                        blake3.to_vec(),
+                        "chunked",
+                        SqlValue::Null,
+                        SqlValue::Null,
+                        SqlValue::Blob(upload.to_vec()),
                     )
                 }
             };
@@ -178,9 +231,10 @@ impl Command for PutObjects {
             ];
             let mut parameters = vec![SqlValue::Blob(object.oid.to_vec())];
             parameters.extend(expected.iter().cloned());
+            parameters.push(chunk_id);
             let result = context.sql(&SqlBatch { statements: vec![
                 SqlStatement {
-                    sql: "INSERT INTO objects (oid, kind, size, digest, storage, body, external_sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(oid) DO NOTHING".into(),
+                    sql: "INSERT INTO objects (oid, kind, size, digest, storage, body, external_sha256, chunk_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(oid) DO NOTHING".into(),
                     parameters,
                 },
                 SqlStatement {
