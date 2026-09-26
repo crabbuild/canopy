@@ -177,6 +177,14 @@ fn changed(state: &RepositoryHttp, result: Result<TokenChange, ServerError>) -> 
             StatusCode::UNPROCESSABLE_ENTITY,
             "Token expiry must be in the future",
         ),
+        Ok(TokenChange::ActiveLimit) => plain(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Account has reached its active-token limit; revoke a credential before retrying",
+        ),
+        Ok(TokenChange::IssuanceLimit) => plain(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Account has reached its token issuance limit for the past 24 hours",
+        ),
         Err(error) => failed(error),
     }
 }

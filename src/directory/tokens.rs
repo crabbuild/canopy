@@ -1,6 +1,9 @@
 use super::*;
 
 pub const TOKEN_PAGE_SIZE: usize = 32;
+const MAX_ACTIVE_TOKENS: usize = 64;
+const MAX_DAILY_TOKENS: usize = 256;
+const ISSUANCE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// Credential and trusted site policy used for one atomic account or token operation.
 pub struct TokenAuthority<'a> {
@@ -25,6 +28,8 @@ pub enum TokenChange {
     Conflict,
     LastAdmin,
     InvalidExpiry,
+    ActiveLimit,
+    IssuanceLimit,
 }
 
 // The caller supplies site policy, not an authenticated account assertion.
@@ -115,8 +120,16 @@ impl DirectoryCell {
             SqlValue::Text(scope.as_str().into()),
             expires_at_ms.map_or(SqlValue::Null, SqlValue::Integer),
         ]);
+        // Separate indexed ranges skip retained expired/revoked identities. Limit
+        // each count to the policy ceiling; exact retries precede quota decisions.
+        let active = format!(
+            "(SELECT count(*) FROM (SELECT 1 FROM access_tokens WHERE account = ?4 AND enabled = 1 AND expires_ms IS NULL UNION ALL SELECT 1 FROM access_tokens WHERE account = ?4 AND enabled = 1 AND expires_ms > ?1 LIMIT {MAX_ACTIVE_TOKENS}))"
+        );
+        let recent = format!(
+            "(SELECT count(*) FROM (SELECT 1 FROM access_tokens WHERE account = ?4 AND created_ms > ?1 - {ISSUANCE_WINDOW_MS} LIMIT {MAX_DAILY_TOKENS}))"
+        );
         let decision = format!(
-            "CASE WHEN NOT ({AUTHORIZED}) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND digest = ?6 AND account = ?4 AND scope = ?7 AND enabled = 1 AND expires_ms IS ?8 AND (expires_ms IS NULL OR expires_ms > ?1)) THEN 'applied' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 OR digest = ?6) THEN 'conflict' WHEN ?8 IS NOT NULL AND ?8 <= ?1 THEN 'invalid_expiry' ELSE 'applied' END"
+            "CASE WHEN NOT ({AUTHORIZED}) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND digest = ?6 AND account = ?4 AND scope = ?7 AND enabled = 1 AND expires_ms IS ?8 AND (expires_ms IS NULL OR expires_ms > ?1)) THEN 'applied' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 OR digest = ?6) THEN 'conflict' WHEN ?8 IS NOT NULL AND ?8 <= ?1 THEN 'invalid_expiry' WHEN {active} >= {MAX_ACTIVE_TOKENS} THEN 'active_limit' WHEN {recent} >= {MAX_DAILY_TOKENS} THEN 'issuance_limit' ELSE 'applied' END"
         );
         let result = self.credential_command(identity, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT {decision}"), parameters: parameters.clone() },
@@ -170,6 +183,8 @@ fn changed(
             "conflict" => TokenChange::Conflict,
             "last_admin" => TokenChange::LastAdmin,
             "invalid_expiry" => TokenChange::InvalidExpiry,
+            "active_limit" => TokenChange::ActiveLimit,
+            "issuance_limit" => TokenChange::IssuanceLimit,
             _ => {
                 return Err(InvocationError::NotStarted(Error::Command(
                     "invalid token outcome",

@@ -1,3 +1,5 @@
+mod token_quotas;
+
 use super::*;
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};

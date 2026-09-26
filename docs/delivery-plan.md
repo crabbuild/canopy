@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB Git object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -67,8 +67,8 @@ separate product decisions.
    command deduplication alone does not identify an HTTP operation.
 4. Complete account deletion, administration UI and audit records.
    Accounts support disablement; tokens support rotation, revocation and expiry.
-   Add issuance quotas; qualify admitted Git/LFS operations during revocation
-   and owner takeover.
+   Active-credential and rolling issuance limits are enforced in the Directory.
+   Qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
@@ -2317,3 +2317,60 @@ maintenance drain and recovery, and independent backup/restore with 80 MiB and
 empty LFS objects after deletion of every original source object. The bounded
 RustFS tmpfs fixture proves process/storage-API behavior, not provider disk or
 power-loss durability or production capacity.
+
+## Credential issuance limits
+
+On 2026-09-26, the Directory began enforcing 64 active credentials and 256 new
+credentials per rolling 24 hours for each target account. Initial account tokens
+and all scopes count. Exact active-record retries succeed at capacity; expired
+or revoked identities remain reserved. HTTP 429 distinguishes active capacity
+from the rolling issuance window. Revocation/expiry free active slots without
+resetting issuance history. Account creation retries and site-admin issuance
+cannot bypass the target account's limits.
+
+Admission counts and insertion share the existing owner-timed Directory
+transaction. Two indexes provide separate active-expiry and issuance-time ranges;
+both counts stop at their policy ceiling. No external counter, timer/reset job,
+new dependency or configuration option is introduced.
+
+Evidence:
+
+- All four Directory integration tests pass. The new time-boundary case starts
+  with published expired/revoked issuance history and a separate full pool of
+  expiring credentials. It verifies both rejections, preserved SDK replay results,
+  successful fresh attempts after time advances, authentication of newly admitted
+  credentials and retention of every historical row.
+- All three token HTTP integrations pass. Concurrent site-owner/self-admin
+  issuances compete for one slot; exactly one succeeds. The suite exercises
+  retry/conflict behavior, denial without reserving credentials, initial-account
+  replay, revocation, both limit boundaries, account isolation and fresh-node
+  recovery of active and daily usage. Existing expiry, rotation and last-admin
+  invariants continue to pass.
+- A disposable probe used the actual quota SQL and pinned SQLite 3.49.1 engine
+  with 100,000 expired historical rows. Empty and historical-only lookups both
+  took 33 VM steps for active count and 28 for recent count. With 64 permanent
+  credentials and 300 additional recently expired records, the counts stopped
+  at 64/256 using 536/2,075 VM steps. EXPLAIN QUERY PLAN confirmed the intended
+  covering index ranges. These are SQL-work observations, not end-to-end latency
+  or production capacity claims.
+- All-target Clippy with warnings denied, Rust formatting, Python syntax,
+  whitespace and the release build pass.
+
+The Directory schema gains indexes and its module digest changes; use a fresh
+preview prefix until explicit migrations exist. These policies bound credential
+count and issuance rate. Retained credentials, runtime command receipts,
+account-count admission, request-rate controls and deployment storage limits
+remain separate work. Administration UI, account deletion and audit records
+remain open; gate 2 is still partial.
+
+The final RustFS `1.0.0-beta.8-glibc` process run passed with
+`--sqlite-chunks --many-objects 256`. Through public HTTP, it fills active
+capacity, proves rejection/retry/revocation behavior, then rotates credentials
+until 256 retained issuances block both self-admin and site-admin requests.
+The recorded usage, metadata, denial and exact-record retry behavior survive
+clean restart and SIGKILL/lease expiry/local database loss. The same run passes
+Git/LFS, collaboration, ACL/privacy, 256 files and 300 refs, large SQLite objects,
+eight repositories across two HTTPS peers, maintenance drain and interrupted
+recovery, and independent backup/restore of 80 MiB and empty LFS objects after
+source deletion. The bounded tmpfs provider is process and storage-API evidence;
+provider disk/power-loss durability and production capacity remain unqualified.

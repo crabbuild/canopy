@@ -743,10 +743,42 @@ revocations cannot remove both remaining admins. Current authorization is still
 required for every HTTP retry, including after revoking the caller's own token.
 
 Secrets and IDs remain reserved after revocation or expiry. Account creation
-cannot reactivate one. Token records have no retention cleanup or issuance
-quota yet. Rotation is issue → verify replacement → update clients/deployment →
-revoke old ID. A deployment must configure an active owner admin token before
+cannot reactivate one. Token records have no retention cleanup yet. Rotation is
+issue → verify replacement → update clients/deployment → revoke old ID. A deployment must configure an active owner admin token before
 restart; startup rejects a retired configured token instead of recreating it.
+
+Each account allows at most 64 active credentials (`enabled = 1` and unexpired)
+and 256 issuances in a rolling 86,400,000-millisecond window. Both counts include
+the initial account credential and all scopes. An issuance timestamp exactly one
+window before execution is outside the window. Future-dated rows are counted.
+These are fixed preview admission policies, not throughput targets or deployment
+configuration. The target account owns usage even when the site admin issues.
+
+`issue_token` checks authorization, exact active-record retry, conflicting ID or
+digest, valid expiry, active capacity and then recent issuance, in that order.
+Quota rejection returns HTTP 429 with a distinct active-limit or window-limit
+message and creates no token record or token ID/secret reservation. A fresh HTTP attempt
+can reuse a previously refused ID/secret once capacity is available. An exact
+SDK mutation replay retains its original receipt/outcome. Exact successful HTTP
+retries remain 204 at capacity. Revocation and expiry release active slots, but
+retain their records in the issuance window; they cannot reset a rolling budget.
+Account creation retries cannot bypass limits because they never mint another
+initial token for an existing account.
+
+The two quota checks and insertion share one Directory transaction and owner
+execution timestamp. Active counts use separate null-expiry and future-expiry
+ranges in a partial `(account, expires_ms)` index for enabled records. Recent
+issuance uses `(account, created_ms)`. Counts stop at their respective ceilings;
+retained expired history is skipped through indexed ranges. SQLite applies
+[compound SELECT limits](https://sqlite.org/lang_select.html#limitoffset) to the
+whole `UNION ALL`, and its [partial-index rules](https://sqlite.org/partialindex.html)
+permit the matching enabled predicates. Limits require no external counter or
+periodic reset job. Disabled accounts remain unavailable.
+
+These limits bound active credentials and issuance rate, not total retained
+storage. Historical credentials and runtime command outcomes remain retained;
+account-count admission, request-rate controls, receipt retention and deployment
+storage quotas still need their own policies.
 
 Directory credential command 3 and query 4 bind parameter 1 to one execution
 timestamp for the entire SQL operation. They use the greater of owner wall time

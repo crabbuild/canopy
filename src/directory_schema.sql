@@ -22,6 +22,8 @@ CREATE TABLE access_tokens (
 ) WITHOUT ROWID;
 
 CREATE INDEX access_tokens_account ON access_tokens(account, id);
+CREATE INDEX access_tokens_active ON access_tokens(account, expires_ms) WHERE enabled = 1;
+CREATE INDEX access_tokens_issued ON access_tokens(account, created_ms);
 
 CREATE INDEX repositories_owner_id ON repositories(owner, repository_id) WHERE state = 'ready';
 

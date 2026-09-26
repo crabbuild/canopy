@@ -29,6 +29,7 @@ import smoke_s3_checks
 import smoke_s3_corpus
 import smoke_s3_issues
 import smoke_s3_pulls
+import smoke_s3_token_quotas
 import smoke_s3_threads
 import smoke_s3_browse
 import smoke_s3_merge
@@ -686,6 +687,7 @@ def main():
                               {"id": replacement_id, "token": reader_token, "scope": "read"}) == 204
             assert api_status(base_url, f"{token_api}/{tokens[0]['id']}", "local-test-token", "DELETE") == 204
             verify_revoked_token(base_url, revoked_reader)
+            quota_state = smoke_s3_token_quotas.seed(base_url)
             expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
@@ -706,6 +708,7 @@ def main():
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
             verify_revoked_token(base_url, revoked_reader)
+            smoke_s3_token_quotas.verify(base_url, quota_state)
             verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
             url = f"{base_url}/canopy/renamed.git"
@@ -739,6 +742,7 @@ def main():
             print("PASS: same-directory restart reclaims abandoned Git/scratch/SQLite state before durable recovery", flush=True)
             verify_revoked_token(base_url, revoked_reader)
             tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
+            smoke_s3_token_quotas.verify(base_url, quota_state)
             verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
             assert len(tokens) == 2

@@ -568,6 +568,14 @@ Expired/revoked IDs and secrets stay reserved. Revoking the site's last
 non-expiring admin token returns 409, including under concurrent requests.
 Expiring admins do not satisfy that recovery guard.
 
+Each account admits at most 64 active credentials and 256 new credentials per
+rolling 24 hours, including its initial credential. HTTP 429 distinguishes an
+active-capacity limit from the issuance window. Revoke a credential or wait for
+its expiry to free active capacity; revocation and expiry do not erase issuance
+history. Exact active-record retries do not consume another slot. Limits apply
+to the target account, including issuance by the site owner, and survive recovery.
+
+
 For rotation, issue a replacement, verify it, update clients, then revoke the old
 token. For the site owner, also update `CANOPY_GIT_TOKEN` in the deployment before
 retiring its configured credential: startup requires an active owner admin token.

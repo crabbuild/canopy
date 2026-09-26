@@ -170,3 +170,140 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
     runtime.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn issuance_window_and_expiry_release_capacity_without_deleting_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    use cellule_runtime::{SqlBatch, SqlStatement, SqlValue};
+    let application = Arc::new(CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../Cargo.lock"),
+        "credential-window-test",
+    ))?);
+    let tenant = TenantId::from_bytes([71; 16]);
+    let application_id = ApplicationId::from_bytes([72; 16]);
+    let target = directory::directory_target(tenant, application_id)?;
+    let session = SessionId::from_bytes([73; 16]);
+    let runtime = runtime(session)?;
+    let layout = CellStorageLayout::new(
+        Store::new(Arc::new(InMemory::new())),
+        StorePath::from("credential-window"),
+        *application_id.as_bytes(),
+    );
+    let files = tempfile::TempDir::new()?;
+    let handle = bootstrap(
+        &runtime,
+        &application.registry(),
+        &layout,
+        &target,
+        (DirectoryModule::NAME, directory::SCHEMA),
+        session,
+        &files.path().join("directory.sqlite"),
+    )
+    .await?;
+    let app = app_handle(&application, tenant, application_id, handle);
+    let cell = DirectoryCell::new(&app, target.clone())?;
+    cell.create_account(random_identity()?, "owner", [1; 32], TokenScope::Admin)
+        .await?;
+    cell.create_account(random_identity()?, "member", [2; 32], TokenScope::Admin)
+        .await?;
+    let now = random_identity()?.issued_at_ms;
+    let boundary = now + 2000;
+    let created = boundary - 24 * 60 * 60 * 1000;
+    // Published historical rows stand in for credentials issued nearly a day ago;
+    // no clock override or privileged time parameter reaches the product handler.
+    let sql = app.sql::<DirectoryModule>(target)?;
+    sql.batch(random_identity()?, SqlBatch { statements: vec![
+        SqlStatement {
+            sql: "WITH RECURSIVE history(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM history WHERE n < 255) INSERT INTO access_tokens (id, digest, account, scope, enabled, created_ms, expires_ms) SELECT randomblob(16), randomblob(32), 'owner', 'read', n % 2, ?1, ?1 + 1 FROM history".into(),
+            parameters: vec![SqlValue::Integer(created)],
+        },
+        SqlStatement {
+            sql: "WITH RECURSIVE active(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM active WHERE n < 63) INSERT INTO access_tokens (id, digest, account, scope, enabled, created_ms, expires_ms) SELECT randomblob(16), randomblob(32), 'member', 'read', 1, ?1, ?2 FROM active".into(),
+            parameters: vec![SqlValue::Integer(now), SqlValue::Integer(boundary)],
+        },
+    ]}).await?;
+    let denied = random_identity()?;
+    assert_eq!(
+        cell.issue_token(
+            denied,
+            authority("owner", [1; 32]),
+            [10; 16],
+            [10; 32],
+            TokenScope::Read,
+            None
+        )
+        .await?
+        .output,
+        TokenChange::IssuanceLimit
+    );
+    assert_eq!(
+        cell.issue_token(
+            random_identity()?,
+            authority("member", [1; 32]),
+            [11; 16],
+            [11; 32],
+            TokenScope::Read,
+            None
+        )
+        .await?
+        .output,
+        TokenChange::ActiveLimit
+    );
+    let wait = boundary - random_identity()?.issued_at_ms;
+    assert!(wait > 0, "quota fixture did not fill before its boundary");
+    tokio::time::sleep(std::time::Duration::from_millis((wait + 20) as u64)).await;
+    // Replaying a decided command cannot turn a rejected attempt into a mutation.
+    assert_eq!(
+        cell.issue_token(
+            denied,
+            authority("owner", [1; 32]),
+            [10; 16],
+            [10; 32],
+            TokenScope::Read,
+            None
+        )
+        .await?
+        .output,
+        TokenChange::IssuanceLimit
+    );
+    for (account, id, digest) in [
+        ("owner", [10; 16], [10; 32]),
+        ("member", [11; 16], [11; 32]),
+    ] {
+        assert_eq!(
+            cell.issue_token(
+                random_identity()?,
+                authority(account, [1; 32]),
+                id,
+                digest,
+                TokenScope::Read,
+                None
+            )
+            .await?
+            .output,
+            TokenChange::Applied
+        );
+        assert!(cell.authenticate(digest, None).await?.output.is_some());
+    }
+    let retained = sql
+        .query(
+            None,
+            SqlBatch {
+                statements: vec![SqlStatement {
+        sql: "SELECT account, count(*) FROM access_tokens GROUP BY account ORDER BY account".into(),
+        parameters: vec![],
+    }],
+            },
+        )
+        .await?
+        .output;
+    assert_eq!(
+        retained[0].rows,
+        vec![
+            vec![SqlValue::Text("member".into()), SqlValue::Integer(65)],
+            vec![SqlValue::Text("owner".into()), SqlValue::Integer(257)],
+        ]
+    );
+    runtime.shutdown().await?;
+    Ok(())
+}
