@@ -28,6 +28,7 @@ pub mod http;
 pub mod issues;
 pub mod large_blob;
 pub mod lfs;
+mod native_git;
 mod object_batch;
 mod object_chunks;
 mod object_reads;

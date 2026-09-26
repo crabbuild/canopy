@@ -214,30 +214,10 @@ async fn run(
     input: &[u8],
     environment: &[(&str, &str)],
 ) -> Result<Output, GatewayError> {
-    let mut command = Command::new("git");
-    command.env_clear();
-    // Host Git configuration may define arbitrary merge drivers or signing
-    // commands. This disposable cache accepts no host configuration/environment.
-    for name in ["PATH", "SystemRoot"] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
+    let mut command = crate::native_git::command(&backend.git_dir());
     command
-        .env("HOME", backend.git_dir())
-        .env("XDG_CONFIG_HOME", backend.git_dir())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_ATTR_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("LC_ALL", "C")
         .envs(environment.iter().copied())
-        .current_dir(backend.git_dir())
-        .arg("--no-replace-objects")
-        .args(["-c", "protocol.allow=never", "--git-dir"])
+        .arg("--git-dir")
         .arg(backend.git_dir())
         .args(args)
         .stdin(Stdio::piped())

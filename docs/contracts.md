@@ -528,6 +528,25 @@ Crash-left directories and cleanup-failure charges need startup reconciliation;
 native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
+Every native Git entry point now uses one process environment policy: HTTP
+backend, post-push ref enumeration, incremental object readers and candidate
+preparation. Only `PATH` and Windows `SystemRoot` survive from the server's
+environment. System/global Git configuration and system attributes are disabled;
+replacement objects and outbound Git protocols are disabled. The gateway adds
+only its validated CGI fields, or the candidate's recorded author and timestamp.
+The server retains its provider credentials for object storage; Git and its
+helpers do not inherit them. Home and temporary directories point into an
+absolute disposable cache, including when the configured data directory was
+relative. Executables selected through `PATH` remain trusted dependencies;
+this policy is not a filesystem sandbox or a peak disk limit.
+
+This boundary follows Git's documented
+[configuration, object-path and trace environment contracts](https://git-scm.com/docs/git/2.50.0#_environment_variables)
+and the HTTP backend's
+[CGI contract](https://git-scm.com/docs/git-http-backend#_environment).
+Git may add its own child environment, including its resolved executable path;
+host values are removed before that initialization.
+
 Schema version 1 is still changing in this unreleased repository. The chunk,
 HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,
 and the operation-5/8/9 codec changes
@@ -1264,10 +1283,10 @@ and committer are the preparing account at `<account>@users.canopy.invalid`;
 the reserved time is truncated to UTC seconds, and a missing message newline is
 appended. The HTTP caller cannot choose the resulting OID or tree.
 
-The native subprocess environment is cleared, preserving only executable lookup
-and Windows system root. Global/system Git configuration and system attributes
-are disabled. Home paths point into the disposable cache, replacement objects
-are disabled, and protocol access is denied. No repository worktree/index,
+The shared native subprocess environment is cleared, preserving only executable
+lookup and Windows system root. Global/system Git configuration and system
+attributes are disabled. Home and temporary paths point into the disposable
+cache, replacement objects are disabled, and protocol access is denied. No repository worktree/index,
 user merge drivers, hooks or signing commands are used by preparation. The
 native worker is trusted to compute the merge tree; the Cell validates exact
 canonical commit bytes and certified graph closure before recording readiness.

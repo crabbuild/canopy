@@ -49,7 +49,9 @@ impl GitCache {
         let head = format!("ref: {head}\n");
         tokio::task::spawn_blocking(move || {
             let cache = Arc::new(Self {
-                directory: tempfile::TempDir::new_in(root)?,
+                // Native workers change cwd to this cache; their paths must stay
+                // absolute even when the node's data directory is relative.
+                directory: tempfile::TempDir::new_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {

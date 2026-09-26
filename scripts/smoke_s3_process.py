@@ -83,7 +83,8 @@ def start(binary, directory, settings, instance):
     path.write_text(json.dumps(config))
     log = directory / f"{instance}.log"
     output = log.open("wb")
-    process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output)
+    process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output,
+                               env=host_git_environment(directory))
     output.close()
     try:
         wait_ready(process, address, log)
@@ -92,6 +93,37 @@ def start(binary, directory, settings, instance):
         process.wait()
         raise
     return process, f"http://{address}"
+
+
+def host_git_environment(directory):
+    # Contaminate only the server process. Client Git and the storage provider
+    # retain their normal environment; native cache workers must strip this.
+    root = directory / "host-git"
+    root.mkdir(exist_ok=True)
+    config = root / "config"
+    config.write_text("[http]\nreceivepack = false\nuploadpack = false\n"
+                      "[receive]\ndenyDeletes = true\n"
+                      "[uploadpack]\npackObjectsHook = false\n")
+    return {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": str(config),
+        "GIT_CONFIG_SYSTEM": str(config),
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.uploadpack",
+        "GIT_CONFIG_VALUE_0": "false",
+        "GIT_DIR": str(root / "wrong.git"),
+        "GIT_COMMON_DIR": str(root / "wrong.git"),
+        "GIT_OBJECT_DIRECTORY": str(root / "objects"),
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(root / "alternates"),
+        "GIT_EXEC_PATH": str(root / "exec"),
+        "GIT_TRACE": str(root / "trace"),
+        "GIT_TRACE2_EVENT": str(root / "trace2"),
+        "GIT_PROTOCOL": "version=2",
+        "HTTP_GIT_PROTOCOL": "version=2",
+        "TMPDIR": str(root / "tmp"),
+        "TMP": str(root / "tmp"),
+        "TEMP": str(root / "tmp"),
+    }
 
 
 def create_repository(base_url, name):
@@ -724,6 +756,8 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
+            assert {path.name for path in (directory / "host-git").iterdir()} == {"config"}
+            print("PASS: native Git ignores host config, object paths, exec path, protocol and trace settings", flush=True)
             print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
         except Exception:
             for log in directory.glob("*.log"):

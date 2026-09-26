@@ -12,10 +12,7 @@ use axum::body::Body;
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{MutationIdentity, RequestId};
 use object_store::ObjectStore;
-use tokio::{
-    process::Command,
-    sync::{Mutex, OwnedSemaphorePermit},
-};
+use tokio::sync::{Mutex, OwnedSemaphorePermit};
 
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
@@ -526,7 +523,7 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
 }
 
 async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
-    let output = Command::new("git")
+    let output = crate::native_git::command(git_dir)
         .arg("--git-dir")
         .arg(git_dir)
         .args(args)

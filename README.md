@@ -452,6 +452,9 @@ size limits and share disk admission with the encoded upload.
 Disposable Git caches retain shared disk reservations. Hydration admits bytes
 before writing; native Git writes are measured before durable ref publication.
 Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.
+All native Git workers use an isolated environment: host Git configuration,
+object paths, tracing and provider credentials are removed. Home and temporary
+paths point into the disposable cache; Git is selected through the host `PATH`.
 Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories
 evict an inactive repository and restore from durable state when accessed again.

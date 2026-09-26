@@ -135,7 +135,7 @@ impl GitHttpBackend {
         {
             return Err(GitHttpError::InvalidPath);
         }
-        let mut process = Command::new("git");
+        let mut process = crate::native_git::command(&self.git_dir());
         // The cache's HEAD must not implicitly protect a branch by name.
         // Repository policy belongs in the Cell ref transaction.
         process

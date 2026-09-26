@@ -40,7 +40,12 @@ separate product decisions.
    to evict. The resident limit is not a production capacity target.
    Hydration and retained caches now use shared disk admission; native Git's
    completed writes are measured before publication, but its peak usage remains
-   unbounded. Add crash-left cache reconciliation and qualify cleanup failures.
+   unbounded. All native workers now discard host configuration, object paths,
+   tracing and provider credentials, with temporary paths inside their cache.
+   Enforce the remaining byte ceiling with filesystem quotas or a proven bound
+   on every native write; periodic sampling and per-file limits alone cannot
+   prove aggregate peak usage. Add crash-left cache reconciliation and qualify
+   cleanup failures.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -1654,3 +1659,37 @@ moderation, rebase/conflict resolution, administration, releases/assets, public
 service features, account lifecycle, native resource bounds, backup/GC, routing,
 observability, hosted CI and production capacity gates remain open. The separate
 saved-file-download proof gap and general per-push history also remain.
+
+
+## Native Git environment isolation qualification
+
+On 2026-09-26, all four native Git entry points moved to
+`src/native_git.rs`: smart HTTP, post-push ref enumeration, incremental object
+reads and merge preparation. The shared policy removes inherited configuration,
+object paths, trace settings and provider credentials. Home and temporary paths
+resolve inside the absolute disposable cache. This closes an accounting escape
+prerequisite; aggregate native peak disk usage remains an open release gate.
+
+Proof on Darwin arm64 with Apple Git 2.50.1 and RustFS 1.0.0-beta.8-glibc:
+
+- The previous release binary fails its first push with HTTP 500 under the new
+  hostile-host-environment process fixture. The rebuilt binary passes the same
+  fixture through graceful restart, fresh local state and SIGKILL/lease takeover.
+- A separate-process regression proves that host configuration is absent, a
+  synthetic provider secret does not reach a Git shell helper, relative cache
+  roots resolve correctly and an object write stays in the intended cache.
+- The 37 Git-focused unit tests, smart HTTP advertisement integration,
+  all-target Clippy, formatting and release build pass.
+- `smoke_s3_process.py --sqlite-chunks --many-objects 256 --large-clone` passes:
+  Git/LFS, merge/squash, policy hooks, exact reply retries and collaboration state
+  survive recovery. Both v0 and v2 restore an 83,912,145-byte pack with matching
+  file hashes and `git fsck`. Large SQLite tree/commit/tag bodies and 300 extra
+  refs also restore. The host override directory contains only its input config;
+  no redirected objects, traces or temporary files appear.
+
+Local clone observations: 7.53 seconds cold v0, 3.36 seconds warm v2. Different
+cache states; these are recovery observations, not a throughput target. The
+production addition is one small policy shared by four callers, replacing the
+candidate-only copy. No dependency, schema or wire-format change. Filesystem
+allocation overhead, crash-left cleanup, native peak memory/disk and cross-OS
+qualification remain open.

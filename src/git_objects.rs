@@ -4,7 +4,7 @@ use std::{io, path::Path, process::Stdio, time::Duration};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::{Child, ChildStdin, ChildStdout},
     time::timeout,
 };
 use tokio_util::task::AbortOnDropHandle;
@@ -39,8 +39,7 @@ struct Process {
 
 impl Process {
     fn start(git_dir: &Path, args: &[&str]) -> Result<(Self, ChildStdin), ObjectReadError> {
-        let mut child = Command::new("git")
-            .arg("--no-replace-objects")
+        let mut child = crate::native_git::command(git_dir)
             .arg("--git-dir")
             .arg(git_dir)
             .args(args)
