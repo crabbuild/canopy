@@ -461,6 +461,12 @@ live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
 stop startup. Keep the lock files in place; files outside the managed runtime
 are untouched. Windows orphan-worker recovery still requires manual cleanup
 after all server and Git processes have stopped.
+
+The server handle supervises startup and shutdown. Dropping it requests a drain;
+cancelling a startup or shutdown wait cannot interrupt admitted Cell work or
+release the workspace early. A failed node drain retains the workspace lock
+until process restart.
+
 Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories
 evict an inactive repository and restore from durable state when accessed again.

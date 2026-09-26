@@ -21,7 +21,11 @@ use cellule_store::{StorageError, Store, probe_storage};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
 use sha2::{Digest as _, Sha256};
-use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex, oneshot},
+    task::JoinHandle,
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
@@ -35,6 +39,7 @@ use crate::{
 };
 
 mod discovery;
+mod lifecycle;
 mod residency;
 mod tokens;
 mod workspace;
@@ -120,8 +125,14 @@ impl AdvertisementIdentity {
     }
 }
 
-/// Owns the HTTP listener, leased Cell node, and its shutdown order.
+/// Controls a supervised node; dropping the handle requests graceful shutdown.
 pub struct CanopyServer {
+    address: std::net::SocketAddr,
+    shutdown: oneshot::Sender<()>,
+    finished: JoinHandle<Result<(), ServerError>>,
+}
+
+struct RunningServer {
     address: std::net::SocketAddr,
     node: Arc<CellNode>,
     directory: NodeDirectory,
@@ -308,9 +319,8 @@ impl RepositoryManager {
     }
 }
 
-impl CanopyServer {
-    /// Starts a node only after storage fencing, authority and Git ingress are ready.
-    pub async fn start(
+impl RunningServer {
+    async fn start(
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
@@ -474,7 +484,11 @@ impl CanopyServer {
         let api = match startup {
             Ok(api) => api,
             Err(error) => {
-                let _ = node.shutdown().await;
+                if let Err(cleanup) = node.shutdown().await {
+                    tracing::error!(error = %cleanup, "startup drain failed; workspace retained until process restart");
+                    // A failed runtime drain does not prove every SQL worker closed.
+                    std::mem::forget(Arc::clone(&local));
+                }
                 let observed = advertisement.lock().await;
                 let _ = directory.withdraw(&observed, unix_now_ms()?).await;
                 return Err(error);
@@ -498,30 +512,6 @@ impl CanopyServer {
             tasks,
             _local: local,
         })
-    }
-
-    #[must_use]
-    pub const fn local_addr(&self) -> std::net::SocketAddr {
-        self.address
-    }
-
-    /// Stops ingress, drains the Cell node, then withdraws its directory lease.
-    pub async fn shutdown(self) -> Result<(), ServerError> {
-        self.ingress_stop.cancel();
-        let serving = self.serving.await;
-        self.tasks.close();
-        self.tasks.wait().await;
-        let drained = self.node.shutdown().await;
-        self.stop.cancel();
-        let observed = self.advertisement.lock().await;
-        let withdrawn = match unix_now_ms() {
-            Ok(now_ms) => self.directory.withdraw(&observed, now_ms).await,
-            Err(error) => return Err(error),
-        };
-        serving??;
-        drained?;
-        withdrawn?;
-        Ok(())
     }
 }
 

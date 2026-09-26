@@ -46,7 +46,8 @@ separate product decisions.
    on every native write; periodic sampling and per-file limits alone cannot
    prove aggregate peak usage. Managed runtime recovery now fences live nodes
    and Unix Git descendants before reclaiming crash-left files. Qualify OS power
-   loss, startup cancellation and Windows process containment next.
+   loss, abrupt runtime destruction and Windows process containment next.
+   A node supervisor now retains startup and drain across caller cancellation.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -1738,3 +1739,41 @@ Cell schema change. Windows orphan containment, startup cancellation during Cell
 acquisition, OS power loss, Linux qualification and native peak disk/memory limits
 remain open. Earlier development builds' anonymous directories remain untouched;
 there is no adoption or compatibility reader for them.
+
+
+## Cancellation-safe node lifecycle qualification
+
+On 2026-09-26, `src/server/lifecycle.rs` introduced one supervisor that owns
+initialization, HTTP serving, Cell drain and local workspace exclusion.
+`CanopyServer` is now its control handle. Cancelling startup, dropping a ready
+handle or cancelling the shutdown wait requests cleanup without aborting admitted
+Cellule work. A failed node drain retains the workspace lock until process
+restart, including startup rollback.
+
+Dependency proof used the pinned Cellule revision `56b35ab`: CellNode retains a
+runtime drain task, while CellRuntime shutdown sends an actor message and then
+closes the SQL worker pool. Failure does not prove every worker was joined.
+Tokio's JoinHandle detaches on drop, so the control channel, supervised ownership
+and explicit drain are necessary; dropping the old server's listener task handle
+alone did not stop the service.
+
+Evidence:
+
+- Three lifecycle integration tests use real Cellule and a paused ObjectStore.
+  They cancel startup during Serving publication; drop a ready handle; cancel a
+  shutdown waiting for Idle publication; and inject an Idle publication denial.
+  The local lock remains held at each paused boundary. Successful cleanup permits
+  immediate reuse of the same address and directory with durable repository UUIDs
+  preserved. Failed drain retains exclusion.
+- The same-directory workspace integration and all six residency/fault
+  integrations pass. All-target Clippy, formatting and release build pass.
+- The real RustFS process probe passes with `--sqlite-chunks --many-objects 256`:
+  graceful restart, SIGKILL/lease takeover and corrupted-local-SQLite recovery
+  preserve Git/LFS, collaboration, branch rules, merge/squash and exact retries.
+  Large SQLite tree/commit/tag objects and 300 additional refs restore exactly.
+
+This is a small ownership change plus fault-injection coverage. There is one
+startup/drain path and no new dependency, configuration, schema or HTTP contract.
+The Tokio runtime must remain alive until cleanup finishes. Runtime destruction,
+panics, power loss, Windows containment, native peak resource limits and the
+remaining service delivery gates are still open.

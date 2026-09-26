@@ -30,6 +30,8 @@ mod discovery;
 mod issues;
 #[path = "multi_server/large_objects.rs"]
 mod large_objects;
+#[path = "multi_server/lifecycle.rs"]
+mod lifecycle;
 #[path = "multi_server/residency.rs"]
 mod residency;
 #[path = "multi_server/tokens.rs"]

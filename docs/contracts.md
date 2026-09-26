@@ -558,6 +558,20 @@ spools before opening Cells or advertising the node. These are disposable copies
 acknowledged state is recovered from object storage. Normal shutdown may leave
 local files for the next startup to reclaim.
 
+One supervisor owns node startup, the listener, Cell drain and the workspace.
+`CanopyServer::start` waits for its readiness result; cancelling that wait closes
+the control channel and requests drain after admitted initialization settles.
+Dropping a returned handle also requests drain. `shutdown()` waits for completion,
+but cancelling the wait leaves that same supervisor running. The Tokio runtime
+must stay alive for cleanup to finish. This does not make runtime destruction,
+process death or panics graceful.
+
+Shutdown stops ingress, waits for tracked request work, drains Cellule, then
+withdraws the advertisement. If node drain returns an error, Canopy retains its
+workspace lock for the rest of the process lifetime: worker closure is unproven.
+The same rule applies to rollback after a failed startup. Restarting the process
+is required before reusing that data directory.
+
 Each native Git command holds a shared lock in its cache. On Unix the descriptor
 survives exec and is inherited by descendants. Startup acquires every abandoned
 cache's exclusive worker lock before deleting any local state. A worker that
@@ -579,9 +593,11 @@ automatically adopted or deleted.
 Windows lacks the inherited worker fence in this implementation. If a previous
 runtime contains a native worker lock, automatic recovery refuses it; operators
 must stop all server/Git processes before removing that runtime directory.
-Startup cancellation during Cell acquisition, OS power loss, unusual filesystems
-and Windows process containment still require qualification. This cleanup does
-not enforce native peak disk usage or filesystem allocation overhead.
+Cancellation during Cell publication and release is qualified with the real
+runtime and a paused object store. OS power loss, unusual filesystems, abrupt
+Tokio runtime destruction and Windows process containment still require
+qualification. This cleanup does not enforce native peak disk usage or filesystem
+allocation overhead.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
 HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,
