@@ -22,12 +22,19 @@ restart with a fresh local SQLite file.
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`
-lists ready repositories, with an `after` cursor for additional pages.
+lists ready repositories that the authenticated account can access. Pass the
+returned `next_cursor` as `after` until it is null. Pages inspect at most 32
+UUID-ordered candidates and can be short or empty with a non-null cursor,
+including when access was revoked or Cell movement capacity runs out.
+A page that cannot make progress returns 503 with `Retry-After: 1`.
+`GET /api/repositories/<name>` returns the UUID, clone URL, repository role,
+default branch and ref generation; missing or inaccessible names return 404.
 `PATCH /api/repositories/<old_name>` with
 `{"name":"new_name","repository_id":"<returned UUID>"}` atomically renames a ready
 repository. The UUID is a precondition and remains unchanged; a retry with
-the same UUID and new name returns the renamed repository. These endpoints
-require the configured owner's token. Git and LFS use
+the same UUID and new name returns the renamed repository. Create and rename
+require the configured owner's token; list and get also admit collaborators.
+Git and LFS use
 `/<owner>/<repository_name>.git`. Repository creation reserves a UUID in the
 Directory Cell, provisions its own Repository Cell, then marks the name ready.
 Later requests recover that Cell on demand from the directory.
@@ -83,8 +90,8 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account lifecycle API, organization model, collaborator-visible repository
-listing, multi-node routing, backup, repository browser, issue or pull request
+account lifecycle API, organization model, API to list a repository's
+collaborators, multi-node routing, backup, repository browser, issue or pull request
 API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
 Git revision, so a
 fresh Canopy checkout builds without a local Cellule checkout.
@@ -201,5 +208,5 @@ turn storage publications into unresolved mutations even with free byte space.
 Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above
 1 MiB, then verify exact raw bytes and OIDs after takeover with a strict fsck.
 This exercises SQLite chunk storage independently of external large blobs.
-The chunk and default-branch layouts change the unreleased schema; use a fresh
-development storage prefix when moving from builds that predate either change.
+The chunk, default-branch and repository-discovery layouts change the unreleased
+schema; use a fresh development storage prefix when moving from older builds.

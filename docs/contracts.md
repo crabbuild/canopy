@@ -14,6 +14,7 @@ before admitting persistent customer repositories.
 | Account | lowercase ASCII name, enabled flag | Directory Cell |
 | Access token | SHA-256 digest of bearer secret, account, scope (`read`, `write`, `admin`), enabled flag | Directory Cell |
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
+| Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
@@ -191,8 +192,52 @@ same UUID and repository contents survive a URL change. Ready names route
 through their UUID on demand; one node can serve multiple repository Cells.
 The Directory Cell authenticates token digests; each Repository Cell authorizes
 its own Git and LFS access. Repeated bootstrap requires the same owner token.
-Account disablement, token rotation/revocation, collaborator-visible listing
-and audit records remain open.
+Account disablement, token rotation/revocation, listing a repository's
+collaborators and audit records remain open.
+
+Repository discovery uses a Directory Cell candidate index, keyed by account
+and repository UUID. The product grant path first records a candidate through
+an owner-authorized Directory write, then grants access in the Repository Cell.
+It reports success only after both publications. An interrupted grant can leave
+a candidate without an ACL; every listing still checks that Cell before exposing
+metadata. SDK callers coordinating grants must follow the same ordering.
+Direct `RepositoryCell::grant_member` is the local ACL primitive and does not
+populate the Directory index.
+
+Revoke changes only the authoritative Repository Cell ACL. Candidates remain:
+removing one after revocation could race with a new grant and hide valid access.
+Regrant reuses the same candidate. Future candidate compaction needs fencing
+against grants; no candidate GC runs today. Account and repository quotas remain
+open. Owned repositories use the immutable Directory owner field without loading
+each Cell. Candidate discovery itself is not authorization, and the SDK names
+its primitive `list_candidates` to preserve that distinction.
+
+`GET /api/repositories` requires an authenticated read-scoped token and checks
+at most 32 candidates per page. Results use UUID order, so rename preserves
+pagination position. The `after` parameter is a returned UUID cursor; arbitrary
+cursors never bypass the caller's account filter or Cell ACL. Missing and
+revoked candidates contribute no entries. A page may be empty while
+`next_cursor` is present. Clients must continue until it is null. Cursors contain
+UUIDs rather than private repository names; a cursor may identify a prepared or
+revoked candidate and does not grant access to it. Pending creations are excluded.
+
+Cell movement capacity can stop a cold scan early. After any progress, the
+manager returns the authorized entries already read and a cursor for the last
+candidate checked. With no progress it returns 503 and `Retry-After: 1`. Other
+storage/runtime failures return an error rather than an apparently complete
+listing. Directory queries use owner/UUID and account/UUID indexes; they do not
+enumerate other accounts' repositories. Pages are not a cross-Cell snapshot:
+new grants or repositories behind a cursor require a fresh scan, and each ACL
+is observed when that candidate is checked. Cold lists still restore candidate
+Cells, so the 32-candidate bound is not a production latency guarantee.
+
+`GET /api/repositories/<name>` first checks for a Directory candidate (or owner),
+then the current Cell ACL before returning metadata. Missing and unauthorized
+names return 404. It returns `owner`, `name`, `repository_id`, `clone_url`, `role`,
+`default_branch` and `ref_generation`. `role` describes repository membership;
+token scope remains an independent restriction. Repository access is checked at
+read admission, as for existing Git/LFS reads. Rename and ACL/default-branch
+changes across Cells are not presented as one atomic snapshot.
 
 Repository residency is bounded independently of the number of directory
 entries. A request pins its loaded repository before using its Cell or Git/LFS
@@ -434,8 +479,8 @@ Crash-left directories and cleanup-failure charges need startup reconciliation;
 native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
-Schema version 1 is still changing in this unreleased repository. The chunk and
-HEAD layouts and operation-5 codec change require a fresh development storage prefix;
+Schema version 1 is still changing in this unreleased repository. The chunk,
+HEAD and discovery layouts and operation-5 codec change require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule

@@ -53,7 +53,7 @@ impl RepositoryHttp {
             )
             .route(
                 "/api/repositories/{name}",
-                axum::routing::patch(rename_repository),
+                get(get_repository).patch(rename_repository),
             )
             .route(
                 "/api/repositories/{name}/default-branch",
@@ -282,24 +282,23 @@ async fn list_repositories(
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    if principal.account != state.manager.owner {
-        return plain(StatusCode::FORBIDDEN, "Repository listing is restricted");
-    }
-    if query
+    let after = match query
         .after
         .as_deref()
-        .is_some_and(|after| !after.is_empty() && directory::validate_component(after).is_err())
+        .map(uuid::Uuid::parse_str)
+        .transpose()
     {
-        return plain(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Invalid repository cursor",
-        );
-    }
-    match state
-        .manager
-        .list(query.after.as_deref().unwrap_or_default())
-        .await
-    {
+        Ok(after) if after.is_none_or(|id| validate_repository_id(id.into_bytes()).is_ok()) => {
+            after.map(uuid::Uuid::into_bytes)
+        }
+        _ => {
+            return plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid repository cursor",
+            );
+        }
+    };
+    match state.manager.list(&principal.account, after).await {
         Ok((entries, next)) if (state.manager.ready)() => json_response(
             StatusCode::OK,
             &serde_json::json!({
@@ -308,9 +307,60 @@ async fn list_repositories(
             }),
         ),
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Err(ServerError::Runtime(cellule_runtime::Error::Capacity(_))) => {
+            let mut response = plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Repository listing capacity is full; retry the request",
+            );
+            response.headers_mut().insert(
+                header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("1"),
+            );
+            response
+        }
         Err(error) => {
             tracing::error!(error = %error, "repository listing failed");
             plain(StatusCode::SERVICE_UNAVAILABLE, "Repository listing failed")
+        }
+    }
+}
+
+async fn get_repository(
+    State(state): State<Arc<RepositoryHttp>>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(&headers, TokenScope::Read).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if directory::validate_component(&name).is_err() {
+        return plain(StatusCode::NOT_FOUND, "Repository does not exist");
+    }
+    match state.manager.inspect(&principal.account, &name).await {
+        Ok(Some(details)) if (state.manager.ready)() => {
+            let repository = repository_response(&state.manager, details.entry);
+            json_response(
+                StatusCode::OK,
+                &serde_json::json!({
+                    "owner": repository.owner,
+                    "name": repository.name,
+                    "repository_id": repository.repository_id,
+                    "clone_url": repository.clone_url,
+                    "role": details.role.as_str(),
+                    "default_branch": details.head.reference,
+                    "ref_generation": details.head.generation,
+                }),
+            )
+        }
+        Ok(Some(_)) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Ok(None) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
+        Err(error) => {
+            tracing::error!(error = %error, "repository metadata read failed");
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Repository is unavailable")
         }
     }
 }

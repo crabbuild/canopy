@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts, per-repository Git/LFS roles and default-branch management survive recovery; account lifecycle, collaborator listing and repository get remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts, per-repository Git/LFS roles, default branches and authorized repository list/get survive recovery; account lifecycle and collaborator roster remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
@@ -55,7 +55,7 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account lifecycle, token rotation/revocation, collaborator-visible
+4. Complete account lifecycle, token rotation/revocation, collaborator roster
    listing, and audit records. Test revocation during in-flight Git and LFS
    operations, including a node takeover.
 5. Implement collaboration as vertical slices: issues; checks and branch
@@ -555,3 +555,57 @@ latency claim.
 Branch protection, account lifecycle, repository get/list permissions, backup,
 GC, native resource ceilings, representative capacity evidence and the broader
 publication fault matrix remain open gates.
+
+## Authorized repository discovery
+
+Authenticated collaborators can now list their accessible repositories and read
+`GET /api/repositories/<name>`. Get returns identity, clone URL, membership role,
+default branch and ref generation, with 404 for missing or inaccessible names.
+Owners retain a Directory-only listing path. Both use the same UUID pagination
+contract; there is no retained name-cursor reader in this unreleased API.
+
+The Directory Cell records account/repository candidates before the product
+grants an ACL in a Repository Cell. Candidates survive revoke and regrant;
+listing rechecks each authoritative Cell ACL. This avoids both publishing access
+without a listing candidate and deleting a concurrent grant's candidate during
+revocation cleanup. Candidate-only interrupted work remains invisible in result
+entries. Direct SDK ACL primitives require their coordinator to record a
+candidate first. Candidate compaction and quotas remain open.
+
+Each page examines at most 32 candidates. Owner/UUID and account/UUID indexes
+support a merge of bounded key ranges. Local SQLite 3.53.4 `EXPLAIN QUERY PLAN`
+inspection showed index searches without a temporary sort after the query was
+adjusted to project the discovery index's ordering column.
+
+The first larger test exposed a Cellule admission constraint: the pinned runtime
+uses a movement budget of two completed moves per 1,000 ms. Retrying a complete
+cold page could repeatedly scan the same prefix without finishing. The manager
+now returns its completed prefix with a continuation on capacity exhaustion;
+no-progress admission returns 503 with `Retry-After: 1`. Revoked entries advance
+the cursor too. Empty pages are valid while a continuation remains. Other
+storage/runtime failures still fail the request. This preserves the runtime's
+movement limits without a dependency patch or a second residency policy.
+
+A stock HTTP test creates and grants 33 repositories, verifies bounded ordered
+pagination without duplicates, renames across a cursor, revokes the first 32,
+and reaches the sole remaining accessible repository through empty pages.
+Fresh-owner recovery preserves the index, ACLs and metadata, and regrant restores
+visibility at the same position. An unrelated account sees no entries and cannot
+read metadata. Directory tests verify pending-name exclusion, owner-only candidate
+insertion, self-grant rejection, exact replay, candidate-only invisibility to
+the Cell ACL, and candidate recovery through rename. The eleven multi-server
+tests and Directory Cell test pass; the older owner-only listing expectation
+was replaced with an assertion for the reader's single authorized repository.
+Clippy with warnings denied and the binary build pass; dependencies are unchanged.
+
+
+The RustFS process run with `--sqlite-chunks --many-objects 256` passes as well.
+Owner and reader list/get checks survive repository rename, clean restart,
+SIGKILL, lease expiry and fresh local disk restore. Revocation after takeover
+removes the repository from the reader's list and makes metadata get return
+404. The same run verifies Git/LFS, default branch, 300 refs, SQLite chunks,
+mixed/atomic outcomes and dropped-reply push replay. Environment: Darwin arm64,
+Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, debug build. These are functional
+and recovery checks, not a production capacity measurement. The Directory schema
+changes require a fresh development prefix; persistent upgrade support remains
+a release gate.

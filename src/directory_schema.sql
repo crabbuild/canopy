@@ -19,3 +19,11 @@ CREATE TABLE access_tokens (
 ) WITHOUT ROWID;
 
 CREATE INDEX access_tokens_account ON access_tokens(account);
+
+CREATE INDEX repositories_owner_id ON repositories(owner, repository_id) WHERE state = 'ready';
+
+CREATE TABLE repository_discovery (
+    account TEXT NOT NULL REFERENCES accounts(name),
+    repository_id BLOB NOT NULL REFERENCES repositories(repository_id),
+    PRIMARY KEY(account, repository_id)
+) WITHOUT ROWID;

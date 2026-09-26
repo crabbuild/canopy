@@ -14,6 +14,7 @@ use crate::{CanopyApplication, validate_repository_id};
 
 pub const DIRECTORY: NamespaceId = NamespaceId::from_bytes([72; 16]);
 pub const SCHEMA: &str = include_str!("directory_schema.sql");
+pub const REPOSITORY_PAGE_SIZE: usize = 32;
 
 const COMMANDS: [OperationDescriptor; 1] = [operation(1)];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
@@ -364,6 +365,36 @@ impl DirectoryCell {
         })
     }
 
+    /// Finds a ready name only if the viewer owns it or has an access candidate.
+    ///
+    /// A candidate still requires a current Repository Cell ACL check.
+    pub async fn lookup_candidate(
+        &self,
+        account: &str,
+        owner: &str,
+        name: &str,
+    ) -> Result<Observed<Option<RepositoryEntry>>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(account).map_err(InvocationError::NotStarted)?;
+        validate_name(owner, name).map_err(InvocationError::NotStarted)?;
+        let result = self.sql.query(None, SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "SELECT owner, name, repository_id, state FROM repositories r WHERE owner = ?1 AND name = ?2 AND state = 'ready' AND (owner = ?3 OR EXISTS (SELECT 1 FROM repository_discovery d WHERE d.repository_id = r.repository_id AND d.account = ?3))".into(),
+                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(name.into()), SqlValue::Text(account.into())],
+            }],
+        }).await?;
+        let output = result
+            .output
+            .first()
+            .and_then(|set| set.rows.first())
+            .map(|row| decode_entry(row))
+            .transpose()
+            .map_err(InvocationError::NotStarted)?;
+        Ok(Observed {
+            output,
+            receipt: result.receipt,
+        })
+    }
+
     /// Atomically moves a ready name while preserving its Repository Cell UUID.
     pub async fn rename(
         &self,
@@ -408,19 +439,54 @@ impl DirectoryCell {
         })
     }
 
-    pub async fn list(
+    /// Records a listing candidate before granting repository-local access.
+    ///
+    /// Candidates are retained after revocation; callers must check the Repository
+    /// Cell ACL before exposing metadata. Only the directory owner may record one.
+    pub async fn remember_access(
         &self,
-        owner: &str,
-        after: &str,
+        identity: MutationIdentity,
+        actor: &str,
+        account: &str,
+        repository_id: [u8; 16],
+    ) -> Result<Committed<bool>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(actor).map_err(InvocationError::NotStarted)?;
+        validate_component(account).map_err(InvocationError::NotStarted)?;
+        validate_repository_id(repository_id).map_err(InvocationError::NotStarted)?;
+        let result = self.sql.batch(identity, SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "INSERT INTO repository_discovery (account, repository_id) SELECT ?2, repository_id FROM repositories WHERE owner = ?1 AND repository_id = ?3 AND state = 'ready' AND owner != ?2 AND EXISTS (SELECT 1 FROM accounts WHERE name = ?2 AND enabled = 1) ON CONFLICT(account, repository_id) DO UPDATE SET repository_id = excluded.repository_id".into(),
+                parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(account.into()), SqlValue::Blob(repository_id.to_vec())],
+            }],
+        }).await?;
+        Ok(Committed {
+            output: result
+                .output
+                .first()
+                .is_some_and(|set| set.rows_affected == 1),
+            receipt: result.receipt,
+        })
+    }
+
+    /// Reads a bounded UUID-ordered page of owned repositories and access candidates.
+    ///
+    /// A candidate is not an authorization decision; its current Cell ACL must
+    /// be checked. Pending repositories are excluded and renames retain position.
+    pub async fn list_candidates(
+        &self,
+        account: &str,
+        after: Option<[u8; 16]>,
     ) -> Result<Observed<Vec<RepositoryEntry>>, InvocationError<Vec<SqlResultSet>>> {
-        validate_component(owner).map_err(InvocationError::NotStarted)?;
-        if !after.is_empty() {
-            validate_component(after).map_err(InvocationError::NotStarted)?;
+        validate_component(account).map_err(InvocationError::NotStarted)?;
+        if let Some(after) = after {
+            validate_repository_id(after).map_err(InvocationError::NotStarted)?;
         }
         let result = self.sql.query(None, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND name > ?2 ORDER BY name LIMIT 100".into(),
-                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(after.into())],
+                // Owner entries and candidates are disjoint: remember_access refuses
+                // self-grants. Both UUID ranges can merge without sorting every grant.
+                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND state = 'ready' AND repository_id > ?2 UNION ALL SELECT r.owner, r.name, d.repository_id, r.state FROM repository_discovery d JOIN repositories r ON r.repository_id = d.repository_id WHERE d.account = ?1 AND d.repository_id > ?2 AND r.state = 'ready' ORDER BY repository_id LIMIT ?3".into(),
+                parameters: vec![SqlValue::Text(account.into()), SqlValue::Blob(after.map_or_else(Vec::new, |id| id.to_vec())), SqlValue::Integer(REPOSITORY_PAGE_SIZE as i64)],
             }],
         }).await?;
         let entries = result

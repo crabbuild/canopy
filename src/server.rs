@@ -34,6 +34,7 @@ use crate::{
     repository_http::RepositoryHttp,
 };
 
+mod discovery;
 mod residency;
 
 use residency::LoadedRepository;
@@ -236,6 +237,22 @@ impl RepositoryManager {
         let Some(route) = self.resolve(&self.owner, name).await? else {
             return Ok(MembershipOutcome::RepositoryMissing);
         };
+        // Publish the candidate before granting access. Retaining it on revoke
+        // avoids a concurrent grant losing its index entry to delayed cleanup.
+        if role.is_some()
+            && !self
+                .directory
+                .remember_access(
+                    mutation_identity()?,
+                    actor,
+                    account,
+                    route.repository.repository_id(),
+                )
+                .await?
+                .output
+        {
+            return Ok(MembershipOutcome::Forbidden);
+        }
         let authorized = match role {
             Some(role) => {
                 route
@@ -276,25 +293,6 @@ impl RepositoryManager {
             )
             .await?
             .output)
-    }
-
-    pub(crate) async fn list(
-        &self,
-        after: &str,
-    ) -> Result<(Vec<RepositoryEntry>, Option<String>), ServerError> {
-        let entries = self.directory.list(&self.owner, after).await?.output;
-        let next = if entries.len() == 100 {
-            entries.last().map(|entry| entry.name.clone())
-        } else {
-            None
-        };
-        Ok((
-            entries
-                .into_iter()
-                .filter(|entry| entry.state == RepositoryState::Ready)
-                .collect(),
-            next,
-        ))
     }
 }
 

@@ -8,6 +8,8 @@ use tokio::{net::TcpListener, process::Command};
 
 #[path = "multi_server/default_branch.rs"]
 mod default_branch;
+#[path = "multi_server/discovery.rs"]
+mod discovery;
 #[path = "multi_server/large_objects.rs"]
 mod large_objects;
 #[path = "multi_server/residency.rs"]
@@ -87,15 +89,15 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
             .status(),
         reqwest::StatusCode::OK
     );
-    assert_eq!(
-        client
-            .get(&listing_url)
-            .bearer_auth(&reader_token)
-            .send()
-            .await?
-            .status(),
-        reqwest::StatusCode::FORBIDDEN
-    );
+    let reader_listing: serde_json::Value = client
+        .get(&listing_url)
+        .bearer_auth(&reader_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(reader_listing["repositories"], serde_json::json!([]));
     assert_eq!(
         client
             .post(&listing_url)
@@ -422,15 +424,23 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
             .status(),
         reqwest::StatusCode::OK
     );
+    let reader_listing: serde_json::Value = client
+        .get(format!("http://{second_address}/api/repositories"))
+        .bearer_auth(&reader_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     assert_eq!(
-        client
-            .get(format!("http://{second_address}/api/repositories"))
-            .bearer_auth(&reader_token)
-            .send()
-            .await?
-            .status(),
-        reqwest::StatusCode::FORBIDDEN
+        reader_listing["repositories"]
+            .as_array()
+            .ok_or("missing reader listing")?
+            .len(),
+        1
     );
+    assert_eq!(reader_listing["repositories"][0]["name"], "renamed");
+    assert_eq!(reader_listing["repositories"][0]["repository_id"], first_id);
     let clone = workspace.path().join("clone");
     run_git(
         None,

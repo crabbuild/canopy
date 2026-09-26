@@ -107,6 +107,19 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         .reserve(identity(3)?, "alice", "beta", second_id)
         .await?
         .output;
+    assert!(
+        directory
+            .list_candidates("alice", None)
+            .await?
+            .output
+            .is_empty()
+    );
+    assert!(
+        !directory
+            .remember_access(identity(14)?, "alice", "bob", first_id)
+            .await?
+            .output
+    );
 
     let first_repository = RepositoryCell::new(
         &app_handle(
@@ -149,7 +162,57 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         .await?
         .output;
     directory.activate(identity(5)?, &second).await?;
-    assert_eq!(directory.list("alice", "").await?.output.len(), 2);
+    for (actor, account) in [("bob", "bob"), ("alice", "alice"), ("alice", "missing")] {
+        assert!(
+            !directory
+                .remember_access(random_identity()?, actor, account, first_id)
+                .await?
+                .output
+        );
+    }
+    assert!(
+        directory
+            .list_candidates("bob", None)
+            .await?
+            .output
+            .is_empty()
+    );
+    assert!(
+        directory
+            .lookup_candidate("bob", "alice", "alpha")
+            .await?
+            .output
+            .is_none()
+    );
+    let remember = identity(15)?;
+    for identity in [remember, remember, random_identity()?] {
+        assert!(
+            directory
+                .remember_access(identity, "alice", "bob", first_id)
+                .await?
+                .output
+        );
+    }
+    // Candidate publication alone grants no repository-local permission.
+    assert_eq!(
+        first_repository.access_level("bob", None).await?.output,
+        None
+    );
+    let candidates = directory.list_candidates("bob", None).await?.output;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].repository_id, first_id);
+    assert_eq!(
+        directory
+            .lookup_candidate("bob", "alice", "alpha")
+            .await?
+            .output
+            .map(|entry| entry.repository_id),
+        Some(first_id)
+    );
+    assert_eq!(
+        directory.list_candidates("alice", None).await?.output.len(),
+        2
+    );
     assert_eq!(
         directory.lookup("alice", "alpha", None).await?.output,
         Some(first)
@@ -222,12 +285,20 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         Some(("alice".into(), TokenScope::Admin))
     );
     assert_eq!(directory.authenticate([0; 32], None).await?.output, None);
-    let entries = directory.list("alice", "").await?.output;
+    let candidates = directory.list_candidates("bob", None).await?.output;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].name, "gamma");
+    let entries = directory.list_candidates("alice", None).await?.output;
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].repository_id, second_id);
-    assert_eq!(entries[0].name, "beta");
-    assert_eq!(entries[1].repository_id, first_id);
-    assert_eq!(entries[1].name, "gamma");
+    let mut expected = vec![(first_id, "gamma"), (second_id, "beta")];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.repository_id, entry.name.as_str()))
+            .collect::<Vec<_>>(),
+        expected
+    );
     assert!(
         entries
             .iter()
@@ -274,8 +345,18 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         Some((ObjectKind::Blob, body.to_vec()))
     );
     assert!(beta.existing_objects(&[oid]).await?.output.is_empty());
+    assert_eq!(alpha.access_level("bob", None).await?.output, None);
     second_runtime.shutdown().await?;
     Ok(())
+}
+
+fn random_identity() -> Result<MutationIdentity, Box<dyn std::error::Error>> {
+    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    Ok(MutationIdentity {
+        request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
+        issued_at_ms: now,
+        expires_at_ms: now + 60_000,
+    })
 }
 
 fn runtime(session: SessionId) -> cellule_runtime::Result<CellRuntime> {

@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -130,6 +131,40 @@ def default_branch(base_url, name, reference=None):
         assert changed["reference"] == reference
         assert changed["generation"] == current["generation"] + 1
         return changed
+
+
+def api_get(base_url, path, token):
+    request = urllib.request.Request(f"{base_url}{path}", headers={"Authorization": f"Bearer {token}"})
+    for _ in range(10):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if error.code != 503:
+                raise
+            time.sleep(1)
+    raise RuntimeError("repository discovery admission did not recover")
+
+
+def verify_discovery(base_url, token, expected_names):
+    path = "/api/repositories"
+    found = []
+    for _ in range(100):
+        page = api_get(base_url, path, token)
+        assert len(page["repositories"]) <= 32
+        found.extend(page["repositories"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+        path = f"/api/repositories?after={urllib.parse.quote(cursor)}"
+    else:
+        raise RuntimeError("repository discovery did not terminate")
+    assert sorted(entry["name"] for entry in found) == sorted(expected_names)
+    for entry in found:
+        detail = api_get(base_url, f"/api/repositories/{entry['name']}", token)
+        assert detail["repository_id"] == entry["repository_id"]
+        assert detail["clone_url"] == entry["clone_url"]
+        assert detail["role"] in ("read", "write", "admin")
 
 
 def api_status(base_url, path, token, method="GET", payload=None):
@@ -508,6 +543,8 @@ def main():
             selected_head = default_branch(base_url, "example", "refs/heads/trunk")
             url = rename_repository(base_url, "example", "renamed", repository_id)
             assert default_branch(base_url, "renamed") == selected_head
+            verify_discovery(base_url, reader_token, ["renamed"])
+            verify_discovery(base_url, "local-test-token", ["renamed", "other"])
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
@@ -525,6 +562,7 @@ def main():
             processes.append(second)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
+            verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
@@ -534,6 +572,7 @@ def main():
             processes.append(third)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
+            verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
@@ -579,6 +618,8 @@ def main():
                 "/canopy/renamed.git/info/refs?service=git-upload-pack",
                 reader_token,
             ) == 404
+            verify_discovery(base_url, reader_token, [])
+            assert api_status(base_url, "/api/repositories/renamed", reader_token) == 404
             if large is not None:
                 verify_large_clone(base_url, directory, large)
             if chunks is not None:
@@ -589,7 +630,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: Git/LFS, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
+            print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
         except Exception:
             for log in directory.glob("*.log"):
                 errors = [line for line in log.read_text(errors="replace").splitlines() if "ERROR" in line or "WARN" in line]
