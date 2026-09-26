@@ -179,12 +179,12 @@ HTTP replay: its body can differ and then the reused ID conflicts. A distinct
 ID permits identical bytes to represent a new operation. There is no expiry or
 GC for reservations, completed outcomes or abandoned response attempts yet.
 
-All branches currently permit deletion by an authorized writer. The gateway
+Branches permit deletion by an authorized writer unless an enabled rule denies it. The gateway
 sets `receive.denyDeleteCurrent=ignore` because its HEAD must not implicitly
 create a branch protection policy. Git's
 [receive-pack implementation](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L1428-L1454)
 otherwise rejects deletion of the branch named by HEAD even in this bare
-cache. Future branch rules belong in the Repository Cell transaction.
+cache. Branch rules are enforced again in the Repository Cell transaction.
 
 A name reservation commits before its Repository Cell is provisioned. A retry
 reads the previously reserved UUID and completes the same Cell instead of
@@ -529,7 +529,7 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata, issue and check layouts and the operation-5 codec change
+HEAD, discovery, token-metadata, issue, check and branch-rule layouts, operations 7/8, and the operation-5 codec change
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
@@ -667,7 +667,7 @@ repository. Names and reporters follow the 64-byte lowercase component contract.
 state, optimistic run version, summary, timestamps and an internal monotonically
 increasing creation number. The OID must identify a stored Git commit; absent
 objects, trees, tags and blobs are not check targets. A context does not imply
-branch protection; no ref-publication behavior changes in this slice.
+branch protection; an enabled branch rule must explicitly require it.
 
 Only the configured reporter can start runs. The owner has no implicit reporting
 bypass and must explicitly configure itself as reporter if desired. Starting
@@ -699,8 +699,9 @@ version. Late callbacks and old start retries never move that order. After a
 policy version change, a context without a matching attempt returns `run: null`.
 Disabled contexts disappear from commit views but remain in the policy listing;
 historical runs stay available by UUID to repository readers. Prior successful
-results remain historical data after reporter membership revocation; branch
-requirements and their interpretation at publication are not implemented yet.
+results remain trusted after reporter membership revocation. To revoke that
+trust, disable or update the context; branch publication then requires a new
+result at the new context version.
 
 HTTP routes:
 
@@ -732,4 +733,81 @@ The `(oid, context, context_version, number)` run index finds each newest attemp
 without scanning attempt history. A full page carries at most 128 KiB of summaries
 before metadata/wire overhead, below the 1 MiB SQL result bound. There is no
 attempt-history listing, log/artifact upload, runner, event delivery, expiry,
-quota, cleanup or aggregate required-check decision yet.
+quota or cleanup yet. Required-check decisions belong to branch publication.
+
+
+### Exact-branch rules
+
+`branch_rules` stores a version, enabled flag, deletion policy and fast-forward
+policy for each exact `refs/heads/...` name. `branch_required_checks` stores up to
+16 unique context names per rule. There are no patterns or priority conflicts.
+Only the immutable repository owner may replace a rule, with its expected
+version (zero for a new name). Enabled rules require all named contexts to exist
+and be enabled. Disabled rules can retain names of unavailable contexts. Every
+replacement increments the version; disabling never releases a name/version.
+The typed `SetBranchRule` command is operation 8, codec 1.
+
+`GET /api/repositories/<name>/branch-rules?after=<ref>` requires read membership
+and a read-scoped token. It returns `repository_id`, `rules`, and `next_after`;
+32 sorted rules per page, disabled included. A full final page may lead to an
+empty terminal page. Each observation is independent. PUT requires an
+admin-scoped owner token and `{repository_id, rule}`. `rule` contains `reference`,
+`expected_version`, `enabled`, `deny_deletions`, `fast_forward_only`, and
+`required_checks`. Success is 204; version/context conflict is 409; bad values
+are 422. Repository identity is a UUID precondition. The body limit is 16 KiB
+with a 30-second receive deadline. The Cell command rechecks owner authority.
+
+The one authoritative `refs::apply_push` function applies to both typed
+`FinalizePush` and HTTP `CompletePush`. Before any ref writes, each enabled rule
+checks deletion policy, ancestry and every required check. For a non-deletion,
+the selected attempt is the greatest creation number matching the proposed
+commit, context and current context version. It must have state `success` and
+the configured reporter. Missing/disabled contexts, missing attempts and all
+other states reject. Current reporter membership is required to report results,
+but does not retroactively invalidate an already accepted result. Rules apply
+to every writer without an owner bypass. Deletion depends on `deny_deletions`;
+checks and fast-forward policy govern non-deletions. Branch creation needs checks
+but has no old ancestry to prove.
+
+Verified commit objects provide `commit_parents(child, parent)` when graph
+closure is certified. Only commit-parent edges enter that table. Immutable
+`commit_ancestry(ancestor, descendant)` certificates avoid graph traversal in the
+ref transaction. Operation 7, codec 1 accepts at most 128 child/parent steps.
+Every step must exist in verified parent links and lead either to the claimed
+ancestor or to an existing certificate. Any false step rejects and rolls back
+the complete command. Preparation reads parents in pages of 128, follows all
+merge parents and publishes proof chunks from the known ancestor outward.
+Interrupted preparation may retain positive immutable facts without changing
+refs. A collector must invalidate graph and ancestry certificates before deleting
+objects or their required chunks/edges. No collector is implemented yet.
+
+Native Git receives an executable, disposable `update` hook. Git's documented
+[update-hook contract](https://git-scm.com/docs/githooks#_update) supplies exact
+ref/old/new arguments and permits per-ref rejection. The hook verifies those
+arguments against decoded request commands, safely quotes ref names, checks
+snapshot policy and runs `git merge-base --is-ancestor` where required. Ordinary
+mixed pushes retain accepted refs; atomic pushes use native Git's group behavior.
+The gateway buffers the report and persists objects before authoritative Cell
+publication. A rule/check change after preflight that invalidates an accepted
+update rejects the entire proposed publication with HTTP 409; the buffered
+success report is discarded. A completed push replay returns its original report
+without reapplying refs, even if current rules changed. Already rejected refs
+stay rejected if policy becomes permissive during that request; retry normally.
+
+The [receive-pack command list](https://git-scm.com/docs/pack-protocol#_reference_update_request_and_packfile_transfer)
+is parsed only when a repository has enabled rules. It admits shallow lines,
+first-command capabilities and at most 64 unique updates in a 256 KiB prefix;
+pack data after the flush remains native Git's responsibility. Malformed command
+input is HTTP 400 and too many updates is 413. Unsupported media types retain
+native Git's response. Repositories without enabled rules retain native error
+reports, including rejected requests containing more commands than can be
+published. Final publication always checks current rules, even if none existed
+at preflight. An `(enabled, reference)` index bounds the presence probe; rule and
+requirement primary keys and the check-attempt index bound final policy lookups.
+
+Reads, proof commands and final per-ref decisions are bounded. Total ancestry
+search memory/time, retained certificate growth, native Git scratch peaks and
+cross-OS hook execution still need production qualification. Rules do not yet
+include PR approval requirements, path policies, tag rules, exemptions or a UI.
+These new tables require a fresh unreleased development prefix; there is no
+backfill path for old object certificates lacking parent rows.

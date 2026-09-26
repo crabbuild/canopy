@@ -96,6 +96,26 @@ impl GitCache {
         self.writer(Path::new(relative))?.write_all(bytes)
     }
 
+    pub(crate) async fn store_update_hook(
+        self: &Arc<Self>,
+        bytes: Vec<u8>,
+    ) -> Result<(), CacheError> {
+        let cache = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            cache.write_file("hooks/update", &bytes)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    cache.git_dir().join("hooks/update"),
+                    fs::Permissions::from_mode(0o700),
+                )?;
+            }
+            Ok(())
+        })
+        .await?
+    }
+
     pub(crate) async fn store_object(
         self: &Arc<Self>,
         oid: [u8; 20],

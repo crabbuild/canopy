@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import smoke_s3_branch_rules
 import smoke_s3_checks
 import smoke_s3_corpus
 import smoke_s3_issues
@@ -497,7 +498,7 @@ def main():
                 "-c", "http.extraHeader=Authorization: Bearer local-test-token",
                 "push", url, ":refs/heads/reused", cwd=local,
             )
-            other_url, _ = create_repository(base_url, "other")
+            other_url, other_id = create_repository(base_url, "other")
             other = directory / "other"
             git("init", "-b", "main", str(other))
             git("config", "user.name", "Canopy Test", cwd=other)
@@ -562,12 +563,18 @@ def main():
                 "push", url, "HEAD:refs/heads/trunk", cwd=local)
             selected_head = default_branch(base_url, "example", "refs/heads/trunk")
             url = rename_repository(base_url, "example", "renamed", repository_id)
+            assert default_branch(base_url, "renamed") == selected_head
             issue_state = smoke_s3_issues.seed(base_url, repository_id)
+            branch_state = smoke_s3_branch_rules.seed(base_url, repository_id, local, oid.decode())
+            # Protected creation, the accepted mixed sibling and promotion each
+            # advance the repository generation without changing its HEAD name.
+            selected_head = {**selected_head, "generation": selected_head["generation"] + 3}
             check_state = smoke_s3_checks.seed(base_url, repository_id, oid.decode())
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_checks.verify(base_url, check_state)
+            smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             verify_discovery(base_url, "local-test-token", ["renamed", "other"])
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
@@ -605,6 +612,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_checks.verify(base_url, check_state)
+            smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
@@ -623,6 +631,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_checks.verify(base_url, check_state)
+            smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
@@ -637,6 +646,16 @@ def main():
             other_restored_url = f"{base_url}/canopy/other.git"
             git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
                 "push", other_restored_url, ":refs/heads/replayed", cwd=other)
+            # Completed replay must return its saved success without recreating
+            # the deleted branch, even when current policy would deny that push.
+            assert api_status(base_url, "/api/repositories/other/check-contexts/replay-ci",
+                              "local-test-token", "PUT", {"repository_id": other_id,
+                              "expected_version": 0, "reporter": "canopy", "enabled": True}) == 204
+            assert api_status(base_url, "/api/repositories/other/branch-rules",
+                              "local-test-token", "PUT", {"repository_id": other_id,
+                              "rule": {"reference": "refs/heads/replayed", "expected_version": 0,
+                                       "enabled": True, "deny_deletions": True, "fast_forward_only": True,
+                                       "required_checks": ["replay-ci"]}}) == 204
             replay = urllib.request.Request(
                 f"{other_restored_url}/git-receive-pack", data=lost_reply["body"],
                 headers=lost_reply["headers"], method="POST",

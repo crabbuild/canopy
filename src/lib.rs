@@ -12,6 +12,8 @@ use cellule_runtime::{
 use sha1::{Digest as _, Sha1};
 
 mod access;
+mod ancestry;
+pub mod branch_rules;
 pub mod checks;
 mod default_branch;
 pub mod directory;
@@ -46,12 +48,14 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 5] = [
+const COMMANDS: [OperationDescriptor; 7] = [
     operation(1),
     operation_with_codec(3, 3),
     operation(4),
     operation_with_codec(5, 2),
     operation(6),
+    operation(7),
+    operation(8),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
@@ -163,6 +167,9 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph.rs"));
+                source.update(include_bytes!("ancestry.rs"));
+                source.update(include_bytes!("branch_rules.rs"));
+                source.update(include_bytes!("branch_rules/command.rs"));
                 source.update(include_bytes!("graph/preparation.rs"));
                 source.update(include_bytes!("object_batch.rs"));
                 source.update(include_bytes!("object_chunks.rs"));
@@ -207,7 +214,9 @@ impl CellModule for RepositoryModule {
         registry.bind_command::<FinalizePush>()?;
         registry.bind_command::<push::CompletePush>()?;
         registry.bind_command::<object_batch::PutObjects>()?;
-        registry.bind_command::<graph::CertifyObjects>()
+        registry.bind_command::<graph::CertifyObjects>()?;
+        registry.bind_command::<ancestry::CertifyAncestry>()?;
+        registry.bind_command::<branch_rules::command::SetBranchRule>()
     }
 }
 
@@ -259,6 +268,7 @@ impl RepositoryCell {
         plan: PushPlan,
     ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
         self.prepare_graph(&plan).await?;
+        self.prepare_branch_proofs(&plan).await?;
         self.application
             .command::<FinalizePush>(&self.target, identity, plan)
             .await

@@ -297,7 +297,9 @@ pub(crate) fn apply_push(
             return Ok(false);
         }
     }
-    if !crate::graph::certified_roots(context, plan)? {
+    if !crate::graph::certified_roots(context, plan)?
+        || !crate::branch_rules::policies_allow(context, plan)?
+    {
         return Ok(false);
     }
     for update in &plan.updates {

@@ -24,8 +24,9 @@ def seed(base_url, repository_id, oid):
             "state": state, "summary": f"Attempt completed: {state}",
         })
     current = request(base_url, commit)
-    assert current["checks"][0]["run"]["id"] == newer["id"]
-    assert current["checks"][0]["run"]["state"] == "failure"
+    selected = next(check for check in current["checks"] if check["context"]["name"] == "unit-tests")
+    assert selected["run"]["id"] == newer["id"]
+    assert selected["run"]["state"] == "failure"
     historical = request(base_url, f"{REPOSITORY}/checks/{old['id']}")
     return commit, old, current, historical
 

@@ -1,5 +1,7 @@
 #[path = "repository_cell/batches.rs"]
 mod batches;
+#[path = "repository_cell/branch_rules.rs"]
+mod branch_rules;
 #[path = "repository_cell/checks.rs"]
 mod checks;
 #[path = "repository_cell/chunks.rs"]
@@ -433,6 +435,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         );
         default_branch::verify(&repository).await?;
         graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
+        branch_rules::verify(&repository, &graph_sql, &application_handle, &target).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }

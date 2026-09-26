@@ -27,6 +27,8 @@ pub enum InputError {
     TooLarge,
     #[error("Git request upload timed out")]
     Timeout,
+    #[error("Git receive-pack commands are malformed")]
+    Commands,
     #[error("Git request body failed")]
     Body(#[from] axum::Error),
     #[error("Git request gzip stream is invalid")]
@@ -167,6 +169,19 @@ impl GitInput {
             .await
             .map_err(|_| InputError::Timeout)?
             .map_err(InputError::Task)?
+    }
+
+    pub(crate) async fn prefix(&self, limit: usize) -> Result<Vec<u8>, InputError> {
+        let spool = Arc::clone(&self.spool);
+        Ok(tokio::task::spawn_blocking(move || {
+            let mut file = &spool.file;
+            file.rewind()?;
+            let mut bytes = Vec::new();
+            (&mut file).take(limit as u64).read_to_end(&mut bytes)?;
+            file.rewind()?;
+            Ok::<_, std::io::Error>(bytes)
+        })
+        .await??)
     }
 
     pub(crate) fn stdin(&self) -> Result<Stdio, std::io::Error> {

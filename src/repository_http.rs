@@ -1,6 +1,7 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
 mod authorization;
+mod branch_rules;
 mod checks;
 mod collaborators;
 mod default_branch;
@@ -73,6 +74,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/default-branch",
                 get(default_branch::read).put(default_branch::update),
+            )
+            .route(
+                "/api/repositories/{name}/branch-rules",
+                get(branch_rules::list).put(branch_rules::update),
             )
             .route(
                 "/api/repositories/{name}/check-contexts",

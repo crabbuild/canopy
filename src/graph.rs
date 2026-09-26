@@ -142,6 +142,19 @@ impl Command for CertifyObjects {
                     return Ok(CommandResult::Rejected(false));
                 }
             }
+            if state.kind == ObjectKind::Commit {
+                let parents: Vec<_> = edges
+                    .iter()
+                    .filter(|(_, kind)| *kind == Some(ObjectKind::Commit))
+                    .map(|(parent, _)| *parent)
+                    .collect();
+                for parents in parents.chunks(MAX_CERTIFICATES) {
+                    context.sql(&SqlBatch { statements: parents.iter().map(|parent| SqlStatement {
+                        sql: "INSERT INTO commit_parents (child, parent) VALUES (?1, ?2) ON CONFLICT DO NOTHING".into(),
+                        parameters: vec![SqlValue::Blob(oid.to_vec()), SqlValue::Blob(parent.to_vec())],
+                    }).collect() })?;
+                }
+            }
             // These proofs depend only on immutable objects. A future collector must
             // invalidate certificates before removing any reachable object or chunk.
             context.sql(&SqlBatch {

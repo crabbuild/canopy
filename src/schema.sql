@@ -133,3 +133,29 @@ CREATE TABLE check_runs (
     updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
 );
 CREATE INDEX check_runs_by_commit ON check_runs(oid, context, context_version, number);
+
+CREATE TABLE commit_parents (
+    child BLOB NOT NULL REFERENCES objects(oid) CHECK(length(child) = 20),
+    parent BLOB NOT NULL REFERENCES objects(oid) CHECK(length(parent) = 20),
+    PRIMARY KEY(child, parent)
+) WITHOUT ROWID;
+
+CREATE TABLE commit_ancestry (
+    ancestor BLOB NOT NULL REFERENCES objects(oid) CHECK(length(ancestor) = 20),
+    descendant BLOB NOT NULL REFERENCES objects(oid) CHECK(length(descendant) = 20),
+    PRIMARY KEY(ancestor, descendant)
+) WITHOUT ROWID;
+
+CREATE TABLE branch_rules (
+    reference TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    deny_deletions INTEGER NOT NULL CHECK(deny_deletions IN (0, 1)),
+    fast_forward INTEGER NOT NULL CHECK(fast_forward IN (0, 1))
+) WITHOUT ROWID;
+CREATE TABLE branch_required_checks (
+    reference TEXT NOT NULL REFERENCES branch_rules(reference),
+    context TEXT NOT NULL,
+    PRIMARY KEY(reference, context)
+) WITHOUT ROWID;
+CREATE INDEX branch_rules_by_enabled ON branch_rules(enabled, reference);

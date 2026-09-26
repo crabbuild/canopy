@@ -498,6 +498,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         }
         Ok(_) => unavailable(),
         Err(GatewayError::Unauthorized) => unauthorized(),
+        Err(GatewayError::Input(crate::git_input::InputError::Commands)) => plain(
+            StatusCode::BAD_REQUEST,
+            "Malformed Git receive-pack commands",
+        ),
         Err(GatewayError::Input(crate::git_input::InputError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large")
         }

@@ -32,6 +32,8 @@ use crate::{
     refs::{REF_PAGE_SIZE, RefReadError},
 };
 
+mod branch_policy;
+
 pub use crate::git_objects::ObjectReadError;
 
 type CellError = Box<dyn StdError + Send + Sync>;
@@ -238,6 +240,7 @@ impl GitGateway {
         id: [u8; 16],
         digest: [u8; 32],
     ) -> Result<GitHttpResponse, GatewayError> {
+        self.install_branch_policy(cached, &request).await?;
         let before = cached.snapshot.refs.clone();
         let response = cached.backend.run(request).await?;
         // Git may accept some refs and reject others unless atomic was requested.

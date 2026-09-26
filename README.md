@@ -101,7 +101,7 @@ Pages observe current state independently. Bodies are returned as raw text; no
 Markdown or HTML rendering, attachments, labels, assignees, or deletion API yet.
 
 Commit checks record results from a configured reporter; they do not execute CI
-jobs or enforce branch protection yet.
+jobs. Exact-branch rules can require successful results.
 
 | Method | Path | Action |
 | --- | --- | --- |
@@ -128,6 +128,46 @@ attempt for each enabled context at its current version; a late result or retry
 from an older attempt cannot replace it. A missing current attempt appears as
 `run: null`. Context/commit pages contain at most 32 entries with name-based
 `after` / `next_after` cursors. Historical attempts remain readable by UUID.
+
+Branch protection uses `GET /api/repositories/<name>/branch-rules` and an
+admin-scoped owner `PUT` to that URL:
+
+```json
+{
+  "repository_id": "<repository UUID>",
+  "rule": {
+    "reference": "refs/heads/main",
+    "expected_version": 0,
+    "enabled": true,
+    "deny_deletions": true,
+    "fast_forward_only": true,
+    "required_checks": ["unit-tests"]
+  }
+}
+```
+
+Rules name exact branch refs and apply to every writer, including the owner.
+Configure required check contexts first. The newest attempt for each required
+context at its current version must be `success`; missing, pending, failed, or
+stale results reject the update. Push a candidate to an unprotected branch, run
+and report its checks, then promote that commit to the protected branch.
+Previously accepted results remain trusted after reporter access is revoked;
+disable or update the context to invalidate them.
+
+PUT returns 204; stale rule versions or unavailable required contexts return 409.
+Use `expected_version: 0` for creation and the returned version for later changes.
+Disable with `enabled: false`; the name/version remains reserved. GET is available
+to repository readers and returns `repository_id`, `rules`, and `next_after` with
+up to 32 ref-ordered rules per page, including disabled ones. Each rule lists its
+version and complete policy. Up to 16 unique contexts are permitted per rule.
+
+Ordinary pushes retain allowed sibling refs when another ref is rejected;
+`git push --atomic` rejects the group. The final Cell transaction rechecks policy,
+so a concurrent rule/check change can return HTTP 409 for the accepted group
+before any success report is sent. Ref names are at most 255 ASCII bytes. When
+rules are enabled, command preflight accepts at most 64 updates within a 256 KiB
+prefix. The Git response is recorded only after durable ref publication; an exact
+completed retry returns that saved response without reapplying refs.
 
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
 own account's tokens; the configured owner can manage any account's tokens:

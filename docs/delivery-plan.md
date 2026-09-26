@@ -11,10 +11,10 @@ Do not infer completion from compilation or a disposable cache test.
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account disable/delete remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
-| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
+| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs and configured commit checks survive recovery; branch rules, pulls/reviews/merge, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs, configured checks and exact branch rules implemented; pulls/reviews/merge, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -52,14 +52,15 @@ separate product decisions.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
    publishes the complete response with ref changes. Typed graph connectivity
-   now gates both ref commands. Add branch rules; define retention and quotas
+   and current branch rules now gate both ref commands. Define retention and quotas
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: issue labels/assignees; branch rules using the configured check results; pull requests, reviews and merge; releases and assets; UI. Each
+5. Continue collaboration as vertical slices: pull requests, reviews and merge;
+   issue labels/assignees; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
 Keep LFS bodies and unreferenced Git objects under conservative retention
@@ -896,7 +897,7 @@ three bounded reads and six HTTP operations. Common admission, validation and
 outcome decoding stay within the check boundary. The process probes share their
 JSON request helper rather than duplicating it for checks and issues.
 
-Branch protection remains the next dependent publication slice:
+Branch protection implementation checklist (delivered in the following section):
 
 1. Add owner-managed, versioned rules for exact branch refs, including deletion,
    force-update policy and required context identities. Keep administrative
@@ -917,6 +918,61 @@ Branch protection remains the next dependent publication slice:
    refs again under newly changed policy.
 
 This schema extension requires a fresh development prefix. Check reporting is
-functional but does not run CI jobs or protect branches yet. History listing,
+functional but does not run CI jobs. Branch protection is covered below. History listing,
 check logs/artifacts, notifications, retention, quotas, PR integration and UI
 remain open, along with the broader delivery gates.
+
+
+## Branch protection
+
+Exact-branch policy now connects configured checks to authoritative publication.
+Owners replace versioned rules; enabled rules can require up to 16 check contexts,
+reject deletion and require fast-forward history. No writer bypass exists.
+HTTP configuration uses the repository UUID plus expected rule version. Listings
+are bounded and include disabled policies; disabled names retain their versions.
+
+The native Git update hook supplies per-ref rejections and preserves ordinary
+mixed versus atomic push semantics. Both typed and HTTP publication use the same
+Cell policy check before any ref writes. Changes to rules, contexts or newest
+attempts are interpreted at publication. Verified commit-parent links and bounded
+ancestry certificate commands support constant indexed ancestry decisions in
+that transaction. The SDK prepares multi-page and merge ancestry ahead of it.
+
+Evidence collected:
+
+- Stock Git E2E: absent, queued, failed and stale-version checks; a late old
+  success behind a newer attempt; successful promotion; ordinary mixed and atomic
+  rejection; owner force/delete rejection; safe shell quoting of valid unusual
+  refs; owner-only configuration, rule CAS and input validation; rename and
+  recovery on fresh local storage; disable/re-enable and subsequent promotion.
+- Direct Cell: independently encoded forged ancestry claims reject and roll back
+  earlier valid steps; low-level publication cannot bypass missing proofs; a
+  132-edge merged path spans proof pages; current queued attempts and disabled
+  contexts reject captured push intent. Completed command replay preserves refs
+  after stricter rules. Rule reads page past 32 entries and preserve tombstones.
+- Existing Repository Cell and smart-HTTP integration pass, including malformed
+  pack reports spanning response chunks, encoded input, replay, Git/LFS and
+  cache admission. The two-repository HTTP/Git/LFS recovery regression passes.
+
+All-target Clippy with warnings denied, formatting and the release binary build
+pass. The release process smoke against RustFS `1.0.0-beta.8-glibc`, with
+`--sqlite-chunks --many-objects 256`, exits successfully. It verifies protected
+promotion and force/delete rejection before restart, after clean restart and
+after SIGKILL/lease expiry on fresh local storage. An old successful push replays
+after deletion and a new required-check rule without recreating the branch.
+Issue/check state, Git/LFS, token/ACL recovery, SQLite chunks, 300 refs and mixed
+versus atomic outcomes remain covered in the same run. Fresh-volume RustFS
+initialization diagnostics are unchanged. The fixture asserts the exact three
+ref-generation increments introduced by the branch probe before checking recovery.
+
+Approximately 1,030 new Rust source/schema lines cover the versioned policy API,
+verified ancestry preparation/commands, safe native-hook generation and the
+shared final publication gate. The proof tables keep graph traversal outside
+the ref transaction; the hook is only a native reporting boundary. There is one
+policy query shared by preflight and authoritative publication.
+
+Remaining work: final-publication fault injection, bounded total ancestry search,
+certificate retention, native Git scratch peaks and cross-OS hook proof. PR
+approval policy and PR/review/merge APIs are the next collaboration slice. Full
+hosting delivery gates above remain open. No dependency or lockfile changes;
+new schema tables and operation registrations require a fresh development prefix.
