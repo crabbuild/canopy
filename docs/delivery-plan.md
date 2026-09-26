@@ -8,14 +8,14 @@ Do not infer completion from compilation or a disposable cache test.
 | Gate | Deliverable | Acceptance proof | State |
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
-| 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
+| 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
-| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone and fenced Unix runtime reclamation pass; full routing fault matrix, backup, GC and telemetry remain |
+| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation and conservative maintenance admission implemented; maintenance crash recovery, full routing fault matrix, backup, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 
 The **internal preview** requires gates 0–5, including real storage and
@@ -72,6 +72,26 @@ separate product decisions.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
+
+6. Complete offline operations in this order:
+   - Recover a maintenance drain interrupted by node death. Fence the exact stale
+     advertisement and Cell owner using runtime authority, recover its pinned
+     publication, then release the Cell. Acceptance: SIGKILL at each drain
+     boundary, no old writer can publish, and resume stays denied until every
+     catalog entry is settled. A force-resume flag is not sufficient evidence.
+   - Add backup capture with a runtime pin and a verified manifest of every
+     external Git blob/LFS body reachable from the pinned SQLite roots. The
+     capture coordinator must participate in maintenance drain. Acceptance:
+     interrupt capture/copy, retry without exposing an incomplete backup, and
+     verify every recorded digest before declaring the backup usable.
+   - Restore into an isolated destination with explicit destination fencing and
+     identity/release validation. Acceptance: restore without source node disks,
+     stock Git clone and LFS pull reproduce exact bytes, and collaboration/ACL
+     state matches the pinned roots. Include missing/corrupt external bodies.
+   - Add retention and collection only after roots include active transfers,
+     pending operations, recovery roots and backup pins. Acceptance: concurrent
+     fetch/merge/backup and injected collector failure never remove required
+     bytes; crash-left uploads become collectible only after the grace period.
 
 Keep LFS bodies and unreferenced Git objects under conservative retention
 until a fenced collector can prove the complete root set. No automatic GC
@@ -2015,3 +2035,56 @@ Directory coordination, HTTP/UI controls and shared query-policy changes; it
 also removes duplicate read predicates. Public-service gate 9 remains partial:
 organizations/teams, search, webhooks, candidate index rebuilding/retention and
 production quotas remain open, along with the earlier operational gates.
+
+
+## Deployment admission and fleet maintenance
+
+On 2026-09-26, `Deployment` gained durable tenant/application identity and exact
+compiled-release/image enrollment. First startup may initialize only an empty
+catalog. Concurrent initialization and interrupted Prepared/Activating phases
+resume the same deterministic operation. Existing catalogs without release
+metadata are rejected. Repository and Directory provisioning both use the
+runtime's release admission contract.
+
+The CLI now supports `canopy maintenance <config.json> begin|status|end`, with an
+operation UUID for begin/end. A closed release makes each node stop ingress and
+perform supervised drain. Lease renewal continues during drain. Completion
+requires no unfenced node advertisements and settled controls for every catalog
+entry. Expired advertisements, missing roots and owned Cells remain unfinished.
+The executable exits when its supervisor completes, including maintenance-driven
+shutdown without an OS signal.
+
+Evidence:
+
+- Five deployment unit tests pass: concurrent initialization, interruption of
+  either bootstrap phase, rejection of an unregistered catalog, corrupt release
+  descriptor denial, and expired-advertisement refusal to resume.
+- Two-node integration passes: real Git push, maintenance admission denial,
+  exact-operation replay, wrong-operation rejection, both nodes drained, wrong
+  identity/image rejection, fresh-local-storage clone and strict Git fsck.
+- All five lifecycle integration tests pass. The new case pauses Idle control
+  publication and proves maintenance cannot complete until Cell release settles.
+  Existing startup/shutdown cancellation and failed-drain exclusion tests pass.
+- All-target Clippy with warnings denied, Rust formatting, Python syntax,
+  whitespace checks and the release build pass.
+- The release process smoke against RustFS `1.0.0-beta.8-glibc` passes with large
+  SQLite tree/commit/tag chunks, a 256-file history and 300 additional refs.
+  Existing Git/LFS, collaboration, authorization and replay checks survive
+  restart, local disk loss and owner takeover. Eight repositories across two
+  HTTPS peers exceed resident capacity and survive SIGKILL of one owner.
+- The same process run invokes maintenance without Git/node signing secrets,
+  observes the surviving process exit successfully, verifies `drained: true`,
+  resumes the selected release, then clones and verifies Git/LFS from a new
+  node with fresh local storage. Normal SIGTERM drain also exits successfully.
+
+The RustFS fixture uses bounded Docker tmpfs. This proves Canopy process and
+S3-compatible protocol behavior, not provider disk or power-loss durability.
+No schema, dependency or lockfile changes were needed. The compiled module
+source digest changes, and release enrollment is now mandatory; use a fresh
+preview prefix. Existing data is not migrated or deleted.
+
+The added product code owns a real deployment authority, CLI and node lifecycle
+integration; it does not add another Cell state machine. Gates 1 and 8 remain
+partial. A crash during maintenance can leave a conservative unfinished drain;
+fenced recovery, retained operation history, backup capture/restore, upgrades,
+GC and operational telemetry still need their own acceptance evidence.

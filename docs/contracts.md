@@ -1692,3 +1692,60 @@ Both Directory and Repository initialization schemas changed in this unreleased
 build. Use a fresh development prefix; existing data is not migrated or removed.
 Source digest validation rejects old modules; mixed-build rolling upgrades are
 not supported. Production upgrade migration remains a delivery gate.
+
+## Deployment release enrollment and maintenance
+
+`Deployment` uses the pinned Cellule `ApplicationIdentityStore` and `ReleaseStore`.
+The authoritative prefix binds tenant/application IDs before nodes enroll. On a
+fresh catalog, the selected descriptor is the registry's exact canonical release
+bytes, addressed by its BLAKE3 digest. Initial Prepared → Activating → Ready
+transitions share a deterministic bootstrap operation; concurrent initialization
+and process loss can adopt only that exact release/image. A catalog that already
+contains Cells with no release record is rejected. Existing preview data has no
+automatic upgrade path. The configured image digest is an identity assertion,
+not binary attestation.
+
+Node startup checks Ready before enrollment, again after publishing its signed
+advertisement, and before exposing HTTP. Provisioning uses `ReleaseStore::provision`
+to check the descriptor and Ready/activation contract before and after catalog
+publication. The release watcher shares the three-second lease-renewal loop.
+Missing, unreadable, non-Ready or mismatched release selection closes HTTP
+readiness and requests the existing supervised shutdown. Accepted work can drain;
+lease renewal continues until SQL workers close and exact advertisements withdraw.
+The executable observes supervisor completion as well as OS stop signals.
+
+Maintenance administration prepares the same compiled descriptor and enters
+Maintenance with a caller-supplied UUID. It does not select new code or modify Cell
+contents. Calls with the same UUID resume/replay the operation; another UUID is
+rejected while a transition is pending. Replaying begin after that operation
+completed returns the Ready record and cannot close admission again while that
+UUID is still the current operation. The release record retains only its latest
+operation; administrative callers must not replay older UUIDs after a subsequent
+operation starts. Durable operation history and retention remain open.
+
+Drain observation verifies the persisted identity and descriptor, enumerates
+unfenced advertised sessions (including expired records), and scans all 256
+catalog shards. A catalog entry is settled only with an unowned Idle control
+containing a root, or an unowned Tombstoned control. Missing controls, unpublished
+roots and Serving/Recovering states remain unsettled. The release must be
+unchanged after the scan. Only a stable Maintenance record with zero advertised
+sessions and zero unsettled Cells reports `drained: true`; Ready never does.
+Session enumeration is bounded at 4,096 and fails closed on overflow. Maintenance
+end requires the exact operation and drain proof, then uses the upstream release
+CAS. Retrying completed end returns its unchanged Ready record.
+
+The upstream contracts are implemented in pinned Cellule revision
+`56b35ab376ff93ec85d502c70bb436c918463958`, specifically `application.rs`,
+`release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
+admission but does not itself drain writers; Canopy supplies that lifecycle.
+Heartbeat expiry is not writer-close evidence. Source store errors propagate;
+there is no fallback to an unregistered release.
+
+This does not implement an upgrade controller or force maintenance recovery.
+A node killed before releasing its Cells is conservatively unfinished. Backup
+remains separate work: Cellule `BackupPinStore::create` validates a Ready release
+and requires participation in maintenance drain, while its restore covers only
+runtime objects. Canopy still needs a backup coordinator enrolled through capture,
+external blob/LFS manifests and copies, operation retention, destination fencing,
+and verified restores from an isolated backup. Maintenance alone is not backup
+or recovery proof.

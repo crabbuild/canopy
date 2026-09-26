@@ -3,6 +3,8 @@
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client
+import json
+import os
 import signal
 import ssl
 import subprocess
@@ -133,7 +135,29 @@ def qualify(binary, directory, settings, processes):
         assert api_status(base_b, f"/canopy/{public_name}.git/info/lfs/objects/batch", None,
                           "POST", {"operation": "download", "objects": []}) == 401
         print("PASS: anonymous Git/LFS and public discovery survive cross-node routing and SIGKILL; privatization revokes new reads", flush=True)
-        second.send_signal(signal.SIGTERM)
+        operation = str(uuid.uuid4())
+        configuration = directory / "peer-second.json"
+        def maintenance(action, operation_id=None):
+            arguments = [str(binary), "maintenance", str(configuration), action]
+            if operation_id is not None:
+                arguments.append(operation_id)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ("CANOPY_GIT_TOKEN", "CANOPY_NODE_SIGNING_KEY_HEX")}
+            result = subprocess.run(arguments, check=True, capture_output=True, env=environment)
+            return json.loads(result.stdout)
+        assert maintenance("begin", operation)["release"]["state"] == "maintenance"
         second.wait(timeout=30)
         assert second.returncode == 0
+        assert maintenance("status")["drained"]
+        assert maintenance("end", operation)["release"]["state"] == "ready"
+        restored, restored_url = start(binary, directory,
+            {**settings, "node_id": str(uuid.uuid4()), "peer_endpoint": peer_b},
+            "peer-resumed", listen_address=b)
+        processes.append(restored)
+        clone_and_verify(f"{restored_url}/canopy/{public_name}.git", directory / "maintenance-resume",
+                         public_oid, public_readme, public_lfs)
+        restored.send_signal(signal.SIGTERM)
+        restored.wait(timeout=30)
+        assert restored.returncode == 0
+        print("PASS: CLI maintenance drains the surviving process, proves closed writers, and resumes the same Git/LFS repository without node secrets", flush=True)
         print("PASS: two live HTTPS nodes serve eight Git/LFS repositories beyond resident capacity through opposite Cell owners; survivor restores Directory and repository after SIGKILL without restarting", flush=True)

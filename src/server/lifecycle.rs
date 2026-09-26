@@ -20,7 +20,10 @@ impl CanopyServer {
                 }
             };
             if ready.send(Ok(server.address)).is_ok() {
-                let _ = receive_shutdown.await;
+                tokio::select! {
+                    _ = receive_shutdown => {},
+                    () = server.release_stop.cancelled() => {},
+                }
             }
             let result = server.shutdown().await;
             if let Err(error) = &result {
@@ -42,6 +45,27 @@ impl CanopyServer {
             shutdown,
             finished,
         })
+    }
+
+    /// Runs until a stop signal or deployment-driven shutdown, preserving drain.
+    pub async fn serve_until(
+        self,
+        signal: impl std::future::Future<Output = std::io::Result<()>>,
+    ) -> Result<(), ServerError> {
+        let Self {
+            shutdown,
+            mut finished,
+            ..
+        } = self;
+        tokio::select! {
+            result = &mut finished => result?,
+            result = signal => {
+                let _ = shutdown.send(());
+                let drained = finished.await?;
+                result?;
+                drained
+            }
+        }
     }
 
     #[must_use]

@@ -11,11 +11,12 @@ use cellule_app::CellApplication;
 use cellule_host::{CellNode, CellNodeBuilder};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits, LtxError};
 use cellule_runtime::{
-    ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellStorageLayout, CellTarget, ControlState, Digest, Error, IncarnationId, InvocationError,
-    MutationIdentity, NodeAdvertisement, NodeCapacity, NodeDirectory, NodeFailureDomain, NodeId,
-    NodeLeaseGuard, Owner, RecoveryManifestStore, RequestId, SessionId, SqlResultSet,
-    SqlWorkerPool, TenantId, VersionedNodeAdvertisement,
+    ApplicationId, ApplicationIdentity, CatalogEntry, CatalogRole, CellAuthority, CellCatalog,
+    CellClient, CellModule, CellStorageLayout, CellTarget, ControlState, Digest, Error,
+    IncarnationId, InvocationError, MutationIdentity, NodeAdvertisement, NodeCapacity,
+    NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard, Owner, RecoveryManifestStore,
+    ReleaseStore, RequestId, SessionId, SqlResultSet, SqlWorkerPool, TenantId,
+    VersionedNodeAdvertisement,
 };
 use cellule_store::{StorageError, Store, probe_storage};
 use ed25519_dalek::SigningKey;
@@ -30,6 +31,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     CanopyApplication, build_descriptor,
+    deployment::Deployment,
     directory::{
         self, CreateAccountOutcome, DirectoryCell, DirectoryModule, Principal, RenameOutcome,
         RepositoryEntry, RepositoryState, TokenScope,
@@ -141,6 +143,7 @@ struct RunningServer {
     advertisement: Arc<Mutex<VersionedNodeAdvertisement>>,
     stop: CancellationToken,
     ingress_stop: CancellationToken,
+    release_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
     tasks: TaskTracker,
     local: Arc<workspace::Workspace>,
@@ -380,6 +383,16 @@ impl RunningServer {
             config.store_prefix.clone(),
             *config.application.as_bytes(),
         );
+        let deployment = Deployment::new(
+            layout.store().clone(),
+            config.store_prefix.clone(),
+            ApplicationIdentity::new(config.tenant, config.application),
+            config.fleet,
+            config.image,
+            registry.clone(),
+        )?;
+        deployment.initialize().await?;
+        let release_stop = CancellationToken::new();
         let session = SessionId::from_bytes(uuid::Uuid::new_v4().into_bytes());
         let identity = AdvertisementIdentity {
             node: config.node,
@@ -420,12 +433,15 @@ impl RunningServer {
         let advertisement = Arc::new(Mutex::new(observed));
         let tasks = TaskTracker::new();
         let startup = async {
+            deployment.require_ready().await?;
             let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
             node.install_node_lease_for_startup(guard.clone())?;
             let renewal_directory = directory.clone();
             let renewal_observed = Arc::clone(&advertisement);
             let renewal_stop = stop.clone();
             let renewal_guard = guard.clone();
+            let renewal_deployment = deployment.clone();
+            let renewal_release_stop = release_stop.clone();
             node_tasks.spawn(async move {
                 renew_lease(
                     renewal_directory,
@@ -433,6 +449,8 @@ impl RunningServer {
                     identity,
                     renewal_guard,
                     renewal_stop,
+                    renewal_deployment,
+                    renewal_release_stop,
                 )
                 .await
             })?;
@@ -457,8 +475,10 @@ impl RunningServer {
             let external_store: Arc<dyn ObjectStore> =
                 Arc::new(PrefixStore::new(raw_store, config.store_prefix));
             let ready_node = Arc::clone(&node);
-            let ready: Arc<dyn Fn() -> bool + Send + Sync> =
-                Arc::new(move || ready_node.is_ready() && guard.check().is_ok());
+            let ready_release = release_stop.clone();
+            let ready: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                !ready_release.is_cancelled() && ready_node.is_ready() && guard.check().is_ok()
+            });
             let token_digest = Sha256::digest(config.token.as_bytes()).into();
             node.start()?;
             if !matches!(
@@ -497,6 +517,7 @@ impl RunningServer {
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));
+            deployment.require_ready().await?;
             Ok::<_, ServerError>((api, peer))
         }
         .await;
@@ -529,6 +550,7 @@ impl RunningServer {
             advertisement,
             stop,
             ingress_stop,
+            release_stop,
             serving,
             tasks,
             local,
@@ -542,6 +564,8 @@ async fn renew_lease(
     identity: AdvertisementIdentity,
     guard: NodeLeaseGuard,
     stop: CancellationToken,
+    deployment: Deployment,
+    release_stop: CancellationToken,
 ) -> Result<(), ServerError> {
     let mut progress = 1_u64;
     loop {
@@ -549,6 +573,14 @@ async fn renew_lease(
             () = stop.cancelled() => return Ok(()),
             () = tokio::time::sleep(RENEW_INTERVAL) => {}
         }
+        if !release_stop.is_cancelled()
+            && let Err(error) = deployment.require_ready().await
+        {
+            tracing::warn!(error = %error, "deployment admission closed; draining node");
+            release_stop.cancel();
+        }
+        // Continue renewing while accepted work drains. Withdrawal follows SQL
+        // close, so maintenance never mistakes heartbeat expiry for closed writers.
         guard.check()?;
         progress = progress.checked_add(1).ok_or(ServerError::Clock)?;
         let now_ms = unix_now_ms()?;
@@ -591,8 +623,17 @@ async fn acquire_sql_cell(
     let code = registry
         .module_code(module)
         .ok_or(ServerError::Repository("SQL module is absent"))?;
-    let proof = CellCatalog::new(layout.clone(), target.tenant())
-        .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
+    let catalog = CellCatalog::new(layout.clone(), target.tenant());
+    let releases = ReleaseStore::new(
+        layout.clone(),
+        ApplicationIdentity::new(target.tenant(), target.application()),
+    )?;
+    let proof = releases
+        .provision(
+            &catalog,
+            &registry,
+            CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
+        )
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let owner = Owner {

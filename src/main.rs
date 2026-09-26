@@ -1,8 +1,13 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use canopy_server::server::{CanopyServer, ServerConfig, ServerError};
-use cellule_runtime::{ApplicationId, Digest, NodeId, TenantId};
-use cellule_store::{StorageError, provider_store::build_url_object_store};
+use canopy_server::{
+    CanopyApplication, build_descriptor,
+    deployment::Deployment,
+    server::{CanopyServer, ServerConfig, ServerError},
+};
+use cellule_app::CellApplication;
+use cellule_runtime::{ApplicationId, ApplicationIdentity, Digest, NodeId, RequestId, TenantId};
+use cellule_store::{StorageError, Store, provider_store::build_url_object_store};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use thiserror::Error;
@@ -28,7 +33,9 @@ struct FileConfig {
 
 #[derive(Debug, Error)]
 enum StartupError {
-    #[error("usage: canopy <config.json>")]
+    #[error(
+        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|end <operation-uuid>"
+    )]
     Usage,
     #[error("cannot read configuration")]
     ConfigIo(#[from] std::io::Error),
@@ -46,6 +53,8 @@ enum StartupError {
     Length,
     #[error("object-store configuration failed")]
     Storage(#[from] StorageError),
+    #[error("deployment administration failed")]
+    Deployment(#[from] cellule_runtime::Error),
     #[error("Canopy service failed")]
     Server(#[from] ServerError),
 }
@@ -57,13 +66,23 @@ async fn main() -> Result<(), StartupError> {
         .init();
     let mut args = std::env::args_os();
     let _ = args.next();
-    let Some(path) = args.next() else {
+    let Some(first) = args.next() else {
         return Err(StartupError::Usage);
     };
+    if first == "maintenance" {
+        let path = args.next().ok_or(StartupError::Usage)?;
+        let action = args.next().ok_or(StartupError::Usage)?;
+        let operation = args.next();
+        if args.next().is_some() {
+            return Err(StartupError::Usage);
+        }
+        let file: FileConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+        return maintenance(file, action, operation).await;
+    }
     if args.next().is_some() {
         return Err(StartupError::Usage);
     }
-    let file: FileConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+    let file: FileConfig = serde_json::from_slice(&std::fs::read(first)?)?;
     let token = std::env::var("CANOPY_GIT_TOKEN")
         .map_err(|_| StartupError::MissingSecret("CANOPY_GIT_TOKEN"))?;
     if token.is_empty() {
@@ -92,8 +111,7 @@ async fn main() -> Result<(), StartupError> {
     };
     let server = CanopyServer::start(config, provider.store_arc()).await?;
     tracing::info!(address = %server.local_addr(), "Canopy is ready");
-    shutdown_signal().await?;
-    server.shutdown().await?;
+    server.serve_until(shutdown_signal()).await?;
     Ok(())
 }
 
@@ -117,4 +135,55 @@ fn decode_fixed(value: &str) -> Result<[u8; 32], StartupError> {
     hex::decode(value)?
         .try_into()
         .map_err(|_| StartupError::Length)
+}
+
+async fn maintenance(
+    file: FileConfig,
+    action: std::ffi::OsString,
+    operation: Option<std::ffi::OsString>,
+) -> Result<(), StartupError> {
+    let operation = match (action.to_str(), operation) {
+        (Some("status"), None) => None,
+        (Some("begin" | "end"), Some(value)) => Some(RequestId::from_bytes(
+            Uuid::parse_str(value.to_str().ok_or(StartupError::Usage)?)?.into_bytes(),
+        )),
+        _ => return Err(StartupError::Usage),
+    };
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let provider = build_url_object_store(&file.storage_url)?;
+    let deployment = Deployment::new(
+        Store::new(provider.store_arc()),
+        provider.prefix().clone(),
+        ApplicationIdentity::new(
+            TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
+            ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
+        ),
+        Digest::from_bytes(decode_fixed(&file.fleet_digest)?),
+        Digest::from_bytes(decode_fixed(&file.image_digest)?),
+        application.registry(),
+    )?;
+    let now = || -> Result<i64, StartupError> {
+        let elapsed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| StartupError::Server(ServerError::Clock))?;
+        i64::try_from(elapsed.as_millis()).map_err(|_| StartupError::Server(ServerError::Clock))
+    };
+    match (action.to_str(), operation) {
+        (Some("begin"), Some(operation)) => {
+            deployment.begin_maintenance(operation).await?;
+        }
+        (Some("end"), Some(operation)) => {
+            deployment.end_maintenance(operation, now()?).await?;
+        }
+        (Some("status"), None) => {}
+        _ => return Err(StartupError::Usage),
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&deployment.status(now()?).await?)?
+    );
+    Ok(())
 }

@@ -27,6 +27,41 @@ gateway. The Directory Cell has one owner, with on-demand recovery after release
 or lease expiry. Automatic fleet balancing and production capacity qualification
 remain pending.
 
+### Deployment maintenance
+
+Each storage prefix has one durable tenant/application identity and a selected
+compiled release. First startup initializes an empty deployment; later nodes
+must match its release and configured image identity. A nonempty catalog without
+release metadata is rejected. Existing preview prefixes require explicit future
+migration; do not point this build at them as an upgrade.
+
+To close admission and drain the fleet, choose a fresh operation UUID and use
+the same binary and configuration as the deployment:
+
+```bash
+canopy maintenance config.json begin <operation-uuid>
+canopy maintenance config.json status
+canopy maintenance config.json end <operation-uuid>
+```
+
+`begin` records the operation before returning. Nodes observe the closed release
+during lease renewal, stop ingress, drain accepted work, close SQLite and withdraw
+their advertisements. The binary exits after supervised shutdown. `status` emits
+JSON with the release, advertised session count, unsettled Cell count and
+`drained`. Offline work must wait for `drained: true`. Expired advertisements and
+owned/unpublished Cells do not count as drained. `end` requires that proof and
+the matching operation UUID, then permits the same compiled release to start.
+Retries use the same UUID while it remains the current operation. Replaying its
+completed begin does not start a new drain. Once another operation starts, do not
+replay older UUIDs; completed operation history is not retained.
+
+Administration needs object-store credentials; it does not need the Git token or
+node signing key. No force-resume, stale-owner repair, upgrade/migration or backup
+command is provided yet. In particular, a crash during drain can require a future
+fenced recovery procedure; this preview does not silently declare it complete.
+This maintenance boundary is a prerequisite for offline restore and collection,
+not a delivered backup system.
+
 ### Public repositories
 
 Repositories start private. An owner with an admin-scoped token can use **Change

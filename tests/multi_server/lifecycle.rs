@@ -292,3 +292,47 @@ fn runtime_destruction_cannot_release_an_unconfirmed_sql_workspace() -> Result {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn maintenance_waits_for_confirmed_cell_release() -> Result {
+    use canopy_server::{CanopyApplication, build_descriptor, deployment::Deployment};
+    use cellule_app::CellApplication;
+    use cellule_runtime::{ApplicationIdentity, RequestId};
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let address = available_address().await?;
+    let settings = config(address, files.path().join("node"));
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let deployment = Deployment::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        ApplicationIdentity::new(settings.tenant, settings.application),
+        settings.fleet,
+        settings.image,
+        application.registry(),
+    )?;
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    create_repository(address, "held").await?;
+    store.arm(ControlState::Idle);
+    let operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
+    deployment.begin_maintenance(operation).await?;
+    store.wait().await?;
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?;
+    let status = deployment.status(now).await?;
+    assert!(!status.drained);
+    assert_eq!(status.advertised_sessions, 1);
+    assert!(status.unsettled_cells > 0);
+    assert!(deployment.end_maintenance(operation, now).await.is_err());
+    store.proceed.notify_one();
+    server.shutdown().await?;
+    assert!(deployment.status(now).await?.drained);
+    deployment.end_maintenance(operation, now).await?;
+    Ok(())
+}

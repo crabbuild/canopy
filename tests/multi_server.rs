@@ -26,6 +26,8 @@ mod checks;
 mod collaborators;
 #[path = "multi_server/default_branch.rs"]
 mod default_branch;
+#[path = "multi_server/deployment.rs"]
+mod deployment;
 #[path = "multi_server/discovery.rs"]
 mod discovery;
 #[path = "multi_server/issues.rs"]

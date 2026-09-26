@@ -279,7 +279,7 @@ async fn clone(
     Ok(())
 }
 
-struct Proxy(tokio::task::JoinHandle<()>);
+pub(super) struct Proxy(tokio::task::JoinHandle<()>);
 impl Drop for Proxy {
     fn drop(&mut self) {
         self.0.abort();
@@ -342,7 +342,7 @@ async fn response_loss_proxy(
     Ok((address, lose_reply, Proxy(task)))
 }
 
-async fn proxy(
+pub(super) async fn proxy(
     upstream: std::net::SocketAddr,
     config: Arc<tokio_rustls::rustls::ServerConfig>,
 ) -> Result<(String, Proxy)> {
@@ -369,7 +369,7 @@ async fn proxy(
     Ok((endpoint, Proxy(task)))
 }
 
-fn tls_config() -> Result<(Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>)> {
+pub(super) fn tls_config() -> Result<(Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>)> {
     let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()])?;
     let ca = certified.cert.pem().into_bytes();
     let tls = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(

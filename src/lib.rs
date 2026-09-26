@@ -18,6 +18,7 @@ mod ancestry;
 pub mod branch_rules;
 pub mod checks;
 mod default_branch;
+pub mod deployment;
 pub mod directory;
 mod git_cache;
 pub mod git_gateway;
