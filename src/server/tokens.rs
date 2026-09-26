@@ -2,6 +2,18 @@ use super::*;
 use crate::directory::{TokenAuthority, TokenChange, TokenInfo};
 
 impl RepositoryManager {
+    pub(crate) async fn accounts(
+        &self,
+        actor_digest: [u8; 32],
+        after: Option<&str>,
+    ) -> Result<Option<Vec<directory::AccountInfo>>, ServerError> {
+        Ok(self
+            .directory
+            .accounts(actor_digest, &self.owner, after)
+            .await?
+            .output)
+    }
+
     pub(crate) async fn tokens(
         &self,
         actor_digest: [u8; 32],

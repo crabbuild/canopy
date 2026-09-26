@@ -15,6 +15,7 @@ function revokeDownloads() { for (const url of downloads) URL.revokeObjectURL(ur
 function disconnect() {
   session++; generation++; token = ""; clearTimeout(noticeTimer); $("notice").hidden = true; viewController?.abort(); for (const controller of requests) controller.abort();
   $("visibility-dialog")?.remove();
+  $("account-dialog")?.remove(); $("account-nav").hidden = true;
   revokeDownloads(); repositories = []; nextRepository = null; $("repositories").replaceChildren(); $("view").replaceChildren();
   $("connect-form").reset(); $("workspace").hidden = true; $("login").hidden = false; $("disconnect").hidden = true;
   $("create-dialog").close(); $("create-form").reset(); $("create-error").textContent = ""; $("token").focus(); document.title = "Canopy · Repositories";
@@ -42,6 +43,7 @@ async function api(path, { method = "GET", body, signal } = {}) {
 function route() {
   try {
     const value = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+    if (value?.view === "accounts") return { view: "accounts", account: typeof value.account === "string" ? value.account : undefined, after: typeof value.after === "string" ? value.after : undefined };
     if (!value || typeof value.repo !== "string") return {};
     return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue", "pulls", "pull", "new-pull"].includes(value.view) ? value.view : "tree",
       thread: Number.isSafeInteger(value.thread) && value.thread > 0 ? value.thread : undefined,
@@ -76,14 +78,16 @@ async function loadRepositories(append = false) {
 }
 $("connect-form").addEventListener("submit", async event => {
   event.preventDefault(); const submit = event.currentTarget.querySelector("button"); submit.disabled = true;
+  clearTimeout(noticeTimer); $("notice").hidden = true;
   const epoch = ++session; token = $("token").value.trim(); $("new-repo").hidden = false; $("disconnect").textContent = "Disconnect";
   try {
     await loadRepositories(); currentSession(epoch); $("connect-form").reset(); $("login").hidden = true; $("workspace").hidden = false; $("disconnect").hidden = false;
-    await render();
+    $("account-nav").hidden = false; await render();
   } catch (error) { if (epoch === session) { disconnect(); notice(error.message); } } finally { submit.disabled = false; }
 });
 document.querySelector(".skip").addEventListener("click", event => { event.preventDefault(); $("content").focus(); });
 $("disconnect").addEventListener("click", disconnect);
+$("account-nav").addEventListener("click", () => navigate({ view: "accounts" }));
 async function browsePublic() {
   disconnect(); const epoch = ++session;
   try {
@@ -266,8 +270,13 @@ async function render() {
   if ($("workspace").hidden) return;
   const ticket = ++generation; viewController?.abort(); viewController = new AbortController(); const signal = viewController.signal;
   revokeDownloads(); sidebar(); const current = route(); $("view").replaceChildren(element("p", "Opening repository…", "loading"));
-  if (!current.repo) { welcome(); return; }
+  if (!current.repo && current.view !== "accounts") { welcome(); return; }
   try {
+    if (current.view === "accounts") {
+      const panel = await accountsView(current, signal);
+      if (ticket !== generation) return;
+      $("view").replaceChildren(panel); document.title = "Accounts · Canopy"; return;
+    }
     const repository = await api(`/api/repositories/${encodeURIComponent(current.repo)}`, { signal });
     const fragment = document.createDocumentFragment();
     fragment.append(heading(repository));

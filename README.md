@@ -190,6 +190,39 @@ bound to a review, including after branch movement or deletion.
 See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
 paths, pagination, limits and authorization behavior.
 
+### Account administration
+
+After connecting, choose **Account**. Admin-scoped credentials can list, issue
+and revoke their own account's tokens. Site-owner admins can also page through
+accounts, create accounts, manage other accounts' tokens and disable accounts.
+Read/write credentials show their identity and explain the required admin scope.
+Repository grants remain separate from token scopes and are managed through the API.
+
+Token rows show scope, ID, creation time, expiry, revocation and **This session**.
+Times use the browser's local time; refresh to update status. Issuance defaults
+to 30 days, with 7-day, 90-day and non-expiring choices. Account creation issues
+one non-expiring initial token. The browser generates secrets using Web Crypto
+and shows them only in the issuance dialog. Save the secret before closing;
+Canopy stores only its digest and cannot retrieve it later. Nothing is placed in
+URLs or browser storage. A lost response preserves the exact request and secret
+for **Retry token issuance** or **Retry account creation**. Reloading or closing
+an unconfirmed issuance can lose a credential that the server already accepted.
+
+Revocation and disablement have explicit confirmations. Confirmed revocation of
+the current credential disconnects the tab. The server protects the site's last
+non-expiring admin credential. Disabled accounts remain listed with their name
+reserved; re-enable and account deletion are not implemented.
+
+`GET /api/session` requires an active credential of any scope and returns
+`{account, token_scope, token_id, site_admin}` without the secret or digest.
+`GET /api/accounts?after=<name>` requires a site-owner admin credential and
+returns `{accounts: [{name, enabled}], next_after}`. Pages contain up to 32
+accounts, including disabled identities, ordered by name. Continue with
+`next_after` until null; a full final page may require one empty request. Each
+page observes current state independently. Account listing rechecks the exact
+credential and its expiry in the Directory query at owner execution time.
+Both endpoints use `Cache-Control: no-store`.
+
 ### Repository API
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the

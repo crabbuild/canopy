@@ -1,5 +1,13 @@
 use super::*;
 
+pub const ACCOUNT_PAGE_SIZE: usize = 32;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub name: String,
+    pub enabled: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DisableAccountOutcome {
     Disabled,
@@ -9,6 +17,68 @@ pub enum DisableAccountOutcome {
 }
 
 impl DirectoryCell {
+    /// Lists accounts, including disabled identities, for an active site administrator.
+    pub async fn accounts(
+        &self,
+        actor_digest: [u8; 32],
+        site_owner: &str,
+        after: Option<&str>,
+    ) -> Result<Observed<Option<Vec<AccountInfo>>>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(site_owner).map_err(InvocationError::NotStarted)?;
+        if let Some(after) = after {
+            validate_component(after).map_err(InvocationError::NotStarted)?;
+        }
+        let authorized = "EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?2 AND t.account = ?3 AND t.scope = 'admin' AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1)";
+        let parameters = vec![
+            SqlValue::Blob(actor_digest.to_vec()),
+            SqlValue::Text(site_owner.into()),
+        ];
+        let mut page = parameters.clone();
+        page.push(SqlValue::Text(after.unwrap_or_default().into()));
+        // Owner-time authorization and the page share one snapshot. A credential
+        // revoked while this read waits cannot disclose the account directory.
+        let result = self.credential_query(None, SqlBatch { statements: vec![
+            SqlStatement { sql: format!("SELECT {authorized}"), parameters },
+            SqlStatement { sql: format!("SELECT name, enabled FROM accounts WHERE name > ?4 AND ({authorized}) ORDER BY name LIMIT {ACCOUNT_PAGE_SIZE}"), parameters: page },
+        ] }).await?;
+        let allowed = matches!(
+            result
+                .output
+                .first()
+                .and_then(|set| set.rows.first())
+                .map(Vec::as_slice),
+            Some([SqlValue::Integer(1)])
+        );
+        let output = if allowed {
+            let page = result.output.get(1).ok_or_else(|| {
+                InvocationError::NotStarted(Error::Command("missing account page"))
+            })?;
+            Some(
+                page.rows
+                    .iter()
+                    .map(|row| {
+                        let [SqlValue::Text(name), SqlValue::Integer(enabled)] = row.as_slice()
+                        else {
+                            return Err(Error::Command("invalid account row"));
+                        };
+                        validate_component(name)?;
+                        Ok(AccountInfo {
+                            name: name.clone(),
+                            enabled: *enabled == 1,
+                        })
+                    })
+                    .collect::<cellule_runtime::Result<Vec<_>>>()
+                    .map_err(InvocationError::NotStarted)?,
+            )
+        } else {
+            None
+        };
+        Ok(Observed {
+            output,
+            receipt: result.receipt,
+        })
+    }
+
     /// Disables an account while reserving its name and preserving attributed data.
     ///
     /// Only the active site-owner admin credential may disable accounts. The

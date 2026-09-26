@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration implemented; account deletion and audit records remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB Git object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -65,8 +65,9 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account deletion, administration UI and audit records.
-   Accounts support disablement; tokens support rotation, revocation and expiry.
+4. Complete account deletion and audit records.
+   Browser administration supports account creation/disablement and token
+   issuance, expiry selection, listing and revocation.
    Active-credential and rolling issuance limits are enforced in the Directory.
    Qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
@@ -2374,3 +2375,64 @@ eight repositories across two HTTPS peers, maintenance drain and interrupted
 recovery, and independent backup/restore of 80 MiB and empty LFS objects after
 source deletion. The bounded tmpfs provider is process and storage-API evidence;
 provider disk/power-loss durability and production capacity remain unqualified.
+
+
+## Browser account and credential administration
+
+On 2026-09-26, Canopy added **Account** navigation to its embedded interface.
+Site-owner admins can page through enabled/disabled accounts, create accounts,
+manage credentials and disable accounts. Other admin-scoped credentials manage
+their own tokens; read/write credentials receive an explicit scope explanation.
+The new session endpoint returns the actual credential ID so the browser can
+mark **This session** and disconnect after confirmed self-revocation.
+
+`GET /api/accounts` uses an exclusive name cursor, a 32-row bound and owner-time
+credential authorization inside the same Directory query as the page. Both new
+read endpoints omit credential secrets/digests and disable HTTP caching. The
+Directory module digest changes without a schema change: use a fresh preview
+prefix until explicit release migrations exist.
+
+The browser uses Web Crypto, displays a secret only in its issuance dialog and
+keeps the same payload, ID and absolute expiry after an uncertain result. It
+requires explicit closure after showing the secret. Token scopes, repository
+grants and site administration remain distinct server authorization boundaries.
+Issued-token expiry defaults to 30 days; the first account credential remains
+non-expiring under the existing account API. Account disablement is described as
+irreversible through the current UI/API; the owner cannot be disabled.
+
+Verification:
+
+- Real HTTP integration: session identity matches the token page, unauthorized
+  and mismatched Basic identities fail, read/non-owner-admin tokens cannot list
+  accounts, 33 accounts paginate without losing disabled rows, revoked/disabled
+  credentials fail, and session ID/account state survive fresh-local-state restore.
+- Directory tests: revoked, read and non-owner-admin credentials cannot list
+  accounts. A query queued before expiry and executed afterward returns no page.
+  All four Directory tests and existing token rotation/recovery pass.
+- Chrome against a release binary and disposable RustFS: create account, connect
+  using its generated secret, self-service admin view, write-scope explanation,
+  issue a 30-day admin token, connect with it, revoke it, and reject reconnection.
+  Last permanent owner-admin revocation shows the server's conflict. Account
+  disablement changes its row and rejects the account's credential afterward.
+- Browser fault injection dropped an actual successful issuance response. The
+  dialog retained the original secret, exposed uncertainty, and retried to one
+  stored credential. A paused account-list response was canceled by disconnect;
+  the private view stayed cleared. Temporary interception was removed.
+- Credential pages show 32 entries followed by the remaining entry. Desktop and
+  390-pixel mobile list/dialog rendering were inspected; no horizontal overflow
+  or JavaScript console errors were observed. A stale rejected-login notice
+  found during this pass was cleared when starting a new connection.
+- The real RustFS process run passed with `--sqlite-chunks --many-objects 256`.
+  New session/account reads and disabled-credential denials are checked across
+  clean restart and SIGKILL/lease expiry/local SQLite loss. Existing Git/LFS,
+  collaboration, quotas, two HTTPS nodes, maintenance recovery and independent
+  backup/restore proof still pass, including 80 MiB and empty LFS objects after
+  source deletion. This tmpfs provider run does not prove power-loss durability
+  or production capacity.
+- All-target Clippy with warnings denied, formatting, JavaScript/Python syntax,
+  whitespace and the release build pass.
+
+Gate 2 remains partial. Account deletion, reactivation policy, audit records,
+account admission/rate limits and storage retention still require implementation
+or product decisions; the browser milestone does not close the broader hosting,
+performance or operations gates.

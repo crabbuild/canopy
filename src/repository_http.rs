@@ -63,6 +63,8 @@ impl RepositoryHttp {
         Router::new()
             .route("/", get(crate::web::index))
             .route("/assets/canopy.js", get(crate::web::script))
+            .route("/assets/accounts.js", get(crate::web::accounts))
+            .route("/assets/accounts.css", get(crate::web::account_styles))
             .route("/assets/issues.js", get(crate::web::issues))
             .route("/assets/discussion.js", get(crate::web::discussion))
             .route("/assets/pulls.js", get(crate::web::pulls))
@@ -71,7 +73,8 @@ impl RepositoryHttp {
             .route("/assets/canopy.css", get(crate::web::styles))
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
-            .route("/api/accounts", axum::routing::post(create_account))
+            .route("/api/session", get(accounts::session))
+            .route("/api/accounts", get(accounts::list).post(create_account))
             .route(
                 "/api/accounts/{account}/disable",
                 axum::routing::post(accounts::disable),

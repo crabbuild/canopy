@@ -32,6 +32,7 @@ async fn test_identity(mut request: Request<Body>, next: Next) -> Response {
     request
         .extensions_mut()
         .insert(Viewer::Authenticated(Principal {
+            token_id: [1; 16],
             account: "canopy".into(),
             scope: TokenScope::Admin,
         }));

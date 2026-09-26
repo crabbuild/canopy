@@ -3,7 +3,7 @@
 mod accounts;
 mod timed_sql;
 mod tokens;
-pub use accounts::DisableAccountOutcome;
+pub use accounts::{ACCOUNT_PAGE_SIZE, AccountInfo, DisableAccountOutcome};
 pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
 
 use std::sync::OnceLock;
@@ -159,6 +159,7 @@ impl TokenScope {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Principal {
+    pub token_id: [u8; 16],
     pub account: String,
     pub scope: TokenScope,
 }
@@ -292,7 +293,7 @@ impl DirectoryCell {
     ) -> Result<Observed<Option<Principal>>, InvocationError<Vec<SqlResultSet>>> {
         let result = self.credential_query(minimum, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT a.name, t.scope FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?2 AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1".into(),
+                sql: "SELECT a.name, t.scope, t.id FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?2 AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1".into(),
                 parameters: vec![SqlValue::Blob(token_digest.to_vec())],
             }],
         }).await?;
@@ -301,13 +302,22 @@ impl DirectoryCell {
             .first()
             .and_then(|set| set.rows.first())
             .map(|row| {
-                let [SqlValue::Text(account), SqlValue::Text(scope)] = row.as_slice() else {
+                let [
+                    SqlValue::Text(account),
+                    SqlValue::Text(scope),
+                    SqlValue::Blob(id),
+                ] = row.as_slice()
+                else {
                     return Err(Error::Command("invalid account row"));
                 };
                 validate_component(account)?;
                 let scope =
                     TokenScope::parse(scope).ok_or(Error::Command("invalid token scope"))?;
                 Ok(Principal {
+                    token_id: id
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| Error::Command("invalid token ID"))?,
                     account: account.clone(),
                     scope,
                 })

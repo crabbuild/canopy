@@ -1,3 +1,5 @@
+#[path = "multi_server/account_admin.rs"]
+mod account_admin;
 #[path = "multi_server/accounts.rs"]
 mod accounts;
 #[path = "multi_server/backup.rs"]

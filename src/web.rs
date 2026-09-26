@@ -69,3 +69,16 @@ pub(crate) async fn pulls() -> Response<Body> {
 pub(crate) async fn pull_styles() -> Response<Body> {
     asset(include_str!("../web/pulls.css"), "text/css; charset=utf-8")
 }
+
+pub(crate) async fn accounts() -> Response<Body> {
+    asset(
+        include_str!("../web/accounts.js"),
+        "text/javascript; charset=utf-8",
+    )
+}
+pub(crate) async fn account_styles() -> Response<Body> {
+    asset(
+        include_str!("../web/accounts.css"),
+        "text/css; charset=utf-8",
+    )
+}

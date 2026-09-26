@@ -81,6 +81,9 @@ async fn disable_rechecks_exact_admin_credential_inside_the_directory_transactio
             expected
         );
     }
+    for digest in [[1; 32], [3; 32], [4; 32], [0; 32]] {
+        assert_eq!(cell.accounts(digest, "owner", None).await?.output, None);
+    }
     assert!(cell.authenticate([4; 32], None).await?.output.is_some());
     let identity = random_identity()?;
     let disabled = cell

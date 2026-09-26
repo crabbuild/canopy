@@ -288,6 +288,14 @@ def verify_disabled_account(base_url, tokens):
     # Check before retrying the disable: a replay must not mask lost state.
     for token in tokens:
         verify_revoked_token(base_url, token)
+        assert api_status(base_url, "/api/session", token) == 401
+        assert api_status(base_url, "/api/accounts", token) == 401
+    session = api_get(base_url, "/api/session", "local-test-token")
+    assert session["account"] == "canopy" and session["site_admin"] is True
+    credentials = api_get(base_url, "/api/accounts/canopy/tokens", "local-test-token")
+    assert any(item["id"] == session["token_id"] and item["enabled"] for item in credentials["tokens"])
+    accounts = api_get(base_url, "/api/accounts", "local-test-token")["accounts"]
+    assert {"name": "disabled", "enabled": False} in accounts
     assert api_status(base_url, "/api/accounts", "local-test-token", "POST",
                       {"name": "disabled", "token": tokens[0], "scope": "admin"}) == 409
     assert api_status(base_url, "/api/accounts/disabled/disable", "local-test-token", "POST") == 204

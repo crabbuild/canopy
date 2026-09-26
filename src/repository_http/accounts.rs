@@ -48,3 +48,88 @@ pub(super) async fn disable(
         }
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AccountQuery {
+    after: Option<String>,
+}
+
+pub(super) async fn session(
+    State(state): State<Arc<RepositoryHttp>>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(&headers, TokenScope::Read).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    json_response(
+        StatusCode::OK,
+        &serde_json::json!({
+            "account": principal.account,
+            "token_scope": principal.scope.as_str(),
+            "token_id": uuid::Uuid::from_bytes(principal.token_id).to_string(),
+            "site_admin": principal.account == state.manager.owner && principal.scope == TokenScope::Admin,
+        }),
+    )
+}
+
+pub(super) async fn list(
+    State(state): State<Arc<RepositoryHttp>>,
+    Query(query): Query<AccountQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(&headers, TokenScope::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Account management is restricted");
+    }
+    if query
+        .after
+        .as_deref()
+        .is_some_and(|after| directory::validate_component(after).is_err())
+    {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid account cursor");
+    }
+    let Some(credential) = http::credential(headers.get(header::AUTHORIZATION)) else {
+        return unauthorized();
+    };
+    let digest = Sha256::digest(credential.token.as_bytes()).into();
+    match state.manager.accounts(digest, query.after.as_deref()).await {
+        Ok(Some(accounts)) if (state.manager.ready)() => {
+            let next = (accounts.len() == directory::ACCOUNT_PAGE_SIZE)
+                .then(|| accounts.last().map(|account| &account.name))
+                .flatten();
+            let entries: Vec<_> = accounts
+                .iter()
+                .map(
+                    |account| serde_json::json!({"name": account.name, "enabled": account.enabled}),
+                )
+                .collect();
+            json_response(
+                StatusCode::OK,
+                &serde_json::json!({"accounts": entries, "next_after": next}),
+            )
+        }
+        Ok(None) => plain(StatusCode::FORBIDDEN, "Account management is restricted"),
+        Ok(Some(_)) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Err(error) => {
+            tracing::error!(error = %error, "account listing failed");
+            plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Account management unavailable",
+            )
+        }
+    }
+}
