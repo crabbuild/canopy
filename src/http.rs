@@ -404,6 +404,23 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         .get("Git-Protocol")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "version=2");
+    let mut encodings = request.headers().get_all(header::CONTENT_ENCODING).iter();
+    let gzip = match (encodings.next(), encodings.next()) {
+        (None, None) => false,
+        (Some(value), None) if value.as_bytes().eq_ignore_ascii_case(b"identity") => false,
+        (Some(value), None)
+            if value.as_bytes().eq_ignore_ascii_case(b"gzip")
+                || value.as_bytes().eq_ignore_ascii_case(b"x-gzip") =>
+        {
+            true
+        }
+        _ => {
+            return plain(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Unsupported Git content encoding",
+            );
+        }
+    };
     let push_id = if method == "POST" && suffix == "/git-receive-pack" {
         let mut values = request.headers().get_all("Idempotency-Key").iter();
         match (values.next(), values.next()) {
@@ -440,6 +457,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
                 path_info,
                 query,
                 content_type,
+                gzip,
                 protocol_v2,
                 body: request.into_body(),
                 authenticated: true,
@@ -483,6 +501,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         Err(GatewayError::RefConflict) => {
             plain(StatusCode::CONFLICT, "Repository changed during push")
         }
+        Err(GatewayError::RefSnapshotBusy) => plain(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Repository refs are changing; retry the request",
+        ),
         Err(
             GatewayError::Cache(error)
             | GatewayError::Http(crate::git_http::GitHttpError::Cache(error)),

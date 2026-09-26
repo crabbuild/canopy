@@ -233,6 +233,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
             .as_ref()
             .is_some_and(|state| state.oid.is_none() && state.version == 2)
     );
+    let refs_generation = repository.refs_page("", None).await?.output.generation;
     let _ = stop.send(());
     server.await??;
     drop(repository);
@@ -277,6 +278,10 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         application_id,
     );
     let repository = Arc::new(RepositoryCell::new(&app_handle, target)?);
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        refs_generation
+    );
     assert_eq!(
         repository
             .ref_state("refs/heads/reused", None)

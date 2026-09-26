@@ -56,6 +56,7 @@ pub async fn verify(
             .header("Idempotency-Key", &id)
             .body(body.clone())
     };
+    let before = repository.refs_page("", None).await?.output.generation;
     let occupied = budget.try_reserve(budget.capacity() - body.len() as u64 - 4096)?;
     let response = request().send().await?;
     assert_eq!(response.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
@@ -69,6 +70,10 @@ pub async fn verify(
     );
     assert!(repository.next_object(None).await?.output.is_none());
     assert_eq!(budget.used(), occupied.bytes());
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        before
+    );
     drop(occupied);
 
     let response = request().send().await?.error_for_status()?.bytes().await?;
@@ -85,6 +90,30 @@ pub async fn verify(
             .output
             .and_then(|state| state.oid),
         Some(expected)
+    );
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        before + 1
+    );
+    let replay = request()
+        .header("Content-Encoding", "identity")
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    assert_eq!(replay, response);
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        before + 1
+    );
+    assert_eq!(
+        request()
+            .header("Content-Encoding", "gzip")
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
     );
 
     // This request has no uploaded pack. Its cache must hydrate from SQLite,

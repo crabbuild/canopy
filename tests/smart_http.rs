@@ -21,6 +21,8 @@ mod support;
 
 #[path = "smart_http/cache_admission.rs"]
 mod cache_admission;
+#[path = "smart_http/ref_snapshots.rs"]
+mod ref_snapshots;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
@@ -380,6 +382,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 .output
                 .is_some_and(|state| state.version == 3)
         );
+        ref_snapshots::verify(&repository, &client, &url).await?;
         let _ = stop_tx.send(());
         server.await??;
 
@@ -424,6 +427,9 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             b"served from the repository Cell\n"
         );
         assert_eq!(tokio::fs::read(clone.join("large.bin")).await?, large_body);
+        let tags = run_git(Some(&clone), &["tag", "--list", "snapshot-*"]).await?;
+        assert_eq!(std::str::from_utf8(&tags)?.lines().count(), 300);
+        run_git(Some(&clone), &["fsck", "--full"]).await?;
         run_git(Some(&clone), &["lfs", "install", "--local"]).await?;
         run_git(
             Some(&clone),

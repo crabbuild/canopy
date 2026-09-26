@@ -12,7 +12,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads and bounded atomic SQLite object batches work; per-object buffers and 64 MiB blob ceiling remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
-| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; consistent ref snapshot, native scratch limits and corpus capacity proof remain |
+| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
@@ -295,3 +295,41 @@ establish production throughput or a controlled comparison with earlier builds.
 Native Git's peak scratch use, filesystem allocation overhead, cleanup after
 process death and durable storage quotas remain open; completed-write accounting
 does not satisfy those release gates.
+
+
+## Consistent ref pagination and compressed Git requests
+
+A repository-wide generation now commits atomically with each accepted ref plan.
+Every bounded ref page includes that generation; continuations reject changes,
+including deletion/recreation and ABA updates. The gateway attempts at most three
+scans before returning a retryable 503. Object writes and exact push replay do not
+advance the generation. This extends the unreleased schema version 1; no shipped
+schema migration or old request-digest reader is introduced.
+
+The real HTTP fixture publishes 300 refs across multiple pages, then changes two
+refs on opposite sides of a page boundary in one transaction. During 32 concurrent
+updates, the observed run returned 28 consistent advertisements and four retryable
+503s. Deterministic Cell checks cover stale continuation rejection, empty terminal
+pages, deletion/recreation, ABA, rejected plans and exact replay. Stock Git lists
+and clones all 300 refs after gateway replacement and passes `git fsck`; owner
+recovery preserves the durable generation. Focused tests, Clippy and the binary
+build pass.
+
+This workload exposed a stock-client clone failure: larger fetch requests used
+gzip, but the gateway omitted CGI content encoding. The gateway now forwards
+identity/gzip semantics, rejects unsupported or stacked encodings, and binds gzip
+to the versioned push request digest. Explicit gzip, x-gzip and case-insensitive
+gzip fetches pass. Reusing a completed push UUID with changed encoding returns
+409; explicit identity encoding replays the original result without changing refs.
+Native decompression and pack expansion still need resource enforcement.
+
+
+The combined RustFS process smoke now publishes 300 additional refs in its
+256-file repository and verifies every restored ref OID after owner death, lease
+expiry and local disk loss. The corrected qualification passed all four repository
+Cells, resident eviction, Git/LFS, ACL, mixed/atomic outcomes and dropped-reply
+replay. Its 80 MiB push completed in 17.60 seconds; v0/v2 clones restored
+83,912,147-byte packs with matching hashes and clean `git fsck` in 33.39/5.42
+seconds. The 256-file/300-ref recovery check completed in 1.48 seconds. Environment:
+Darwin arm64, Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, fresh bind-mounted
+provider data. These are correctness/workload observations, not capacity claims.

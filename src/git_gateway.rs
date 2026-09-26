@@ -26,6 +26,7 @@ use crate::{
     lfs::LfsService,
     object_batch::MAX_OBJECTS,
     push::{PushCompletion, PushError},
+    refs::{REF_PAGE_SIZE, RefReadError},
 };
 
 pub use crate::git_objects::ObjectReadError;
@@ -54,6 +55,8 @@ pub enum GatewayError {
     Objects(#[from] ObjectReadError),
     #[error("ref publication conflicted with current Cell state")]
     RefConflict,
+    #[error("repository refs kept changing during snapshot acquisition")]
+    RefSnapshotBusy,
     #[error("authentication is required")]
     Unauthorized,
     #[error("durable push response failed")]
@@ -168,6 +171,7 @@ impl GitGateway {
             path_info,
             query,
             content_type,
+            gzip,
             protocol_v2,
             body,
             authenticated,
@@ -178,6 +182,7 @@ impl GitGateway {
             path_info,
             query,
             content_type,
+            gzip,
             protocol_v2,
             body,
             authenticated,
@@ -287,24 +292,30 @@ impl GitGateway {
     }
 
     async fn cell_refs(&self) -> Result<BTreeMap<String, RefExpectation>, GatewayError> {
-        let mut refs = BTreeMap::new();
-        let mut after = String::new();
-        loop {
-            let page = self
-                .repository
-                .refs_page(&after)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                .output;
-            if page.is_empty() {
-                break;
-            }
-            for (name, state) in page {
-                after = name.clone();
-                refs.insert(name, state);
+        for _ in 0..3 {
+            let mut refs = BTreeMap::new();
+            let mut after = String::new();
+            let mut generation = None;
+            loop {
+                let page = match self.repository.refs_page(&after, generation).await {
+                    Ok(page) => page.output,
+                    Err(RefReadError::Changed) => break,
+                    Err(RefReadError::Cell(error)) => {
+                        return Err(GatewayError::Cell(Box::new(error)));
+                    }
+                };
+                generation = Some(page.generation);
+                let complete = page.refs.len() < REF_PAGE_SIZE;
+                for (name, state) in page.refs {
+                    after = name.clone();
+                    refs.insert(name, state);
+                }
+                if complete {
+                    return Ok(refs);
+                }
             }
         }
-        Ok(refs)
+        Err(GatewayError::RefSnapshotBusy)
     }
 
     async fn persist_objects(
@@ -391,10 +402,11 @@ fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
 
 async fn request_digest(request: &GitHttpRequest) -> Result<[u8; 32], InputError> {
     let mut hash = blake3::Hasher::new();
-    hash.update(b"canopy-git-push-v1");
+    hash.update(b"canopy-git-push-v2");
     hash.update(&[
         u8::from(request.protocol_v2),
         u8::from(request.content_type.is_some()),
+        u8::from(request.gzip),
     ]);
     for field in [
         request.method.as_bytes(),

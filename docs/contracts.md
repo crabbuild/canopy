@@ -46,6 +46,18 @@ the accepted ref changes and replayable response through `CompletePush`. Both
 Rejected or interrupted pushes may leave unreferenced objects; collection is not
 implemented yet.
 
+The `ref_generation` singleton advances once in the same transaction as each
+accepted ref plan. Typed finalization and HTTP completion share this update;
+rejected plans, completed-request replay and object/ACL writes do not advance it.
+Ref queries return at most 256 rows with their generation in one SQLite
+statement, including an empty terminal page. A continuation must supply the
+first page's generation. Changes invalidate the scan even when tips return to
+their previous OIDs or names are deleted and recreated. The gateway discards
+partial scans and tries at most three scans, then returns HTTP 503.
+Successful scans therefore describe one coherent ref state. That state can
+become older while its disposable cache is hydrated; admitted readers retain
+the selected generation, and immutable objects remain readable without GC.
+
 Git owns the [per-ref report and atomic capability](https://git-scm.com/docs/protocol-capabilities#_report_status).
 An ordinary push may accept some refs and reject others. The gateway publishes
 the actual accepted changes in one Cell transaction before forwarding Git's
@@ -84,11 +96,14 @@ bounded certification work remain in the streaming/performance gate.
 
 For receive-pack POSTs, `Idempotency-Key` must be one canonical lowercase,
 hyphenated UUID. Missing IDs are generated, and recorded responses include
-`X-Canopy-Push-Id`. The request digest covers a versioned domain, protocol flag,
+`X-Canopy-Push-Id`. The request digest covers the `canopy-git-push-v2` domain,
+protocol and gzip flags,
 content-type presence, and length-prefixed method, internal repository path,
 query, content type and body. Account identity is bound separately. The
 repository UUID scopes the record, so a name change preserves its identity.
 Authorization secrets and host addresses are not part of the digest.
+Explicit identity encoding and absent encoding have the same interpretation;
+changing to gzip under a completed request UUID produces a conflict.
 
 A reservation binds the ID before running Git. Response metadata and 512 KiB
 body chunks are durable before finalization. `CompletePush` checks the binding,
@@ -252,6 +267,15 @@ running Git. This keeps the identity format unchanged for chunked and fixed-leng
 HTTP requests. CGI receives the exact file size and reads stdin directly from the
 file. Its worker retains the spool's disk reservation until subprocess work ends.
 No Git objects or refs are published from an incomplete HTTP upload.
+
+Git requests support identity and gzip content encoding (`x-gzip` is also
+accepted). Unsupported or stacked encodings return 415. The spool retains wire
+bytes and their exact length; the gateway passes canonical `HTTP_CONTENT_ENCODING`
+to [Git's CGI implementation](https://github.com/git/git/blob/v2.50.1/http-backend.c),
+which inflates gzip before passing bytes to upload-pack or receive-pack. This is required
+for stock clients that compress large fetch requests. The admission limits above
+bound encoded bytes; native inflation and pack expansion still need resource
+enforcement beyond the subprocess deadline.
 
 Push reports, LFS transfers and individual object hydration still allocate
 bounded whole buffers. Cold fetches still rebuild the complete bare cache.

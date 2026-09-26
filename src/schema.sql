@@ -23,6 +23,12 @@ CREATE TABLE refs (
     version INTEGER NOT NULL CHECK(version > 0)
 ) WITHOUT ROWID;
 
+CREATE TABLE ref_generation (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation >= 0)
+) WITHOUT ROWID;
+INSERT INTO ref_generation (singleton, generation) VALUES (1, 0);
+
 CREATE TABLE lfs_objects (
     sha256 BLOB PRIMARY KEY CHECK(length(sha256) = 32),
     size INTEGER NOT NULL CHECK(size >= 0),

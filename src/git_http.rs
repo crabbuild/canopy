@@ -57,6 +57,7 @@ pub struct GitHttpRequest<B = GitInput> {
     pub path_info: String,
     pub query: String,
     pub content_type: Option<String>,
+    pub gzip: bool,
     pub protocol_v2: bool,
     pub body: B,
     pub authenticated: bool,
@@ -147,6 +148,10 @@ impl GitHttpBackend {
             .env("PATH_INFO", &request.path_info)
             .env("QUERY_STRING", &request.query)
             .env("CONTENT_LENGTH", request.body.size().to_string())
+            .env(
+                "HTTP_CONTENT_ENCODING",
+                if request.gzip { "gzip" } else { "identity" },
+            )
             .env("SERVER_PROTOCOL", "HTTP/1.1")
             .stdin(request.body.stdin()?)
             .stdout(Stdio::piped())

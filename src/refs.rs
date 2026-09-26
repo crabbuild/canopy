@@ -12,6 +12,21 @@ use crate::{
 
 const MAX_UPDATES: usize = 64;
 const MAX_REF_NAME_BYTES: usize = 255;
+pub(crate) const REF_PAGE_SIZE: usize = 256;
+
+/// A bounded ref page tied to one durable ref generation, including deletions.
+pub struct RefPage {
+    pub generation: i64,
+    pub refs: Vec<(String, RefExpectation)>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RefReadError {
+    #[error("repository refs changed while reading pages")]
+    Changed,
+    #[error("repository ref query failed")]
+    Cell(#[from] InvocationError<Vec<SqlResultSet>>),
+}
 
 /// Expected ref version and optional tip; a missing tip is a retained deletion.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,22 +83,30 @@ impl RepositoryCell {
         })
     }
 
-    /// Reads at most 256 live or deleted refs after a lexical cursor.
+    /// Reads at most 256 refs; continuations require the first page's generation.
+    ///
+    /// A changed generation rejects the page, requiring a new scan from the start.
     pub async fn refs_page(
         &self,
         after: &str,
-    ) -> std::result::Result<
-        Observed<Vec<(String, RefExpectation)>>,
-        InvocationError<Vec<SqlResultSet>>,
-    > {
+        generation: Option<i64>,
+    ) -> Result<Observed<RefPage>, RefReadError> {
+        if !after.is_empty() && generation.is_none() {
+            return Err(InvocationError::NotStarted(Error::Command(
+                "ref cursor requires a generation",
+            ))
+            .into());
+        }
         let result = self
             .sql
             .query(
                 None,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT name, oid, version FROM refs WHERE name > ?1 ORDER BY name LIMIT 256".into(),
-                        parameters: vec![SqlValue::Text(after.into())],
+                        // One SQLite statement binds the generation even to an empty
+                        // final page. Separate observations could miss a concurrent push.
+                        sql: "SELECT g.generation, r.name, r.oid, r.version FROM ref_generation g LEFT JOIN (SELECT name, oid, version FROM refs WHERE name > ?1 ORDER BY name LIMIT ?2) r ON 1 = 1 WHERE g.singleton = 1 ORDER BY r.name".into(),
+                        parameters: vec![SqlValue::Text(after.into()), SqlValue::Integer(REF_PAGE_SIZE as i64)],
                     }],
                 },
             )
@@ -92,19 +115,39 @@ impl RepositoryCell {
             .output
             .first()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing refs page")))?;
+        let current = match rows.rows.first().map(Vec::as_slice) {
+            Some([SqlValue::Integer(value), ..]) if *value >= 0 => *value,
+            _ => {
+                return Err(
+                    InvocationError::NotStarted(Error::Command("invalid ref generation")).into(),
+                );
+            }
+        };
+        if generation.is_some_and(|expected| expected != current) {
+            return Err(RefReadError::Changed);
+        }
         let mut refs = Vec::with_capacity(rows.rows.len());
         for row in &rows.rows {
-            let [SqlValue::Text(name), oid, version] = row.as_slice() else {
-                return Err(InvocationError::NotStarted(Error::Command(
-                    "invalid stored ref row",
-                )));
+            if matches!(
+                row.as_slice(),
+                [_, SqlValue::Null, SqlValue::Null, SqlValue::Null]
+            ) {
+                continue;
+            }
+            let [_, SqlValue::Text(name), oid, version] = row.as_slice() else {
+                return Err(
+                    InvocationError::NotStarted(Error::Command("invalid stored ref row")).into(),
+                );
             };
             let state = decode_ref_row(&[oid.clone(), version.clone()])
                 .map_err(InvocationError::NotStarted)?;
             refs.push((name.clone(), state));
         }
         Ok(Observed {
-            output: refs,
+            output: RefPage {
+                generation: current,
+                refs,
+            },
             receipt: result.receipt,
         })
     }
@@ -285,6 +328,17 @@ pub(crate) fn apply_push(
         if result.first().is_none_or(|set| set.rows_affected != 1) {
             return Err(Error::Command("ref CAS changed no rows"));
         }
+    }
+    // Both typed pushes and HTTP completion pass here. Advance only with the
+    // ref transaction so paginated readers reject mixed generations, including ABA.
+    let result = context.sql(&SqlBatch {
+        statements: vec![SqlStatement {
+            sql: "UPDATE ref_generation SET generation = generation + 1 WHERE singleton = 1 AND generation < 9223372036854775807".into(),
+            parameters: vec![],
+        }],
+    })?;
+    if result.first().is_none_or(|set| set.rows_affected != 1) {
+        return Err(Error::Command("ref generation cannot advance"));
     }
     Ok(true)
 }

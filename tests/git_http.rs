@@ -25,6 +25,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                 path_info: "/repo.git/info/refs".into(),
                 query: format!("service={service}"),
                 content_type: None,
+                gzip: false,
                 protocol_v2: false,
                 body: canopy_server::git_input::GitInput::receive(
                     axum::body::Body::empty(),

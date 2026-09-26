@@ -280,6 +280,17 @@ def seed_many_objects(base_url, directory, count):
         git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
             "push", "--tags", url, "HEAD:refs/heads/main", cwd=local)
         print(f"PASS: {count}-file {stage} push in {time.monotonic() - started:.2f}s", flush=True)
+    refs = [f"refs/tags/snapshot-{index:03}" for index in range(300)]
+    head = git("rev-parse", "HEAD", cwd=local).decode()
+    subprocess.run(
+        ["git", "update-ref", "--stdin"], cwd=local,
+        input="".join(f"update {name} {head}\n" for name in refs).encode(),
+        capture_output=True, check=True,
+    )
+    for start in range(0, len(refs), 64):
+        git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+            "push", url, *refs[start:start + 64], cwd=local)
+    print("PASS: published 300 additional refs across bounded push transactions", flush=True)
     return initial, git("rev-parse", "HEAD", cwd=local), git("rev-parse", "release", cwd=local)
 
 
@@ -292,11 +303,14 @@ def verify_many_objects(base_url, directory, count, expected):
     assert git("rev-parse", "HEAD", cwd=clone) == head
     assert git("rev-parse", "HEAD^", cwd=clone) == initial
     assert git("rev-parse", "release", cwd=clone) == tag
+    refs = git("for-each-ref", "--format=%(objectname) %(refname)", "refs/tags/snapshot-*", cwd=clone)
+    expected_refs = [head + f" refs/tags/snapshot-{index:03}".encode() for index in range(300)]
+    assert refs.splitlines() == expected_refs
     for index in range(count):
         expected_body = b"changed\0\n" if index == 0 else f"original {index}\0\n".encode()
         assert (clone / f"file-{index}").read_bytes() == expected_body
     git("fsck", "--full", cwd=clone)
-    print(f"PASS: {count}-file clone restored both commits and tag after takeover in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: {count}-file clone restored both commits, annotated tag and 300 refs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
 def main():

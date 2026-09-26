@@ -136,6 +136,9 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         );
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
         let repository = RepositoryCell::new(&application_handle, target)?;
+        let empty = repository.refs_page("", None).await?.output;
+        assert_eq!(empty.generation, 0);
+        assert!(empty.refs.is_empty());
         batches::exercise(&repository, &graph_sql).await?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;

@@ -30,7 +30,7 @@ pub mod server;
 
 pub use object_batch::ObjectBatch;
 pub use push::PushError;
-pub use refs::{FinalizePush, PushPlan, RefExpectation, RefUpdate};
+pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
 pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
