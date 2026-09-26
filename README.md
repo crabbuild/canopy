@@ -100,6 +100,35 @@ lists optionally accept `state=open` or `state=closed`; the default includes bot
 Pages observe current state independently. Bodies are returned as raw text; no
 Markdown or HTML rendering, attachments, labels, assignees, or deletion API yet.
 
+Commit checks record results from a configured reporter; they do not execute CI
+jobs or enforce branch protection yet.
+
+| Method | Path | Action |
+| --- | --- | --- |
+| GET | `/api/repositories/<name>/check-contexts` | List contexts, including disabled ones |
+| PUT | `/api/repositories/<name>/check-contexts/<context>` | Owner configures reporter and enablement |
+| GET / POST | `/api/repositories/<name>/commits/<oid>/checks` | Read latest attempts / start an attempt |
+| GET / PUT | `/api/repositories/<name>/checks/<id>` | Read an attempt / report progress or result |
+
+Context PUT requires an admin-scoped owner token and `repository_id`,
+`expected_version` (zero for creation), `reporter` (a repository member), and
+`enabled`. Context names use lowercase components up to 64 bytes. Each policy
+change advances its version and invalidates earlier-version results.
+
+The reporter uses a write-scoped token to POST `repository_id`, a fresh UUID `id`,
+`context`, and `context_version`. The Git commit must already be stored. The
+attempt starts `queued`; POST returns its `id`. An exact retry preserves that
+attempt. PUT supplies `repository_id`, `expected_version`, `state`, and `summary`
+(up to 4 KiB). States advance to `in_progress`, `success`, `failure`, or `cancelled`.
+Terminal results are immutable; reruns need a new UUID. PUT returns 204; stale
+versions or changed context policy return 409.
+
+Repository readers can inspect checks. Commit views select the newest-created
+attempt for each enabled context at its current version; a late result or retry
+from an older attempt cannot replace it. A missing current attempt appears as
+`run: null`. Context/commit pages contain at most 32 entries with name-based
+`after` / `next_after` cursors. Historical attempts remain readable by UUID.
+
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
 own account's tokens; the configured owner can manage any account's tokens:
 
@@ -251,6 +280,7 @@ kills the new owner, waits for lease expiry, and clones from a third process.
 It verifies collaborator access and the owner roster after takeover, then denial
 and roster removal after revocation. Edited issues/comments and original-create
 retries are checked before shutdown, after restart and after forced takeover.
+Check policies/results retain the newest attempt even after an old start retry.
 It rotates a collaborator token before restart, then checks the retired token
 remains denied for API, Git and LFS after restart and owner takeover.
 It also verifies that a deleted branch stays absent through takeover and can
@@ -292,6 +322,6 @@ writes. Page time includes inline integrity verification; cache time includes
 worker scheduling, OID verification, compression and admitted disk writes.
 Use release builds for performance measurements.
 
-The chunk, default-branch, repository-discovery, token-metadata and issue layouts
+The chunk, default-branch, repository-discovery, token-metadata, issue and check layouts
 change the unreleased schema; use a fresh development storage prefix when moving
 from older builds.

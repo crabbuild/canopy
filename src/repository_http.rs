@@ -1,6 +1,7 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
 mod authorization;
+mod checks;
 mod collaborators;
 mod default_branch;
 mod issues;
@@ -72,6 +73,22 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/default-branch",
                 get(default_branch::read).put(default_branch::update),
+            )
+            .route(
+                "/api/repositories/{name}/check-contexts",
+                get(checks::contexts),
+            )
+            .route(
+                "/api/repositories/{name}/check-contexts/{context}",
+                axum::routing::put(checks::set_context),
+            )
+            .route(
+                "/api/repositories/{name}/commits/{oid}/checks",
+                get(checks::commit).post(checks::start),
+            )
+            .route(
+                "/api/repositories/{name}/checks/{id}",
+                get(checks::read).put(checks::update),
             )
             .route(
                 "/api/repositories/{name}/issues",

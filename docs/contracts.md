@@ -16,6 +16,7 @@ before admitting persistent customer repositories.
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
 | Issues and comments | repository-local numbers, immutable creation UUID/binding, text, author, optimistic version and timestamps | Repository Cell |
+| Commit checks | owner-defined reporter/context version, queued attempts, immutable terminal results and newest-created selection | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
@@ -528,7 +529,7 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata and issue layouts and the operation-5 codec change
+HEAD, discovery, token-metadata, issue and check layouts and the operation-5 codec change
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
@@ -651,3 +652,84 @@ comment pages contain at most 256 KiB of body text before wire overhead, below
 the runtime's 1 MiB SQL result limit. These are bounded operations, not measured
 production capacity. There is no edit history, delete/moderation API, labels,
 assignees, attachments, notifications, issue search, or issue UI yet.
+
+
+### Commit checks
+
+`check_contexts` pins a check name to an account, enabled flag and monotonically
+increasing policy version. Only the Repository Cell owner can change it. Version
+zero creates a name; later PUTs require the exact version. Disabled names remain
+reserved, preventing a disable/re-enable or reporter reassignment from reviving
+old results. Enabling requires that the reporter currently belongs to the
+repository. Names and reporters follow the 64-byte lowercase component contract.
+
+`check_runs` retains a UUID, commit OID, context and context version, reporter,
+state, optimistic run version, summary, timestamps and an internal monotonically
+increasing creation number. The OID must identify a stored Git commit; absent
+objects, trees, tags and blobs are not check targets. A context does not imply
+branch protection; no ref-publication behavior changes in this slice.
+
+Only the configured reporter can start runs. The owner has no implicit reporting
+bypass and must explicitly configure itself as reporter if desired. Starting
+requires the enabled context's current version and current repository membership.
+The UUID binds commit/context/version/reporter. Exact start retries return the
+same UUID without updating the row or its creation order; a different binding
+conflicts. Retrying after a context change still requires current policy and
+reporter authority. An accepted start begins `queued` at version one.
+
+Updates require the attempt's reporter, current repository membership, unchanged
+enabled context version/reporter, and an expected run version. Queued and
+in-progress attempts can become `in_progress`, `success`, `failure`, or `cancelled`.
+Success, failure and cancelled attempts are terminal and immutable; use a new UUID
+for a rerun. Every accepted update advances the run version and retains a
+nondecreasing edit time. An exact runtime command replay returns its recorded
+outcome; HTTP updates use fresh runtime identities and stale versions conflict.
+
+All decisions and guarded writes share one Cell SQL command transaction. The SDK
+trusts its authenticated account assertion; the HTTP layer authenticates the
+token at admission. Context mutations require an admin-scoped owner token. Run
+mutations require a write-scoped token, while the reporter needs only repository
+read membership. Membership and context authority are rechecked in the write,
+including after receiving a delayed body. Token revocation after HTTP admission
+has the same admitted-request boundary as Git/LFS and issue operations.
+
+Commit reads return one entry per currently enabled context. Its run is the row
+with the greatest internal creation number for this OID/context/current policy
+version. Late callbacks and old start retries never move that order. After a
+policy version change, a context without a matching attempt returns `run: null`.
+Disabled contexts disappear from commit views but remain in the policy listing;
+historical runs stay available by UUID to repository readers. Prior successful
+results remain historical data after reporter membership revocation; branch
+requirements and their interpretation at publication are not implemented yet.
+
+HTTP routes:
+
+| Method/path under `/api/repositories/<name>` | Request | Response |
+| --- | --- | --- |
+| GET `/check-contexts` | optional `after` name | `repository_id`, `contexts`, `next_after` |
+| PUT `/check-contexts/<context>` | `repository_id`, `expected_version`, `reporter`, `enabled` | 204 |
+| GET `/commits/<oid>/checks` | optional `after` name | `repository_id`, `oid`, `checks`, `next_after` |
+| POST `/commits/<oid>/checks` | `repository_id`, `id`, `context`, `context_version` | 200 with `id`, including exact retries |
+| GET `/checks/<id>` | none | `repository_id`, `check` |
+| PUT `/checks/<id>` | `repository_id`, `expected_version`, `state`, `summary` | 204 |
+
+Each context contains name, reporter, enabled and version. Each run contains id,
+OID, context, context_version, reporter, state, version, summary, created_at_ms
+and updated_at_ms. Mutation UUIDs are canonical lowercase with the supported
+RFC variant/version; OIDs use 40 lowercase hexadecimal characters. All writes
+carry the repository UUID to prevent stale names from targeting another Cell.
+Missing membership/resources/non-commit targets return 404, authority or scope
+failure returns 403, identity/version/terminal-state conflicts return 409, and
+invalid input returns 422 (malformed extractor input returns 400). Summary text
+allows 4 KiB UTF-8 with no NUL. The request envelope admits 32 KiB and a 30-second
+body deadline, returning 413/408. Summaries are raw text.
+
+Both policy and commit views return at most 32 context-ordered entries. Continue
+with `after=next_after` until null, including a final empty page for exact
+multiples. Pages are independent observations. The policy primary key supports
+name scans; `(enabled, name)` avoids scanning disabled contexts for commit pages.
+The `(oid, context, context_version, number)` run index finds each newest attempt
+without scanning attempt history. A full page carries at most 128 KiB of summaries
+before metadata/wire overhead, below the 1 MiB SQL result bound. There is no
+attempt-history listing, log/artifact upload, runner, event delivery, expiry,
+quota, cleanup or aggregate required-check decision yet.

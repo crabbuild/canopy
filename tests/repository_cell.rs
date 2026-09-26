@@ -1,5 +1,7 @@
 #[path = "repository_cell/batches.rs"]
 mod batches;
+#[path = "repository_cell/checks.rs"]
+mod checks;
 #[path = "repository_cell/chunks.rs"]
 mod chunks;
 #[path = "repository_cell/default_branch.rs"]
@@ -191,6 +193,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         let first_commit = format!("tree {}\nauthor Canopy <test@example.invalid> 0 +0000\ncommitter Canopy <test@example.invalid> 0 +0000\n\nFirst\n", hex::encode(tree));
         let committed = objects::put(&repository, identity(27), ObjectKind::Commit, first_commit.as_bytes())
             .await?;
+        checks::exercise(&repository, committed.output).await?;
         let second_commit = format!("tree {}\nparent {}\nauthor Canopy <test@example.invalid> 1 +0000\ncommitter Canopy <test@example.invalid> 1 +0000\n\nSecond\n", hex::encode(tree), hex::encode(committed.output));
         let next = objects::put(&repository,
                 MutationIdentity {

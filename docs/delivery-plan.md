@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs, optimistic edits and open/close state implemented; checks/rules, pulls/reviews/merge, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs and configured commit checks survive recovery; branch rules, pulls/reviews/merge, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,8 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: issue labels/assignees; checks and
-   branch rules; pull requests, reviews and merge; releases and assets; UI. Each
+5. Continue collaboration as vertical slices: issue labels/assignees; branch rules using the configured check results; pull requests, reviews and merge; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
 Keep LFS bodies and unreferenced Git objects under conservative retention
@@ -852,3 +851,72 @@ schema and module source digest; old development prefixes require replacement.
 The full collaboration gate remains open: no labels, assignees, edit history,
 attachments, delete/moderation API, notifications, search or UI yet. Aggregate
 issue/comment quotas and retention policy also remain open.
+
+
+## Configured commit checks
+
+Commit checks now have owner-configured contexts and an explicit reporter
+account. Run creation binds a UUID to commit/context/policy version/reporter;
+updates compare a run version and allow only active attempts to progress. Every
+write rechecks Cell membership and authority. Terminal results remain immutable.
+Reruns get new identities and ordered creation numbers, so delayed callbacks and
+old start retries cannot replace the newest attempt. Changing context policy
+invalidates older-version results; disabled context names stay reserved.
+
+The check SDK owns three bounded reads and three transactional mutations. Six
+HTTP operations expose policy configuration, current commit results, run start,
+run read and updates. Context/commit pages contain at most 32 entries; summaries
+are at most 4 KiB. Name, enabled/name and commit/context/version/creation indexes
+keep current-state reads independent of disabled-context and attempt histories.
+No new dependencies, external data store or process runner was introduced.
+
+The HTTP test pushes real commits and verifies configured-reporter authority,
+read-token restrictions, concurrent exact starts, conflicting UUID bindings,
+late successful callbacks behind a newer attempt, concurrent terminal outcomes,
+reporter changes, enablement changes during a paused upload, membership
+revocation, history reads, non-commit rejection, 33-context pagination, rename
+and fresh-local-storage recovery. New starts after recovery become current while
+old start retries preserve the saved result. Direct SDK tests prove the same
+owner/reporter boundary without HTTP, exact runtime receipt replay, terminal
+immutability, maximum summary size and revocation. Repository Cell integration,
+all-target Clippy and the release build pass.
+
+The release process smoke against RustFS `1.0.0-beta.8-glibc`, with
+`--sqlite-chunks --many-objects 256`, also passes. It completes a newer attempt
+with failure, then an older attempt with success, and verifies that the newer
+failure remains selected before shutdown, after clean restart and after
+SIGKILL/lease expiry with fresh local storage. Replaying the older start preserves
+that selection and both original result records. The same run retains issue
+edits, collaborator/token behavior, Git/LFS, SQLite chunks, 300 refs, mixed/atomic
+outcomes and lost-reply replay. The process exits successfully. Initialization
+diagnostics from the fresh RustFS volume are unchanged.
+
+The new Rust surface is about 900 lines for check models, three Cell writes,
+three bounded reads and six HTTP operations. Common admission, validation and
+outcome decoding stay within the check boundary. The process probes share their
+JSON request helper rather than duplicating it for checks and issues.
+
+Branch protection remains the next dependent publication slice:
+
+1. Add owner-managed, versioned rules for exact branch refs, including deletion,
+   force-update policy and required context identities. Keep administrative
+   bypasses explicit and default to applying policy to every writer.
+2. Produce native Git per-ref rejections before receive-pack reports accepted
+   updates. Git's [update hook](https://git-scm.com/docs/githooks#_update) can reject
+   one ref; ordinary pushes must retain allowed siblings, while `--atomic` must
+   reject the whole requested group. Use bounded request/ref inputs and retain
+   the existing encoded-input and subprocess resource limits.
+3. Enforce current rules and the newest matching check result in `refs::apply_push`,
+   shared by `FinalizePush` and `CompletePush`. A hook snapshot alone is insufficient:
+   context/rule changes or a new queued run during the push must not bypass policy.
+   Force-update decisions need ancestry evidence verified from immutable Git
+   data at the Cell boundary, rather than a caller assertion.
+4. Verify absent/pending/failed/old-version checks, reruns during publication,
+   protected deletion/force pushes, ordinary mixed outcomes, atomic outcomes,
+   owner recovery and exact lost-reply replay. A completed replay must not apply
+   refs again under newly changed policy.
+
+This schema extension requires a fresh development prefix. Check reporting is
+functional but does not run CI jobs or protect branches yet. History listing,
+check logs/artifacts, notifications, retention, quotas, PR integration and UI
+remain open, along with the broader delivery gates.

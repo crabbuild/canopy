@@ -12,6 +12,7 @@ use cellule_runtime::{
 use sha1::{Digest as _, Sha1};
 
 mod access;
+pub mod checks;
 mod default_branch;
 pub mod directory;
 mod git_cache;
@@ -168,6 +169,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
+                source.update(include_bytes!("checks.rs"));
+                source.update(include_bytes!("checks/mutations.rs"));
                 source.update(include_bytes!("issues.rs"));
                 source.update(include_bytes!("issues/mutations.rs"));
                 source.update(include_bytes!("lfs.rs"));

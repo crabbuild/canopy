@@ -109,3 +109,27 @@ CREATE TABLE issue_comments (
     updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
 );
 CREATE INDEX comments_by_issue ON issue_comments(issue_number, number);
+
+CREATE TABLE check_contexts (
+    name TEXT PRIMARY KEY,
+    reporter TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0)
+) WITHOUT ROWID;
+
+CREATE INDEX check_contexts_by_enabled ON check_contexts(enabled, name);
+
+CREATE TABLE check_runs (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
+    context TEXT NOT NULL REFERENCES check_contexts(name),
+    context_version INTEGER NOT NULL CHECK(context_version > 0),
+    reporter TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued', 'in_progress', 'success', 'failure', 'cancelled')),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    summary TEXT NOT NULL CHECK(length(CAST(summary AS BLOB)) <= 4096),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX check_runs_by_commit ON check_runs(oid, context, context_version, number);

@@ -6,6 +6,8 @@ use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command};
 
+#[path = "multi_server/checks.rs"]
+mod checks;
 #[path = "multi_server/collaborators.rs"]
 mod collaborators;
 #[path = "multi_server/default_branch.rs"]
