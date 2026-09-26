@@ -16,6 +16,7 @@ pub mod directory;
 pub mod git_gateway;
 pub mod git_http;
 pub mod git_input;
+mod git_objects;
 mod graph;
 pub mod http;
 pub mod large_blob;

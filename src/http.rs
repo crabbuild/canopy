@@ -487,11 +487,11 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::CONFLICT,
             "Push ID is bound to another request or account",
         ),
-        Err(GatewayError::ObjectTooLarge) => {
+        Err(GatewayError::Objects(crate::git_gateway::ObjectReadError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git object is too large")
         }
         Err(error) => {
-            tracing::error!(error = %error, "Git request failed");
+            tracing::error!(error = ?error, "Git request failed");
             plain(StatusCode::INTERNAL_SERVER_ERROR, "Git request failed")
         }
     }

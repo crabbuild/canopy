@@ -24,11 +24,14 @@ use crate::{
     directory::TokenScope,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
-    large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore, MAX_EXTERNAL_BLOB_BYTES},
+    git_objects::GitObjects,
+    large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore},
     lfs::LfsService,
     object_id,
     push::{PushCompletion, PushError},
 };
+
+pub use crate::git_objects::ObjectReadError;
 
 type CellError = Box<dyn StdError + Send + Sync>;
 
@@ -48,8 +51,8 @@ pub enum GatewayError {
     Git(String),
     #[error("Git cache contains malformed data")]
     MalformedCache,
-    #[error("Git object is too large for the current Cell ingest path")]
-    ObjectTooLarge,
+    #[error("Git object ingestion failed")]
+    Objects(#[from] ObjectReadError),
     #[error("ref publication conflicted with current Cell state")]
     RefConflict,
     #[error("authentication is required")]
@@ -199,7 +202,8 @@ impl GitGateway {
             if plan.updates.is_empty() {
                 None
             } else {
-                self.persist_objects(&cached.backend).await?;
+                self.persist_objects(&cached.backend, &before, &plan)
+                    .await?;
                 Some(plan)
             }
         } else {
@@ -319,31 +323,25 @@ impl GitGateway {
         Ok(refs)
     }
 
-    async fn persist_objects(&self, backend: &GitHttpBackend) -> Result<(), GatewayError> {
-        let git_dir = backend.git_dir();
-        let listing = git_output(
-            &git_dir,
-            &[
-                "cat-file",
-                "--batch-all-objects",
-                "--batch-check=%(objectname) %(objecttype) %(objectsize)",
-            ],
-        )
-        .await?;
-        for line in listing
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-        {
-            let line = std::str::from_utf8(line).map_err(|_| GatewayError::MalformedCache)?;
-            let mut fields = line.split_whitespace();
-            let (Some(oid), Some(kind), Some(size), None) =
-                (fields.next(), fields.next(), fields.next(), fields.next())
-            else {
-                return Err(GatewayError::MalformedCache);
-            };
-            let oid = parse_oid(oid)?;
-            let kind = parse_kind(kind)?;
-            let size: usize = size.parse().map_err(|_| GatewayError::MalformedCache)?;
+    async fn persist_objects(
+        &self,
+        backend: &GitHttpBackend,
+        before: &BTreeMap<String, RefExpectation>,
+        plan: &PushPlan,
+    ) -> Result<(), GatewayError> {
+        let included: Vec<_> = plan
+            .updates
+            .iter()
+            .filter_map(|update| update.new_oid)
+            .collect();
+        if included.is_empty() {
+            return Ok(());
+        }
+        // Published refs already have durable graph closure. Excluding them avoids
+        // re-reading old history; the final Cell transaction still verifies every new tip.
+        let excluded = before.values().filter_map(|state| state.oid).collect();
+        let mut objects = GitObjects::start(&backend.git_dir(), included, excluded)?;
+        while let Some(oid) = objects.next().await? {
             if self
                 .repository
                 .object_exists(oid)
@@ -353,16 +351,7 @@ impl GitGateway {
             {
                 continue;
             }
-            if size > MAX_EXTERNAL_BLOB_BYTES
-                || (size > INLINE_OBJECT_LIMIT && kind != ObjectKind::Blob)
-            {
-                return Err(GatewayError::ObjectTooLarge);
-            }
-            let body =
-                git_output(&git_dir, &["cat-file", kind.git_name(), &hex::encode(oid)]).await?;
-            if body.len() != size || object_id(kind, &body) != oid {
-                return Err(GatewayError::MalformedCache);
-            }
+            let (kind, body) = objects.read(oid).await?;
             if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
                 let uploaded = self.large_blobs.put(&body).await?;
                 if uploaded.oid != oid {
@@ -389,6 +378,7 @@ impl GitGateway {
                 }
             }
         }
+        objects.finish().await?;
         Ok(())
     }
 }
@@ -556,16 +546,6 @@ fn parse_oid(oid: &str) -> Result<[u8; 20], GatewayError> {
         .map_err(|_| GatewayError::MalformedCache)?
         .try_into()
         .map_err(|_| GatewayError::MalformedCache)
-}
-
-fn parse_kind(kind: &str) -> Result<ObjectKind, GatewayError> {
-    match kind {
-        "blob" => Ok(ObjectKind::Blob),
-        "tree" => Ok(ObjectKind::Tree),
-        "commit" => Ok(ObjectKind::Commit),
-        "tag" => Ok(ObjectKind::Tag),
-        _ => Err(GatewayError::MalformedCache),
-    }
 }
 
 fn new_identity() -> Result<MutationIdentity, GatewayError> {

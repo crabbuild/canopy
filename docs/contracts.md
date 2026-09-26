@@ -142,6 +142,28 @@ and preserves a later ref deletion. Crashes during
 individual staging/publication boundaries, simultaneous multi-node routing and
 backup restore still need proof before service readiness.
 
+Push object ingestion runs two Git processes regardless of object count:
+[`rev-list --objects --no-object-names --stdin`](https://git-scm.com/docs/git-rev-list)
+enumerates objects reachable from accepted new ref tips, excluding the previous
+live tips; [`cat-file --batch`](https://git-scm.com/docs/git-cat-file) reads only
+candidates missing from SQLite. Deletion-only pushes skip both. Enumeration is
+consumed incrementally; ref roots travel over stdin rather than an unbounded
+argument list. Incoming objects reachable only from rejected ref tips are not
+newly persisted.
+
+Both commands disable replacement refs so stored bytes retain their canonical
+identity. The batch reader caps headers at 128 bytes, validates kind and size
+before allocation, reads the exact body and delimiter, and recomputes its Git
+OID. Missing, truncated, malformed or corrupt output fails the push. Each enumeration read,
+object read and process completion has a 120-second timeout. OID hashing uses
+a blocking worker so large bodies do not occupy an async executor thread. Stderr is drained
+concurrently, retaining at most 64 KiB per process. Dropping the reader kills
+both direct children and aborts pipe tasks; normal completion requires both
+successful exits before publishing refs or recording the successful report.
+Previously published graph closure makes exclusions safe; the Cell transaction
+still verifies every new tip. Per-object SQLite queries/publications and complete
+cold-cache hydration remain performance costs.
+
 Git CGI responses use one subprocess/stream implementation. The HTTP gateway
 streams advertisements and fetch replies through four queued chunks of at most
 64 KiB each. Backpressure stops stdout reads when that queue fills. The worker

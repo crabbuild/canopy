@@ -75,7 +75,12 @@ def start(binary, directory, settings, instance):
     output = log.open("wb")
     process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output)
     output.close()
-    wait_ready(process, address, log)
+    try:
+        wait_ready(process, address, log)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
     return process, f"http://{address}"
 
 
@@ -254,13 +259,56 @@ def verify_large_clone(base_url, directory, expected):
         print(f"PASS: protocol v{protocol} clone restored {size} pack bytes in {time.monotonic() - started:.2f}s", flush=True)
 
 
+def seed_many_objects(base_url, directory, count):
+    url, _ = create_repository(base_url, "many")
+    local = directory / "many-source"
+    git("init", "-b", "main", str(local))
+    git("config", "user.name", "Canopy Test", cwd=local)
+    git("config", "user.email", "canopy@example.invalid", cwd=local)
+    for index in range(count):
+        (local / f"file-{index}").write_bytes(f"original {index}\0\n".encode())
+    git("add", ".", cwd=local)
+    git("commit", "-m", "Many objects", cwd=local)
+    initial = git("rev-parse", "HEAD", cwd=local)
+    for stage in ("initial", "incremental"):
+        if stage == "incremental":
+            (local / "file-0").write_bytes(b"changed\0\n")
+            git("add", ".", cwd=local)
+            git("commit", "-m", "One changed object", cwd=local)
+            git("tag", "-a", "release", "-m", "Annotated release", cwd=local)
+        started = time.monotonic()
+        git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+            "push", "--tags", url, "HEAD:refs/heads/main", cwd=local)
+        print(f"PASS: {count}-file {stage} push in {time.monotonic() - started:.2f}s", flush=True)
+    return initial, git("rev-parse", "HEAD", cwd=local), git("rev-parse", "release", cwd=local)
+
+
+def verify_many_objects(base_url, directory, count, expected):
+    initial, head, tag = expected
+    clone = directory / "many-restored"
+    started = time.monotonic()
+    git("-c", "http.extraHeader=Authorization: Bearer local-test-token", "clone",
+        f"{base_url}/canopy/many.git", str(clone))
+    assert git("rev-parse", "HEAD", cwd=clone) == head
+    assert git("rev-parse", "HEAD^", cwd=clone) == initial
+    assert git("rev-parse", "release", cwd=clone) == tag
+    for index in range(count):
+        expected_body = b"changed\0\n" if index == 0 else f"original {index}\0\n".encode()
+        assert (clone / f"file-{index}").read_bytes() == expected_body
+    git("fsck", "--full", cwd=clone)
+    print(f"PASS: {count}-file clone restored both commits and tag after takeover in {time.monotonic() - started:.2f}s", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--storage-url", required=True, help="S3 bucket URL, e.g. s3://test-bucket")
     parser.add_argument("--work-parent", type=Path, required=True)
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
+    parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
     args = parser.parse_args()
+    if args.many_objects < 0:
+        parser.error("--many-objects must be nonnegative")
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
         if not os.environ.get(name):
             parser.error(f"{name} must be set")
@@ -374,6 +422,7 @@ def main():
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             large = seed_large_repository(base_url, directory) if args.large_clone else None
+            many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:
@@ -436,11 +485,21 @@ def main():
             ) == 404
             if large is not None:
                 verify_large_clone(base_url, directory, large)
+            if many is not None:
+                verify_many_objects(base_url, directory, args.many_objects, many)
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
             print("PASS: Git/LFS, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
+        except Exception:
+            for log in directory.glob("*.log"):
+                errors = [line for line in log.read_text(errors="replace").splitlines() if "ERROR" in line or "WARN" in line]
+                for line in errors[-10:]:
+                    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
+                        line = line.replace(os.environ[name], "[redacted]")
+                    print(f"{log.name}: {line}", flush=True)
+            raise
         finally:
             for process in processes:
                 if process.poll() is None:

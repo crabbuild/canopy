@@ -10,7 +10,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted requests admit 512 MiB pushes; per-object buffers and 64 MiB blob ceiling remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes and incremental batch object reads work; per-object buffers and 64 MiB blob ceiling remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; consistent ref snapshot, cache admission and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
@@ -33,12 +33,15 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Replace the per-object subprocess path and account bare-cache disk usage.
-   Requests now spool under shared disk admission and CGI read responses stream
-   through a bounded queue. Add SQLite chunks
-   for large trees, commits and tags, plus a real corpus benchmark and bounded
-   graph certification for
-   large initial pushes. Keep the bare repo disposable.
+2. Account bare-cache disk usage, add resident Cell eviction, and reduce
+   per-object Cell publication overhead. The current SQL worker admits four
+   active Cells total: the directory plus three repositories. A fourth
+   repository currently returns 503; this is not a service capacity target.
+   Requests now spool under shared disk admission, CGI reads stream through a
+   bounded queue, and ingest uses incremental enumeration plus a persistent Git
+   batch reader. Add SQLite chunks for large trees, commits and tags, plus a
+   real corpus benchmark and bounded graph certification for large initial
+   pushes. Keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
    publishes the complete response with ref changes. Typed graph connectivity
@@ -85,3 +88,41 @@ push completed in 19.12 seconds. After takeover, v0 and v2 each restored an
 (28.49 seconds cold and 3.89 seconds warm, including verification). The suite
 also proves HTTP 507 on exhausted upload admission, successful retry after
 capacity is released, and cleanup after input cancellation/disconnect.
+
+
+## Incremental object ingestion qualification
+
+The batch-reader build on Darwin arm64 with Apple Git 2.50.1 passed the
+256-file process smoke against RustFS `1.0.0-beta.8-glibc`, with provider data
+and logs on a dedicated directory on the mounted workspace. The initial push
+created 258 Git objects. Its follow-up changed one file and added an annotated
+tag. After owner loss, the clone retained both commit OIDs, the tag, every file's
+bytes and a clean `git fsck` result.
+
+| Action | Observed debug-build time |
+| --- | --- |
+| Initial 256-file push | 22.13 seconds |
+| One-file update and annotated tag | 1.04 seconds |
+| Clone and verification after takeover | 1.05 seconds |
+
+A separate run of the same executable passed the 80 MiB single-push case in
+21.23 seconds. After takeover, v0 and v2 each restored an 83,912,144-byte pack
+with matching hashes and clean `git fsck` results: 36.86 seconds cold and
+6.26 seconds warm, including verification. Both process runs also passed the
+Git/LFS, ACL, mixed/atomic ref result and dropped-reply replay checks.
+
+The reader tests separately prove exclusion of old history, direct tree/blob
+roots, nested tags, canonical reads despite replacement refs, binary bodies,
+40 MiB body reads, malformed/truncated output rejection, size admission before
+allocation, failed child exit and cancellation cleanup. Focused Git HTTP and
+owner-recovery integration tests and Clippy also pass.
+
+These are correctness and workload observations, not a production throughput
+claim or an old/new performance comparison. Earlier qualification attempts
+exposed a nearly exhausted Docker inode pool, repeated provider HTTP 500s and
+unresolved Cell mutations. Moving test data to the mounted workspace allowed
+the many-object test to pass. A separate large-transfer attempt observed Cell
+fencing under concurrent host load; lease/storage fault qualification remains
+open. Canopy must continue to fail closed when a mutation lacks durable proof.
+Run `--many-objects 256` and `--large-clone` separately until resident Cell
+admission/eviction supports both extra fixture repositories in one process.

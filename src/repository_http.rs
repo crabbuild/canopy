@@ -246,7 +246,7 @@ async fn create_repository(
         }
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
         Err(error) => {
-            tracing::error!(error = %error, "repository creation failed");
+            tracing::error!(error = ?error, "repository creation failed");
             plain(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Repository creation failed",
