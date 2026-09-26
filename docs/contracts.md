@@ -19,7 +19,7 @@ before admitting persistent customer repositories.
 | Commit checks | owner-defined reporter/context version, queued attempts, immutable terminal results and newest-created selection | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
-| Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
+| Local residency | a reserved Directory SQL slot and at most three repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Cellule transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB and at most 64 MiB | `object_chunks`, verified before object publication |
@@ -263,7 +263,60 @@ entries. A request pins its loaded repository before using its Cell or Git/LFS
 router. That pin lasts through request processing and the complete response
 body, including trailers; EOF, body errors and disconnects release it. Membership
 changes and repository initialization also retain their route while using it.
-The Directory Cell stays resident for authentication and routing.
+The Directory Cell has one owner for authentication and routing; other gateways
+use its typed peer client.
+
+### Peer routing
+
+`server::peer::NodePeer` uses Cellule's signed `PeerSigner`, `PeerVerifier`,
+`PeerDispatcher` and `CellClient::peer` protocol. Both Directory and Repository
+Cells use the same existing commands and queries. The HTTP adapter accepts only
+enrolled, live sessions in the configured fleet/image/release. Its authorizer
+requires the Canopy node principal, `canopy.cell` action, tenant, application and
+one of the two product namespaces before the dispatcher resolves a local owner.
+Untrusted request fields cannot choose a destination URL.
+
+Outbound routing reads authoritative Cell ownership and resolves that session's
+signed advertisement. The endpoint must match the Cell owner and use HTTPS.
+TLS verifies the server certificate and hostname; an optional private CA adds a
+trust root. Redirects, environment proxies and HTTP retries are disabled. HTTP
+failure after sending, oversized responses and response-body errors preserve an
+unknown mutation outcome. Cellule retains the original identity for resolution;
+the transport does not issue a replacement mutation.
+
+TLS ingress forwards `/internal/cell` to the node listener. Sender authentication
+uses signed requests verified against live enrollment; this adapter does not use
+the runtime's separate mTLS certificate-verification helper. The object store,
+TLS terminator and enrolled signing keys are trusted fleet infrastructure. A
+compromised enrolled node has internal Cell authority, not an end-user role.
+Peer ingress admits 32 concurrent requests, bounds bodies and replies by Cellule's
+`MAX_PEER_REQUEST_BYTES`, and applies a 30-second body deadline. These are initial
+limits, not measured production capacity.
+
+Local dispatch avoids ownership-store reads once the Cell is resident. A lazy
+restored Cell is resolved through its catalog/control proof using `local_handle`;
+it must not be acquired again just because `resident_handle` is absent. Directory
+acquisition is serialized and tracked across caller cancellation. An idle or
+expired Directory owner is restored locally on demand using the existing CAS and
+node takeover proof. An unavailable live owner returns an error until it recovers
+or its lease expires.
+
+Repository gateways bind local handles when they own a Cell and peer clients when
+another live node owns it. Remote gateway entries consume cache admission but do
+not own local SQLite or release the remote Cell on eviction. When remote authority
+is released or expires, the next request drops the disposable binding and uses
+the existing local acquisition path. Movement during a multi-call request can
+fail that request; there is no distributed request pin or transparent mutation
+retry. Runtime command fencing and existing ref/ACL checks remain authoritative.
+
+Current placement is first acquisition, not an automatic fleet balancer. Remote
+execution does not remove the resident repository bound, transfer limits or native
+resource gaps. Focused HTTPS integration and real RustFS process coverage prove
+opposite-owner Git/LFS traffic and survivor takeover after SIGKILL without a
+gateway restart. The full placement, partition and publication fault matrices
+remain open.
+
+### Residency release
 
 When all repository slots are occupied, the manager selects the least recently
 used unpinned repository among Cellule's settled transfer candidates. It calls
@@ -315,7 +368,7 @@ Git and LFS fetch after an unclean owner exit, lease expiry and a third process
 claiming the Cell from an S3-compatible object store. A proxy also drops a
 successful push reply; exact replay after takeover returns its recorded report
 and preserves a later ref deletion. Crashes during
-individual staging/publication boundaries, simultaneous multi-node routing and
+individual staging/publication boundaries, the full multi-node fault matrix and
 backup restore still need proof before service readiness.
 
 Cold hydration uses `RepositoryCell::object_page(after)` in ascending OID order.

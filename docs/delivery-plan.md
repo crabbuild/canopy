@@ -15,7 +15,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
-| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover, cold clone and fenced Unix runtime reclamation pass; multi-node routing/backup/GC/telemetry remain |
+| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone and fenced Unix runtime reclamation pass; full routing fault matrix, backup, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
 The **internal preview** requires gates 0–5, including real storage and
@@ -34,10 +34,11 @@ separate product decisions.
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
 2. Enforce native Git scratch limits and qualify residency under faults and larger
-   hot sets. The current SQL worker admits four active Cells total: the
-   directory plus three repositories. Inactive repositories now release their
-   Cell and reload on demand; admission returns 503 when no repository is safe
-   to evict. The resident limit is not a production capacity target.
+   hot sets. Each node reserves one SQL slot for Directory takeover and admits
+   three repository gateway entries, backed by local or remote Cells. Inactive
+   local repositories release their Cell and reload on demand; unpinned remote
+   entries can be dropped without releasing their owner. Admission returns 503
+   when no entry is safe to evict. The resident limit is not a production capacity target.
    Hydration and retained caches now use shared disk admission; native Git's
    completed writes are measured before publication, but its peak usage remains
    unbounded. All native workers now discard host configuration, object paths,
@@ -1850,3 +1851,63 @@ dependency, configuration or schema change. Requests authenticated before
 disablement may finish under existing repository ACL rules. Re-enablement,
 deletion, account listing, administrative UI, audit records, token expiry and
 quotas remain open. The full hosting-service goal is still incomplete.
+
+## Signed HTTPS Cell routing qualification
+
+On 2026-09-26, gateways gained routing to the current Directory and Repository
+Cell owners using Cellule's signed peer protocol. A repository still owns one
+SQLite Cell. A remote gateway holds a disposable binding and Git cache, while
+queries and mutations execute through the same typed Cell commands at the owner.
+There is no second SQL implementation or automatic mutation retry.
+
+Owner resolution checks durable control, live signed enrollment and matching
+HTTPS endpoint. TLS verifies certificates and hostnames; a private deployment
+may configure a PEM CA certificate. The receiver checks session, signature,
+release, product principal, action and target scope. TLS termination and enrolled
+fleet nodes are trusted infrastructure; this is signed peer authentication,
+not mTLS. Warm local Directory calls avoid ownership-store reads.
+
+Evidence:
+
+- A real Cellule two-node integration pushes and clones through opposite owners,
+  verifies exact bytes with stock Git and fsck, and checks that repository SQLite
+  exists only at its owner. Directory authentication and both repositories recover
+  through the surviving gateway after graceful owner shutdown.
+- Missing CA trust, unsigned requests, wrong signing keys, unknown sessions,
+  expired envelopes and incorrect principal/action scopes are rejected. A proxy
+  consumes a completed mutation reply and substitutes HTTP 503. The gateway
+  reports uncertainty; the durable account exists and an explicit retry succeeds.
+- Initial lifecycle regressions exposed that a restored Cell can own authority
+  before becoming resident. Resolution now uses Cellule's catalog/control-backed
+  `local_handle` for that case, avoiding a second acquisition against its own node.
+  All four lifecycle, six residency/fault, account-disablement, token-rotation and
+  workspace-restart integrations pass, alongside the new peer integration.
+- The release binary passes the RustFS process probe with `--sqlite-chunks
+  --many-objects 256`. Two live HTTPS nodes push and clone stock Git/LFS through
+  opposite repository owners. Killing the Directory owner produces 503 before
+  lease expiry; the surviving process then restores Directory and repository
+  state and clones exact Git/LFS bytes without restarting. The same run preserves
+  collaboration, branch rules, merge/squash and exact retries through graceful
+  restart and corrupted-local-SQLite takeover, including large SQLite objects and
+  300 additional refs. An initial process-fixture failure correctly rejected a
+  CA certificate presented as a server certificate; the fixture now uses a
+  separate CA-signed leaf with the proper server usage and hostname.
+- All-target Clippy, formatting, release build, Python syntax checks and example
+  configuration digest checks pass. Cellule's pinned source supplies the peer
+  dispatch, transport-uncertainty, live enrollment and lazy-local-owner contracts.
+
+The additional production code owns HTTP transport, routing and authentication
+at the server boundary; the runtime retains dispatch, leases and mutation identity.
+Reqwest now enables verified rustls transport; rcgen and tokio-rustls support the
+TLS test fixture. The dependency lock changes were reviewed. No Cellule pin,
+patch or schema change is required. The example image digest was corrected to
+32 bytes. The process smoke requires OpenSSL for its private test CA and server
+certificate.
+
+First acquisition determines placement. Directory takeover reserves one local
+SQL slot; three repository gateway entries share the remaining admission. There
+is no distributed pin spanning a multi-command Git request, and owner movement
+can fail that request. Concurrent placement, partitions, larger hot sets,
+production storage and throughput, native peak resource bounds, backup/restore,
+GC and telemetry still need qualification or implementation. The service delivery
+gates remain incomplete.

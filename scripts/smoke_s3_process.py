@@ -31,6 +31,7 @@ import smoke_s3_pulls
 import smoke_s3_threads
 import smoke_s3_browse
 import smoke_s3_merge
+import smoke_s3_peers
 
 
 def port():
@@ -71,8 +72,8 @@ def wait_ready(process, address, log):
     raise RuntimeError(f"Canopy did not become ready: {log.read_text(errors='replace')}")
 
 
-def start(binary, directory, settings, instance, *, data_instance=None):
-    address = f"127.0.0.1:{port()}"
+def start(binary, directory, settings, instance, *, data_instance=None, listen_address=None):
+    address = listen_address or f"127.0.0.1:{port()}"
     config = {
         **settings,
         "listen": address,
@@ -795,6 +796,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
+            smoke_s3_peers.qualify(args.binary, directory, settings, processes)
             assert {path.name for path in (directory / "host-git").iterdir()} == {"config"}
             print("PASS: native Git ignores host config, object paths, exec path, protocol and trace settings", flush=True)
             print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")

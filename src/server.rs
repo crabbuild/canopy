@@ -40,6 +40,7 @@ use crate::{
 
 mod discovery;
 mod lifecycle;
+pub(crate) mod peer;
 mod residency;
 mod tokens;
 mod workspace;
@@ -85,6 +86,7 @@ pub struct ServerConfig {
     pub token: String,
     pub public_url: String,
     pub peer_endpoint: String,
+    pub peer_ca_pem: Option<Vec<u8>>,
     pub listen: std::net::SocketAddr,
     pub data_dir: PathBuf,
     pub store_prefix: StorePath,
@@ -146,6 +148,7 @@ struct RunningServer {
 
 pub(crate) struct RepositoryManager {
     directory: DirectoryCell,
+    peer: peer::NodePeer,
     node: Arc<CellNode>,
     layout: CellStorageLayout,
     node_directory: NodeDirectory,
@@ -389,7 +392,7 @@ impl RunningServer {
             image: config.image,
             release: registry.release_digest(),
             module_digests: registry.module_digests(),
-            signing_key: config.signing_key,
+            signing_key: config.signing_key.clone(),
         };
         let directory = NodeDirectory::new(
             layout.clone(),
@@ -434,26 +437,19 @@ impl RunningServer {
                 .await
             })?;
             let directory_target = directory::directory_target(config.tenant, config.application)?;
-            // Acquisition can hand work to SQL threads that outlive this future.
-            // Only a successful node drain may authorize workspace reuse afterward.
             local.require_drain();
-            let directory_handle = acquire_sql_cell(
-                &node,
-                &layout,
-                &directory,
-                SqlCellSpec {
-                    target: &directory_target,
-                    module: DirectoryModule::NAME,
-                    schema: directory::SCHEMA,
-                    max_database_bytes: 64 * 1024 * 1024,
-                    destination: local.path().join("directory.sqlite"),
-                },
+            let peer = peer::NodePeer::new(
+                &config,
+                Arc::clone(&node),
+                layout.clone(),
+                directory.clone(),
+                Arc::clone(&local),
+                tasks.clone(),
                 session,
-                &config.peer_endpoint,
-            )
-            .await?;
+            )?;
+            peer.ensure_directory().await?;
             let directory_application = node.application_handle::<CanopyApplication>(
-                CellClient::local(Arc::clone(&registry), directory_handle),
+                peer.client(),
                 config.tenant,
                 config.application,
             );
@@ -483,6 +479,7 @@ impl RunningServer {
             }
             let manager = Arc::new(RepositoryManager {
                 directory: directory_cell,
+                peer: peer.clone(),
                 node: Arc::clone(&node),
                 layout: layout.clone(),
                 node_directory: directory.clone(),
@@ -500,10 +497,10 @@ impl RunningServer {
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));
-            Ok::<_, ServerError>(api)
+            Ok::<_, ServerError>((api, peer))
         }
         .await;
-        let api = match startup {
+        let (api, peer) = match startup {
             Ok(api) => api,
             Err(error) => {
                 match node.shutdown().await {
@@ -518,7 +515,10 @@ impl RunningServer {
         let ingress_stop = CancellationToken::new();
         let serving_stop = ingress_stop.clone();
         let serving = tokio::spawn(async move {
-            axum::serve(listener, api.router())
+            let peer_routes = axum::Router::new()
+                .route(peer::PATH, axum::routing::post(peer::serve))
+                .with_state(peer);
+            axum::serve(listener, api.router().merge(peer_routes))
                 .with_graceful_shutdown(serving_stop.cancelled_owned())
                 .await
         });

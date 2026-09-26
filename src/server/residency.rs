@@ -13,7 +13,7 @@ use axum::{
     body::{Body, Bytes, HttpBody},
     http::{Request, Response},
 };
-use cellule_runtime::{CatalogRole, CellClient, CellHandle, CellModule, CellTarget, Error};
+use cellule_runtime::{CatalogRole, CellClient, CellModule, CellTarget, Error};
 use http_body::{Frame, SizeHint};
 use tower::ServiceExt;
 
@@ -34,6 +34,7 @@ pub(super) struct LoadedRepository {
     pin: Arc<()>,
     last_used: Instant,
     initialized: bool,
+    local: bool,
     state: ResidencyState,
 }
 
@@ -121,6 +122,16 @@ impl RepositoryManager {
         entry: &RepositoryEntry,
         loaded: &mut HashMap<[u8; 16], LoadedRepository>,
     ) -> Result<RepositoryRoute, ServerError> {
+        let target = repository_target(self.tenant, self.application, entry.repository_id)?;
+        if loaded
+            .get(&entry.repository_id)
+            .is_some_and(|repository| !repository.local)
+            && !self.peer.remote_owner(&target).await?
+        {
+            // Remote cache ownership is disposable. Reacquire idle/expired Cell
+            // authority locally before binding a new route after owner loss.
+            loaded.remove(&entry.repository_id);
+        }
         match loaded
             .get(&entry.repository_id)
             .map(|repository| repository.state)
@@ -142,7 +153,12 @@ impl RepositoryManager {
                     ))?;
                 loaded.insert(
                     entry.repository_id,
-                    self.bind_repository(entry, target, handle)?,
+                    self.bind_repository(
+                        entry,
+                        target,
+                        CellClient::local(self.node.application().registry(), handle),
+                        true,
+                    )?,
                 );
             }
             _ => {}
@@ -151,33 +167,34 @@ impl RepositoryManager {
             if loaded.len() >= RESIDENT_REPOSITORIES {
                 self.evict_repository(loaded).await?;
             }
-            let target = repository_target(self.tenant, self.application, entry.repository_id)?;
-            let directory = self.local.path().join(hex::encode(entry.repository_id));
-            tokio::fs::create_dir_all(&directory).await?;
-            let started = Instant::now();
-            let handle = acquire_sql_cell(
-                &self.node,
-                &self.layout,
-                &self.node_directory,
-                SqlCellSpec {
-                    target: &target,
-                    module: RepositoryModule::NAME,
-                    schema: include_str!("../schema.sql"),
-                    max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
-                    destination: directory.join("repository.sqlite"),
-                },
-                self.session,
-                &self.endpoint,
-            )
-            .await?;
-            tracing::debug!(
-                repository = %hex::encode(entry.repository_id),
-                elapsed_seconds = started.elapsed().as_secs_f64(),
-                "acquired repository Cell"
-            );
+            let remote = self.peer.remote_owner(&target).await?;
+            let client = if remote {
+                self.peer.client()
+            } else {
+                let directory = self.local.path().join(hex::encode(entry.repository_id));
+                tokio::fs::create_dir_all(&directory).await?;
+                let started = Instant::now();
+                let handle = acquire_sql_cell(
+                    &self.node,
+                    &self.layout,
+                    &self.node_directory,
+                    SqlCellSpec {
+                        target: &target,
+                        module: RepositoryModule::NAME,
+                        schema: include_str!("../schema.sql"),
+                        max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
+                        destination: directory.join("repository.sqlite"),
+                    },
+                    self.session,
+                    &self.endpoint,
+                )
+                .await?;
+                tracing::debug!(repository = %hex::encode(entry.repository_id), elapsed_seconds = started.elapsed().as_secs_f64(), "acquired repository Cell");
+                CellClient::local(self.node.application().registry(), handle)
+            };
             loaded.insert(
                 entry.repository_id,
-                self.bind_repository(entry, target, handle)?,
+                self.bind_repository(entry, target, client, !remote)?,
             );
         }
         let existing = loaded
@@ -213,6 +230,12 @@ impl RepositoryManager {
             (repository.state == ResidencyState::Released).then_some(*id)
         }) {
             return self.cleanup_released(id, loaded).await;
+        }
+        if let Some(id) = loaded.iter().find_map(|(id, repository)| {
+            (!repository.local && Arc::strong_count(&repository.pin) == 1).then_some(*id)
+        }) {
+            loaded.remove(&id);
+            return Ok(());
         }
         let candidates = self.node.idle_transfer_candidates().await?;
         let mut eligible = Vec::new();
@@ -274,10 +297,11 @@ impl RepositoryManager {
         &self,
         entry: &RepositoryEntry,
         target: CellTarget,
-        handle: CellHandle,
+        client: CellClient,
+        local: bool,
     ) -> Result<LoadedRepository, ServerError> {
         let application = self.node.application_handle::<CanopyApplication>(
-            CellClient::local(self.node.application().registry(), handle),
+            client,
             self.tenant,
             self.application,
         );
@@ -297,6 +321,7 @@ impl RepositoryManager {
             pin: Arc::new(()),
             last_used: Instant::now(),
             initialized: false,
+            local,
             state: ResidencyState::Serving,
         })
     }

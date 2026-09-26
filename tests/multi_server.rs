@@ -34,6 +34,8 @@ mod issues;
 mod large_objects;
 #[path = "multi_server/lifecycle.rs"]
 mod lifecycle;
+#[path = "multi_server/peers.rs"]
+mod peers;
 #[path = "multi_server/residency.rs"]
 mod residency;
 #[path = "multi_server/tokens.rs"]
@@ -581,6 +583,7 @@ fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> Server
         token: "local-test-token".into(),
         public_url: format!("http://{address}"),
         peer_endpoint: "https://canopy.test".into(),
+        peer_ca_pem: None,
         listen: address,
         data_dir,
         store_prefix: StorePath::from("single-server-test"),

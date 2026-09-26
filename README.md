@@ -20,6 +20,13 @@ authority, and a bare Git repository is only a rebuildable cache. Integration
 tests use stock `git` and `git-lfs` clients to push and clone, including a
 restart with a fresh local SQLite file.
 
+Nodes sharing a deployment can serve requests for Cells owned by another live
+node. Repository creation acquires its Cell on the receiving node; other gateways
+use signed HTTPS Cell RPCs to that owner. Git caches stay disposable on each
+gateway. The Directory Cell has one owner, with on-demand recovery after release
+or lease expiry. Automatic fleet balancing and production capacity qualification
+remain pending.
+
 ### Repository browser
 
 Open `/` on the Canopy HTTP listener and connect using your existing access
@@ -474,14 +481,15 @@ release the workspace early. A failed node drain or destruction of the Tokio
 runtime before confirmed drain retains the workspace lock until process restart.
 Keep the runtime alive until shutdown finishes for graceful cleanup.
 
-Local recovery currently admits a 512 MiB SQLite database. The node keeps the
-Directory Cell and up to three Repository Cells resident. Additional repositories
-evict an inactive repository and restore from durable state when accessed again.
+Local recovery currently admits a 512 MiB SQLite database. The node reserves a
+SQL slot for Directory ownership and caches up to three repository gateways,
+each bound to a local or remote Cell. Additional repositories evict an inactive
+gateway; local Cell ownership is released before its slot is reused.
 Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account deletion API, organization model, multi-node routing, backup
+account deletion API, organization model, backup
 or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.
@@ -553,6 +561,28 @@ readiness. Git and LFS requests require `Authorization: Bearer <token>` or
 HTTP Basic credentials using the matching account name and token. Stop with
 SIGINT or SIGTERM to drain requests and withdraw the node advertisement.
 
+### Multiple nodes
+
+Use the same storage prefix, tenant/application IDs, fleet/image digests, owner,
+active bootstrap credential and application build on all nodes. Give each node a
+distinct `node_id`, signing key, data directory and reachable `peer_endpoint`.
+That endpoint must be an HTTPS origin whose TLS ingress forwards
+`POST /internal/cell` unchanged to the node's HTTP listener. Public Git/API URLs
+may point to a load balancer; requests do not require a sticky session.
+
+Peer clients verify TLS certificates and hostnames using public trust roots.
+For a private CA, set the optional `peer_ca_certificate` configuration field to
+its PEM file path. There is no insecure TLS mode. Requests are separately signed
+with the sending node's enrolled key and checked against its live advertisement.
+Keep signing keys and object-store write access restricted to trusted fleet nodes:
+the peer capability permits internal Cell operations, including Directory SQL.
+TLS termination is trusted infrastructure; this transport does not claim mTLS.
+
+Unknown owners and in-progress movement can return 503. After an owner stops,
+the surviving gateway restores the Directory on demand; Repository Cells are
+reacquired on the next request. An unclean exit requires lease expiry before
+takeover. Cross-node placement races and larger hot sets still need qualification.
+
 ## Verify the current slice
 
 Use a checkout-specific target directory on the mounted Workspace volume:
@@ -579,8 +609,8 @@ python3 scripts/smoke_s3_process.py \
   --work-parent "$HOME/Workspace/crabbuild-target/canopy-local"
 ```
 
-The script requires `CANOPY_NODE_SIGNING_KEY_HEX` and provider credentials in
-the environment. It pushes two repositories with stock Git and LFS, grants a
+The script requires `openssl` on `PATH`, `CANOPY_NODE_SIGNING_KEY_HEX` and
+provider credentials in the environment. It pushes two repositories with stock Git and LFS, grants a
 collaborator access, renames one repository, restarts with fresh local databases,
 kills the new owner, waits for lease expiry, and clones from a third process.
 It verifies collaborator access and the owner roster after takeover, then denial
@@ -595,7 +625,10 @@ Mixed push checks prove accepted refs survive recovery, rejected refs stay
 absent, and `git push --atomic` rejects the entire mixed update.
 A proxy drops a successful push reply; replay after takeover returns the original
 report without undoing a later branch deletion.
-It writes under a unique prefix in the supplied bucket.
+A final phase runs two nodes behind local HTTPS proxies with a private test CA,
+pushes and clones Git/LFS through the opposite repository owner, kills one node,
+and verifies Directory and repository takeover through the surviving gateway
+without restarting it. It writes under a unique prefix in the supplied bucket.
 
 Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the
 repository using protocol v0 and v2 after takeover. Each clone must receive a
