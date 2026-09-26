@@ -524,8 +524,8 @@ This accounts retained caches and bounds Canopy's hydration writes. It does
 **not** impose a hard limit on native Git's peak scratch usage: native writes
 are measured after execution, and a rejected push can temporarily exceed the
 budget. File lengths also exclude filesystem allocation and inode overhead.
-Crash-left directories and cleanup-failure charges need startup reconciliation;
-native scratch enforcement remains a release gate. These reservations are
+Managed crash-left directories are reclaimed at startup on Unix as described
+below; native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Every native Git entry point now uses one process environment policy: HTTP
@@ -546,6 +546,42 @@ and the HTTP backend's
 [CGI contract](https://git-scm.com/docs/git-http-backend#_environment).
 Git may add its own child environment, including its resolved executable path;
 host values are removed before that initialization.
+
+### Local runtime recovery
+
+`data_dir/.canopy-owner.lock` prevents concurrent nodes from using one local
+directory. The server and repository manager retain the lock throughout their
+lifetime, including detached request work. `data_dir/runtime-v1/` is private to
+the node (created with mode 0700 on Unix) and identified by a version marker.
+Startup validates that marker and reclaims local SQLite files, Git caches and
+spools before opening Cells or advertising the node. These are disposable copies;
+acknowledged state is recovered from object storage. Normal shutdown may leave
+local files for the next startup to reclaim.
+
+Each native Git command holds a shared lock in its cache. On Unix the descriptor
+survives exec and is inherited by descendants. Startup acquires every abandoned
+cache's exclusive worker lock before deleting any local state. A worker that
+outlives a killed server therefore prevents cleanup with `WouldBlock`; retry
+after that worker exits. Cache destruction also respects this fence. Failed or
+busy deletion retains both the directory and its current disk charge until node
+restart. There is no second unchecked TempDir deletion attempt.
+
+The lock semantics follow [`File` locking](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock)
+and Unix [`flock`](https://man7.org/linux/man-pages/man2/flock.2.html): locks survive
+duplicated descriptors and exec until the final descriptor closes. Executables
+and the local filesystem remain trusted; lock files must never be removed or
+replaced while a node or its workers are active. Cleanup errors stop startup.
+Unrecognized markers and a symlink at the runtime root are rejected. Nested
+symlinks are unlinked without deleting their targets. Other files in `data_dir`,
+including earlier development builds' anonymous temporary directories, are not
+automatically adopted or deleted.
+
+Windows lacks the inherited worker fence in this implementation. If a previous
+runtime contains a native worker lock, automatic recovery refuses it; operators
+must stop all server/Git processes before removing that runtime directory.
+Startup cancellation during Cell acquisition, OS power loss, unusual filesystems
+and Windows process containment still require qualification. This cleanup does
+not enforce native peak disk usage or filesystem allocation overhead.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
 HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,

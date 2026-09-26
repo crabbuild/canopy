@@ -71,13 +71,13 @@ def wait_ready(process, address, log):
     raise RuntimeError(f"Canopy did not become ready: {log.read_text(errors='replace')}")
 
 
-def start(binary, directory, settings, instance):
+def start(binary, directory, settings, instance, *, data_instance=None):
     address = f"127.0.0.1:{port()}"
     config = {
         **settings,
         "listen": address,
         "public_url": f"http://{address}",
-        "data_dir": str(directory / instance),
+        "data_dir": str(directory / (data_instance or instance)),
     }
     path = directory / f"{instance}.json"
     path.write_text(json.dumps(config))
@@ -666,9 +666,20 @@ def main():
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
             second.wait(timeout=10)
+            abandoned = directory / "second" / "runtime-v1"
+            stale_caches = list(abandoned.glob("canopy-git-*"))
+            assert stale_caches, "expected a retained fetch cache at owner death"
+            sentinel = abandoned / "abandoned-upload"
+            sentinel.write_bytes(b"disposable scratch")
+            # SQLite is a recovered cache: corrupting the killed node's copy must
+            # not prevent restoration of acknowledged data from object storage.
+            (abandoned / "directory.sqlite").write_bytes(b"discard this stale database")
             time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
-            third, base_url = start(args.binary, directory, settings, "third")
+            third, base_url = start(args.binary, directory, settings, "third", data_instance="second")
             processes.append(third)
+            assert not sentinel.exists()
+            assert all(not path.exists() for path in stale_caches)
+            print("PASS: same-directory restart reclaims abandoned Git/scratch/SQLite state before durable recovery", flush=True)
             verify_revoked_token(base_url, revoked_reader)
             tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
             assert len(tokens) == 2

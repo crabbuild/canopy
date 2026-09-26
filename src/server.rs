@@ -37,6 +37,7 @@ use crate::{
 mod discovery;
 mod residency;
 mod tokens;
+mod workspace;
 
 use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
@@ -129,7 +130,7 @@ pub struct CanopyServer {
     ingress_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
     tasks: TaskTracker,
-    _local: tempfile::TempDir,
+    _local: Arc<workspace::Workspace>,
 }
 
 pub(crate) struct RepositoryManager {
@@ -141,7 +142,7 @@ pub(crate) struct RepositoryManager {
     application: ApplicationId,
     session: SessionId,
     endpoint: String,
-    local_root: PathBuf,
+    local: Arc<workspace::Workspace>,
     external_store: Arc<dyn ObjectStore>,
     disk_budget: DiskBudget,
     pub(crate) owner: String,
@@ -319,8 +320,10 @@ impl CanopyServer {
             return Err(ServerError::Http("Git access token is required"));
         }
         http::validate_public_url(&config.public_url).map_err(ServerError::Http)?;
-        std::fs::create_dir_all(&config.data_dir)?;
-        let local = tempfile::TempDir::new_in(&config.data_dir)?;
+        let data_dir = config.data_dir.clone();
+        let local = Arc::new(
+            tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
+        );
         let store = Store::new(Arc::clone(&raw_store));
         let now_ms = unix_now_ms()?;
         let probe = probe_storage(
@@ -455,7 +458,7 @@ impl CanopyServer {
                 application: config.application,
                 session,
                 endpoint: config.peer_endpoint,
-                local_root: local.path().to_path_buf(),
+                local: Arc::clone(&local),
                 external_store,
                 disk_budget,
                 owner: config.owner,

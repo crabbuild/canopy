@@ -36,6 +36,8 @@ mod residency;
 mod tokens;
 #[path = "multi_server/transfers.rs"]
 mod transfers;
+#[path = "multi_server/workspace.rs"]
+mod workspace;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leased_server_recovers_two_repositories_with_git_and_lfs()

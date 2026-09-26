@@ -29,10 +29,7 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
     );
     let authority = CellAuthority::new(layout);
     let server = CanopyServer::start(settings, store).await?;
-    let local_root = std::fs::read_dir(workspace.path().join("server"))?
-        .next()
-        .ok_or("node directory missing")??
-        .path();
+    let local_root = workspace.path().join("server/runtime-v1");
     let local = workspace.path().join("source");
     run_git(None, &["init", "-b", "main", path_str(&local)?]).await?;
     run_git(Some(&local), &["config", "user.name", "Canopy Test"]).await?;

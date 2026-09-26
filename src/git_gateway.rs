@@ -523,7 +523,7 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
 }
 
 async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
-    let output = crate::native_git::command(git_dir)
+    let output = crate::native_git::command(git_dir)?
         .arg("--git-dir")
         .arg(git_dir)
         .args(args)

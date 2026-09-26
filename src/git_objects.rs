@@ -39,7 +39,7 @@ struct Process {
 
 impl Process {
     fn start(git_dir: &Path, args: &[&str]) -> Result<(Self, ChildStdin), ObjectReadError> {
-        let mut child = crate::native_git::command(git_dir)
+        let mut child = crate::native_git::command(git_dir)?
             .arg("--git-dir")
             .arg(git_dir)
             .args(args)

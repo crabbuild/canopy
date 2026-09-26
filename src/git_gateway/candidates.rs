@@ -214,7 +214,7 @@ async fn run(
     input: &[u8],
     environment: &[(&str, &str)],
 ) -> Result<Output, GatewayError> {
-    let mut command = crate::native_git::command(&backend.git_dir());
+    let mut command = crate::native_git::command(&backend.git_dir())?;
     command
         .envs(environment.iter().copied())
         .arg("--git-dir")

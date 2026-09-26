@@ -13,6 +13,8 @@ use flate2::{Compression, write::ZlibEncoder};
 
 use crate::{ObjectKind, RefExpectation, object_id, refs::valid_ref_name};
 
+pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
+
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
     #[error("Git cache HEAD must name a valid branch")]
@@ -51,7 +53,7 @@ impl GitCache {
             let cache = Arc::new(Self {
                 // Native workers change cwd to this cache; their paths must stay
                 // absolute even when the node's data directory is relative.
-                directory: tempfile::TempDir::new_in(fs::canonicalize(root)?)?,
+                directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
@@ -178,7 +180,11 @@ impl GitCache {
 
 impl Drop for GitCache {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(self.root())
+        let cleanup = || {
+            let _worker = crate::native_git::idle_fence(&self.git_dir())?;
+            fs::remove_dir_all(self.root())
+        };
+        if let Err(error) = cleanup()
             && error.kind() != io::ErrorKind::NotFound
         {
             tracing::error!(path = %self.root().display(), error = %error, "Git cache cleanup failed; disk admission retained until process restart");
@@ -187,6 +193,9 @@ impl Drop for GitCache {
             if let Some(reservation) = self.reservation.take() {
                 std::mem::forget(reservation);
             }
+            // TempDir must not retry deletion after a worker fence rejected it.
+            // Startup reclaims this directory once all descendants have exited.
+            self.directory.disable_cleanup(true);
         }
     }
 }

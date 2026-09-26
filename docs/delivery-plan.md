@@ -15,7 +15,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
-| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
+| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover, cold clone and fenced Unix runtime reclamation pass; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
 The **internal preview** requires gates 0–5, including real storage and
@@ -44,8 +44,9 @@ separate product decisions.
    tracing and provider credentials, with temporary paths inside their cache.
    Enforce the remaining byte ceiling with filesystem quotas or a proven bound
    on every native write; periodic sampling and per-file limits alone cannot
-   prove aggregate peak usage. Add crash-left cache reconciliation and qualify
-   cleanup failures.
+   prove aggregate peak usage. Managed runtime recovery now fences live nodes
+   and Unix Git descendants before reclaiming crash-left files. Qualify OS power
+   loss, startup cancellation and Windows process containment next.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -1693,3 +1694,47 @@ production addition is one small policy shared by four callers, replacing the
 candidate-only copy. No dependency, schema or wire-format change. Filesystem
 allocation overhead, crash-left cleanup, native peak memory/disk and cross-OS
 qualification remain open.
+
+
+## Managed local runtime recovery qualification
+
+On 2026-09-26, `src/server/workspace.rs` replaced anonymous node directories with
+one marked `runtime-v1/` directory beneath a locked `data_dir`. The manager retains
+that owner with detached request work. Git caches use a recognizable prefix and
+per-cache worker locks. On Unix, native Git and its descendants inherit the lock
+descriptor across exec. Startup acquires every abandoned worker fence before
+reclaiming local state; cache destruction respects the same fence and suppresses
+TempDir's implicit deletion retry when cleanup fails.
+
+Proof:
+
+- Five focused workspace tests cover a competing owner, preserving unrelated
+  files, rejecting unknown markers and runtime symlinks, safe nested symlink
+  removal, permission-failure recovery and an orphan Git shell descendant.
+  Killing its Git parent does not allow cleanup; releasing the descendant does.
+  Dropping the cache while that descendant is alive also leaves its files intact.
+- A server API integration rejects a second node sharing the same data directory
+  and restores the same repository UUID after graceful shutdown and reuse.
+- Six residency/fault integrations remain green. Their filesystem probes now
+  target the managed directory while retaining release/cleanup assertions.
+- The 38 Git-focused unit tests and the separate host-environment regression
+  pass, along with all-target Clippy, formatting and the release build.
+- The real RustFS process probe passes with `--sqlite-chunks --many-objects 256
+  --large-clone`. Its first restart uses fresh local storage; after killing the
+  second process, the probe leaves scratch bytes and corrupts its local Directory
+  SQLite file. The third process reuses that exact data directory. All old Git
+  cache paths and the scratch sentinel disappear before restored API results
+  become visible. Tokens/ACLs, issues, reviews, line discussions, branch rules,
+  merge/squash candidates and exact retries retain their acknowledged state.
+- Both v0 and v2 clones restore an 83,912,143-byte pack with matching file hashes
+  and clean `git fsck`. Local observations: 6.48 seconds cold v0, 3.57 seconds warm
+  v2; these are recovery observations with different cache states. Large SQLite
+  tree/commit/tag objects and 300 additional refs also restore exactly.
+
+Qualification host: Darwin arm64, Apple Git 2.50.1, RustFS 1.0.0-beta.8-glibc.
+The added production surface owns a real lifecycle boundary: startup exclusion,
+worker survival and cache reclamation. No dependency, public configuration or
+Cell schema change. Windows orphan containment, startup cancellation during Cell
+acquisition, OS power loss, Linux qualification and native peak disk/memory limits
+remain open. Earlier development builds' anonymous directories remain untouched;
+there is no adoption or compatibility reader for them.

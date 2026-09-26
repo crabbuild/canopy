@@ -455,6 +455,12 @@ Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.
 All native Git workers use an isolated environment: host Git configuration,
 object paths, tracing and provider credentials are removed. Home and temporary
 paths point into the disposable cache; Git is selected through the host `PATH`.
+The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
+restart removes abandoned local state before restoring Cells from object storage;
+live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
+stop startup. Keep the lock files in place; files outside the managed runtime
+are untouched. Windows orphan-worker recovery still requires manual cleanup
+after all server and Git processes have stopped.
 Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories
 evict an inactive repository and restore from durable state when accessed again.

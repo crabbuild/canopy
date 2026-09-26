@@ -1,11 +1,67 @@
 //! Process policy shared by every native Git operation on a disposable cache.
 
-use std::path::Path;
+use std::{fs::File, io, path::Path};
 
 use tokio::process::Command;
 
-pub(crate) fn command(git_dir: &Path) -> Command {
+pub(crate) const WORKER_LOCK: &str = ".canopy-native.lock";
+
+pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
+pub(crate) fn idle_fence(git_dir: &Path) -> io::Result<Option<File>> {
+    let path = git_dir.join(WORKER_LOCK);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Git worker lock",
+            ));
+        }
+    }
+    let file = File::options().read(true).write(true).open(path)?;
+    file.try_lock().map_err(io::Error::from)?;
+    Ok(Some(file))
+}
+
+pub(crate) fn command(git_dir: &Path) -> io::Result<Command> {
     let mut command = Command::new("git");
+    let fence = lock_file(&git_dir.join(WORKER_LOCK))?;
+    fence.try_lock_shared().map_err(io::Error::from)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        // Keep the fence outside stdio slots that spawn replaces. CLOEXEC is
+        // cleared only in this child, never in the multithreaded parent.
+        // SAFETY: fcntl duplicates this live descriptor into a new owned slot.
+        let fd = unsafe { libc::fcntl(fence.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+        if fd == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the successful duplication returned an unowned descriptor.
+        let fence = unsafe { File::from_raw_fd(fd) };
+        // SAFETY: only async-signal-safe fcntl runs after fork. The closure owns
+        // the descriptor through spawn; exec and descendants retain its lock.
+        unsafe {
+            command.pre_exec(move || {
+                let fd = fence.as_raw_fd();
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     // Host configuration can redirect objects, execute helpers or emit traces
     // outside our accounting. Provider credentials must not reach Git or hooks.
     command.env_clear();
@@ -31,7 +87,7 @@ pub(crate) fn command(git_dir: &Path) -> Command {
         .env("LC_ALL", "C")
         .arg("--no-replace-objects")
         .args(["-c", "protocol.allow=never"]);
-    command
+    Ok(command)
 }
 
 #[cfg(all(test, unix))]
@@ -85,12 +141,12 @@ mod tests {
         .await?;
         let git_dir = cache.git_dir();
         assert!(git_dir.is_absolute());
-        let config = command(&git_dir)
+        let config = command(&git_dir)?
             .args(["config", "--get", "canopy.poison"])
             .output()
             .await?;
         assert_eq!(config.status.code(), Some(1));
-        let helper = command(&git_dir)
+        let helper = command(&git_dir)?
             .args([
                 "-c",
                 "alias.probe=!test -z \"$CANOPY_TEST_PROVIDER_KEY$GIT_OBJECT_DIRECTORY$GIT_TRACE\" && test \"$PWD\" = \"$TMPDIR\" && test \"$TEMP\" = \"$TMPDIR\" && test \"$TMP\" = \"$TMPDIR\" && printf isolated",
@@ -100,7 +156,7 @@ mod tests {
             .await?;
         assert!(helper.status.success());
         assert_eq!(helper.stdout, b"isolated");
-        let mut writer = command(&git_dir)
+        let mut writer = command(&git_dir)?
             .args(["hash-object", "-w", "--stdin"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

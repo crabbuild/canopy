@@ -152,7 +152,7 @@ impl RepositoryManager {
                 self.evict_repository(loaded).await?;
             }
             let target = repository_target(self.tenant, self.application, entry.repository_id)?;
-            let directory = self.local_root.join(hex::encode(entry.repository_id));
+            let directory = self.local.path().join(hex::encode(entry.repository_id));
             tokio::fs::create_dir_all(&directory).await?;
             let started = Instant::now();
             let handle = acquire_sql_cell(
@@ -261,7 +261,7 @@ impl RepositoryManager {
     ) -> Result<(), ServerError> {
         // Keep the released entry until deletion completes. A failed cleanup must
         // be retried before restore, whose destination must not already exist.
-        match tokio::fs::remove_dir_all(self.local_root.join(hex::encode(id))).await {
+        match tokio::fs::remove_dir_all(self.local.path().join(hex::encode(id))).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -284,7 +284,7 @@ impl RepositoryManager {
         let repository = Arc::new(RepositoryCell::new(&application, target)?);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
-            self.local_root.clone(),
+            self.local.path().to_path_buf(),
             Arc::clone(&self.external_store),
             self.disk_budget.clone(),
         ));
