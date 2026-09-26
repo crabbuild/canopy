@@ -1,0 +1,34 @@
+[package]
+name = "canopy-server"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+axum = "0.8.9"
+base64 = "0.22"
+blake3 = "1.8"
+bytes = "1.11"
+cellule-app = { path = "/Users/haipingfu/Github/cellule/crates/cellule-app" }
+cellule-runtime = { path = "/Users/haipingfu/Github/cellule/crates/cellule-runtime" }
+flate2 = "1.1"
+hex = "0.4"
+object_store = "0.14.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+thiserror = "2.0"
+tracing = "0.1"
+tokio = { version = "1.49", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+uuid = { version = "1.24", features = ["v4"] }
+url = "2"
+
+[dev-dependencies]
+cellule-host = { path = "/Users/haipingfu/Github/cellule/crates/cellule-host" }
+cellule-ltx = { path = "/Users/haipingfu/Github/cellule/crates/cellule-ltx", features = ["replica"] }
+cellule-store = { path = "/Users/haipingfu/Github/cellule/crates/cellule-store" }
+ed25519-dalek = "2"
+tokio-util = { version = "0.7", features = ["rt"] }
