@@ -229,6 +229,9 @@ impl RepositoryCell {
         &self,
         input: PushCompletion,
     ) -> Result<cellule_runtime::Committed<bool>, InvocationError<bool>> {
+        if let Some(plan) = &input.plan {
+            self.prepare_graph(plan).await?;
+        }
         let identity = identity().map_err(|_| {
             InvocationError::NotStarted(Error::Command("push mutation clock failed"))
         })?;

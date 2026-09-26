@@ -137,7 +137,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .is_err()
         );
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
-        let repository = RepositoryCell::new(&application_handle, target)?;
+        let repository = RepositoryCell::new(&application_handle, target.clone())?;
         let empty = repository.refs_page("", None).await?.output;
         assert_eq!(empty.generation, 0);
         assert!(empty.refs.is_empty());
@@ -414,7 +414,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 version: 5
             })
         );
-        graph::verify(&repository, &graph_sql).await?;
+        graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }

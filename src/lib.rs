@@ -40,11 +40,12 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 4] = [
+const COMMANDS: [OperationDescriptor; 5] = [
     operation(1),
     operation_with_codec(3, 3),
     operation(4),
     operation_with_codec(5, 2),
+    operation(6),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
@@ -81,7 +82,7 @@ pub(crate) fn validate_repository_id(repository: [u8; 16]) -> cellule_runtime::R
 }
 
 /// Git object kind used when calculating the canonical object ID.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ObjectKind {
     Blob,
     Tree,
@@ -155,6 +156,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("graph.rs"));
+                source.update(include_bytes!("graph/preparation.rs"));
                 source.update(include_bytes!("object_batch.rs"));
                 source.update(include_bytes!("object_chunks.rs"));
                 source.update(include_bytes!("push.rs"));
@@ -192,7 +194,8 @@ impl CellModule for RepositoryModule {
         register_sql::<Self>(registry)?;
         registry.bind_command::<FinalizePush>()?;
         registry.bind_command::<push::CompletePush>()?;
-        registry.bind_command::<object_batch::PutObjects>()
+        registry.bind_command::<object_batch::PutObjects>()?;
+        registry.bind_command::<graph::CertifyObjects>()
     }
 }
 
@@ -237,12 +240,13 @@ impl RepositoryCell {
         })
     }
 
-    /// Publishes one all-or-none ref plan after its objects are durable.
+    /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.
     pub async fn finalize_push(
         &self,
         identity: cellule_runtime::MutationIdentity,
         plan: PushPlan,
     ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
+        self.prepare_graph(&plan).await?;
         self.application
             .command::<FinalizePush>(&self.target, identity, plan)
             .await

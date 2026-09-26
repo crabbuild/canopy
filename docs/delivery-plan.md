@@ -11,7 +11,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
-| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
+| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
@@ -45,8 +45,9 @@ separate product decisions.
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
    and existence queries group up to 128 IDs. Large trees, commits and tags now
-   use verified SQLite chunks. Add a real corpus benchmark and bounded graph
-   certification for large initial pushes. Keep the bare repo disposable.
+   use verified SQLite chunks. Graph certification now uses commands capped at
+   128 objects and 64 MiB of SQLite bytes. Add a real corpus benchmark, qualify
+   traversal memory and native resource limits. Keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
    publishes the complete response with ref changes. Typed graph connectivity
@@ -453,3 +454,58 @@ took 0.71/0.96 seconds; the 300-ref recovery check took 0.97 seconds. Stock Git/
 ACL, mixed/atomic ref outcomes and dropped-reply replay also pass. These are
 debug-build observations on Darwin arm64 with Apple Git 2.50.1. Scoped tests,
 formatting, Clippy, Python syntax validation and the binary build pass.
+
+
+## Bounded graph certification before ref publication
+
+Initial-history traversal no longer runs inside the ref transaction. One async
+postorder preparation path serves direct finalization and HTTP push completion.
+It groups dependency-ordered candidates into `CertifyObjects` commands of at most
+128 object IDs and 64 MiB of SQLite verification bytes. The Cell command reads
+and verifies stored objects itself and requires each typed child to have a durable
+certificate, querying dependencies in groups of 128. Repeated references to the
+same object/type share a proof. The final transaction checks only the new tips,
+ACL, ref CAS, namespace conflicts and outcome publication.
+
+Valid certificate batches survive later failure and can be reused. No partly
+certified graph can publish a ref. This replaces the former single-transaction
+traversal; there is no fallback to that path. The extra preparation module owns
+async traversal and error/lifetime handling while `graph.rs` owns authoritative
+certificate checks and parsers. Operation 6 uses codec 1; schema and dependency
+revisions are unchanged, but the module digest changes with the new behavior.
+
+A 270-leaf test deliberately omits the last dependency. Exactly 256 certificates
+commit in bounded batches, while the root stays uncertified and refs/generation
+stay unchanged. Adding the dependency and retrying certifies the remaining graph
+and publishes one ref generation. Direct low-level ref publication without a root
+certificate is rejected. Wire-level command checks bypass the preparer to prove
+incorrect ordering, missing/wrongly typed dependencies and malformed object graphs
+are rejected by the registered Cell handler; a failed batch rolls back earlier
+certificates in that batch. Existing ACL, CAS, ABA, atomic/mixed push, replay,
+large-object clone and owner-recovery tests pass.
+
+Remaining capacity work includes traversal frontier memory, large distinct edge
+sets, native Git scratch and a representative real-repository corpus. Certificate
+batches add durable publications; latency measurements must include them. The
+lease/storage publication fault matrix still needs owner loss during preparation
+at each boundary; this change does not close that gate.
+
+
+An initial process run passed recovery but observed 2.94/4.03 seconds for the
+256-file initial/incremental pushes. Inspection exposed per-child metadata
+calls in preparation. These now use 128-child pages and reuse returned immutable
+metadata; repeated roots are deduplicated too. The partial-progress and typed
+command rejection tests still pass after this change, along with all nine
+multi-server tests, owner restart and stock smart HTTP. Timings from this host
+are observations, with no controlled throughput or latency claim.
+
+
+The final RustFS process run with `--sqlite-chunks --many-objects 256` passes:
+large metadata push 2.08 seconds; 256-file initial/incremental pushes 0.95/0.89
+seconds; chunked-object recovery 1.36 seconds; 300-ref repository recovery 1.07
+seconds. Exact object bytes/OIDs and strict fsck survive owner death, lease
+expiry and local disk loss. Git/LFS, ACL, mixed/atomic outcomes and dropped-reply
+replay pass. Environment: Darwin arm64, Apple Git 2.50.1, RustFS
+`1.0.0-beta.8-glibc`, debug build. These observations do not isolate host load
+from code changes or establish production capacity. Formatting, scoped tests,
+Clippy and the binary build pass.

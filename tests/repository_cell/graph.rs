@@ -66,13 +66,18 @@ async fn certificates(sql: &SqlCell<RepositoryModule>) -> Result<Vec<SqlValue>> 
         .collect())
 }
 
-pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>) -> Result<()> {
+pub async fn verify(
+    repository: &RepositoryCell,
+    sql: &SqlCell<RepositoryModule>,
+    application: &cellule_app::ApplicationHandle<canopy_server::CanopyApplication>,
+    target: &cellule_runtime::CellTarget,
+) -> Result<()> {
     let blob_body = b"graph closure leaf";
     let blob = object_id(ObjectKind::Blob, blob_body);
     let tree_body = entry("100644", b"leaf", blob);
     let tree = object_id(ObjectKind::Tree, &tree_body);
     let root = put(repository, ObjectKind::Commit, &commit(tree, None)).await?;
-    let before = certificates(sql).await?;
+
     let push = plan("refs/heads/graph", root);
     assert!(matches!(
         repository.finalize_push(identity()?, push.clone()).await,
@@ -90,8 +95,38 @@ pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>
         repository.finalize_push(identity()?, push.clone()).await,
         Err(InvocationError::Rejected(_))
     ));
-    assert_eq!(certificates(sql).await?, before);
+    assert!(
+        !certificates(sql)
+            .await?
+            .contains(&SqlValue::Blob(root.to_vec()))
+    );
     put(repository, ObjectKind::Blob, blob_body).await?;
+    for candidates in [vec![root, tree, blob], vec![blob, root]] {
+        assert!(matches!(
+            application
+                .command::<CertificateCommand>(target, identity()?, CertificateInput(candidates))
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        assert!(
+            !certificates(sql)
+                .await?
+                .contains(&SqlValue::Blob(blob.to_vec()))
+        );
+    }
+    assert!(
+        application
+            .command::<CertificateCommand>(target, identity()?, CertificateInput(vec![blob, tree]))
+            .await?
+            .output
+    );
+    // Calling the low-level command cannot bypass certificate preparation.
+    assert!(matches!(
+        application
+            .command::<canopy_server::FinalizePush>(target, identity()?, push.clone())
+            .await,
+        Err(InvocationError::Rejected(_))
+    ));
     repository.finalize_push(identity()?, push).await?;
     let after = certificates(sql).await?;
     for oid in [root, tree, blob] {
@@ -133,6 +168,12 @@ pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>
     ] {
         let oid = put(repository, kind, body).await?;
         let name = format!("refs/tags/{name}");
+        assert!(matches!(
+            application
+                .command::<CertificateCommand>(target, identity()?, CertificateInput(vec![oid]))
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
         assert!(
             matches!(
                 repository
@@ -152,8 +193,8 @@ pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>
     ));
     assert_eq!(certificates(sql).await?, after);
 
-    // The valid root is traversed first. A later missing root must roll back
-    // both its new certificates and every ref, not only the invalid update.
+    // A missing root must reject every ref even when another root is valid.
+    // Certificate preparation is independent of ref publication.
     let independent = put(repository, ObjectKind::Blob, b"independent graph leaf").await?;
     let mut mixed = plan("refs/tags/missing-root", [73; 20]);
     mixed
@@ -163,7 +204,6 @@ pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>
         repository.finalize_push(identity()?, mixed).await,
         Err(InvocationError::Rejected(_))
     ));
-    assert_eq!(certificates(sql).await?, after);
     assert!(
         repository
             .ref_state("refs/tags/independent", None)
@@ -200,5 +240,123 @@ pub async fn verify(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>
             .await,
         Err(InvocationError::Rejected(_))
     ));
+    resumable(repository, sql).await?;
     Ok(())
+}
+
+async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>) -> Result<()> {
+    use canopy_server::{ObjectBatch, ObjectStorage, StoredObject};
+    let mut leaves: Vec<_> = (0..270)
+        .map(|index| {
+            let body = format!("resumable leaf {index}").into_bytes();
+            (object_id(ObjectKind::Blob, &body), body)
+        })
+        .collect();
+    leaves.sort_by_key(|(oid, _)| *oid);
+    let mut tree = Vec::new();
+    for (index, (oid, _)) in leaves.iter().enumerate() {
+        tree.extend(entry("100644", format!("leaf-{index:03}").as_bytes(), *oid));
+    }
+    let (missing, body) = leaves.pop().ok_or("missing fixture leaf")?;
+    for group in leaves.chunks(128) {
+        let mut batch = ObjectBatch::default();
+        for (oid, body) in group {
+            assert!(
+                batch
+                    .try_push(StoredObject {
+                        oid: *oid,
+                        kind: ObjectKind::Blob,
+                        storage: ObjectStorage::Inline(body.clone())
+                    })
+                    .is_ok()
+            );
+        }
+        repository.put_objects(identity()?, batch).await?;
+    }
+    let root = put(repository, ObjectKind::Tree, &tree).await?;
+    let generation = repository.refs_page("", None).await?.output.generation;
+    let plan = plan("refs/tags/resumable-graph", root);
+    assert!(matches!(
+        repository.finalize_push(identity()?, plan.clone()).await,
+        Err(InvocationError::Rejected(_))
+    ));
+    let persisted = certificates(sql).await?;
+    assert_eq!(
+        leaves
+            .iter()
+            .filter(|(oid, _)| persisted.contains(&SqlValue::Blob(oid.to_vec())))
+            .count(),
+        256
+    );
+    assert!(!persisted.contains(&SqlValue::Blob(root.to_vec())));
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        generation
+    );
+    assert!(
+        repository
+            .ref_state("refs/tags/resumable-graph", None)
+            .await?
+            .output
+            .is_none()
+    );
+    assert_eq!(put(repository, ObjectKind::Blob, &body).await?, missing);
+    repository.finalize_push(identity()?, plan).await?;
+    assert_eq!(
+        repository.refs_page("", None).await?.output.generation,
+        generation + 1
+    );
+    assert_eq!(
+        repository
+            .ref_state("refs/tags/resumable-graph", None)
+            .await?
+            .output
+            .and_then(|state| state.oid),
+        Some(root)
+    );
+    let persisted = certificates(sql).await?;
+    assert!(persisted.contains(&SqlValue::Blob(root.to_vec())));
+    for (oid, _) in leaves {
+        assert!(persisted.contains(&SqlValue::Blob(oid.to_vec())));
+    }
+    Ok(())
+}
+
+// A separately encoded client invokes the registered server command. Its local
+// handler cannot run, so these checks exercise the actual wire trust boundary.
+struct CertificateInput(Vec<[u8; 20]>);
+impl cellule_runtime::WireValue for CertificateInput {
+    fn encode(
+        &self,
+        encoder: &mut cellule_runtime::BoundedEncoder,
+    ) -> std::result::Result<(), cellule_runtime::CodecError> {
+        encoder.write_count(self.0.len())?;
+        for oid in &self.0 {
+            encoder.write_bytes(oid)?;
+        }
+        Ok(())
+    }
+    fn decode(
+        _: &mut cellule_runtime::BoundedDecoder<'_>,
+    ) -> std::result::Result<Self, cellule_runtime::CodecError> {
+        Err(cellule_runtime::CodecError::Invalid(
+            "client fixture is encode-only",
+        ))
+    }
+}
+struct CertificateCommand;
+impl cellule_runtime::Command for CertificateCommand {
+    const MODULE: &'static str = "repository";
+    const ID: u32 = 6;
+    const CODEC_VERSION: u32 = 1;
+    type Input = CertificateInput;
+    type Output = bool;
+    fn execute(
+        _: &mut cellule_runtime::CommandContext<'_, '_>,
+        _: Self::Input,
+    ) -> cellule_runtime::Result<cellule_runtime::CommandResult<bool>> {
+        Err(cellule_runtime::Error::Command(
+            "client fixture handler must not execute",
+        ))
+    }
 }

@@ -30,7 +30,8 @@ before admitting persistent customer repositories.
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
-| Git connectivity | typed commit/tree/tag edges, required local objects, commit-only branch tips; completed subgraphs cached in SQLite | `object_closure`, shared ref finalization |
+| Graph certificates | at most 128 candidate objects and 64 MiB SQLite object bytes per command; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
+| Git connectivity at ref publication | at most 64 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
@@ -68,7 +69,7 @@ report unchanged. A rejected atomic push changes no refs. Malformed packs
 retain Git's unpack failure report and publish no refs. The gateway does not
 infer transaction success by searching diagnostic text for status fragments.
 
-Both ref commands validate the reachable Git graph in the ref transaction.
+Both ref commands require certified reachable Git graphs in the ref transaction.
 Commit trees and parents, tree entries, and annotated tag targets must exist
 with the required object kind. Branch tips must be commits. Tree symlinks and
 regular files require blobs; gitlinks refer to another repository and do not
@@ -79,23 +80,46 @@ require a local object. The traversal follows Git's
 It checks graph structure and content hashes; it is not a replacement for all
 of `git fsck`'s metadata, filename and portability checks.
 
-An iterative postorder traversal checks inline OIDs and BLAKE3 digests, then
-inserts an `object_closure` certificate only after all required descendants
-are certified. Repeated pushes stop at existing certificates, while still
-checking edge types. Certificates and ref changes commit together; rejection
-rolls both back. New objects can be staged in any order, but missing descendants
-prevent publication. An external blob's certificate relies on the gateway's
-verified immutable upload before recording its SQLite reference; it does not
-perform network I/O in the Cell transaction.
+An async postorder traversal prepares certificates before either ref command.
+It reads only uncertified history, deduplicates repeated typed roots/edges and
+checks child status in pages of 128. Certified children need no separate Cell
+call; uncertified children carry their observed immutable metadata into traversal.
+It groups at most 128 candidate object IDs in dependency order. Its cache of objects ready
+for certification covers only the pending batch. `CertifyObjects` independently
+reads each candidate from SQLite, recomputes hashes and graph edges, and requires
+all typed children to be certified. It checks child metadata in groups of at most
+128 rows. Newly verified inline and chunked bodies share a 64 MiB budget per
+command; references to verified external blob bodies do not consume that budget.
+The final ref transaction checks only the at-most-64 new tips, their certificates
+and branch types, together with current ACL, versions and namespace conflicts.
+
+The certificate command is the trust boundary: incorrect candidate order,
+missing or mismatched children, corrupt data or work beyond the byte limit
+rejects its whole application savepoint. The client traversal cannot assert a
+certificate. Certificates and refs are separate publications. A failed or
+interrupted preparation may retain valid certificates from earlier batches;
+retries reuse them. Partially certified roots cannot publish refs, and certificate
+commits do not advance `ref_generation`. An external blob certificate relies on
+the verified immutable upload before its SQLite record; there is no external
+network I/O inside certificate or ref transactions.
+
+`RepositoryCell::finalize_push` and HTTP completion share this preparation path.
+The low-level `FinalizePush` command requires certificates already present.
+A preparation failure is reported as ref invocation `NotStarted`, retaining its
+underlying error, since the final ref command has not been dispatched. Certificate
+work may itself have a pending outcome; retry rechecks committed state. Direct
+callers must keep their supplied finalization identity valid through preparation;
+HTTP completion creates its final command identity after preparation.
 
 Certificates rely on immutable object records and retained object bytes. There
 is currently no object mutation or collector through the product API. Any
 future collector or repair that removes or changes objects must invalidate all
 affected ancestor certificates before ref publication resumes; clearing the
 entire certificate table is the conservative implementation. Backup and restore
-must preserve the database and its referenced external bodies together. Large
-first-time traversals still run in one transaction; capacity qualification and
-bounded certification work remain in the streaming/performance gate.
+must preserve the database and its referenced external bodies together. Each
+certificate transaction has explicit object/byte limits, but large individual
+objects, traversal frontier memory and production-scale latency still need
+capacity qualification.
 
 For receive-pack POSTs, `Idempotency-Key` must be one canonical lowercase,
 hyphenated UUID. Missing IDs are generated, and recorded responses include
@@ -218,8 +242,8 @@ a blocking worker so large bodies do not occupy an async executor thread. Stderr
 concurrently, retaining at most 64 KiB per process. Dropping the reader kills
 both direct children and aborts pipe tasks; normal completion requires both
 successful exits before publishing refs or recording the successful report.
-Previously published graph closure makes exclusions safe; the Cell transaction
-still verifies every new tip.
+Previously published graph closure makes exclusions safe; ref publication
+still requires every new tip to have a durable certificate.
 
 Candidate existence queries group up to 128 IDs. Missing records accumulate in
 an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
@@ -250,8 +274,8 @@ uploads remain staged until a collector can prove they are unreferenced.
 
 Hydration and direct SQLite object reads use the same chunk count, length and
 hash checks. Every SQL result contains at most one chunk, fitting Cellule's
-1 MiB result limit. Reads reconstruct a bounded whole object in memory. Ref
-finalization reconstructs chunked objects before applying the same typed graph
+1 MiB result limit. Reads reconstruct a bounded whole object in memory. Graph
+certification reconstructs chunked objects before applying the same typed edge
 checks as inline objects; chunking does not certify missing edges. Part data is
 immutable through product APIs, and no collector exists yet. Any future collector
 must preserve chunks reachable from objects and invalidate graph certificates

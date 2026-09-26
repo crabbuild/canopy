@@ -10,7 +10,7 @@ use crate::{
     directory::{TokenScope, validate_component},
 };
 
-const MAX_UPDATES: usize = 64;
+pub(crate) const MAX_UPDATES: usize = 64;
 const MAX_REF_NAME_BYTES: usize = 255;
 pub(crate) const REF_PAGE_SIZE: usize = 256;
 
@@ -227,7 +227,7 @@ fn read_oid(decoder: &mut BoundedDecoder<'_>) -> Result<[u8; 20], CodecError> {
         .map_err(|_| CodecError::Invalid("Git object ID is not 20 bytes"))
 }
 
-/// Checks every expected version and publishes all ref changes in one Cell command.
+/// Checks prepared graph certificates and expected versions, publishing all ref changes in one command.
 pub struct FinalizePush;
 
 impl Command for FinalizePush {
@@ -297,7 +297,7 @@ pub(crate) fn apply_push(
             return Ok(false);
         }
     }
-    if !crate::graph::certify(context, plan)? {
+    if !crate::graph::certified_roots(context, plan)? {
         return Ok(false);
     }
     for update in &plan.updates {

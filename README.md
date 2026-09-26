@@ -78,9 +78,11 @@ API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
 Git revision, so a
 fresh Canopy checkout builds without a local Cellule checkout.
 
-Ref publication checks the durable Git graph: commit trees and parents, tree
-entries and tag targets must exist with the correct object type. Branch tips
-must be commits. Submodule gitlinks may name commits in another repository.
+Before ref publication, bounded certificate batches verify the durable Git
+graph: commit trees and parents, tree entries and tag targets must exist with
+the correct object type. Each batch covers at most 128 objects and 64 MiB of
+SQLite object bytes. Ref publication checks certified tips atomically with
+permissions and ref versions; branch tips must be commits. Submodule gitlinks may name commits in another repository.
 SQLite certificates let later pushes reuse validated history. Push ingestion streams
 candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
