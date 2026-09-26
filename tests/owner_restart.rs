@@ -270,6 +270,7 @@ async fn serve(
         "canopy".into(),
         "local-test-token",
         &format!("http://{address}"),
+        Arc::new(|| true),
     )?);
     let (stop, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {

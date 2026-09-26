@@ -106,6 +106,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             "canopy".into(),
             "local-test-token",
             &format!("http://{address}"),
+            Arc::new(|| true),
         )?);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let server = tokio::spawn(async move {
@@ -213,6 +214,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             "canopy".into(),
             "local-test-token",
             &format!("http://{address}"),
+            Arc::new(|| true),
         )?);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let server = tokio::spawn(async move {

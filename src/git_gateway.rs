@@ -63,7 +63,8 @@ pub struct GitGateway {
     large_blobs: LargeBlobStore,
     lfs: LfsService,
     scratch_root: PathBuf,
-    cache: Mutex<Option<CachedRepository>>,
+    cache: Mutex<Option<Arc<CachedRepository>>>,
+    push: Mutex<()>,
 }
 
 impl GitGateway {
@@ -80,6 +81,7 @@ impl GitGateway {
             lfs,
             scratch_root,
             cache: Mutex::new(None),
+            push: Mutex::new(()),
         }
     }
 
@@ -93,38 +95,34 @@ impl GitGateway {
             return Err(GatewayError::Unauthorized);
         }
         let is_push = request.method == "POST" && request.path_info == "/repo.git/git-receive-pack";
-        let mut cache = self.cache.lock().await;
+        if is_push {
+            let _push = self.push.lock().await;
+            let cache = self.build_cache(self.cell_refs().await?).await?;
+            return self.handle_push(&cache, request).await;
+        }
         let live_refs = self.cell_refs().await?;
-        if cache.as_ref().is_none_or(|cached| cached.refs != live_refs) {
-            *cache = Some(self.build_cache(live_refs).await?);
-        }
-        let Some(cached) = cache.as_mut() else {
-            return Err(GatewayError::MalformedCache);
+        let cached = {
+            let mut cache = self.cache.lock().await;
+            if cache.as_ref().is_none_or(|cached| cached.refs != live_refs) {
+                *cache = Some(Arc::new(self.build_cache(live_refs).await?));
+            }
+            Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
         };
-        let outcome = self.handle_cached(cached, request, is_push).await;
-        if outcome.is_err() {
-            // Any failed push may have moved only disposable Git refs.
-            *cache = None;
-        }
-        outcome
+        Ok(cached.backend.run(request).await?)
     }
 
-    async fn handle_cached(
+    async fn handle_push(
         &self,
-        cached: &mut CachedRepository,
+        cached: &CachedRepository,
         request: GitHttpRequest,
-        is_push: bool,
     ) -> Result<GitHttpResponse, GatewayError> {
         let before = cached.refs.clone();
         let response = cached.backend.run(request).await?;
-        if is_push && has_rejected_ref(&response.body) {
+        if has_rejected_ref(&response.body) {
             return Err(GatewayError::RefConflict);
         }
-        if is_push && response.status != 200 {
+        if response.status != 200 {
             return Err(GatewayError::RefConflict);
-        }
-        if !is_push {
-            return Ok(response);
         }
         let after = git_refs(&cached.backend.git_dir()).await?;
         let plan = diff_refs(&before, &after);
@@ -143,7 +141,6 @@ impl GitGateway {
         if !result.output {
             return Err(GatewayError::RefConflict);
         }
-        cached.refs = self.cell_refs().await?;
         Ok(response)
     }
 

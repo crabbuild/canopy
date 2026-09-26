@@ -33,6 +33,7 @@ pub struct GitHttpApi {
     owner: String,
     token_digest: [u8; 32],
     public_url: Url,
+    ready: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl GitHttpApi {
@@ -41,6 +42,7 @@ impl GitHttpApi {
         owner: String,
         token: &str,
         public_url: &str,
+        ready: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self, &'static str> {
         if owner.is_empty() || token.is_empty() {
             return Err("Git owner and token are required");
@@ -68,11 +70,14 @@ impl GitHttpApi {
             owner,
             token_digest: Sha256::digest(token.as_bytes()).into(),
             public_url,
+            ready,
         })
     }
 
     pub fn router(self: Arc<Self>) -> Router {
         Router::new()
+            .route("/healthz", get(health))
+            .route("/readyz", get(readiness))
             .route("/repo.git/{*path}", any(git_request))
             .route("/repo.git/info/lfs/objects/batch", post(lfs_batch))
             .route(
@@ -114,6 +119,18 @@ impl GitHttpApi {
     }
 }
 
+async fn health() -> Response<Body> {
+    plain(StatusCode::OK, "ok")
+}
+
+async fn readiness(State(api): State<Arc<GitHttpApi>>) -> Response<Body> {
+    if (api.ready)() {
+        plain(StatusCode::OK, "ready")
+    } else {
+        unavailable()
+    }
+}
+
 #[derive(Deserialize)]
 struct LfsBatchRequest {
     operation: String,
@@ -129,6 +146,9 @@ struct LfsBatchObject {
 }
 
 async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -> Response<Body> {
+    if !(api.ready)() {
+        return unavailable();
+    }
     let Some(authorization) = request.headers().get(header::AUTHORIZATION) else {
         return lfs_unauthorized();
     };
@@ -227,6 +247,9 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
         }
         objects.push(response);
     }
+    if !(api.ready)() {
+        return unavailable();
+    }
     lfs_json(
         StatusCode::OK,
         json!({"transfer": "basic", "objects": objects, "hash_algo": "sha256"}),
@@ -238,6 +261,9 @@ async fn lfs_get(
     Path(oid): Path<String>,
     request: Request<Body>,
 ) -> Response<Body> {
+    if !(api.ready)() {
+        return unavailable();
+    }
     if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
         return lfs_unauthorized();
     }
@@ -245,7 +271,7 @@ async fn lfs_get(
         return plain(StatusCode::NOT_FOUND, "LFS object does not exist");
     };
     match api.gateway.lfs().get(oid).await {
-        Ok(body) => {
+        Ok(body) if (api.ready)() => {
             let mut response = Response::new(Body::from(body));
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
@@ -253,6 +279,7 @@ async fn lfs_get(
             );
             response
         }
+        Ok(_) => unavailable(),
         Err(LfsError::NotFound) => plain(StatusCode::NOT_FOUND, "LFS object does not exist"),
         Err(error) => {
             tracing::error!(error = %error, "LFS download failed");
@@ -266,6 +293,9 @@ async fn lfs_put(
     Path(oid): Path<String>,
     request: Request<Body>,
 ) -> Response<Body> {
+    if !(api.ready)() {
+        return unavailable();
+    }
     if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
         return lfs_unauthorized();
     }
@@ -276,7 +306,8 @@ async fn lfs_put(
         return plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large");
     };
     match api.gateway.lfs().put(oid, &body).await {
-        Ok(_) => plain(StatusCode::OK, ""),
+        Ok(_) if (api.ready)() => plain(StatusCode::OK, ""),
+        Ok(_) => unavailable(),
         Err(LfsError::Corrupt) => plain(
             StatusCode::UNPROCESSABLE_ENTITY,
             "LFS object digest mismatch",
@@ -332,6 +363,9 @@ fn lfs_json(status: StatusCode, value: Value) -> Response<Body> {
 }
 
 async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -> Response<Body> {
+    if !(api.ready)() {
+        return unavailable();
+    }
     if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
         return unauthorized();
     }
@@ -364,7 +398,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         })
         .await
     {
-        Ok(cgi) => {
+        Ok(cgi) if (api.ready)() => {
             let Ok(status) = StatusCode::from_u16(cgi.status) else {
                 return plain(StatusCode::BAD_GATEWAY, "Invalid Git backend status");
             };
@@ -380,6 +414,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             }
             response
         }
+        Ok(_) => unavailable(),
         Err(GatewayError::Unauthorized) => unauthorized(),
         Err(GatewayError::RefConflict) => {
             plain(StatusCode::CONFLICT, "Repository changed during push")
@@ -407,4 +442,8 @@ fn plain(status: StatusCode, message: &'static str) -> Response<Body> {
     let mut response = Response::new(Body::from(message));
     *response.status_mut() = status;
     response
+}
+
+fn unavailable() -> Response<Body> {
+    plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
 }

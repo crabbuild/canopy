@@ -25,10 +25,11 @@ pushes may leave unreferenced objects; collection is not implemented yet.
 
 Git packs and the bare repository cache are transport and acceleration
 artifacts. Neither is authoritative. The gateway can reconstruct cache objects
-from the Cell and external store. One test proves gateway restart in one live
-runtime. Another proves exact-root restore after clean node shutdown and local
-SQLite loss using a shared in-memory object store. Unexpected owner loss,
-ambiguous push result resolution and multi-node takeover still need proof
+from the Cell and external store. Integration tests prove exact-root restore
+after clean node shutdown and local SQLite loss. The process smoke also proves
+Git and LFS fetch after an unclean owner exit, lease expiry and a third process
+claiming the Cell from an S3-compatible object store. Ambiguous push result
+resolution, simultaneous multi-node routing and backup restore still need proof
 before service readiness.
 
 Schema version 1 is still changing in this unreleased repository. The module

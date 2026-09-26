@@ -17,11 +17,13 @@ pub mod http;
 pub mod large_blob;
 pub mod lfs;
 mod refs;
+pub mod server;
 
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
 pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
+pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
 const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation(3)];
@@ -162,7 +164,7 @@ impl CellApplication for CanopyApplication {
         builder.register(RepositoryModule)?;
         builder.cell_type(
             CellType::entity_uuid(RepositoryModule::NAME, "repository", REPOSITORIES)?
-                .with_limits(8 * 1024 * 1024 * 1024, 64 * 1024 * 1024)?,
+                .with_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024)?,
         )
     }
 }

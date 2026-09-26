@@ -1,0 +1,15 @@
+{
+  "storage_url": "s3://canopy-data/example",
+  "tenant_id": "5e17b1fb-1ea7-4891-b9c3-7ee319c41114",
+  "application_id": "57e83d94-889c-4d0c-adee-6141a1b1a160",
+  "repository_id": "a948af5d-a210-4b5f-a9a4-359c9789a7ba",
+  "node_id": "de656d4e-0555-4bc2-9a31-d5d898ad5f74",
+  "fleet_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "image_digest": "2222222222222222222222222222222222222222222222222222222222",
+  "owner": "canopy",
+  "public_url": "http://127.0.0.1:8080",
+  "peer_endpoint": "https://node.example.invalid",
+  "listen": "127.0.0.1:8080",
+  "data_dir": "/var/lib/canopy",
+  "local_disk_limit_bytes": 10737418240
+}
