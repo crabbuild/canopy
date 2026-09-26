@@ -13,12 +13,14 @@ CREATE TABLE accounts (
 
 CREATE TABLE access_tokens (
     digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
     account TEXT NOT NULL REFERENCES accounts(name),
     scope TEXT NOT NULL CHECK(scope IN ('read', 'write', 'admin')),
-    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1))
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
 ) WITHOUT ROWID;
 
-CREATE INDEX access_tokens_account ON access_tokens(account);
+CREATE INDEX access_tokens_account ON access_tokens(account, id);
 
 CREATE INDEX repositories_owner_id ON repositories(owner, repository_id) WHERE state = 'ready';
 

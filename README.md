@@ -62,7 +62,29 @@ and LFS require both sufficient token scope and repository role. A ref update
 rechecks the writer in the ref transaction; an LFS upload rechecks the writer
 when publishing metadata.
 
-The current service supports one repository owner and one token per account.
+Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
+own account's tokens; the configured owner can manage any account's tokens:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/accounts/<account>/tokens?after=<UUID>` | Up to 32 metadata records and `next_after`; omit `after` for the first page |
+| POST | `/api/accounts/<account>/tokens` | Issue with `{"id":"<UUID>","token":"cnp_<64 random hex digits>","scope":"read"}`; returns 204 |
+| DELETE | `/api/accounts/<account>/tokens/<UUID>` | Revoke one token; returns 204 |
+
+Choose a new canonical UUID and random secret for each issuance. An exact retry
+with the same active ID, secret and scope succeeds; conflicting or revoked
+identities return 409. Listing returns only ID, scope, enabled state and creation
+time. Revoked IDs and secrets stay reserved. Revoking the site's last admin token
+returns 409, including under concurrent requests.
+
+For rotation, issue a replacement, verify it, update clients, then revoke the old
+token. For the site owner, also update `CANOPY_GIT_TOKEN` in the deployment before
+retiring its configured credential: startup requires an active owner admin token.
+Revocation blocks subsequent API, Git and LFS authentication. Already admitted
+Git/LFS operations may finish; token issuance and account creation recheck the
+authorizing credential in their mutation transaction.
+
+The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
 as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
@@ -90,7 +112,7 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account lifecycle API, organization model, API to list a repository's
+account disable/delete API, organization model, API to list a repository's
 collaborators, multi-node routing, backup, repository browser, issue or pull request
 API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
 Git revision, so a
@@ -190,6 +212,8 @@ the environment. It pushes two repositories with stock Git and LFS, grants a
 collaborator access, renames one repository, restarts with fresh local databases,
 kills the new owner, waits for lease expiry, and clones from a third process.
 It verifies collaborator access after takeover and denial after revocation.
+It rotates a collaborator token before restart, then checks the retired token
+remains denied for API, Git and LFS after restart and owner takeover.
 It also verifies that a deleted branch stays absent through takeover and can
 then be recreated through stock Git.
 Mixed push checks prove accepted refs survive recovery, rejected refs stay
@@ -229,5 +253,5 @@ writes. Page time includes inline integrity verification; cache time includes
 worker scheduling, OID verification, compression and admitted disk writes.
 Use release builds for performance measurements.
 
-The chunk, default-branch and repository-discovery layouts change the unreleased
+The chunk, default-branch, repository-discovery and token-metadata layouts change the unreleased
 schema; use a fresh development storage prefix when moving from older builds.

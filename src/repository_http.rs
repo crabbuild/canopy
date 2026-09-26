@@ -1,6 +1,7 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
 mod default_branch;
+mod tokens;
 
 use std::sync::Arc;
 
@@ -47,6 +48,14 @@ impl RepositoryHttp {
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
             .route("/api/accounts", axum::routing::post(create_account))
+            .route(
+                "/api/accounts/{account}/tokens",
+                get(tokens::list).post(tokens::issue),
+            )
+            .route(
+                "/api/accounts/{account}/tokens/{id}",
+                axum::routing::delete(tokens::revoke),
+            )
             .route(
                 "/api/repositories",
                 get(list_repositories).post(create_repository),
@@ -118,6 +127,12 @@ struct CreateAccountRequest {
     scope: String,
 }
 
+fn valid_new_token(token: &str) -> bool {
+    token.strip_prefix("cnp_").is_some_and(|secret| {
+        secret.len() == 64 && secret.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RenameRepositoryRequest {
@@ -184,6 +199,10 @@ async fn create_account(
     if principal.account != state.manager.owner {
         return plain(StatusCode::FORBIDDEN, "Account creation is restricted");
     }
+    let Some(credential) = http::credential(request.headers().get(header::AUTHORIZATION)) else {
+        return unauthorized();
+    };
+    let actor_digest = Sha256::digest(credential.token.as_bytes()).into();
     let Ok(body) = to_bytes(request.into_body(), 8192).await else {
         return plain(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -193,22 +212,16 @@ async fn create_account(
     let Ok(input) = serde_json::from_slice::<CreateAccountRequest>(&body) else {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid account request");
     };
-    let scope = match input.scope.as_str() {
-        "read" => TokenScope::Read,
-        "write" => TokenScope::Write,
-        "admin" => TokenScope::Admin,
-        _ => return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid token scope"),
+    let Some(scope) = TokenScope::parse(&input.scope) else {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid token scope");
     };
-    let valid_token = input.token.strip_prefix("cnp_").is_some_and(|secret| {
-        secret.len() == 64 && secret.bytes().all(|byte| byte.is_ascii_hexdigit())
-    });
-    if directory::validate_component(&input.name).is_err() || !valid_token {
+    if directory::validate_component(&input.name).is_err() || !valid_new_token(&input.token) {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid account identity");
     }
     let digest = Sha256::digest(input.token.as_bytes()).into();
     match state
         .manager
-        .create_account(&input.name, digest, scope)
+        .create_account(actor_digest, &input.name, digest, scope)
         .await
     {
         Ok(CreateAccountOutcome::Created(account)) if (state.manager.ready)() => json_response(
@@ -219,6 +232,9 @@ async fn create_account(
             plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
         }
         Ok(CreateAccountOutcome::NameTaken) => plain(StatusCode::CONFLICT, "Account name is taken"),
+        Ok(CreateAccountOutcome::Forbidden) => {
+            plain(StatusCode::FORBIDDEN, "Account creation is restricted")
+        }
         Err(error) => {
             tracing::error!(error = %error, "account creation failed");
             plain(StatusCode::SERVICE_UNAVAILABLE, "Account creation failed")

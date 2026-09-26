@@ -187,6 +187,13 @@ def api_status(base_url, path, token, method="GET", payload=None):
         return error.code
 
 
+def verify_revoked_token(base_url, token):
+    assert api_status(base_url, "/api/repositories", token) == 401
+    assert api_status(base_url, "/canopy/renamed.git/info/refs?service=git-upload-pack", token) == 401
+    assert api_status(base_url, "/canopy/renamed.git/info/lfs/objects/batch", token,
+                      "POST", {"operation": "download", "objects": []}) == 401
+
+
 def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token", branch="main"):
     git(
         "-c",
@@ -550,6 +557,16 @@ def main():
             verify_discovery(base_url, "local-test-token", ["renamed", "other"])
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
+            token_api = "/api/accounts/reader/tokens"
+            tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
+            assert len(tokens) == 1 and tokens[0]["enabled"]
+            revoked_reader = reader_token
+            reader_token = f"cnp_{secrets.token_hex(32)}"
+            replacement_id = str(uuid.uuid4())
+            assert api_status(base_url, token_api, "local-test-token", "POST",
+                              {"id": replacement_id, "token": reader_token, "scope": "read"}) == 204
+            assert api_status(base_url, f"{token_api}/{tokens[0]['id']}", "local-test-token", "DELETE") == 204
+            verify_revoked_token(base_url, revoked_reader)
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
@@ -567,6 +584,7 @@ def main():
                 raise RuntimeError("Canopy did not shut down cleanly")
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
+            verify_revoked_token(base_url, revoked_reader)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_discovery(base_url, reader_token, ["renamed"])
@@ -577,6 +595,11 @@ def main():
             time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
             third, base_url = start(args.binary, directory, settings, "third")
             processes.append(third)
+            verify_revoked_token(base_url, revoked_reader)
+            tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
+            assert len(tokens) == 2
+            assert [token["id"] for token in tokens if token["enabled"]] == [replacement_id]
+            print("PASS: rotated token survives takeover; revoked token remains denied for API, Git and LFS", flush=True)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_discovery(base_url, reader_token, ["renamed"])

@@ -14,6 +14,8 @@ mod discovery;
 mod large_objects;
 #[path = "multi_server/residency.rs"]
 mod residency;
+#[path = "multi_server/tokens.rs"]
+mod tokens;
 #[path = "multi_server/transfers.rs"]
 mod transfers;
 

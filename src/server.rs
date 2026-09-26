@@ -36,6 +36,7 @@ use crate::{
 
 mod discovery;
 mod residency;
+mod tokens;
 
 use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
@@ -171,13 +172,23 @@ impl RepositoryManager {
 
     pub(crate) async fn create_account(
         &self,
+        actor_digest: [u8; 32],
         name: &str,
         token_digest: [u8; 32],
         scope: TokenScope,
     ) -> Result<CreateAccountOutcome, ServerError> {
         Ok(self
             .directory
-            .create_account(mutation_identity()?, name, token_digest, scope)
+            .create_account_authorized(
+                mutation_identity()?,
+                directory::TokenAuthority {
+                    actor_digest,
+                    site_owner: &self.owner,
+                    account: name,
+                },
+                token_digest,
+                scope,
+            )
             .await?
             .output)
     }

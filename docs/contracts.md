@@ -12,7 +12,7 @@ before admitting persistent customer repositories.
 | Name reservation | owner/name row stores one canonical UUID and pending/ready state | Directory Cell |
 | Repository rename | compare expected UUID, move one ready name atomically, keep Cell identity | Directory Cell |
 | Account | lowercase ASCII name, enabled flag | Directory Cell |
-| Access token | SHA-256 digest of bearer secret, account, scope (`read`, `write`, `admin`), enabled flag | Directory Cell |
+| Access token | unique opaque 16-byte ID, SHA-256 secret digest, account, scope (`read`, `write`, `admin`), enabled flag, creation timestamp | Directory Cell |
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
@@ -191,8 +191,8 @@ acquired that Cell. Rename updates only the ready Directory Cell row, so the
 same UUID and repository contents survive a URL change. Ready names route
 through their UUID on demand; one node can serve multiple repository Cells.
 The Directory Cell authenticates token digests; each Repository Cell authorizes
-its own Git and LFS access. Repeated bootstrap requires the same owner token.
-Account disablement, token rotation/revocation, listing a repository's
+its own Git and LFS access. Repeated bootstrap requires an active admin token
+belonging to the configured owner. Account disablement, listing a repository's
 collaborators and audit records remain open.
 
 Repository discovery uses a Directory Cell candidate index, keyed by account
@@ -279,11 +279,14 @@ the same shared disk admission described below.
 
 Token scope is checked at request admission. Repository write access is also
 checked in the ref or LFS metadata transaction, so an intervening collaborator
-revocation blocks publication. Previously admitted reads may finish after
-revocation. A denied upload can leave an unreferenced immutable body; no
+revocation blocks publication. Token revocation denies new authentication;
+already admitted Git/LFS reads and writes may finish using their admitted
+principal, subject to the Repository Cell's current ACL. Token issuance and
+account creation additionally recheck the actor credential within the mutation,
+including after request body reception. A denied upload can leave an unreferenced immutable body; no
 collector removes those bodies yet. Account creation is idempotent only for
-the same account, token digest and scope; changing bootstrap credentials fails
-startup instead of replacing the stored account.
+the same account, active token digest and scope. Bootstrap accepts an issued
+active owner admin token and does not replace or revive credentials.
 
 Git packs and the bare repository cache are transport and acceleration
 artifacts. Neither is authoritative. The gateway can reconstruct cache objects
@@ -507,9 +510,48 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD and discovery layouts and operation-5 codec change require a fresh development storage prefix;
+HEAD, discovery and token-metadata layouts and operation-5 codec change require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule
 revision; its UUID partition contract is proposed in
 [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5).
+
+### Token lifecycle
+
+Account token routes list, issue and revoke credentials in the Directory Cell.
+An admin-scoped credential can manage its own account; the configured site owner
+can manage any enabled account. The SDK's `TokenAuthority` carries the exact actor
+digest and trusted site-owner policy. That policy comes from server configuration,
+never request input. Every list and mutation checks the active actor token,
+account state and target scope within its SQL operation. Site-admin account
+creation uses the same transaction boundary; only trusted startup bootstrap
+uses the credential-free SDK primitive.
+
+`GET /api/accounts/<account>/tokens` returns at most 32 ID-ordered entries with
+`id`, `scope`, `enabled` and `created_at_ms`. It never returns secrets or digests.
+The optional `after` and returned `next_after` are canonical UUID strings.
+Continue while `next_after` is present, including a final empty page after an
+exact multiple of 32. Pagination observes each page independently; new IDs
+inserted before a cursor require a fresh scan. Revoked entries remain listed.
+
+`POST` to that path takes a client-chosen ID, a random `cnp_` secret with 64 hex
+digits and scope. Reception admits 8 KiB with a 30-second deadline. Issuance is
+immutable: an exact retry of an active record returns 204 without changing its
+creation time. Reusing an ID or digest for different fields, or for a revoked
+record, returns 409. Initial account-token IDs use the bootstrap/create command's
+request ID; token creation time uses that mutation's issued timestamp.
+
+`DELETE /api/accounts/<account>/tokens/<id>` returns 204 for revocation and repeat
+revocation by a still-authorized actor. Missing or inaccessible targets return
+404. Revoking the site's final active admin token returns 409; read/write tokens
+do not satisfy that guard. The decision is recorded before the conditional
+update in one Cell transaction, so self-revocation can succeed and concurrent
+revocations cannot remove both remaining admins. Current authorization is still
+required for every HTTP retry, including after revoking the caller's own token.
+
+Secrets and IDs remain reserved after revocation. Account creation cannot
+reactivate one. Token records have no expiry, retention cleanup or issuance
+quota yet. Rotation is issue → verify replacement → update clients/deployment →
+revoke old ID. A deployment must configure an active owner admin token before
+restart; startup rejects a retired configured token instead of recreating it.

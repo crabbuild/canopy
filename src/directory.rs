@@ -1,5 +1,8 @@
 //! Durable owner/name to Repository Cell identity mapping.
 
+mod tokens;
+pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
+
 use std::sync::OnceLock;
 
 use cellule_app::{ApplicationHandle, CellType};
@@ -46,9 +49,13 @@ impl CellModule for DirectoryModule {
         static DESCRIPTOR: OnceLock<ModuleDescriptor> = OnceLock::new();
         DESCRIPTOR.get_or_init(|| ModuleDescriptor {
             name: Self::NAME,
-            source_digest: Digest::from_bytes(
-                *blake3::hash(include_bytes!("directory.rs")).as_bytes(),
-            ),
+            source_digest: {
+                let mut source = blake3::Hasher::new();
+                source.update(include_bytes!("directory.rs"));
+                source.update(include_bytes!("directory/tokens.rs"));
+                source.update(SCHEMA.as_bytes());
+                Digest::from_bytes(*source.finalize().as_bytes())
+            },
             retained_codes: &[],
             schema_min: 1,
             schema_max: 1,
@@ -125,6 +132,15 @@ pub enum TokenScope {
 }
 
 impl TokenScope {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "read" => Some(Self::Read),
+            "write" => Some(Self::Write),
+            "admin" => Some(Self::Admin),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -144,6 +160,7 @@ pub struct Principal {
 pub enum CreateAccountOutcome {
     Created(Principal),
     NameTaken,
+    Forbidden,
 }
 
 pub struct DirectoryCell {
@@ -160,7 +177,7 @@ impl DirectoryCell {
         })
     }
 
-    /// Creates one account and its first token or returns the existing identity.
+    /// Creates a bootstrap account through a trusted Directory capability.
     pub async fn create_account(
         &self,
         identity: MutationIdentity,
@@ -168,23 +185,78 @@ impl DirectoryCell {
         token_digest: [u8; 32],
         scope: TokenScope,
     ) -> Result<Committed<CreateAccountOutcome>, InvocationError<Vec<SqlResultSet>>> {
+        self.create_account_inner(identity, name, token_digest, scope, None)
+            .await
+    }
+
+    /// Creates an account only while the site's authorizing admin credential is active.
+    pub async fn create_account_authorized(
+        &self,
+        identity: MutationIdentity,
+        authority: TokenAuthority<'_>,
+        token_digest: [u8; 32],
+        scope: TokenScope,
+    ) -> Result<Committed<CreateAccountOutcome>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(authority.site_owner).map_err(InvocationError::NotStarted)?;
+        self.create_account_inner(
+            identity,
+            authority.account,
+            token_digest,
+            scope,
+            Some((authority.actor_digest, authority.site_owner)),
+        )
+        .await
+    }
+
+    async fn create_account_inner(
+        &self,
+        identity: MutationIdentity,
+        name: &str,
+        token_digest: [u8; 32],
+        scope: TokenScope,
+        authority: Option<([u8; 32], &str)>,
+    ) -> Result<Committed<CreateAccountOutcome>, InvocationError<Vec<SqlResultSet>>> {
         validate_component(name).map_err(InvocationError::NotStarted)?;
+        // Only trusted bootstrap bypasses an existing credential. HTTP account
+        // creation rechecks the site admin in the transaction that issues its token.
+        let authorized = "?6 IS NULL OR EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?6 AND t.account = ?7 AND t.scope = 'admin' AND t.enabled = 1 AND a.enabled = 1)";
+        let parameters = vec![
+            SqlValue::Text(name.into()),
+            SqlValue::Blob(token_digest.to_vec()),
+            SqlValue::Text(scope.as_str().into()),
+            SqlValue::Blob(identity.request_id.as_bytes().to_vec()),
+            SqlValue::Integer(identity.issued_at_ms),
+            authority.map_or(SqlValue::Null, |(digest, _)| {
+                SqlValue::Blob(digest.to_vec())
+            }),
+            authority.map_or(SqlValue::Null, |(_, owner)| SqlValue::Text(owner.into())),
+        ];
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![
+                SqlStatement { sql: format!("SELECT {authorized}"), parameters: parameters.clone() },
                 SqlStatement {
-                    sql: "INSERT INTO accounts (name, enabled) SELECT ?1, 1 WHERE NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?2) ON CONFLICT(name) DO NOTHING".into(),
-                    parameters: vec![SqlValue::Text(name.into()), SqlValue::Blob(token_digest.to_vec())],
+                    sql: format!("INSERT INTO accounts (name, enabled) SELECT ?1, 1 WHERE ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?2) ON CONFLICT(name) DO NOTHING"),
+                    parameters: parameters.clone(),
                 },
                 SqlStatement {
-                    sql: "INSERT INTO access_tokens (digest, account, scope, enabled) SELECT ?2, ?1, ?3, 1 FROM accounts WHERE name = ?1 AND enabled = 1 AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?1) ON CONFLICT(digest) DO NOTHING".into(),
-                    parameters: vec![
-                        SqlValue::Text(name.into()),
-                        SqlValue::Blob(token_digest.to_vec()),
-                        SqlValue::Text(scope.as_str().into()),
-                    ],
+                    sql: format!("INSERT INTO access_tokens (digest, account, scope, enabled, id, created_ms) SELECT ?2, ?1, ?3, 1, ?4, ?5 FROM accounts WHERE name = ?1 AND enabled = 1 AND ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?1) ON CONFLICT DO NOTHING"),
+                    parameters,
                 },
             ],
         }).await?;
+        if !matches!(
+            committed
+                .output
+                .first()
+                .and_then(|set| set.rows.first())
+                .map(Vec::as_slice),
+            Some([SqlValue::Integer(1)])
+        ) {
+            return Ok(Committed {
+                output: CreateAccountOutcome::Forbidden,
+                receipt: committed.receipt,
+            });
+        }
         let authenticated = self
             .authenticate(token_digest, Some(committed.receipt))
             .await?
@@ -222,12 +294,8 @@ impl DirectoryCell {
                     return Err(Error::Command("invalid account row"));
                 };
                 validate_component(account)?;
-                let scope = match scope.as_str() {
-                    "read" => TokenScope::Read,
-                    "write" => TokenScope::Write,
-                    "admin" => TokenScope::Admin,
-                    _ => return Err(Error::Command("invalid token scope")),
-                };
+                let scope =
+                    TokenScope::parse(scope).ok_or(Error::Command("invalid token scope"))?;
                 Ok(Principal {
                     account: account.clone(),
                     scope,

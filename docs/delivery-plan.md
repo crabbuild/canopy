@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts, per-repository Git/LFS roles, default branches and authorized repository list/get survive recovery; account lifecycle and collaborator roster remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts, token issuance/listing/revocation, repository roles, default branches and authorized repository list/get survive recovery; account disable/delete and collaborator roster remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -56,9 +56,9 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account lifecycle, token rotation/revocation, collaborator roster
-   listing, and audit records. Test revocation during in-flight Git and LFS
-   operations, including a node takeover.
+4. Complete account disable/delete, collaborator roster listing and audit records.
+   Tokens now support rotation and revocation. Add expiry and issuance quotas;
+   qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Implement collaboration as vertical slices: issues; checks and branch
    rules; pull requests, reviews and merge; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
@@ -706,3 +706,52 @@ error retains mutation evidence but omits the underlying `OutcomeUnknown`
 source, so the cause remains unresolved. The successful release run does not
 close that fault gate. Canopy continues to reject unproven publication; no
 retry, deadline extension or dependency patch was introduced.
+
+## Durable token lifecycle
+
+Accounts now support multiple scoped credentials with opaque IDs and creation
+timestamps. Admins list, issue and revoke their own account's tokens; the site
+owner can manage all enabled accounts. Listing returns bounded UUID pages of
+metadata without digests or secrets. Exact active issuance retries converge;
+revoked IDs and secrets remain reserved. Rotation uses a separately issued
+replacement, followed by client/deployment updates and revocation of the old ID.
+
+The Directory token module owns transaction-level authorization and the guard
+against revoking the site's final active admin. HTTP token management supplies
+the exact actor digest and site policy from server configuration. The related
+account-creation path now also checks the site-admin credential inside the SQL
+transaction that issues the first token. Trusted startup bootstrap uses the same
+creation implementation without requiring a pre-existing credential. The pinned
+Cellule SQL batch contract executes its statements in one command transaction
+and records the result for command replay; the token decision precedes the
+conditional update so successful self-revocation is not reported as failure.
+
+The HTTP recovery test proves:
+
+- Own-account and site-owner authority, denied foreign administration, insufficient
+  scope and mismatched Basic usernames.
+- Exact issue retries, global digest conflicts, invalid input, bounded ordered
+  pagination over 35 entries, and metadata that contains no digest or secret.
+- Paused token and account creation requests whose credentials are revoked after
+  HTTP authentication cannot issue credentials when their bodies arrive.
+- Two concurrent self-revocations leave one site-admin token active; read-scoped
+  tokens do not satisfy that guard.
+- Stock Git cloning with an issued credential, persistent denial of revoked
+  credentials for Git/LFS, and a successful clone after fresh-owner restore using
+  the rotated configured admin token.
+
+Directory recovery and the existing two-repository Git/LFS test pass, as do
+all-target clippy with warnings denied and the release binary build. The RustFS
+process smoke with `--sqlite-chunks --many-objects 256` also passes: it rotates
+the reader token before restart, confirms the old token stays denied for API,
+Git and LFS after SIGKILL/lease takeover, and clones with the replacement. The
+same run retains the default branch, ACL behavior, 300 refs, SQLite object chunks,
+mixed/atomic ref outcomes and lost-reply replay. Environment: Darwin arm64,
+Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, release build.
+
+This changes the unreleased Directory schema; use a fresh development prefix.
+Deployment configuration must contain an active owner admin token on restart.
+Token revocation blocks new authentication; admitted Git/LFS operations may
+finish subject to current repository ACLs. Account disable/delete, token expiry,
+issuance quotas, retained-record cleanup, collaborator rosters and audit remain
+open. Dependencies and lockfiles are unchanged.
