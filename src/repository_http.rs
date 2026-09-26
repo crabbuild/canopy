@@ -2,6 +2,7 @@
 
 mod authorization;
 mod branch_rules;
+mod browse;
 mod candidates;
 mod checks;
 mod collaborators;
@@ -56,6 +57,9 @@ impl RepositoryHttp {
 
     pub(crate) fn router(self: Arc<Self>) -> Router {
         Router::new()
+            .route("/", get(crate::web::index))
+            .route("/assets/canopy.js", get(crate::web::script))
+            .route("/assets/canopy.css", get(crate::web::styles))
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
             .route("/api/accounts", axum::routing::post(create_account))
@@ -74,6 +78,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}",
                 get(get_repository).patch(rename_repository),
+            )
+            .route(
+                "/api/repositories/{name}/browse",
+                axum::routing::post(browse::browse),
             )
             .route(
                 "/api/repositories/{name}/default-branch",
@@ -724,6 +732,14 @@ fn json_response(status: StatusCode, value: &impl Serialize) -> Response<Body> {
         );
     };
     let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
     *response.status_mut() = status;
     response.headers_mut().insert(
         header::CONTENT_TYPE,

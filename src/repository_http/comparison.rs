@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    comparison::{CompareError, Reader, Side},
+    git_read::{ReadError, Reader, Side},
     pulls::PullRevision,
 };
 use std::time::Duration;
@@ -143,26 +143,26 @@ async fn serve(
         ),
     }
 }
-fn failed(error: CompareError) -> Response<Body> {
+fn failed(error: ReadError) -> Response<Body> {
     let (status, message) = match error {
-        CompareError::Missing => (StatusCode::NOT_FOUND, "Pull request or file is unavailable"),
-        CompareError::Changed => (
+        ReadError::Missing => (StatusCode::NOT_FOUND, "Pull request or file is unavailable"),
+        ReadError::Changed => (
             StatusCode::CONFLICT,
             "Pull request revision changed; read current state",
         ),
-        CompareError::Unrelated => (
+        ReadError::Unrelated => (
             StatusCode::CONFLICT,
             "Source and base have unrelated histories",
         ),
-        CompareError::Ambiguous => (
+        ReadError::Ambiguous => (
             StatusCode::CONFLICT,
             "Comparison requires a unique merge base",
         ),
-        CompareError::TooLarge => (
+        ReadError::TooLarge => (
             StatusCode::PAYLOAD_TOO_LARGE,
             "Comparison exceeds its traversal or output limit",
         ),
-        CompareError::Invalid => (
+        ReadError::Invalid => (
             StatusCode::UNPROCESSABLE_ENTITY,
             "Invalid comparison revision or path",
         ),

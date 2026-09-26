@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates implemented; rebase, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates and repository browser implemented; rebase, releases and collaboration UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -60,7 +60,7 @@ separate product decisions.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; text patches;
-   issue labels/assignees; releases and assets; UI. Each
+   issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
 
 Keep LFS bodies and unreferenced Git objects under conservative retention
@@ -1226,3 +1226,65 @@ retention/quotas, backup/GC, multi-node routing, audit/observability and measure
 capacity. Public visibility, organizations, search, webhooks and account
 lifecycle remain. Hosted CI needs a Canopy remote. All gates above remain open
 until their full acceptance proof is recorded.
+
+
+## Repository browser and embedded interface
+
+Canopy now serves an embedded repository interface at `/`. Its bearer-authenticated
+API reads verified SQLite objects directly, with no bare-cache hydration. Default
+HEAD resolves atomically to a ref tip; immutable commit/tag roots pin tree, file
+and first-parent history pages through later branch movement. Raw-byte paths and
+commit metadata preserve non-UTF-8 data. The shared Git reader now owns both PR
+comparisons and browsing; comparison limits and behavior stay unchanged.
+
+The UI connects with a memory-only token, lists/creates repositories, selects
+branches/tags, navigates directories, displays literal file content and follows
+history. Merge commits expose all parents. Empty/loading/error states reach the
+real API. Logout aborts requests, clears content and invalidates old-session
+replies. CSP, no-store and text-only rendering protect repository-supplied bytes.
+No frontend framework, runtime dependency, lockfile or schema change was added.
+
+Verified on Darwin arm64, Apple Git 2.50.1:
+
+- Four focused Git-reader unit tests: native permission normalization, raw names,
+  merge-base selection, and commit header/graph boundaries.
+- Browser integration: 44-entry paginated trees, 32-entry history pages matching
+  stock `git log --first-parent`, ordered merge parents, nested files, binary and
+  non-UTF-8 bytes, executable/symlink/Gitlink modes, annotated tags, large-file
+  metadata, stale ref cursors, grant revocation during paused uploads, invalid
+  paths, response headers, and identical snapshots after fresh-local recovery.
+- Three existing comparison integrations: changed-file/file-byte equivalence,
+  wide and criss-cross histories, ambiguity/unrelated behavior, and oversized
+  change-set rejection. Shared transfer overload integration also passes.
+- Clippy with warnings denied, Rust formatting, JavaScript syntax, Python probe
+  parsing, and the release binary build pass.
+- Release process probe against RustFS `1.0.0-beta.8-glibc` with
+  `--sqlite-chunks --many-objects 256`: pinned tree/file/history snapshots and
+  static UI assets match after clean restart, fresh local storage, SIGKILL and
+  lease takeover. Existing Git/LFS, replay, checks/rules, issue/pull/review,
+  merge/squash candidates, token/ACL, chunked objects and 300-ref proof passes.
+  The runner exits successfully; provider fresh-volume diagnostics are unchanged.
+- Live Chrome with that release binary: rejected-token feedback, successful
+  login, API-backed repository creation, branch/tag selection, nested file
+  navigation, human-readable history, keyboard skip, explicit logout, and no
+  retained login after reload. Inspected desktop and 390×844 mobile views; mobile
+  history and file pages have no document-level horizontal overflow. Hostile HTML
+  is literal text with zero script/image nodes. No page console errors observed.
+
+Saved-download verification remains a gap: the browser download event timed out,
+then browser security policy denied access to Chrome's downloads page. The UI
+provides an octet-stream blob link; API tests prove its source bytes, but a saved
+file was not confirmed in this environment. Other browsers, complete accessibility
+and resource/capacity matrices still need qualification.
+
+The added implementation is approximately 590 Rust lines for bounded browse
+records/queries, HTTP admission and static assets, plus the dependency-free web
+interface. Existing graph/tree/object mechanics moved into one shared reader;
+they were not duplicated. This growth delivers the first usable repository UI.
+
+Completion audit: verified progress on gate 7; the full hosting goal remains
+active. Collaboration editors, text patches/line discussions, rebase/conflict
+resolution, releases/assets, public visibility, organizations, search and
+webhooks remain. Operations work still includes native peak resource bounds,
+fault injection, retention/quotas, backup/GC, multi-node routing, audit/metrics
+and production capacity. Hosted CI still needs a Canopy remote.

@@ -1,5 +1,6 @@
-//! Bounded immutable PR comparison over verified Cell Git objects.
+//! Bounded repository browsing and PR comparison over verified Cell Git objects.
 
+pub(crate) mod browse;
 mod graph;
 mod trees;
 
@@ -24,8 +25,8 @@ const MAX_CHANGED_FILES: usize = 10_000;
 const MAX_DEPTH: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CompareError {
-    #[error("pull request is unavailable")]
+pub(crate) enum ReadError {
+    #[error("Git view is unavailable")]
     Missing,
     #[error("pull request revision changed")]
     Changed,
@@ -33,15 +34,15 @@ pub(crate) enum CompareError {
     Unrelated,
     #[error("Git history has multiple best common ancestors")]
     Ambiguous,
-    #[error("comparison exceeds its traversal or output limit")]
+    #[error("Git view exceeds its traversal or output limit")]
     TooLarge,
     #[error("invalid comparison input")]
     Invalid,
-    #[error("comparison encountered malformed Git data")]
+    #[error("Git view encountered malformed data")]
     Malformed,
-    #[error("comparison Cell read failed")]
+    #[error("Git Cell read failed")]
     Cell(#[from] InvocationError<Vec<SqlResultSet>>),
-    #[error("comparison worker failed")]
+    #[error("Git read worker failed")]
     Task(#[from] tokio::task::JoinError),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,7 +123,7 @@ impl Reader {
         actor: &str,
         number: i64,
         revision: &PullRevision,
-    ) -> Result<(Oid, Oid), CompareError> {
+    ) -> Result<(Oid, Oid), ReadError> {
         let source = oid(&revision.source_oid)?;
         let base = oid(&revision.base_oid)?;
         let pull = self
@@ -130,7 +131,7 @@ impl Reader {
             .pull(actor, number)
             .await?
             .output
-            .ok_or(CompareError::Missing)?;
+            .ok_or(ReadError::Missing)?;
         let pull = pull.summary;
         if pull.version != revision.pull_version
             || pull.source.oid.as_deref() != Some(&revision.source_oid)
@@ -138,11 +139,11 @@ impl Reader {
             || pull.base.oid.as_deref() != Some(&revision.base_oid)
             || pull.base.version != revision.base_version
         {
-            return Err(CompareError::Changed);
+            return Err(ReadError::Changed);
         }
         Ok((base, source))
     }
-    async fn roots(&mut self, base: Oid, source: Oid) -> Result<(Oid, Oid, Oid), CompareError> {
+    async fn roots(&mut self, base: Oid, source: Oid) -> Result<(Oid, Oid, Oid), ReadError> {
         let merge_base = self.merge_base(base, source).await?;
         let before = self.commit_tree(merge_base).await?;
         let after = self.commit_tree(source).await?;
@@ -154,7 +155,7 @@ impl Reader {
         number: i64,
         revision: PullRevision,
         after: Option<&str>,
-    ) -> Result<Comparison, CompareError> {
+    ) -> Result<Comparison, ReadError> {
         let cursor = after.map(path).transpose()?;
         let (base, source) = self.authorize(actor, number, &revision).await?;
         let (merge_base, before, after) = self.roots(base, source).await?;
@@ -194,7 +195,7 @@ impl Reader {
         revision: PullRevision,
         encoded_path: &str,
         side: Side,
-    ) -> Result<FilePreview, CompareError> {
+    ) -> Result<FilePreview, ReadError> {
         let path = path(encoded_path)?;
         let (base, source) = self.authorize(actor, number, &revision).await?;
         let (merge_base, before, after) = self.roots(base, source).await?;
@@ -205,7 +206,8 @@ impl Reader {
         let entry = self
             .resolve(root, &path)
             .await?
-            .ok_or(CompareError::Missing)?;
+            .filter(|entry| !entry.is_tree())
+            .ok_or(ReadError::Missing)?;
         let (size, content_status, content_base64) = if entry.mode & 0o170000 == 0o160000 {
             (None, "gitlink", None)
         } else {
@@ -229,7 +231,7 @@ impl Reader {
             content_base64,
         })
     }
-    async fn size(&self, oid: Oid, kind: ObjectKind) -> Result<u64, CompareError> {
+    async fn size(&self, oid: Oid, kind: ObjectKind) -> Result<u64, ReadError> {
         let result = self
             .repository
             .sql
@@ -249,7 +251,7 @@ impl Reader {
             .and_then(|set| set.rows.first())
             .map(Vec::as_slice)
         else {
-            return Err(CompareError::Malformed);
+            return Err(ReadError::Malformed);
         };
         let expected = match kind {
             ObjectKind::Blob => "blob",
@@ -258,14 +260,14 @@ impl Reader {
             ObjectKind::Tag => "tag",
         };
         if stored_kind != expected {
-            return Err(CompareError::Malformed);
+            return Err(ReadError::Malformed);
         }
-        u64::try_from(*size).map_err(|_| CompareError::Malformed)
+        u64::try_from(*size).map_err(|_| ReadError::Malformed)
     }
-    async fn body(&mut self, oid: Oid, kind: ObjectKind) -> Result<Vec<u8>, CompareError> {
+    async fn body(&mut self, oid: Oid, kind: ObjectKind) -> Result<Vec<u8>, ReadError> {
         let size = self.size(oid, kind).await?;
         if size > MAX_OBJECT_BYTES || size > MAX_TREE_BYTES.saturating_sub(self.bytes) {
-            return Err(CompareError::TooLarge);
+            return Err(ReadError::TooLarge);
         }
         self.bytes += size;
         let (stored_kind, body) = self
@@ -273,36 +275,36 @@ impl Reader {
             .object(oid, None)
             .await?
             .output
-            .ok_or(CompareError::Malformed)?;
+            .ok_or(ReadError::Malformed)?;
         if stored_kind != kind || body.len() as u64 != size {
-            return Err(CompareError::Malformed);
+            return Err(ReadError::Malformed);
         }
         Ok(body)
     }
-    async fn commit_tree(&mut self, oid: Oid) -> Result<Oid, CompareError> {
+    async fn commit_tree(&mut self, oid: Oid) -> Result<Oid, ReadError> {
         let body = self.body(oid, ObjectKind::Commit).await?;
         let line = body
             .split(|byte| *byte == b'\n')
             .next()
-            .ok_or(CompareError::Malformed)?;
-        let tree = line.strip_prefix(b"tree ").ok_or(CompareError::Malformed)?;
-        let tree = std::str::from_utf8(tree).map_err(|_| CompareError::Malformed)?;
-        oid_from_bytes(tree).ok_or(CompareError::Malformed)
+            .ok_or(ReadError::Malformed)?;
+        let tree = line.strip_prefix(b"tree ").ok_or(ReadError::Malformed)?;
+        let tree = std::str::from_utf8(tree).map_err(|_| ReadError::Malformed)?;
+        oid_from_bytes(tree).ok_or(ReadError::Malformed)
     }
 }
 fn oid_from_bytes(value: &str) -> Option<Oid> {
     parse_oid(value)?.try_into().ok()
 }
-fn oid(value: &str) -> Result<Oid, CompareError> {
-    oid_from_bytes(value).ok_or(CompareError::Invalid)
+fn oid(value: &str) -> Result<Oid, ReadError> {
+    oid_from_bytes(value).ok_or(ReadError::Invalid)
 }
-fn path(value: &str) -> Result<Vec<u8>, CompareError> {
+fn path(value: &str) -> Result<Vec<u8>, ReadError> {
     if value.len() > MAX_PATH.div_ceil(3) * 4 {
-        return Err(CompareError::Invalid);
+        return Err(ReadError::Invalid);
     }
     let bytes = URL_SAFE_NO_PAD
         .decode(value)
-        .map_err(|_| CompareError::Invalid)?;
+        .map_err(|_| ReadError::Invalid)?;
     if bytes.is_empty()
         || bytes.len() > MAX_PATH
         || bytes.contains(&0)
@@ -311,7 +313,7 @@ fn path(value: &str) -> Result<Vec<u8>, CompareError> {
             .any(|part| part.is_empty() || part == b"." || part == b"..")
         || URL_SAFE_NO_PAD.encode(&bytes) != value
     {
-        return Err(CompareError::Invalid);
+        return Err(ReadError::Invalid);
     }
     Ok(bytes)
 }

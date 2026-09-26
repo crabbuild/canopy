@@ -8,7 +8,7 @@ const PAGE: usize = 512;
 type Graph = HashMap<Oid, Vec<Oid>>;
 
 impl Reader {
-    pub(super) async fn merge_base(&self, base: Oid, source: Oid) -> Result<Oid, CompareError> {
+    pub(super) async fn merge_base(&self, base: Oid, source: Oid) -> Result<Oid, ReadError> {
         if base == source {
             return Ok(base);
         }
@@ -39,31 +39,31 @@ impl Reader {
                 let result = self.repository.sql.query(None,SqlBatch { statements:vec![SqlStatement {
                     sql:format!("SELECT child, parent FROM commit_parents WHERE child IN ({placeholders}) AND (child > ?1 OR (child = ?1 AND parent > ?2)) ORDER BY child, parent LIMIT {PAGE}"),parameters,
                 }] }).await?;
-                let rows = &result.output.first().ok_or(CompareError::Malformed)?.rows;
+                let rows = &result.output.first().ok_or(ReadError::Malformed)?.rows;
                 for row in rows {
                     let [SqlValue::Blob(child), SqlValue::Blob(parent)] = row.as_slice() else {
-                        return Err(CompareError::Malformed);
+                        return Err(ReadError::Malformed);
                     };
                     let child: Oid = child
                         .as_slice()
                         .try_into()
-                        .map_err(|_| CompareError::Malformed)?;
+                        .map_err(|_| ReadError::Malformed)?;
                     let parent: Oid = parent
                         .as_slice()
                         .try_into()
-                        .map_err(|_| CompareError::Malformed)?;
+                        .map_err(|_| ReadError::Malformed)?;
                     edges += 1;
                     if edges > MAX_EDGES {
-                        return Err(CompareError::TooLarge);
+                        return Err(ReadError::TooLarge);
                     }
                     graph
                         .get_mut(&child)
-                        .ok_or(CompareError::Malformed)?
+                        .ok_or(ReadError::Malformed)?
                         .push(parent);
                     cursor = Some((child, parent));
                     if discovered.insert(parent) {
                         if discovered.len() > MAX_COMMITS {
-                            return Err(CompareError::TooLarge);
+                            return Err(ReadError::TooLarge);
                         }
                         pending.push(parent);
                     }
@@ -81,7 +81,7 @@ impl Reader {
         .await?
     }
 }
-fn best_common(graph: Graph, base: Oid, source: Oid) -> Result<Oid, CompareError> {
+fn best_common(graph: Graph, base: Oid, source: Oid) -> Result<Oid, ReadError> {
     let mut flags = HashMap::<Oid, u8>::new();
     let mut pending = vec![(base, 1), (source, 2)];
     while let Some((oid, flag)) = pending.pop() {
@@ -90,7 +90,7 @@ fn best_common(graph: Graph, base: Oid, source: Oid) -> Result<Oid, CompareError
             continue;
         }
         *current |= flag;
-        for parent in graph.get(&oid).ok_or(CompareError::Malformed)? {
+        for parent in graph.get(&oid).ok_or(ReadError::Malformed)? {
             pending.push((*parent, flag));
         }
     }
@@ -103,30 +103,18 @@ fn best_common(graph: Graph, base: Oid, source: Oid) -> Result<Oid, CompareError
     let mut inferior = HashSet::new();
     let mut pending = Vec::new();
     for oid in &common {
-        pending.extend(
-            graph
-                .get(oid)
-                .ok_or(CompareError::Malformed)?
-                .iter()
-                .copied(),
-        );
+        pending.extend(graph.get(oid).ok_or(ReadError::Malformed)?.iter().copied());
     }
     while let Some(oid) = pending.pop() {
         if !inferior.insert(oid) {
             continue;
         }
-        pending.extend(
-            graph
-                .get(&oid)
-                .ok_or(CompareError::Malformed)?
-                .iter()
-                .copied(),
-        );
+        pending.extend(graph.get(&oid).ok_or(ReadError::Malformed)?.iter().copied());
     }
     let mut best = common.into_iter().filter(|oid| !inferior.contains(oid));
-    let first = best.next().ok_or(CompareError::Unrelated)?;
+    let first = best.next().ok_or(ReadError::Unrelated)?;
     if best.next().is_some() {
-        return Err(CompareError::Ambiguous);
+        return Err(ReadError::Ambiguous);
     }
     Ok(first)
 }
@@ -150,11 +138,11 @@ mod tests {
         cross.insert(d, vec![b, a]);
         assert!(matches!(
             best_common(cross, c, d),
-            Err(CompareError::Ambiguous)
+            Err(ReadError::Ambiguous)
         ));
         assert!(matches!(
             best_common(Graph::from([(a, vec![]), (b, vec![])]), a, b),
-            Err(CompareError::Unrelated)
+            Err(ReadError::Unrelated)
         ));
     }
 }

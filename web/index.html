@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Canopy · Repositories</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/canopy.css">
+<script src="/assets/canopy.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar">
+<a class="brand" href="#" aria-label="Canopy repositories"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 27V6M16 18 6 10M16 22l10-8"/><circle cx="16" cy="5" r="3"/><circle cx="5" cy="9" r="3"/><circle cx="27" cy="13" r="3"/></svg>Canopy</a>
+<span class="top-caption">A home for your code</span>
+<button id="disconnect" class="quiet" hidden>Disconnect</button>
+</header>
+<main id="content" tabindex="-1">
+<section id="login" class="login-panel">
+<div class="login-intro"><p class="eyebrow">Repository workspace</p><h1>Open your Canopy.</h1><p>Browse code, follow its history, and find your next change.</p></div>
+<form id="connect-form"><h2>Connect with an access token</h2><label for="token">Access token</label><input id="token" name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="Paste your token"><p class="hint">Your token stays in memory for this tab. Disconnect to clear it.</p><button type="submit" class="primary">Connect</button></form>
+</section>
+<section id="workspace" class="workspace" hidden>
+<aside class="sidebar" aria-label="Repository navigation"><div class="sidebar-heading"><h2>Repositories</h2><button id="new-repo" class="quiet" aria-label="Create repository">＋</button></div><nav id="repositories" aria-label="Repositories"></nav><button id="more-repos" class="quiet" hidden>Load more repositories</button><p class="sidebar-note">Private by default.<br>Ready when you are.</p></aside>
+<section class="repository-panel"><div id="view" aria-live="polite"></div></section>
+</section>
+<p id="notice" role="status" class="notice" hidden></p>
+</main>
+<dialog id="create-dialog"><form id="create-form"><h2>Create a repository</h2><label for="repo-name">Repository name</label><input id="repo-name" name="name" required maxlength="64" pattern="[a-z0-9_.\-]+" placeholder="my-project" autocomplete="off"><p class="hint">Lowercase letters, numbers, dots, underscores and hyphens. Requires an owner token.</p><p id="create-error" class="error" role="alert"></p><div class="actions"><button id="cancel-create" type="button" class="quiet">Cancel</button><button type="submit" class="primary">Create repository</button></div></form></dialog>
+<noscript><p class="notice">Enable JavaScript to browse repositories. Git smart HTTP remains available without JavaScript.</p></noscript>
+</body>
+</html>

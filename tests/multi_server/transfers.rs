@@ -51,6 +51,14 @@ async fn transfers_share_node_admission_and_disconnect_allows_retry()
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()["retry-after"], "1");
     }
+    let response = client
+        .post(format!("http://{address}/api/repositories/first/browse"))
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["retry-after"], "1");
     for operation in ["comparison", "merge", "merge-candidates"] {
         let response = client
             .post(format!(

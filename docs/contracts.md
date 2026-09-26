@@ -901,7 +901,7 @@ No aggregate approval count, mergeability or diff computation runs on these read
 Fast-forward merge publication rechecks current review requirements, grant/ref/pull
 versions and branch checks in the transaction that advances the base ref and marks
 the pull merged, as specified below. Required-PR branches reject direct pushes.
-Text patches, general file browsing, inline threads, rebase, conflict-resolution UI,
+Text patches, inline threads, rebase, conflict-resolution UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications and UI remain open. A future collector must retain initial pull
 OIDs, historical review OIDs, merge result OIDs and merge preparation roots in addition to live refs.
@@ -1175,3 +1175,89 @@ No GC runs today. Abandoned pending rows, ready refs, external orphan objects an
 historic candidates need quota/retention policy before persistent public use.
 Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
 codec 2 require a fresh development prefix. No dependency or lockfile changes.
+
+
+## Repository browser
+
+`POST /api/repositories/<name>/browse` requires a read-scoped token, current
+membership, the canonical `repository_id` UUID from discovery and a `query`.
+A different UUID returns 409; malformed input returns 422. The response is
+`{"repository_id":"<UUID>","view":{"<view name>":{...}}}`. The queries are:
+
+| Query | View name | Contract |
+| --- | --- | --- |
+| `{"kind":"resolve","reference":null}` | `resolved` | Resolve durable default HEAD; a full ref name selects that ref instead |
+| `{"kind":"refs","after":null,"generation":null}` | `refs` | Up to 256 ref records examined in name order |
+| `{"kind":"tree","commit":"<OID>","path_base64":"","after":null}` | `tree` | Root directory, or the directory at the raw-byte path |
+| `{"kind":"file","commit":"<OID>","path_base64":"<path>"}` | `file` | One blob/symlink/Gitlink entry |
+| `{"kind":"history","commit":"<OID>"}` | `history` | Up to 32 commits following only the first parent |
+
+`resolved` contains `reference`, nullable `oid`/`version`, and `generation`.
+Default HEAD and its ref tip come from one SQL observation. A missing/deleted
+reference returns null OID. Subsequent tree/file/history queries use the returned
+lowercase SHA-1 object ID, preserving that snapshot through ref changes.
+Annotated tags are peeled to commits, with at most 16 object visits. Tags to
+blobs/trees are not supported browser roots and return 404. A certified commit
+can be read by members even after it becomes unreachable from current refs;
+the browser does not make per-ref access promises. Uncertified staged roots are
+not readable. Existing object readers verify hashes and chunk completeness.
+
+Ref pages return `generation`, `default_branch`, live `entries` containing
+`name`, `oid` and `version`, and `next_after`. Deleted refs consume examination
+capacity but are omitted from entries; empty pages can have a continuation.
+Pass both `next_after` and the unchanged generation for continuation. Any ref or
+HEAD movement returns 409; restart enumeration. The selected ref observation and
+ref-list page are independent; they do not form a transaction across requests.
+
+Tree pages return root `commit` metadata, `path_base64`, directory `tree_oid`,
+up to 32 `entries`, and `next_after`. Entries have `name_base64`, nullable UTF-8
+`name`, full `path_base64`, `kind` (`tree`, `file`, `symlink`, `gitlink`), canonical
+six-digit octal `mode` and `oid`. Ordering is raw basename byte order, without a
+directories-first grouping. `next_after` is the last basename, encoded with
+URL-safe unpadded base64. Keep the same commit/path when paging. Nonempty paths
+use that same canonical base64 encoding, up to 4,096 decoded bytes and 128
+components; empty tree path selects the root. Slash, dot/dot-dot, empty and NUL
+components are rejected; file paths cannot be empty. Invalid cursors return 422.
+
+File views return peeled `commit`, `path_base64`, nullable UTF-8 `path`, `mode`,
+`oid`, nullable `size`, `content_status` and nullable `content_base64`. At most
+256 KiB of verified blob content is included. Larger blobs return `too_large`
+and metadata without reading external payloads. Gitlinks return `gitlink` with
+no bytes/size; symlinks return their target bytes without following them.
+
+Commit records contain `oid`, `tree_oid`, ordered `parents`, optional raw
+`author_base64`/`committer_base64`, `message_base64` and `message_truncated`.
+Tree and contiguous parent headers follow [native Git parsing order](https://github.com/git/git/blob/v2.50.1/commit.c); later
+headers or message/signature text cannot invent graph edges. Author/committer
+headers are limited to 4 KiB each, parents to 2,048 per commit. Messages contain
+at most the first 4 KiB of bytes and need not be UTF-8. History is explicitly
+first-parent, not a topologically sorted traversal of all reachable commits.
+`next_commit` selects the next page; clients may follow any returned parent.
+
+Reads check membership before and after traversal. Token admission follows the
+existing Directory-token contract: revocation prevents new admissions, while an
+already admitted request may finish. A revoked Repository Cell grant fails the
+final membership check. Missing/inaccessible roots and entries return 404;
+resource ceilings return 413; unavailable Cell/data returns 503; the 120-second
+work deadline returns 504. Bodies are limited to 32 KiB with a 30-second deadline.
+The shared reader limits each object to 8 MiB, aggregate reads to 64 MiB and tree
+entries to 250,000. Limits fail the whole view without a partial page. Parsing
+runs on blocking workers retaining the request's admission permit. Browse shares
+the eight-transfer node limit with Git/LFS/comparisons; 503 includes Retry-After
+when all permits are occupied. Reads do not hydrate a bare Git cache.
+
+The embedded `/` interface and `/assets/canopy.{js,css}` are public static
+resources. Repository JSON requires bearer authentication. JSON and assets
+carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`; assets
+also carry a restrictive CSP, no-referrer and no-frame-ancestors policy.
+Tokens exist only in tab memory, with no cookies/local storage or URL token.
+Disconnect aborts work, clears repository content and revokes download URLs;
+responses from previous sessions cannot repopulate the new session. Blob
+previews use text nodes and downloads use octet-stream object URLs. Raw HTML is
+inert. Names escape control/bidirectional characters; non-UTF-8 names display
+escaped bytes. The UI never opens repository-supplied links automatically.
+
+This adds no schema/command/dependency change. The canonical verified Git reader
+is shared by browsing and PR comparison. Collaboration editors, complete DAG
+history, syntax highlighting, large-file streaming downloads, rendered Markdown
+and production browser/capacity matrices remain outside the current browser.

@@ -20,6 +20,27 @@ authority, and a bare Git repository is only a rebuildable cache. Integration
 tests use stock `git` and `git-lfs` clients to push and clone, including a
 restart with a fresh local SQLite file.
 
+### Repository browser
+
+Open `/` on the Canopy HTTP listener and connect using your existing access
+token. The embedded interface lists authorized repositories, creates repositories
+with an owner token, selects branches/tags, browses directories, previews or
+downloads small files, and follows first-parent commit history. Merge commits
+link to each parent. No separate frontend build or asset service is required.
+The token remains in tab memory and clears on disconnect or reload. Use HTTPS
+at the deployment ingress. Repository text is displayed literally; HTML,
+Markdown, symlinks, submodules and LFS pointers are never executed or followed.
+
+Views pin an immutable object ID after selecting a reference. Use **Refresh
+branch** to resolve its latest tip. Directory/history pages contain up to 32
+entries; previews/downloads contain at most 256 KiB. Larger files require Git.
+This interface currently covers repository creation and browsing; issues, pull
+requests, checks, reviews and access management remain API operations.
+See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
+paths, pagination, limits and authorization behavior.
+
+### Repository API
+
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`
 lists ready repositories that the authenticated account can access. Pass the
@@ -364,8 +385,8 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account disable/delete API, organization model, multi-node routing, backup,
-repository browser or production capacity evidence.
+account disable/delete API, organization model, multi-node routing, backup
+or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.
 
