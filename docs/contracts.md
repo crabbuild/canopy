@@ -159,8 +159,9 @@ deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
 the Cell node. Owner initialization retains an acquired entry on failure and
-retries its idempotent setup on later access. The residency bound does not yet
-account Git cache bytes or establish throughput for a larger concurrent hot set.
+retries its idempotent setup on later access. The residency bound does not
+establish throughput for a larger concurrent hot set. Disposable Git files use
+the same shared disk admission described below.
 
 Token scope is checked at request admission. Repository write access is also
 checked in the ref or LFS metadata transaction, so an intervening collaborator
@@ -254,9 +255,37 @@ No Git objects or refs are published from an incomplete HTTP upload.
 
 Push reports, LFS transfers and individual object hydration still allocate
 bounded whole buffers. Cold fetches still rebuild the complete bare cache.
-Request spools and SQLite share admission, but bare-cache bytes still need
-accounting, and process/client concurrency and production throughput remain
-unqualified. Spooling adds a local-file pass before Git can begin pack ingestion.
+Process/client concurrency and production throughput remain unqualified.
+Spooling adds a local-file pass before Git can begin pack ingestion.
+
+### Disposable Git cache admission
+
+Cache construction reserves logical file bytes before writing its bare config,
+HEAD, compressed loose objects and loose refs. The layout follows Git's
+[repository format](https://git-scm.com/docs/gitrepository-layout). Construction
+does not invoke `git init` or copy template hooks. Each cache generation owns
+its directory and reservation; warm caches remain charged between requests.
+Replacing a generation releases an unused old cache before building the next;
+active readers retain their old generation. Blocking hydration workers also
+retain ownership when their caller is cancelled. Process guards signal Git
+before dropping cache and input owners on cancellation. Git hooks and receive
+auto-GC are disabled for these disposable repositories.
+
+After receive-pack finishes, Canopy measures its actual cache file lengths and
+resizes the reservation before staging Git objects, push replies or ref changes.
+Admission failure returns HTTP 507 and publishes no ref change or completed
+push outcome. Retrying the same request identity can succeed after capacity is
+freed. Hydration admission failure also returns 507 and discards the incomplete
+cache. Cache deletion precedes releasing its reservation; if deletion fails,
+the charge is retained for the remainder of the process lifetime.
+
+This accounts retained caches and bounds Canopy's hydration writes. It does
+**not** impose a hard limit on native Git's peak scratch usage: native writes
+are measured after execution, and a rejected push can temporarily exceed the
+budget. File lengths also exclude filesystem allocation and inode overhead.
+Crash-left directories and cleanup-failure charges need startup reconciliation;
+native scratch enforcement remains a release gate. These reservations are
+shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The module
 descriptor and object paths will become compatibility boundaries at the first

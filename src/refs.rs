@@ -367,7 +367,7 @@ fn namespace_conflict(left: &str, right: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-fn valid_ref_name(name: &str) -> bool {
+pub(crate) fn valid_ref_name(name: &str) -> bool {
     if !name.starts_with("refs/")
         || name.len() > MAX_REF_NAME_BYTES
         || name.ends_with('/')

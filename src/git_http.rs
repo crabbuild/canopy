@@ -5,12 +5,15 @@ use std::{
     path::PathBuf,
     pin::Pin,
     process::Stdio,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 
-use crate::git_input::GitInput;
+pub use crate::git_cache::CacheError;
+use crate::{git_cache::GitCache, git_input::GitInput};
 use bytes::Bytes;
+use cellule_ltx::DiskBudget;
 use futures_core::Stream;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -27,6 +30,8 @@ const MAX_CGI_HEADER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHttpError {
+    #[error("Git cache failed")]
+    Cache(#[from] CacheError),
     #[error("Git process I/O failed")]
     Io(#[from] std::io::Error),
     #[error("Git process exited unsuccessfully: {status}: {stderr}")]
@@ -66,44 +71,22 @@ pub struct GitHttpResponse<B = Vec<u8>> {
 
 /// Disposable bare repository used only while serving Git wire requests.
 pub struct GitHttpBackend {
-    project_root: PathBuf,
+    pub(crate) cache: Arc<GitCache>,
 }
 
 impl GitHttpBackend {
     pub(crate) fn git_dir(&self) -> PathBuf {
-        self.project_root.join("repo.git")
+        self.cache.git_dir()
     }
 
-    /// Creates a new empty bare cache at `<root>/repo.git`.
-    pub async fn initialize(project_root: PathBuf) -> Result<Self, GitHttpError> {
-        tokio::fs::create_dir_all(&project_root).await?;
-        let output = Command::new("git")
-            .arg("init")
-            .arg("--bare")
-            .arg(project_root.join("repo.git"))
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(GitHttpError::GitExit {
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        let output = Command::new("git")
-            .arg("--git-dir")
-            .arg(project_root.join("repo.git"))
-            .arg("symbolic-ref")
-            .arg("HEAD")
-            .arg("refs/heads/main")
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(GitHttpError::GitExit {
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-        Ok(Self { project_root })
+    /// Creates an owned bare cache beneath the scratch root using shared disk admission.
+    pub async fn initialize(
+        scratch_root: PathBuf,
+        budget: DiskBudget,
+    ) -> Result<Self, GitHttpError> {
+        Ok(Self {
+            cache: GitCache::create(scratch_root, budget).await?,
+        })
     }
 
     /// Runs Git and collects a bounded reply for durable push publication.
@@ -122,6 +105,7 @@ impl GitHttpBackend {
             }
             bytes.extend_from_slice(&chunk);
         }
+        self.cache.reconcile().await?;
         Ok(GitHttpResponse {
             status,
             headers,
@@ -145,9 +129,19 @@ impl GitHttpBackend {
         // The cache's synthetic HEAD must not protect a branch by name.
         // Repository policy belongs in the Cell ref transaction.
         process
-            .args(["-c", "receive.denyDeleteCurrent=ignore"])
+            .args([
+                "-c",
+                "receive.denyDeleteCurrent=ignore",
+                "-c",
+                "receive.autogc=false",
+            ])
+            .arg("-c")
+            .arg(format!(
+                "core.hooksPath={}",
+                self.git_dir().join("hooks").display()
+            ))
             .arg("http-backend")
-            .env("GIT_PROJECT_ROOT", &self.project_root)
+            .env("GIT_PROJECT_ROOT", self.cache.root())
             .env("GIT_HTTP_EXPORT_ALL", "1")
             .env("REQUEST_METHOD", &request.method)
             .env("PATH_INFO", &request.path_info)
@@ -169,7 +163,7 @@ impl GitHttpBackend {
         }
         start_stream(
             process,
-            (keep_alive, request.body),
+            (keep_alive, Arc::clone(&self.cache), request.body),
             Duration::from_secs(120),
         )
         .await
@@ -215,7 +209,7 @@ async fn start_stream<T: Send + 'static>(
     keep_alive: T,
     deadline: Duration,
 ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
-    let mut process = GitProcess::spawn(&mut command)?;
+    let mut process = GitProcess::spawn(&mut command, keep_alive)?;
     let stdout = process
         .child
         .stdout
@@ -229,9 +223,6 @@ async fn start_stream<T: Send + 'static>(
     let (head_sender, head_receiver) = oneshot::channel();
     let (sender, receiver) = mpsc::channel(4);
     let task = tokio::spawn(async move {
-        // A cache may be replaced while this client is still reading its snapshot.
-        // Retain the caller's owner until every subprocess has finished using it.
-        let _keep_alive = keep_alive;
         let mut head_sender = Some(head_sender);
         let run = async {
             let read_stdout = async {
@@ -308,14 +299,16 @@ async fn start_stream<T: Send + 'static>(
     })
 }
 
-struct GitProcess {
+struct GitProcess<T> {
     child: Child,
     #[cfg(unix)]
     group: Option<i32>,
+    // Drop signals the process group before fields release cache and input owners.
+    _keep_alive: T,
 }
 
-impl GitProcess {
-    fn spawn(command: &mut Command) -> Result<Self, GitHttpError> {
+impl<T> GitProcess<T> {
+    fn spawn(command: &mut Command, keep_alive: T) -> Result<Self, GitHttpError> {
         #[cfg(unix)]
         command.process_group(0);
         let child = command.kill_on_drop(true).spawn()?;
@@ -328,6 +321,7 @@ impl GitProcess {
             child,
             #[cfg(unix)]
             group,
+            _keep_alive: keep_alive,
         })
     }
 
@@ -339,7 +333,7 @@ impl GitProcess {
     }
 }
 
-impl Drop for GitProcess {
+impl<T> Drop for GitProcess<T> {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(group) = self.group {

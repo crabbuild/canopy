@@ -4,7 +4,11 @@ use canopy_server::git_http::{GitHttpBackend, GitHttpRequest};
 async fn git_backend_advertises_smart_fetch_and_authenticated_push()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
-    let backend = GitHttpBackend::initialize(root.path().to_path_buf()).await?;
+    let backend = GitHttpBackend::initialize(
+        root.path().to_path_buf(),
+        cellule_ltx::DiskBudget::new(1 << 20),
+    )
+    .await?;
     for (service, content_type) in [
         (
             "git-upload-pack",

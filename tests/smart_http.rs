@@ -19,6 +19,9 @@ use tokio::{net::TcpListener, process::Command, sync::oneshot};
 
 mod support;
 
+#[path = "smart_http/cache_admission.rs"]
+mod cache_admission;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -257,6 +260,8 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
                 .output
                 .is_none()
         );
+
+        cache_admission::verify(scratch.path(), &repository, &disk_budget, &client, &url).await?;
 
         let local = scratch.path().join("local");
         run_git(

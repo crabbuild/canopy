@@ -483,6 +483,13 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         Err(GatewayError::RefConflict) => {
             plain(StatusCode::CONFLICT, "Repository changed during push")
         }
+        Err(
+            GatewayError::Cache(error)
+            | GatewayError::Http(crate::git_http::GitHttpError::Cache(error)),
+        ) if error.is_admission() => plain(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "Git cache disk budget exhausted",
+        ),
         Err(GatewayError::Push(crate::PushError::Conflict)) => plain(
             StatusCode::CONFLICT,
             "Push ID is bound to another request or account",

@@ -13,6 +13,7 @@ use sha1::{Digest as _, Sha1};
 
 mod access;
 pub mod directory;
+mod git_cache;
 pub mod git_gateway;
 pub mod git_http;
 pub mod git_input;

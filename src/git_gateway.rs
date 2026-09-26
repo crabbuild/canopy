@@ -3,10 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
-    fs::{self, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
-    process::Stdio,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -14,21 +11,20 @@ use std::{
 use axum::body::Body;
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{MutationIdentity, RequestId};
-use flate2::{Compression, write::ZlibEncoder};
 use object_store::ObjectStore;
-use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
+use tokio::{process::Command, sync::Mutex};
 
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
     RefUpdate, RepositoryCell, StoredObject,
     directory::TokenScope,
+    git_cache::CacheError,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
     git_objects::GitObjects,
     large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore},
     lfs::LfsService,
     object_batch::MAX_OBJECTS,
-    object_id,
     push::{PushCompletion, PushError},
 };
 
@@ -38,6 +34,8 @@ type CellError = Box<dyn StdError + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
+    #[error("Git cache failed")]
+    Cache(#[from] CacheError),
     #[error("Git HTTP backend failed")]
     Http(#[from] GitHttpError),
     #[error("Git request input failed")]
@@ -65,7 +63,6 @@ pub enum GatewayError {
 }
 
 struct CachedRepository {
-    _scratch: tempfile::TempDir,
     backend: GitHttpBackend,
     refs: BTreeMap<String, RefExpectation>,
 }
@@ -136,6 +133,7 @@ impl GitGateway {
                     id,
                 )));
             }
+            self.cache.lock().await.take();
             let cache = self.build_cache(self.cell_refs().await?).await?;
             return self
                 .handle_push(&cache, request, actor, id, digest)
@@ -147,6 +145,7 @@ impl GitGateway {
         let cached = {
             let mut cache = self.cache.lock().await;
             if cache.as_ref().is_none_or(|cached| cached.refs != live_refs) {
+                *cache = None;
                 *cache = Some(Arc::new(self.build_cache(live_refs).await?));
             }
             Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
@@ -238,14 +237,10 @@ impl GitGateway {
         &self,
         refs: BTreeMap<String, RefExpectation>,
     ) -> Result<CachedRepository, GatewayError> {
-        let scratch = tempfile::TempDir::new_in(&self.scratch_root)?;
-        let backend = GitHttpBackend::initialize(scratch.path().to_path_buf()).await?;
+        let backend =
+            GitHttpBackend::initialize(self.scratch_root.clone(), self.disk_budget.clone()).await?;
         self.hydrate(&backend, &refs).await?;
-        Ok(CachedRepository {
-            _scratch: scratch,
-            backend,
-            refs,
-        })
+        Ok(CachedRepository { backend, refs })
     }
 
     async fn hydrate(
@@ -253,7 +248,6 @@ impl GitGateway {
         backend: &GitHttpBackend,
         refs: &BTreeMap<String, RefExpectation>,
     ) -> Result<(), GatewayError> {
-        let git_dir = backend.git_dir();
         let mut after = None;
         loop {
             let next = self
@@ -283,23 +277,12 @@ impl GitGateway {
                         .await?
                 }
             };
-            let git_dir = git_dir.clone();
-            tokio::task::spawn_blocking(move || {
-                write_loose_object(&git_dir, object.oid, object.kind, &body)
-            })
-            .await??;
+            backend
+                .cache
+                .store_object(object.oid, object.kind, body)
+                .await?;
         }
-        if refs.is_empty() {
-            return Ok(());
-        }
-        let mut input = Vec::new();
-        input.extend_from_slice(b"start\n");
-        for (name, state) in refs {
-            let Some(oid) = state.oid else { continue };
-            input.extend_from_slice(format!("update {name} {}\n", hex::encode(oid)).as_bytes());
-        }
-        input.extend_from_slice(b"prepare\ncommit\n");
-        git_with_stdin(&git_dir, &["update-ref", "--stdin"], input).await?;
+        backend.cache.store_refs(refs).await?;
         Ok(())
     }
 
@@ -437,32 +420,6 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
     response
 }
 
-fn write_loose_object(
-    git_dir: &Path,
-    oid: [u8; 20],
-    kind: ObjectKind,
-    body: &[u8],
-) -> Result<(), std::io::Error> {
-    if object_id(kind, body) != oid {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Git OID mismatch",
-        ));
-    }
-    let hex = hex::encode(oid);
-    let directory = git_dir.join("objects").join(&hex[..2]);
-    fs::create_dir_all(&directory)?;
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(directory.join(&hex[2..]))?;
-    let mut encoder = ZlibEncoder::new(file, Compression::default());
-    encoder.write_all(format!("{} {}\0", kind.git_name(), body.len()).as_bytes())?;
-    encoder.write_all(body)?;
-    encoder.finish()?;
-    Ok(())
-}
-
 async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
     let output = Command::new("git")
         .arg("--git-dir")
@@ -476,30 +433,6 @@ async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayErr
         ));
     }
     Ok(output.stdout)
-}
-
-async fn git_with_stdin(git_dir: &Path, args: &[&str], input: Vec<u8>) -> Result<(), GatewayError> {
-    let mut child = Command::new("git")
-        .arg("--git-dir")
-        .arg(git_dir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let Some(mut stdin) = child.stdin.take() else {
-        return Err(GatewayError::MalformedCache);
-    };
-    stdin.write_all(&input).await?;
-    drop(stdin);
-    let output = child.wait_with_output().await?;
-    if !output.status.success() {
-        return Err(GatewayError::Git(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
-    }
-    Ok(())
 }
 
 async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, [u8; 20]>, GatewayError> {

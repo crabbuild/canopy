@@ -12,7 +12,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads and bounded atomic SQLite object batches work; per-object buffers and 64 MiB blob ceiling remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure is enforced; branch rules and publication fault matrix remain |
-| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; consistent ref snapshot, cache admission and corpus capacity proof remain |
+| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: backpressured fetch responses and v0/v2 clones above 80 MiB pass after takeover; consistent ref snapshot, native scratch limits and corpus capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
@@ -33,11 +33,14 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Account bare-cache disk usage and qualify residency under faults and larger
+2. Enforce native Git scratch limits and qualify residency under faults and larger
    hot sets. The current SQL worker admits four active Cells total: the
    directory plus three repositories. Inactive repositories now release their
    Cell and reload on demand; admission returns 503 when no repository is safe
    to evict. The resident limit is not a production capacity target.
+   Hydration and retained caches now use shared disk admission; native Git's
+   completed writes are measured before publication, but its peak usage remains
+   unbounded. Add crash-left cache reconciliation and qualify cleanup failures.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -247,3 +250,48 @@ restart remains required. Lease expiry during release, SQL worker close errors,
 acquisition failures, process death at each boundary and the production storage
 provider still need separate fault qualification. Cache byte accounting remains
 open.
+
+
+## Git cache admission qualification
+
+Each disposable cache now owns its directory and shared disk reservation.
+Construction admits compressed object bytes, config, HEAD and refs before
+writing. Warm caches retain admission; active readers retain their generation
+through replacement. Native receive-pack writes are measured after execution
+and admitted before object staging or durable ref publication. Cache cleanup
+precedes reservation release; failed deletion retains the charge until process
+restart. Process guards now own cache and input lifetimes, so cancellation
+signals the process group before releasing those owners.
+
+A real HTTP test sends a delta pack that fits upload admission but expands
+beyond available cache capacity. It receives 507, observes no stored Git object
+or ref, then retries the identical request UUID and bytes successfully after
+freeing capacity. Cold hydration separately fails with 507, releases partial
+cache admission and rebuilds successfully after capacity is restored. The test
+also verifies warm-cache accounting and release when a push replaces it.
+Focused tests cover compressed-file accounting, last-reader cleanup, native
+write reconciliation and Unix deletion failure. Existing subprocess cancellation,
+Git/LFS, residency and release-fault tests pass; Clippy, formatting and the
+binary build pass. No dependency or schema change was needed.
+
+The combined four-repository RustFS process smoke passed on Darwin arm64 with
+Apple Git 2.50.1 and RustFS `1.0.0-beta.8-glibc`, using fresh provider data and
+logs on the mounted workspace:
+
+| Action | Observed debug-build time |
+| --- | --- |
+| One push containing two 40 MiB random blobs | 17.23 seconds |
+| Initial 256-file push | 0.42 seconds |
+| One-file update and annotated tag | 0.51 seconds |
+| v0 clone and verification, cold after takeover | 26.86 seconds |
+| v2 clone and verification, warm | 3.33 seconds |
+| 256-file clone and verification after takeover | 0.47 seconds |
+
+Both large clones restored an 83,912,147-byte pack with matching file hashes
+and clean `git fsck` results. The run also passed resident eviction, Git/LFS,
+ACL, mixed/atomic ref outcomes, exact dropped-reply replay, clean restart,
+owner death, lease expiry and local database loss. These observations do not
+establish production throughput or a controlled comparison with earlier builds.
+Native Git's peak scratch use, filesystem allocation overhead, cleanup after
+process death and durable storage quotas remain open; completed-write accounting
+does not satisfy those release gates.

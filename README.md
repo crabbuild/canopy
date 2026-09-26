@@ -50,6 +50,9 @@ as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
 transfers and individual external Git blobs remain capped at 64 MiB.
+Disposable Git caches retain shared disk reservations. Hydration admits bytes
+before writing; native Git writes are measured before durable ref publication.
+Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.
 Local recovery currently admits a 512 MiB SQLite database. The node keeps the
 Directory Cell and up to three Repository Cells resident. Additional repositories
 evict an inactive repository and restore from durable state when accessed again.
