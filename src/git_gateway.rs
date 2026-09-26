@@ -5,7 +5,7 @@ use std::{
     error::Error as StdError,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::body::Body;
@@ -295,19 +295,28 @@ impl GitGateway {
         backend: &GitHttpBackend,
         refs: &BTreeMap<String, RefExpectation>,
     ) -> Result<(), GatewayError> {
+        let started = Instant::now();
+        let mut page_time = Duration::ZERO;
+        let mut body_time = Duration::ZERO;
+        let mut cache_time = Duration::ZERO;
+        let mut objects = 0_u64;
+        let mut bytes = 0_u64;
         let mut after = None;
         loop {
+            let queried = Instant::now();
             let page = self
                 .repository
                 .object_page(after)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
+            page_time += queried.elapsed();
             if page.is_empty() {
                 break;
             }
             for object in page {
                 after = Some(object.oid);
+                let read = Instant::now();
                 let body = match object.storage {
                     ObjectStorage::Inline(body) => body,
                     ObjectStorage::Chunked {
@@ -334,13 +343,29 @@ impl GitGateway {
                             .await?
                     }
                 };
+                body_time += read.elapsed();
+                objects += 1;
+                bytes += body.len() as u64;
+                let written = Instant::now();
                 backend
                     .cache
                     .store_object(object.oid, object.kind, body)
                     .await?;
+                cache_time += written.elapsed();
             }
         }
         backend.cache.store_refs(refs).await?;
+        tracing::debug!(
+            repository = %hex::encode(self.repository.repository_id()),
+            objects,
+            bytes,
+            cache_bytes = backend.cache.bytes()?,
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            page_seconds = page_time.as_secs_f64(),
+            body_seconds = body_time.as_secs_f64(),
+            cache_seconds = cache_time.as_secs_f64(),
+            "hydrated Git cache"
+        );
         Ok(())
     }
 

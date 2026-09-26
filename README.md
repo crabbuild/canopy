@@ -151,7 +151,7 @@ Configure credentials through the provider's environment variables. Set
 64 hex characters) in the process environment. Then run:
 
 ```sh
-CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo run --locked --bin canopy -- config.json
+CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo run --release --locked --bin canopy -- config.json
 ```
 
 `GET /healthz` reports process liveness and `GET /readyz` reports Cell
@@ -173,12 +173,14 @@ The integration tests need `git` and `git-lfs` on `PATH`. See
 [delivery plan](docs/delivery-plan.md) for the remaining release gates and
 [contracts](docs/contracts.md) for persisted identities and storage rules.
 
-For a black-box process smoke, build `canopy`, provide a test S3-compatible
-bucket and credentials through the provider's environment variables, and run:
+For a black-box process smoke, build the optimized `canopy` binary, provide a
+test S3-compatible bucket and credentials through the provider's environment
+variables, and run:
 
 ```sh
+CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo build --release --locked --bin canopy
 python3 scripts/smoke_s3_process.py \
-  --binary "$HOME/Workspace/crabbuild-target/canopy-local/debug/canopy" \
+  --binary "$HOME/Workspace/crabbuild-target/canopy-local/release/canopy" \
   --storage-url s3://your-test-bucket \
   --work-parent "$HOME/Workspace/crabbuild-target/canopy-local"
 ```
@@ -218,5 +220,14 @@ HEAD history. The script only reads the source, creates a bundle and temporary
 fixtures under `--work-parent`, then verifies every reachable object's type,
 size and bytes in protocol v0/v2 clones after takeover, plus strict `git fsck`.
 Other source branches and tags are outside this qualification.
+
+To measure cold recovery, set
+`RUST_LOG=warn,canopy_server::git_gateway=debug,canopy_server::server::residency=debug`.
+The node reports Cell acquisition time and cache hydration time, with object
+count, raw/cache bytes and time spent in page reads, body retrieval and cache
+writes. Page time includes inline integrity verification; cache time includes
+worker scheduling, OID verification, compression and admitted disk writes.
+Use release builds for performance measurements.
+
 The chunk, default-branch and repository-discovery layouts change the unreleased
 schema; use a fresh development storage prefix when moving from older builds.

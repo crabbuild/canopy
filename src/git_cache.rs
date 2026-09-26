@@ -77,6 +77,10 @@ impl GitCache {
             .ok_or_else(|| io::Error::other("Git cache accounting is closed"))
     }
 
+    pub(crate) fn bytes(&self) -> io::Result<u64> {
+        Ok(self.reservation()?.bytes())
+    }
+
     fn writer(&self, relative: &Path) -> io::Result<CacheWriter<'_>> {
         let path = self.git_dir().join(relative);
         if let Some(parent) = path.parent() {

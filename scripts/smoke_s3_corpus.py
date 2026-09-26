@@ -12,8 +12,11 @@ def _environment():
 
 
 def _git(*args, cwd=None):
-    return subprocess.run(["git", "-c", "credential.helper=", *args], cwd=cwd,
-                          env=_environment(), capture_output=True, check=True).stdout.strip()
+    try:
+        return subprocess.run(["git", "-c", "credential.helper=", *args], cwd=cwd,
+                              env=_environment(), capture_output=True, check=True).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"Git corpus command failed: {error.stderr.decode(errors='replace')}") from error
 
 
 def _inventory(repository, head):

@@ -153,6 +153,7 @@ impl RepositoryManager {
             let target = repository_target(self.tenant, self.application, entry.repository_id)?;
             let directory = self.local_root.join(hex::encode(entry.repository_id));
             tokio::fs::create_dir_all(&directory).await?;
+            let started = Instant::now();
             let handle = acquire_sql_cell(
                 &self.node,
                 &self.layout,
@@ -168,6 +169,11 @@ impl RepositoryManager {
                 &self.endpoint,
             )
             .await?;
+            tracing::debug!(
+                repository = %hex::encode(entry.repository_id),
+                elapsed_seconds = started.elapsed().as_secs_f64(),
+                "acquired repository Cell"
+            );
             loaded.insert(
                 entry.repository_id,
                 self.bind_repository(entry, target, handle)?,

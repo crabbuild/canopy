@@ -314,6 +314,15 @@ visible there only after complete successful hydration. This bounds each query,
 not total repository hydration time or native Git scratch usage. The previous
 single-record `next_object` API was removed from this unreleased crate.
 
+Debug events separate Repository Cell acquisition from successful cache
+hydration. Hydration reports object count, raw bytes, admitted cache bytes, total
+time, page-read/verification time, external/chunk body-read time and cache-write
+time. Cache writes include worker scheduling, OID verification and compression.
+These elapsed wall times include waiting; they are not CPU profiles or a claim
+that all page time belongs to SQLite execution. Acquisition includes authority
+and root validation, sparse activation and publication. Failed phases remain
+errors and do not emit a successful-completion event.
+
 Push object ingestion runs two Git processes regardless of object count:
 [`rev-list --objects --no-object-names --stdin`](https://git-scm.com/docs/git-rev-list)
 enumerates objects reachable from accepted new ref tips, excluding the previous

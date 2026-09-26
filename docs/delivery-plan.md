@@ -663,3 +663,46 @@ The same final run passes Git/LFS, discovery, ACL revocation, default branch,
 mixed/atomic outcomes and lost-reply replay across restart, disk loss and lease
 takeover. Full hydration, debug corpus latency, native scratch, traversal memory,
 release-build load measurements and broader production capacity remain open.
+
+## Release-build recovery timing
+
+The node now emits debug timing for Repository Cell acquisition and cache
+hydration, including page reads, body retrieval, cache writes and raw/admitted
+cache bytes. The run and smoke instructions use `--release`. The corpus runner
+preserves Git's stderr and source exception on failure.
+
+An optimized build passed the same ripgrep HEAD history fixture on Darwin arm64
+with Apple Git 2.50.1 and RustFS `1.0.0-beta.8-glibc`. After SIGKILL, lease expiry
+and fresh local disk, both protocol clones matched all 13,591 objects and the
+previous SHA-256 inventory, then passed strict/full fsck. The base Git/LFS,
+discovery, default-branch, ACL, mixed/atomic ref and dropped-reply checks passed.
+
+| Observed operation or phase | Seconds |
+| --- | ---: |
+| Initial corpus push | 102.83 |
+| Cold protocol v0 clone | 47.94 |
+| Repository Cell acquisition within that cold clone | 14.05 |
+| Full cache hydration within that cold clone | 31.65 |
+| Object page reads and inline verification within hydration | 26.57 |
+| Cache writes within hydration | 5.08 |
+| Subsequent warm protocol v2 clone | 2.18 |
+| Each clone's byte inventory and strict fsck | 0.80 |
+
+The 121,466,167 raw object bytes produced a 32,099,929-byte admitted bare cache.
+Phase times are nested and must not be added to the enclosing operation time.
+This single run identifies object reads and acquisition as the dominant measured
+costs; it does not attribute page time to a particular storage or CPU operation.
+The pinned runtime uses sparse activation and actor-serialized local queries.
+Compression policy remains unchanged because cache writes were the smaller
+component. Next performance work should measure cold SQLite page fetches and
+root validation before changing the cache representation or dependency policy.
+No production throughput, percentile or concurrent-load claim follows from
+these measurements; debug/release and cold/warm runs are different conditions.
+
+Before this successful release run, a timed debug rerun failed during corpus
+object publication with `InvocationError::Pending`. No corpus recovery check
+ran in that attempt. The request identity had not expired; the typed dependency
+error retains mutation evidence but omits the underlying `OutcomeUnknown`
+source, so the cause remains unresolved. The successful release run does not
+close that fault gate. Canopy continues to reject unproven publication; no
+retry, deadline extension or dependency patch was introduced.
