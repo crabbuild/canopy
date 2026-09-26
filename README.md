@@ -15,9 +15,10 @@ starts one leased Cellule node and serves repositories created through its API.
 It probes the object store's fencing capabilities, publishes and renews a signed node
 advertisement, and restores the repository Cell from object storage when its
 local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
-handling; the SQLite Cell is the durable authority, and a bare Git repository
-is only a rebuildable cache. Integration tests use stock `git` and `git-lfs`
-clients to push and clone, including a restart with a fresh local SQLite file.
+handling, including protocol v2 negotiation. The SQLite Cell is the durable
+authority, and a bare Git repository is only a rebuildable cache. Integration
+tests use stock `git` and `git-lfs` clients to push and clone, including a
+restart with a fresh local SQLite file.
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`

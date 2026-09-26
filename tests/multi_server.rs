@@ -26,9 +26,17 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
         create_repository(first_address, "example").await?,
         first_url
     );
+    let client = reqwest::Client::new();
+    let advertisement = client
+        .get(format!("{first_url}/info/refs?service=git-upload-pack"))
+        .bearer_auth("local-test-token")
+        .header("Git-Protocol", "version=2")
+        .send()
+        .await?;
+    assert_eq!(advertisement.status(), reqwest::StatusCode::OK);
+    assert!(advertisement.bytes().await?.starts_with(b"000eversion 2\n"));
     let other_url = create_repository(first_address, "other").await?;
     assert_ne!(first_url, other_url);
-    let client = reqwest::Client::new();
     let listing_url = format!("http://{first_address}/api/repositories");
     assert_eq!(
         client.get(&listing_url).send().await?.status(),
