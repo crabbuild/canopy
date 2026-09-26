@@ -11,22 +11,26 @@ dependency.
 ## Current implementation
 
 This repository is an implementation under construction. The `canopy` binary
-starts one leased Cellule node and serves one configured repository. It probes
-the object store's fencing capabilities, publishes and renews a signed node
+starts one leased Cellule node and serves repositories created through its API.
+It probes the object store's fencing capabilities, publishes and renews a signed node
 advertisement, and restores the repository Cell from object storage when its
 local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
 handling; the SQLite Cell is the durable authority, and a bare Git repository
 is only a rebuildable cache. Integration tests use stock `git` and `git-lfs`
 clients to push and clone, including a restart with a fresh local SQLite file.
 
-The current gateway serves one configured private repository at
-`/<owner>/<repository_name>.git`. On first start it reserves a UUID in the
-Directory Cell, provisions the Repository Cell, then marks the name ready.
-Later starts recover that UUID from the directory; the configuration does not
-pin an ID.
-It uses one static token, buffers requests and responses, and caps Git and LFS
+`POST /api/repositories` with `{"name":"example"}` creates a repository for the
+configured owner and returns its UUID and clone URL. `GET /api/repositories`
+lists ready repositories, with an `after` cursor for additional pages. Both
+endpoints require the configured token. Git and LFS use
+`/<owner>/<repository_name>.git`. Repository creation reserves a UUID in the
+Directory Cell, provisions its own Repository Cell, then marks the name ready.
+Later requests recover that Cell on demand from the directory.
+
+The current service uses one static token for every repository under one owner,
+buffers requests and responses, and caps Git and LFS
 payloads at 64 MiB. Local recovery currently admits a 512 MiB SQLite database.
-There is no account or organization model, repository directory, multi-node
+There is no account or organization model, per-repository ACL, multi-node
 routing, backup, repository browser, issue or pull request API, or production
 capacity evidence. The local Cellule path dependencies in `Cargo.toml` are
 for development only.
@@ -34,7 +38,7 @@ for development only.
 ## Run the current service
 
 Copy [config.example.json](config.example.json) and set the object storage URL,
-tenant and application IDs, repository name, network addresses and data
+tenant and application IDs, owner name, network addresses and data
 directory. The object store must support
 conditional create/update and ranged reads; startup probes these operations.
 Configure credentials through the provider's environment variables. Set
@@ -75,6 +79,7 @@ python3 scripts/smoke_s3_process.py \
 ```
 
 The script requires `CANOPY_NODE_SIGNING_KEY_HEX` and provider credentials in
-the environment. It pushes with stock Git and LFS, restarts with a fresh local
-database, kills the new owner, waits for lease expiry, and clones from a third
-process. It writes under a unique prefix in the supplied bucket.
+the environment. It pushes two repositories with stock Git and LFS, restarts
+with fresh local databases, kills the new owner, waits for lease expiry, and
+clones both from a third process. It writes under a unique prefix in the
+supplied bucket.

@@ -29,8 +29,9 @@ pushes may leave unreferenced objects; collection is not implemented yet.
 A name reservation commits before its Repository Cell is provisioned. A retry
 reads the previously reserved UUID and completes the same Cell instead of
 assigning another identity. The server marks the row ready only after it has
-acquired that Cell. The current HTTP process still serves one configured name;
-runtime creation and routing of additional names remain open.
+acquired that Cell. Ready names route through their UUID on demand; one node
+can serve multiple repository Cells. Account identity and repository-specific
+authorization remain open.
 
 Git packs and the bare repository cache are transport and acceleration
 artifacts. Neither is authoritative. The gateway can reconstruct cache objects

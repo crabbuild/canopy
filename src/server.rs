@@ -1,11 +1,13 @@
-//! One leased Canopy node serving one Repository Cell.
+//! One leased Canopy node serving Repository Cells on demand.
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use axum::Router;
 use cellule_app::CellApplication;
 use cellule_host::{CellNode, CellNodeBuilder};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits, LtxError};
@@ -19,15 +21,17 @@ use cellule_runtime::{
 use cellule_store::{StorageError, Store, probe_storage};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
+use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
     build_descriptor,
-    directory::{self, DirectoryCell, DirectoryModule},
+    directory::{self, DirectoryCell, DirectoryModule, RepositoryEntry, RepositoryState},
     git_gateway::GitGateway,
-    http::GitHttpApi,
+    http::{self, GitHttpApi},
+    repository_http::RepositoryHttp,
     repository_target,
 };
 
@@ -56,11 +60,10 @@ pub enum ServerError {
     Directory(#[from] InvocationError<Vec<SqlResultSet>>),
 }
 
-/// Required ownership and storage settings for a single-repository node.
-pub struct SingleRepositoryConfig {
+/// Required ownership and storage settings for a Canopy node.
+pub struct ServerConfig {
     pub tenant: TenantId,
     pub application: ApplicationId,
-    pub repository_name: String,
     pub node: NodeId,
     pub fleet: Digest,
     pub image: Digest,
@@ -110,7 +113,7 @@ impl AdvertisementIdentity {
 }
 
 /// Owns the HTTP listener, leased Cell node, and its shutdown order.
-pub struct SingleRepositoryServer {
+pub struct CanopyServer {
     address: std::net::SocketAddr,
     node: Arc<CellNode>,
     directory: NodeDirectory,
@@ -121,12 +124,151 @@ pub struct SingleRepositoryServer {
     _local: tempfile::TempDir,
 }
 
-impl SingleRepositoryServer {
+pub(crate) struct RepositoryManager {
+    directory: DirectoryCell,
+    node: Arc<CellNode>,
+    layout: CellStorageLayout,
+    node_directory: NodeDirectory,
+    tenant: TenantId,
+    application: ApplicationId,
+    session: SessionId,
+    endpoint: String,
+    local_root: PathBuf,
+    external_store: Arc<dyn ObjectStore>,
+    pub(crate) owner: String,
+    token: String,
+    pub(crate) public_url: String,
+    pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
+    loaded: Mutex<HashMap<String, Router>>,
+}
+
+impl RepositoryManager {
+    pub(crate) async fn create(&self, name: &str) -> Result<RepositoryEntry, ServerError> {
+        let mut loaded = self.loaded.lock().await;
+        let reserved = self
+            .directory
+            .reserve(
+                mutation_identity()?,
+                &self.owner,
+                name,
+                uuid::Uuid::new_v4().into_bytes(),
+            )
+            .await?
+            .output;
+        let _ = self.load(&reserved, &mut loaded).await?;
+        if reserved.state == RepositoryState::Ready {
+            return Ok(reserved);
+        }
+        Ok(self
+            .directory
+            .activate(mutation_identity()?, &reserved)
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn resolve(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<Option<Router>, ServerError> {
+        if owner != self.owner {
+            return Ok(None);
+        }
+        let Some(entry) = self.directory.lookup(owner, name, None).await?.output else {
+            return Ok(None);
+        };
+        if entry.state != RepositoryState::Ready {
+            return Ok(None);
+        }
+        let mut loaded = self.loaded.lock().await;
+        Ok(Some(self.load(&entry, &mut loaded).await?))
+    }
+
+    pub(crate) async fn list(
+        &self,
+        after: &str,
+    ) -> Result<(Vec<RepositoryEntry>, Option<String>), ServerError> {
+        let entries = self.directory.list(&self.owner, after).await?.output;
+        let next = if entries.len() == 100 {
+            entries.last().map(|entry| entry.name.clone())
+        } else {
+            None
+        };
+        Ok((
+            entries
+                .into_iter()
+                .filter(|entry| entry.state == RepositoryState::Ready)
+                .collect(),
+            next,
+        ))
+    }
+
+    async fn load(
+        &self,
+        entry: &RepositoryEntry,
+        loaded: &mut HashMap<String, Router>,
+    ) -> Result<Router, ServerError> {
+        if let Some(router) = loaded.get(&entry.name) {
+            return Ok(router.clone());
+        }
+        let target = repository_target(self.tenant, self.application, entry.repository_id)?;
+        let handle = acquire_sql_cell(
+            &self.node,
+            &self.layout,
+            &self.node_directory,
+            SqlCellSpec {
+                target: &target,
+                module: RepositoryModule::NAME,
+                schema: include_str!("schema.sql"),
+                max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
+                destination: self
+                    .local_root
+                    .join(format!("{}.sqlite", hex::encode(entry.repository_id))),
+            },
+            self.session,
+            &self.endpoint,
+        )
+        .await?;
+        let application_handle = self.node.application_handle::<CanopyApplication>(
+            CellClient::local(self.node.application().registry(), handle),
+            self.tenant,
+            self.application,
+        );
+        let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
+        let gateway = Arc::new(GitGateway::new(
+            repository,
+            self.local_root.clone(),
+            Arc::clone(&self.external_store),
+        ));
+        let api = Arc::new(
+            GitHttpApi::new(
+                gateway,
+                self.owner.clone(),
+                &entry.name,
+                &self.token,
+                &self.public_url,
+                Arc::clone(&self.ready),
+            )
+            .map_err(ServerError::Http)?,
+        );
+        let router = api.router();
+        loaded.insert(entry.name.clone(), router.clone());
+        Ok(router)
+    }
+}
+
+impl CanopyServer {
     /// Starts a node only after storage fencing, authority and Git ingress are ready.
     pub async fn start(
-        config: SingleRepositoryConfig,
+        config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
+        directory::validate_component(&config.owner)
+            .map_err(|_| ServerError::Http("invalid repository owner"))?;
+        if config.token.is_empty() {
+            return Err(ServerError::Http("Git access token is required"));
+        }
+        http::validate_public_url(&config.public_url).map_err(ServerError::Http)?;
         std::fs::create_dir_all(&config.data_dir)?;
         let local = tempfile::TempDir::new_in(&config.data_dir)?;
         let store = Store::new(Arc::clone(&raw_store));
@@ -229,62 +371,30 @@ impl SingleRepositoryServer {
                 config.application,
             );
             let directory_cell = DirectoryCell::new(&directory_application, directory_target)?;
-            let reserved = directory_cell
-                .reserve(
-                    mutation_identity()?,
-                    &config.owner,
-                    &config.repository_name,
-                    uuid::Uuid::new_v4().into_bytes(),
-                )
-                .await?
-                .output;
-            let target =
-                repository_target(config.tenant, config.application, reserved.repository_id)?;
-            let handle = acquire_sql_cell(
-                &node,
-                &layout,
-                &directory,
-                SqlCellSpec {
-                    target: &target,
-                    module: RepositoryModule::NAME,
-                    schema: include_str!("schema.sql"),
-                    max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
-                    destination: local.path().join("repository.sqlite"),
-                },
-                session,
-                &config.peer_endpoint,
-            )
-            .await?;
-            directory_cell
-                .activate(mutation_identity()?, &reserved)
-                .await?;
-            let application_handle = node.application_handle::<CanopyApplication>(
-                CellClient::local(registry, handle),
-                config.tenant,
-                config.application,
-            );
-            let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
-            // Both Cell state and external bodies share the configured storage prefix.
             let external_store: Arc<dyn ObjectStore> =
                 Arc::new(PrefixStore::new(raw_store, config.store_prefix));
-            let gateway = Arc::new(GitGateway::new(
-                repository,
-                local.path().to_path_buf(),
-                external_store,
-            ));
             let ready_node = Arc::clone(&node);
-            let ready = Arc::new(move || ready_node.is_ready() && guard.check().is_ok());
-            let api = Arc::new(
-                GitHttpApi::new(
-                    gateway,
-                    config.owner,
-                    &config.repository_name,
-                    &config.token,
-                    &config.public_url,
-                    ready,
-                )
-                .map_err(ServerError::Http)?,
-            );
+            let ready: Arc<dyn Fn() -> bool + Send + Sync> =
+                Arc::new(move || ready_node.is_ready() && guard.check().is_ok());
+            let token_digest = Sha256::digest(config.token.as_bytes()).into();
+            let manager = Arc::new(RepositoryManager {
+                directory: directory_cell,
+                node: Arc::clone(&node),
+                layout: layout.clone(),
+                node_directory: directory.clone(),
+                tenant: config.tenant,
+                application: config.application,
+                session,
+                endpoint: config.peer_endpoint,
+                local_root: local.path().to_path_buf(),
+                external_store,
+                owner: config.owner,
+                token: config.token,
+                public_url: config.public_url,
+                ready,
+                loaded: Mutex::new(HashMap::new()),
+            });
+            let api = Arc::new(RepositoryHttp::new(manager, token_digest));
             node.start()?;
             Ok::<_, ServerError>(api)
         }

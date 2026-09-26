@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use canopy_server::server::{ServerError, SingleRepositoryConfig, SingleRepositoryServer};
+use canopy_server::server::{CanopyServer, ServerConfig, ServerError};
 use cellule_runtime::{ApplicationId, Digest, NodeId, TenantId};
 use cellule_store::{StorageError, provider_store::build_url_object_store};
 use ed25519_dalek::SigningKey;
@@ -14,7 +14,6 @@ struct FileConfig {
     storage_url: String,
     tenant_id: String,
     application_id: String,
-    repository_name: String,
     node_id: String,
     fleet_digest: String,
     image_digest: String,
@@ -73,10 +72,9 @@ async fn main() -> Result<(), StartupError> {
         .map_err(|_| StartupError::MissingSecret("CANOPY_NODE_SIGNING_KEY_HEX"))?;
     let signing_key = SigningKey::from_bytes(&decode_fixed(&signing_key)?);
     let provider = build_url_object_store(&file.storage_url)?;
-    let config = SingleRepositoryConfig {
+    let config = ServerConfig {
         tenant: TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
         application: ApplicationId::from_bytes(Uuid::parse_str(&file.application_id)?.into_bytes()),
-        repository_name: file.repository_name,
         node: NodeId::from_bytes(Uuid::parse_str(&file.node_id)?.into_bytes()),
         fleet: Digest::from_bytes(decode_fixed(&file.fleet_digest)?),
         image: Digest::from_bytes(decode_fixed(&file.image_digest)?),
@@ -90,7 +88,7 @@ async fn main() -> Result<(), StartupError> {
         store_prefix: provider.prefix().clone(),
         local_disk_limit_bytes: file.local_disk_limit_bytes,
     };
-    let server = SingleRepositoryServer::start(config, provider.store_arc()).await?;
+    let server = CanopyServer::start(config, provider.store_arc()).await?;
     tracing::info!(address = %server.local_addr(), "Canopy is ready");
     shutdown_signal().await?;
     server.shutdown().await?;

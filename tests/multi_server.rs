@@ -1,24 +1,63 @@
 use std::{path::Path, sync::Arc};
 
-use canopy_server::server::{SingleRepositoryConfig, SingleRepositoryServer};
+use canopy_server::server::{CanopyServer, ServerConfig};
 use cellule_runtime::{ApplicationId, Digest, NodeId, TenantId};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command};
 
 #[tokio::test(flavor = "multi_thread")]
-async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
+async fn leased_server_recovers_two_repositories_with_git_and_lfs()
 -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
     let first_address = available_address().await?;
-    let first_url = format!("http://{first_address}/canopy/example.git");
-    let first = SingleRepositoryServer::start(
+    let first = CanopyServer::start(
         config(first_address, workspace.path().join("first")),
         Arc::clone(&store),
     )
     .await?;
     assert_eq!(first.local_addr(), first_address);
+    let first_url = create_repository(first_address, "example").await?;
+    assert_eq!(
+        create_repository(first_address, "example").await?,
+        first_url
+    );
+    let other_url = create_repository(first_address, "other").await?;
+    assert_ne!(first_url, other_url);
+    let client = reqwest::Client::new();
+    let listing_url = format!("http://{first_address}/api/repositories");
+    assert_eq!(
+        client.get(&listing_url).send().await?.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(&listing_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"name": "../bad"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let listing: serde_json::Value = client
+        .get(&listing_url)
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(
+        listing["repositories"]
+            .as_array()
+            .ok_or("list missing")?
+            .len(),
+        2
+    );
 
     let local = workspace.path().join("local");
     run_git(None, &["init", "-b", "main", path_str(&local)?]).await?;
@@ -51,11 +90,34 @@ async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
     )
     .await?;
     let original = run_git(Some(&local), &["rev-parse", "HEAD"]).await?;
+    let other = workspace.path().join("other");
+    run_git(None, &["init", "-b", "main", path_str(&other)?]).await?;
+    run_git(Some(&other), &["config", "user.name", "Canopy Test"]).await?;
+    run_git(
+        Some(&other),
+        &["config", "user.email", "canopy@example.invalid"],
+    )
+    .await?;
+    tokio::fs::write(other.join("README.md"), b"another Repository Cell\n").await?;
+    run_git(Some(&other), &["add", "README.md"]).await?;
+    run_git(Some(&other), &["commit", "-m", "Other repository"]).await?;
+    run_git(
+        Some(&other),
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "push",
+            &other_url,
+            "HEAD:refs/heads/main",
+        ],
+    )
+    .await?;
+    let other_oid = run_git(Some(&other), &["rev-parse", "HEAD"]).await?;
     first.shutdown().await?;
 
     let second_address = available_address().await?;
     let second_url = format!("http://{second_address}/canopy/example.git");
-    let second = SingleRepositoryServer::start(
+    let second = CanopyServer::start(
         config(second_address, workspace.path().join("second")),
         store,
     )
@@ -92,15 +154,60 @@ async fn leased_server_restarts_from_storage_and_serves_git_and_lfs()
         run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
         original
     );
+    let other_clone = workspace.path().join("other-clone");
+    let other_second_url = format!("http://{second_address}/canopy/other.git");
+    run_git(
+        None,
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "clone",
+            &other_second_url,
+            path_str(&other_clone)?,
+        ],
+    )
+    .await?;
+    assert_eq!(
+        tokio::fs::read(other_clone.join("README.md")).await?,
+        b"another Repository Cell\n"
+    );
+    assert_eq!(
+        run_git(Some(&other_clone), &["rev-parse", "HEAD"]).await?,
+        other_oid
+    );
     second.shutdown().await?;
     Ok(())
 }
 
-fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> SingleRepositoryConfig {
-    SingleRepositoryConfig {
+async fn create_repository(
+    address: std::net::SocketAddr,
+    name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/api/repositories"))
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({"name": name}))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "repository creation failed: {} {}",
+            response.status(),
+            response.text().await?
+        )
+        .into());
+    }
+    let body: serde_json::Value = response.json().await?;
+    Ok(body["clone_url"]
+        .as_str()
+        .ok_or("clone URL missing")?
+        .into())
+}
+
+fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> ServerConfig {
+    ServerConfig {
         tenant: TenantId::from_bytes([51; 16]),
         application: ApplicationId::from_bytes([52; 16]),
-        repository_name: "example".into(),
         node: NodeId::from_bytes([54; 16]),
         fleet: Digest::from_bytes([55; 32]),
         image: Digest::from_bytes([56; 32]),

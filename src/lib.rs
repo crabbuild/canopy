@@ -18,6 +18,7 @@ pub mod http;
 pub mod large_blob;
 pub mod lfs;
 mod refs;
+mod repository_http;
 pub mod server;
 
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefUpdate};

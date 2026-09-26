@@ -52,24 +52,7 @@ impl GitHttpApi {
         }
         validate_component(&owner).map_err(|_| "invalid repository owner")?;
         validate_component(repository_name).map_err(|_| "invalid repository name")?;
-        let public_url = Url::parse(public_url).map_err(|_| "invalid public URL")?;
-        let loopback = public_url.host_str().is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host
-                    .parse::<IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
-        if !matches!(public_url.scheme(), "https" | "http")
-            || (public_url.scheme() == "http" && !loopback)
-            || public_url.host_str().is_none()
-            || !public_url.username().is_empty()
-            || public_url.password().is_some()
-            || public_url.path() != "/"
-            || public_url.query().is_some()
-            || public_url.fragment().is_some()
-        {
-            return Err("public URL must be a bare HTTP origin");
-        }
+        let public_url = validate_public_url(public_url)?;
         Ok(Self {
             gateway,
             repository_path: format!("/{owner}/{repository_name}.git"),
@@ -85,8 +68,6 @@ impl GitHttpApi {
         let lfs_batch_path = format!("{}/info/lfs/objects/batch", self.repository_path);
         let lfs_object_path = format!("{}/info/lfs/objects/{{oid}}", self.repository_path);
         Router::new()
-            .route("/healthz", get(health))
-            .route("/readyz", get(readiness))
             .route(&git_path, any(git_request))
             .route(&lfs_batch_path, post(lfs_batch))
             .route(&lfs_object_path, get(lfs_get).put(lfs_put))
@@ -94,47 +75,65 @@ impl GitHttpApi {
     }
 
     fn authorized(&self, authorization: Option<&HeaderValue>) -> bool {
-        let Some(header) = authorization.and_then(|value| value.to_str().ok()) else {
-            return false;
-        };
-        let token = if let Some(value) = header.strip_prefix("Bearer ") {
-            value
-        } else if let Some(value) = header.strip_prefix("Basic ") {
-            let Ok(decoded) = STANDARD.decode(value) else {
-                return false;
-            };
-            let Ok(decoded) = String::from_utf8(decoded) else {
-                return false;
-            };
-            let Some((user, password)) = decoded.split_once(':') else {
-                return false;
-            };
-            if user != self.owner {
-                return false;
-            }
-            return self.matches_token(password);
-        } else {
-            return false;
-        };
-        self.matches_token(token)
-    }
-
-    fn matches_token(&self, token: &str) -> bool {
-        let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        bool::from(self.token_digest.ct_eq(&candidate))
+        authorized(&self.owner, &self.token_digest, authorization)
     }
 }
 
-async fn health() -> Response<Body> {
-    plain(StatusCode::OK, "ok")
+pub(crate) fn validate_public_url(public_url: &str) -> Result<Url, &'static str> {
+    let public_url = Url::parse(public_url).map_err(|_| "invalid public URL")?;
+    let loopback = public_url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if !matches!(public_url.scheme(), "https" | "http")
+        || (public_url.scheme() == "http" && !loopback)
+        || public_url.host_str().is_none()
+        || !public_url.username().is_empty()
+        || public_url.password().is_some()
+        || public_url.path() != "/"
+        || public_url.query().is_some()
+        || public_url.fragment().is_some()
+    {
+        return Err("public URL must be a bare HTTP origin");
+    }
+    Ok(public_url)
 }
 
-async fn readiness(State(api): State<Arc<GitHttpApi>>) -> Response<Body> {
-    if (api.ready)() {
-        plain(StatusCode::OK, "ready")
+pub(crate) fn authorized(
+    owner: &str,
+    token_digest: &[u8; 32],
+    authorization: Option<&HeaderValue>,
+) -> bool {
+    let Some(header) = authorization.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let token = if let Some(value) = header.strip_prefix("Bearer ") {
+        value
+    } else if let Some(value) = header.strip_prefix("Basic ") {
+        let Ok(decoded) = STANDARD.decode(value) else {
+            return false;
+        };
+        let Ok(decoded) = String::from_utf8(decoded) else {
+            return false;
+        };
+        let Some((user, password)) = decoded.split_once(':') else {
+            return false;
+        };
+        if user != owner {
+            return false;
+        }
+        return matches_token(token_digest, password);
     } else {
-        unavailable()
-    }
+        return false;
+    };
+    matches_token(token_digest, token)
+}
+
+fn matches_token(token_digest: &[u8; 32], token: &str) -> bool {
+    let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+    bool::from(token_digest.ct_eq(&candidate))
 }
 
 #[derive(Deserialize)]

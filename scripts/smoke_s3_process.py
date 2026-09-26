@@ -72,10 +72,24 @@ def start(binary, directory, settings, instance):
     process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output)
     output.close()
     wait_ready(process, address, log)
-    return process, f"http://{address}/{settings['owner']}/{settings['repository_name']}.git"
+    return process, f"http://{address}"
 
 
-def clone_and_verify(url, directory, expected_oid, expected_lfs):
+def create_repository(base_url, name):
+    request = urllib.request.Request(
+        f"{base_url}/api/repositories",
+        data=json.dumps({"name": name}).encode(),
+        headers={
+            "Authorization": "Bearer local-test-token",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)["clone_url"]
+
+
+def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None):
     git(
         "-c",
         "http.extraHeader=Authorization: Bearer local-test-token",
@@ -83,17 +97,19 @@ def clone_and_verify(url, directory, expected_oid, expected_lfs):
         url,
         str(directory),
     )
-    git("lfs", "install", "--local", cwd=directory)
-    git(
-        "-c",
-        "http.extraHeader=Authorization: Bearer local-test-token",
-        "lfs",
-        "pull",
-        cwd=directory,
-    )
+    if expected_lfs is not None:
+        git("lfs", "install", "--local", cwd=directory)
+        git(
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "lfs",
+            "pull",
+            cwd=directory,
+        )
     assert git("rev-parse", "HEAD", cwd=directory) == expected_oid
-    assert (directory / "README.md").read_bytes() == b"Canopy process smoke\n"
-    assert (directory / "asset.lfs").read_bytes() == expected_lfs
+    assert (directory / "README.md").read_bytes() == expected_readme
+    if expected_lfs is not None:
+        assert (directory / "asset.lfs").read_bytes() == expected_lfs
 
 
 def main():
@@ -111,7 +127,6 @@ def main():
         "storage_url": f"{args.storage_url.rstrip('/')}/process-smoke/{run_id}",
         "tenant_id": str(uuid.uuid4()),
         "application_id": str(uuid.uuid4()),
-        "repository_name": "example",
         "node_id": str(uuid.uuid4()),
         "fleet_digest": "11" * 32,
         "image_digest": "22" * 32,
@@ -123,8 +138,9 @@ def main():
         directory = Path(temp)
         processes = []
         try:
-            first, url = start(args.binary, directory, settings, "first")
+            first, base_url = start(args.binary, directory, settings, "first")
             processes.append(first)
+            url = create_repository(base_url, "example")
             local = directory / "local"
             git("init", "-b", "main", str(local))
             git("config", "user.name", "Canopy Test", cwd=local)
@@ -145,24 +161,46 @@ def main():
                 cwd=local,
             )
             oid = git("rev-parse", "HEAD", cwd=local)
+            other_url = create_repository(base_url, "other")
+            other = directory / "other"
+            git("init", "-b", "main", str(other))
+            git("config", "user.name", "Canopy Test", cwd=other)
+            git("config", "user.email", "canopy@example.invalid", cwd=other)
+            other_readme = b"Another Repository Cell\n"
+            (other / "README.md").write_bytes(other_readme)
+            git("add", "README.md", cwd=other)
+            git("commit", "-m", "Other repository", cwd=other)
+            git(
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+                other_url,
+                "HEAD:refs/heads/main",
+                cwd=other,
+            )
+            other_oid = git("rev-parse", "HEAD", cwd=other)
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:
                 raise RuntimeError("Canopy did not shut down cleanly")
-            second, url = start(args.binary, directory, settings, "second")
+            second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
-            clone_and_verify(url, directory / "clean-clone", oid, lfs_body)
+            url = f"{base_url}/canopy/example.git"
+            clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body)
+            clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
             second.wait(timeout=10)
             time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
-            third, url = start(args.binary, directory, settings, "third")
+            third, base_url = start(args.binary, directory, settings, "third")
             processes.append(third)
-            clone_and_verify(url, directory / "takeover-clone", oid, lfs_body)
+            url = f"{base_url}/canopy/example.git"
+            clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
+            clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: Git and LFS survived process restart, local disk loss, and lease takeover")
+            print("PASS: two repositories survived process restart, local disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:
