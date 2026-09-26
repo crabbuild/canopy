@@ -138,6 +138,7 @@ pub(crate) struct RepositoryManager {
     endpoint: String,
     local_root: PathBuf,
     external_store: Arc<dyn ObjectStore>,
+    disk_budget: DiskBudget,
     pub(crate) owner: String,
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -349,6 +350,7 @@ impl RepositoryManager {
             Arc::clone(&repository),
             self.local_root.clone(),
             Arc::clone(&self.external_store),
+            self.disk_budget.clone(),
         ));
         let router = self.router_for(entry, Arc::clone(&gateway))?;
         loaded.insert(
@@ -442,13 +444,11 @@ impl CanopyServer {
         );
         let listener = TcpListener::bind(config.listen).await?;
         let address = listener.local_addr()?;
+        let disk_budget = DiskBudget::new(config.local_disk_limit_bytes);
         let node = Arc::new(
             CellNodeBuilder::new(Arc::clone(&application))
                 .with_runtime(SqlWorkerPool::new(1, 4)?, 64 * 1024 * 1024)
-                .with_replica_host(
-                    Host::default()
-                        .with_local_disk_budget(DiskBudget::new(config.local_disk_limit_bytes)),
-                )
+                .with_replica_host(Host::default().with_local_disk_budget(disk_budget.clone()))
                 .with_session(session)
                 .build()?,
         );
@@ -530,6 +530,7 @@ impl CanopyServer {
                 endpoint: config.peer_endpoint,
                 local_root: local.path().to_path_buf(),
                 external_store,
+                disk_budget,
                 owner: config.owner,
                 public_url: config.public_url,
                 ready,

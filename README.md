@@ -45,9 +45,11 @@ rechecks the writer in the ref transaction; an LFS upload rechecks the writer
 when publishing metadata.
 
 The current service supports one repository owner and one token per account.
-It buffers incoming Git requests and push replies, each capped at 64 MiB.
-Clone and fetch responses stream with backpressure and have no 64 MiB response
-ceiling. LFS transfers and individual external Git blobs remain capped at 64 MiB.
+Incoming Git requests stream to temporary files charged to the same disk budget
+as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
+up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
+responses stream with backpressure and have no 64 MiB response ceiling. LFS
+transfers and individual external Git blobs remain capped at 64 MiB.
 Local recovery currently admits a 512 MiB SQLite database. There is no
 account lifecycle API, organization model, collaborator-visible repository
 listing, multi-node routing, backup, repository browser, issue or pull request
@@ -141,7 +143,7 @@ A proxy drops a successful push reply; replay after takeover returns the origina
 report without undoing a later branch deletion.
 It writes under a unique prefix in the supplied bucket.
 
-Add `--large-clone` to push two independent 40 MiB random blobs, then clone the
+Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the
 repository using protocol v0 and v2 after takeover. Each clone must receive a
 pack larger than 64 MiB, reproduce both file hashes and pass `git fsck`. This is
 a transfer-size qualification; it does not establish production capacity.

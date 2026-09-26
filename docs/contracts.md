@@ -20,7 +20,8 @@ before admitting persistent customer repositories.
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
-| External byte ceiling | 64 MiB per Git blob or LFS object | current buffered ingress |
+| External byte ceiling | 64 MiB per Git blob or LFS object | current object transfer path |
+| Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
@@ -157,10 +158,27 @@ worker. Unix subprocesses use a dedicated process group so cancellation also
 kills upload-pack/pack-objects descendants; other platforms currently use
 Tokio's direct-child kill-on-drop behavior and still need lifecycle qualification.
 
-Only the read response is streamed so far. Requests, push reports, LFS transfers
-and individual object hydration still allocate bounded whole buffers. Cold
-fetches still rebuild the complete bare cache, and there is no global transfer
-admission limit or production throughput qualification yet.
+Incoming Git bodies stream into anonymous temporary files before CGI execution.
+Each write reserves bytes from the same `DiskBudget` used by the node's SQLite
+host. All repositories share that budget. Blocking writes retain the file and
+reservation together, including when an upload is cancelled. The OS removes
+spools when their last handle closes, including on process death. Uploads have
+a 120-second deadline; limits are 512 MiB per push and 64 MiB per fetch request.
+Oversized bodies return 413, failed request bodies 400, timeouts 408, and exhausted
+disk admission 507. Each repository serializes pushes before receiving its body.
+
+The gateway reads the completed spool in bounded chunks to compute the existing
+length-prefixed request digest, then checks the durable replay record before
+running Git. This keeps the identity format unchanged for chunked and fixed-length
+HTTP requests. CGI receives the exact file size and reads stdin directly from the
+file. Its worker retains the spool's disk reservation until subprocess work ends.
+No Git objects or refs are published from an incomplete HTTP upload.
+
+Push reports, LFS transfers and individual object hydration still allocate
+bounded whole buffers. Cold fetches still rebuild the complete bare cache.
+Request spools and SQLite share admission, but bare-cache bytes still need
+accounting, and process/client concurrency and production throughput remain
+unqualified. Spooling adds a local-file pass before Git can begin pack ingestion.
 
 Schema version 1 is still changing in this unreleased repository. The module
 descriptor and object paths will become compatibility boundaries at the first

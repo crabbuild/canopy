@@ -9,18 +9,18 @@ use std::{
     time::Duration,
 };
 
+use crate::git_input::GitInput;
 use bytes::Bytes;
 use futures_core::Stream;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncRead, AsyncReadExt, BufReader},
     process::{Child, Command},
     sync::{mpsc, oneshot},
 };
 
 const MAX_CGI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CGI_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CGI_STDERR_BYTES: usize = 64 * 1024;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_CGI_HEADER_BYTES: usize = 64 * 1024;
@@ -47,13 +47,13 @@ pub enum GitHttpError {
 }
 
 /// One bounded smart HTTP request. The gateway authenticates before constructing it.
-pub struct GitHttpRequest {
+pub struct GitHttpRequest<B = GitInput> {
     pub method: String,
     pub path_info: String,
     pub query: String,
     pub content_type: Option<String>,
     pub protocol_v2: bool,
-    pub body: Vec<u8>,
+    pub body: B,
     pub authenticated: bool,
 }
 
@@ -141,9 +141,6 @@ impl GitHttpBackend {
         {
             return Err(GitHttpError::InvalidPath);
         }
-        if request.body.len() > MAX_CGI_INPUT_BYTES {
-            return Err(GitHttpError::TooLarge);
-        }
         let mut process = Command::new("git");
         // The cache's synthetic HEAD must not protect a branch by name.
         // Repository policy belongs in the Cell ref transaction.
@@ -155,9 +152,9 @@ impl GitHttpBackend {
             .env("REQUEST_METHOD", &request.method)
             .env("PATH_INFO", &request.path_info)
             .env("QUERY_STRING", &request.query)
-            .env("CONTENT_LENGTH", request.body.len().to_string())
+            .env("CONTENT_LENGTH", request.body.size().to_string())
             .env("SERVER_PROTOCOL", "HTTP/1.1")
-            .stdin(Stdio::piped())
+            .stdin(request.body.stdin()?)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -170,7 +167,12 @@ impl GitHttpBackend {
         if request.authenticated {
             process.env("REMOTE_USER", "canopy-gateway");
         }
-        start_stream(process, request.body, keep_alive, Duration::from_secs(120)).await
+        start_stream(
+            process,
+            (keep_alive, request.body),
+            Duration::from_secs(120),
+        )
+        .await
     }
 }
 
@@ -210,16 +212,10 @@ impl Stream for GitBody {
 
 async fn start_stream<T: Send + 'static>(
     mut command: Command,
-    input: Vec<u8>,
     keep_alive: T,
     deadline: Duration,
 ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
     let mut process = GitProcess::spawn(&mut command)?;
-    let mut stdin = process
-        .child
-        .stdin
-        .take()
-        .ok_or(GitHttpError::MalformedCgi)?;
     let stdout = process
         .child
         .stdout
@@ -266,15 +262,8 @@ async fn start_stream<T: Send + 'static>(
                 }
                 Ok::<_, GitHttpError>(())
             };
-            let (_, (), stderr) = tokio::try_join!(
-                async move {
-                    stdin.write_all(&input).await?;
-                    drop(stdin);
-                    Ok::<_, GitHttpError>(())
-                },
-                read_stdout,
-                read_bounded(stderr, MAX_CGI_STDERR_BYTES),
-            )?;
+            let ((), stderr) =
+                tokio::try_join!(read_stdout, read_bounded(stderr, MAX_CGI_STDERR_BYTES),)?;
             // Keep the group leader unreaped while descendants still own pipes;
             // cancellation can then signal its group without PID reuse ambiguity.
             let status = process.child.wait().await?;
@@ -412,6 +401,7 @@ fn parse_headers(output: &[u8]) -> Result<GitHttpResponse<()>, GitHttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn subprocess_output_is_rejected_at_the_read_limit() -> Result<(), GitHttpError> {

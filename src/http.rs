@@ -21,7 +21,6 @@ use crate::{
     lfs::{LfsError, MAX_LFS_BYTES},
 };
 
-const MAX_HTTP_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_LFS_BATCH_BYTES: usize = 1024 * 1024;
 const MAX_LFS_BATCH_OBJECTS: usize = 100;
 const LFS_JSON: &str = "application/vnd.git-lfs+json";
@@ -433,9 +432,6 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     } else {
         None
     };
-    let Ok(body) = to_bytes(request.into_body(), MAX_HTTP_BODY_BYTES).await else {
-        return plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large");
-    };
     match api
         .gateway
         .handle(
@@ -445,7 +441,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
                 query,
                 content_type,
                 protocol_v2,
-                body: body.to_vec(),
+                body: request.into_body(),
                 authenticated: true,
             },
             &principal.account,
@@ -471,6 +467,19 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         }
         Ok(_) => unavailable(),
         Err(GatewayError::Unauthorized) => unauthorized(),
+        Err(GatewayError::Input(crate::git_input::InputError::TooLarge)) => {
+            plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large")
+        }
+        Err(GatewayError::Input(crate::git_input::InputError::Timeout)) => {
+            plain(StatusCode::REQUEST_TIMEOUT, "Git upload timed out")
+        }
+        Err(GatewayError::Input(crate::git_input::InputError::Body(_))) => {
+            plain(StatusCode::BAD_REQUEST, "Git request body failed")
+        }
+        Err(GatewayError::Input(crate::git_input::InputError::Budget(_))) => plain(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "Git upload disk budget exhausted",
+        ),
         Err(GatewayError::RefConflict) => {
             plain(StatusCode::CONFLICT, "Repository changed during push")
         }

@@ -94,10 +94,12 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             .ensure_owner(support::identity()?, "canopy")
             .await?;
         let blob_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let disk_budget = DiskBudget::new(1 << 30);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
             scratch.path().to_path_buf(),
             Arc::clone(&blob_store),
+            disk_budget.clone(),
         ));
         let invalid_oid = [0; 32];
         assert!(matches!(
@@ -164,6 +166,26 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             .await?;
         assert_eq!(
             unsupported.status(),
+            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        let occupied = disk_budget.try_reserve(disk_budget.capacity() - 1)?;
+        let admission_id = uuid::Uuid::new_v4().to_string();
+        let admission_request = || {
+            client
+                .post(format!("{url}/git-receive-pack"))
+                .bearer_auth("local-test-token")
+                .header("Content-Type", "text/plain")
+                .header("Idempotency-Key", &admission_id)
+                .body("1234")
+        };
+        assert_eq!(
+            admission_request().send().await?.status(),
+            reqwest::StatusCode::INSUFFICIENT_STORAGE
+        );
+        drop(occupied);
+        assert_eq!(disk_budget.used(), 0);
+        assert_eq!(
+            admission_request().send().await?.status(),
             reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
         let mut request = Vec::new();
@@ -360,6 +382,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             Arc::clone(&repository),
             scratch.path().to_path_buf(),
             blob_store,
+            DiskBudget::new(1 << 30),
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;

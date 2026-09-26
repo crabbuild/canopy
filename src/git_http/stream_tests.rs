@@ -4,7 +4,7 @@ fn shell(script: &str) -> Command {
     let mut command = Command::new("sh");
     command
         .args(["-c", script])
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
@@ -23,7 +23,7 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
         "printf 'Content-Type: application/octet-stream\r\n\r\n'; dd if=/dev/zero bs=65536 count=1088 2>/dev/null; touch completed",
     );
     command.current_dir(files.path());
-    let mut response = start_stream(command, Vec::new(), files, Duration::from_secs(30)).await?;
+    let mut response = start_stream(command, files, Duration::from_secs(30)).await?;
     tokio::time::timeout(Duration::from_secs(5), async {
         while response.body.receiver.len() < 4 {
             tokio::task::yield_now().await;
@@ -48,7 +48,7 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
 async fn exit_failure_after_headers_is_a_body_error() -> Result<(), Box<dyn std::error::Error>> {
     let mut response = start_stream(
         shell("printf 'Content-Type: application/octet-stream\r\n\r\npartial'; echo failed >&2; exit 7"),
-        Vec::new(), (), Duration::from_secs(5),
+        (), Duration::from_secs(5),
     ).await?;
     let mut bytes = Vec::new();
     let error = loop {
@@ -70,7 +70,6 @@ async fn exit_failure_after_headers_is_a_body_error() -> Result<(), Box<dyn std:
 async fn deadline_after_headers_is_a_body_error() -> Result<(), Box<dyn std::error::Error>> {
     let mut response = start_stream(
         shell("printf 'Content-Type: application/octet-stream\r\n\r\n'; sleep 30"),
-        Vec::new(),
         (),
         Duration::from_secs(1),
     )
@@ -87,7 +86,6 @@ async fn malformed_headers_fail_before_exposing_a_stream() -> Result<(), Box<dyn
 {
     let response = start_stream(
         shell("printf 'not-a-header\r\n\r\n'"),
-        Vec::new(),
         (),
         Duration::from_secs(5),
     )
@@ -110,7 +108,7 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
     let (released, receiver) = oneshot::channel();
     let mut response = start_stream(
         shell("sleep 30 & child=$!; printf 'Content-Type: text/plain\r\n\r\n%s %s\n' \"$$\" \"$child\"; wait"),
-        Vec::new(), Cache(Some(released)), Duration::from_secs(30),
+        Cache(Some(released)), Duration::from_secs(30),
     ).await?;
     let mut ids = Vec::new();
     while !ids.contains(&b'\n') {

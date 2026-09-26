@@ -12,6 +12,7 @@ use std::{
 };
 
 use axum::body::Body;
+use cellule_ltx::DiskBudget;
 use cellule_runtime::{MutationIdentity, RequestId};
 use flate2::{Compression, write::ZlibEncoder};
 use object_store::ObjectStore;
@@ -22,6 +23,7 @@ use crate::{
     RepositoryCell,
     directory::TokenScope,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
+    git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
     large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore, MAX_EXTERNAL_BLOB_BYTES},
     lfs::LfsService,
     object_id,
@@ -34,6 +36,8 @@ type CellError = Box<dyn StdError + Send + Sync>;
 pub enum GatewayError {
     #[error("Git HTTP backend failed")]
     Http(#[from] GitHttpError),
+    #[error("Git request input failed")]
+    Input(#[from] InputError),
     #[error("repository Cell operation failed")]
     Cell(#[source] CellError),
     #[error("large Git blob store failed")]
@@ -68,6 +72,7 @@ pub struct GitGateway {
     large_blobs: LargeBlobStore,
     lfs: LfsService,
     scratch_root: PathBuf,
+    disk_budget: DiskBudget,
     cache: Mutex<Option<Arc<CachedRepository>>>,
     push: Mutex<()>,
 }
@@ -77,6 +82,7 @@ impl GitGateway {
         repository: Arc<RepositoryCell>,
         scratch_root: PathBuf,
         blob_store: Arc<dyn ObjectStore>,
+        disk_budget: DiskBudget,
     ) -> Self {
         let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
@@ -85,6 +91,7 @@ impl GitGateway {
             large_blobs,
             lfs,
             scratch_root,
+            disk_budget,
             cache: Mutex::new(None),
             push: Mutex::new(()),
         }
@@ -106,7 +113,7 @@ impl GitGateway {
     /// Waits for Cell publication before returning any successful receive-pack body.
     pub async fn handle(
         &self,
-        request: GitHttpRequest,
+        request: GitHttpRequest<Body>,
         actor: &str,
         push_id: Option<[u8; 16]>,
     ) -> Result<GitHttpResponse<Body>, GatewayError> {
@@ -116,8 +123,9 @@ impl GitGateway {
         let is_push = request.method == "POST" && request.path_info == "/repo.git/git-receive-pack";
         if is_push {
             let _push = self.push.lock().await;
+            let request = self.receive(request, MAX_PUSH_BYTES).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
-            let digest = request_digest(&request);
+            let digest = request_digest(&request).await?;
             if let Some(response) = self.repository.begin_push(id, actor, digest).await? {
                 return Ok(http_body(with_push_id(
                     self.repository.push_response(response).await?,
@@ -130,6 +138,7 @@ impl GitGateway {
                 .await
                 .map(http_body);
         }
+        let request = self.receive(request, MAX_FETCH_REQUEST_BYTES).await?;
         let live_refs = self.cell_refs().await?;
         let cached = {
             let mut cache = self.cache.lock().await;
@@ -143,6 +152,32 @@ impl GitGateway {
             status: response.status,
             headers: response.headers,
             body: Body::from_stream(response.body),
+        })
+    }
+
+    async fn receive(
+        &self,
+        request: GitHttpRequest<Body>,
+        limit: u64,
+    ) -> Result<GitHttpRequest, GatewayError> {
+        let GitHttpRequest {
+            method,
+            path_info,
+            query,
+            content_type,
+            protocol_v2,
+            body,
+            authenticated,
+        } = request;
+        let body = GitInput::receive(body, &self.scratch_root, &self.disk_budget, limit).await?;
+        Ok(GitHttpRequest {
+            method,
+            path_info,
+            query,
+            content_type,
+            protocol_v2,
+            body,
+            authenticated,
         })
     }
 
@@ -366,7 +401,7 @@ fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
     }
 }
 
-fn request_digest(request: &GitHttpRequest) -> [u8; 32] {
+async fn request_digest(request: &GitHttpRequest) -> Result<[u8; 32], InputError> {
     let mut hash = blake3::Hasher::new();
     hash.update(b"canopy-git-push-v1");
     hash.update(&[
@@ -382,12 +417,11 @@ fn request_digest(request: &GitHttpRequest) -> [u8; 32] {
             .as_deref()
             .unwrap_or_default()
             .as_bytes(),
-        &request.body,
     ] {
         hash.update(&(field.len() as u64).to_le_bytes());
         hash.update(field);
     }
-    *hash.finalize().as_bytes()
+    request.body.digest(hash).await
 }
 
 fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse {

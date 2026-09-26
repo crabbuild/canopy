@@ -22,7 +22,13 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                 query: format!("service={service}"),
                 content_type: None,
                 protocol_v2: false,
-                body: Vec::new(),
+                body: canopy_server::git_input::GitInput::receive(
+                    axum::body::Body::empty(),
+                    root.path(),
+                    &cellule_ltx::DiskBudget::new(1 << 20),
+                    1 << 20,
+                )
+                .await?,
                 authenticated: true,
             })
             .await?;

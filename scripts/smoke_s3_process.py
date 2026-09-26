@@ -223,8 +223,13 @@ def seed_large_repository(base_url, directory):
             hashes[name] = hashlib.file_digest(data, "sha256").hexdigest()
         git("add", name, cwd=local)
         git("commit", "-m", f"Large object {index}", cwd=local)
-        git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
-            "push", url, "HEAD:refs/heads/main", cwd=local)
+    # One push must carry both incompressible blobs, exceeding the former 64 MiB
+    # request limit. Client packet buffering stays small, exercising chunked HTTP.
+    started = time.monotonic()
+    git("-c", "http.postBuffer=1048576", "-c",
+        "http.extraHeader=Authorization: Bearer local-test-token",
+        "push", url, "HEAD:refs/heads/main", cwd=local)
+    print(f"PASS: one push uploaded 80 MiB of random blob data in {time.monotonic() - started:.2f}s", flush=True)
     return git("rev-parse", "HEAD", cwd=local), hashes
 
 
@@ -254,7 +259,7 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--storage-url", required=True, help="S3 bucket URL, e.g. s3://test-bucket")
     parser.add_argument("--work-parent", type=Path, required=True)
-    parser.add_argument("--large-clone", action="store_true", help="Qualify v0/v2 clones above 64 MiB after takeover")
+    parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     args = parser.parse_args()
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
         if not os.environ.get(name):
