@@ -169,6 +169,14 @@ def verify_discovery(base_url, token, expected_names):
         assert detail["role"] in ("read", "write", "admin")
 
 
+def verify_collaborators(base_url, repository_id, expected):
+    page = api_get(base_url, "/api/repositories/renamed/collaborators", "local-test-token")
+    assert page["repository_id"] == repository_id
+    assert page["owner"] == "canopy"
+    assert page["collaborators"] == expected
+    assert page["next_after"] is None
+
+
 def api_status(base_url, path, token, method="GET", payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     request = urllib.request.Request(
@@ -553,6 +561,7 @@ def main():
             selected_head = default_branch(base_url, "example", "refs/heads/trunk")
             url = rename_repository(base_url, "example", "renamed", repository_id)
             assert default_branch(base_url, "renamed") == selected_head
+            verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             verify_discovery(base_url, reader_token, ["renamed"])
             verify_discovery(base_url, "local-test-token", ["renamed", "other"])
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
@@ -587,6 +596,7 @@ def main():
             verify_revoked_token(base_url, revoked_reader)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
+            verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
@@ -602,6 +612,7 @@ def main():
             print("PASS: rotated token survives takeover; revoked token remains denied for API, Git and LFS", flush=True)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
+            verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")
@@ -649,6 +660,8 @@ def main():
                 reader_token,
             ) == 404
             verify_discovery(base_url, reader_token, [])
+            verify_collaborators(base_url, repository_id, [])
+            print("PASS: owner roster survives restart and takeover; revoked collaborator disappears", flush=True)
             assert api_status(base_url, "/api/repositories/renamed", reader_token) == 404
             if large is not None:
                 verify_large_clone(base_url, directory, large)

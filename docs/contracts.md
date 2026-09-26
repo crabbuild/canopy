@@ -192,8 +192,25 @@ same UUID and repository contents survive a URL change. Ready names route
 through their UUID on demand; one node can serve multiple repository Cells.
 The Directory Cell authenticates token digests; each Repository Cell authorizes
 its own Git and LFS access. Repeated bootstrap requires an active admin token
-belonging to the configured owner. Account disablement, listing a repository's
-collaborators and audit records remain open.
+belonging to the configured owner. Account disablement and audit records remain
+open.
+
+`GET /api/repositories/<name>/collaborators?after=<account>` requires an
+admin-scoped token and Repository Cell ownership. It returns `repository_id`,
+`owner`, `collaborators` (objects with `account` and `role`), and `next_after`.
+The immutable owner is separate from the explicit grants. The Repository Cell
+SDK checks ownership in the same SQL batch that reads its member rows; Directory
+discovery candidates never supply roster entries. A resident route stays pinned
+through the query. Missing access returns 404; a known collaborator without
+owner authority receives 403. Insufficient token scope receives 403.
+
+The page contains at most 32 grants ordered by account name. Omit `after` for
+the first page; a supplied empty or invalid account component returns 422.
+A full page returns its last account as `next_after`; an exact multiple of 32
+requires a final empty page. Stop when `next_after` is null. Pages are independent
+observations, not one ACL snapshot: concurrent grants or changes before the
+cursor require a fresh scan. Repository rename changes the route without
+changing the UUID or membership. No schema change is needed for roster reads.
 
 Repository discovery uses a Directory Cell candidate index, keyed by account
 and repository UUID. The product grant path first records a candidate through

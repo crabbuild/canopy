@@ -280,6 +280,10 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .await?
                 .output
         );
+        assert_eq!(repository.collaborators("canopy", None).await?.output, Some(vec![canopy_server::Collaborator { account: "reader".into(), role: TokenScope::Read }]));
+        for actor in ["reader", "outsider"] {
+            assert!(repository.collaborators(actor, None).await?.output.is_none());
+        }
         let reader_plan = PushPlan {
             actor: "reader".into(),
             updates: vec![RefUpdate {
@@ -313,6 +317,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .output
         );
         assert_eq!(repository.access_level("reader", None).await?.output, None);
+        assert_eq!(repository.collaborators("canopy", None).await?.output, Some(Vec::new()));
         let after_revoke = PushPlan {
             actor: "reader".into(),
             updates: vec![RefUpdate {

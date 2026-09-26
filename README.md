@@ -62,6 +62,13 @@ and LFS require both sufficient token scope and repository role. A ref update
 rechecks the writer in the ref transaction; an LFS upload rechecks the writer
 when publishing metadata.
 
+`GET /api/repositories/<name>/collaborators` lets an admin-scoped owner inspect
+access. It returns `repository_id`, `owner`, `collaborators` (account and role),
+and `next_after`. The owner is separate from explicit collaborator grants.
+Pages contain up to 32 grants ordered by account name; pass `?after=<next_after>`
+until the cursor is null. Each page observes current membership independently;
+changes before the cursor require a fresh scan.
+
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
 own account's tokens; the configured owner can manage any account's tokens:
 
@@ -112,9 +119,8 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account disable/delete API, organization model, API to list a repository's
-collaborators, multi-node routing, backup, repository browser, issue or pull request
-API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
+account disable/delete API, organization model, multi-node routing, backup,
+repository browser, issue or pull request API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
 Git revision, so a
 fresh Canopy checkout builds without a local Cellule checkout.
 
@@ -211,7 +217,8 @@ The script requires `CANOPY_NODE_SIGNING_KEY_HEX` and provider credentials in
 the environment. It pushes two repositories with stock Git and LFS, grants a
 collaborator access, renames one repository, restarts with fresh local databases,
 kills the new owner, waits for lease expiry, and clones from a third process.
-It verifies collaborator access after takeover and denial after revocation.
+It verifies collaborator access and the owner roster after takeover, then denial
+and roster removal after revocation.
 It rotates a collaborator token before restart, then checks the retired token
 remains denied for API, Git and LFS after restart and owner takeover.
 It also verifies that a deleted branch stays absent through takeover and can

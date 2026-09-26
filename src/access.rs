@@ -12,7 +12,74 @@ use crate::{
 
 const ACCESS_QUERY: &str = "SELECT CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 'admin' ELSE (SELECT role FROM repository_members WHERE account = ?1) END";
 
+pub const COLLABORATOR_PAGE_SIZE: usize = 32;
+
+/// One explicit repository grant; the immutable owner is not a collaborator entry.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Collaborator {
+    pub account: String,
+    pub role: TokenScope,
+}
+
 impl RepositoryCell {
+    /// Reads one owner-authorized page of current collaborator grants.
+    ///
+    /// Returns `None` for a non-owner. Pages are independent observations in
+    /// account-name order; continue after the last account of a full page.
+    pub async fn collaborators(
+        &self,
+        actor: &str,
+        after: Option<&str>,
+    ) -> Result<Observed<Option<Vec<Collaborator>>>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(actor).map_err(InvocationError::NotStarted)?;
+        if let Some(after) = after {
+            validate_component(after).map_err(InvocationError::NotStarted)?;
+        }
+        let observed = self.sql.query(None, SqlBatch { statements: vec![
+            SqlStatement {
+                sql: "SELECT 1 FROM repository_identity WHERE owner = ?1".into(),
+                parameters: vec![SqlValue::Text(actor.into())],
+            },
+            SqlStatement {
+                sql: format!("SELECT account, role FROM repository_members WHERE account > ?2 AND EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) ORDER BY account LIMIT {COLLABORATOR_PAGE_SIZE}"),
+                parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(after.unwrap_or("").into())],
+            },
+        ] }).await?;
+        let authorized = observed.output.first().ok_or_else(|| {
+            InvocationError::NotStarted(Error::Command("missing roster authorization"))
+        })?;
+        let output = if authorized.rows.is_empty() {
+            None
+        } else {
+            let rows = observed.output.get(1).ok_or_else(|| {
+                InvocationError::NotStarted(Error::Command("missing collaborator page"))
+            })?;
+            let members = rows
+                .rows
+                .iter()
+                .map(|row| {
+                    let [SqlValue::Text(account), SqlValue::Text(role)] = row.as_slice() else {
+                        return Err(Error::Command("invalid collaborator row"));
+                    };
+                    validate_component(account)?;
+                    let role = TokenScope::parse(role)
+                        .filter(|role| *role != TokenScope::Admin)
+                        .ok_or(Error::Command("invalid collaborator role"))?;
+                    Ok(Collaborator {
+                        account: account.clone(),
+                        role,
+                    })
+                })
+                .collect::<cellule_runtime::Result<Vec<_>>>()
+                .map_err(InvocationError::NotStarted)?;
+            Some(members)
+        };
+        Ok(Observed {
+            output,
+            receipt: observed.receipt,
+        })
+    }
+
     /// Pins the owner in the Repository Cell before its directory name becomes ready.
     pub async fn ensure_owner(
         &self,

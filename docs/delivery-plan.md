@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts, token issuance/listing/revocation, repository roles, default branches and authorized repository list/get survive recovery; account disable/delete and collaborator roster remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account disable/delete remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -56,7 +56,7 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account disable/delete, collaborator roster listing and audit records.
+4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Implement collaboration as vertical slices: issues; checks and branch
@@ -753,5 +753,42 @@ This changes the unreleased Directory schema; use a fresh development prefix.
 Deployment configuration must contain an active owner admin token on restart.
 Token revocation blocks new authentication; admitted Git/LFS operations may
 finish subject to current repository ACLs. Account disable/delete, token expiry,
-issuance quotas, retained-record cleanup, collaborator rosters and audit remain
-open. Dependencies and lockfiles are unchanged.
+issuance quotas, retained-record cleanup and audit remain open. Dependencies
+and lockfiles are unchanged.
+
+## Owner collaborator roster
+
+Repository owners can inspect explicit grants through
+`GET /api/repositories/<name>/collaborators`. The response keeps the immutable
+owner separate, identifies the Repository Cell UUID, and returns at most 32
+account-ordered grants. A full page supplies a name cursor; an exact multiple
+requires an empty terminal page. Pages observe current membership independently.
+The existing member primary key supports the scan without a schema change.
+
+The Repository Cell SDK checks owner authority in the same bounded read batch
+as its membership rows. The pinned Cellule query path runs against the
+actor-serialized durable logical head. HTTP requires both admin token scope and
+repository ownership, and retains the residency pin through the read. Default
+branch reads and updates now share their existing routing/authorization helper
+with the roster; their access policy is unchanged. Grant/revoke mutations keep
+using the canonical Cell ACL, while Directory candidates remain discovery data.
+
+The HTTP integration test creates 33 grants, verifies both pagination boundaries,
+updates a role, removes a grant, follows an existing cursor, renames the repository,
+and restores the exact roster using fresh local storage. It proves that anonymous
+requests, outsiders, collaborators with admin-scoped tokens, and the owner using
+a read-scoped token cannot list grants. Direct SDK tests prove owner enforcement
+without HTTP and an empty roster after revocation. The existing default-branch
+recovery test also passes. All-target Clippy with warnings denied and the release
+binary build pass.
+
+The release RustFS process smoke with `--sqlite-chunks --many-objects 256`
+passes. The owner sees the same UUID and explicit reader grant before shutdown,
+after clean restart, and after SIGKILL/lease expiry with fresh local storage.
+Revocation then produces an empty roster and denies reader discovery and Git
+access. The same run verifies rotated credentials, Git/LFS bytes, SQLite chunks,
+300 refs, mixed/atomic push outcomes and lost-reply replay. RustFS startup emits
+fresh-volume initialization warnings; the qualification exits successfully.
+
+No dependency, lockfile, schema or codec changes. This slice adds one read API;
+account disable/delete, audit records and broader collaboration gates remain open.

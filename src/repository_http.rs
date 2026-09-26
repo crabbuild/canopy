@@ -1,7 +1,11 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
+mod authorization;
+mod collaborators;
 mod default_branch;
 mod tokens;
+
+use authorization::authorized_route;
 
 use std::sync::Arc;
 
@@ -67,6 +71,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/default-branch",
                 get(default_branch::read).put(default_branch::update),
+            )
+            .route(
+                "/api/repositories/{name}/collaborators",
+                get(collaborators::list),
             )
             .route(
                 "/api/repositories/{name}/collaborators/{account}",

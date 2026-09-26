@@ -32,6 +32,7 @@ mod repository_http;
 pub mod server;
 mod transfer;
 
+pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
 pub use object_chunks::{MAX_SQLITE_OBJECT_BYTES, ObjectStageError};
