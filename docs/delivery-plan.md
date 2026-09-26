@@ -29,8 +29,10 @@ separate product decisions.
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote; the pinned Cellule revision currently lives on a public
-   branch and needs an upstream release or merge plan.
+   a Canopy remote. The pinned Cellule revision currently lives on a public
+   branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
+   proposes the UUID partition contract. The storage capability probe also
+   needs to land upstream before Canopy can pin a revision on `main`.
 2. Replace the buffered CGI and per-object subprocess path with bounded
    streaming pack ingest/fetch. Add SQLite chunks for large trees, commits
    and tags, plus a real corpus benchmark. Keep the bare repo disposable.
