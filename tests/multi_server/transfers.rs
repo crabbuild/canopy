@@ -51,6 +51,20 @@ async fn transfers_share_node_admission_and_disconnect_allows_retry()
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()["retry-after"], "1");
     }
+    let comparison = client
+        .post(format!(
+            "http://{address}/api/repositories/first/pulls/1/comparison"
+        ))
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    assert_eq!(
+        comparison.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(comparison.headers()["retry-after"], "1");
+    comparison.bytes().await?;
     for path in ["healthz", "readyz", "api/repositories"] {
         let response = client
             .get(format!("http://{address}/{path}"))

@@ -897,8 +897,94 @@ No aggregate approval count, mergeability or diff computation runs on these read
 Future merge publication must recheck current review requirements, grant/ref/pull
 versions and branch checks in the same transaction as the base ref and merged
 state. Git pushes do not currently require a PR review. Required reviewer policy,
-diff/file browsing, inline threads, merge commits/squash/rebase, conflict UI,
+text patches, general file browsing, inline threads, merge commits/squash/rebase, conflict UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications and UI remain open. A future collector must retain initial pull
 OIDs, historical review OIDs and merge preparation roots in addition to live refs.
 Aggregate retention/quotas and production throughput evidence remain open.
+
+
+### Exact-revision pull comparisons
+
+`POST /api/repositories/<name>/pulls/<number>/comparison` is a read operation.
+It accepts canonical `repository_id`, the same exact `PullRevision` as reviews,
+and tagged `query`: `files` with optional `after`, or `file` with `path_base64`
+and `side` (`before`/`after`). Read token scope suffices. JSON rejects unknown
+fields. Input is bounded to 32 KiB and 30 seconds; computation to 120 seconds.
+Missing membership/pull/file returns 404, invalid identity/revision/path 422,
+repository identity mismatch or moved revision 409, budget exhaustion 413,
+computation deadline 504, and unavailable/corrupt data 503. Unrelated histories
+and multiple best merge bases return distinct 409 messages.
+
+The reader checks membership and exact editorial/source/base OIDs and retained
+ref versions before and after traversal. Every page repeats these checks.
+It supports open, closed and draft proposals with live refs. Equal current tips
+produce an empty file list; deleted refs conflict. It does not serve arbitrary
+historical OIDs through this endpoint. The response records the requested revision
+and computed merge base, which describe that observed view rather than promising
+that refs cannot move after the response. Token revocation retains the existing
+request-admission boundary; repository membership is checked again after body
+upload and before returning the result. Revoke during a paused body is rejected.
+
+Comparison uses verified immutable `commit_parents` rows, emitted only by object
+closure certification. Union ancestry is read in groups of 128 commits and SQL
+pages of 512 child/parent edges. Ancestry propagation identifies common nodes;
+removing every proper ancestor of those nodes leaves the best bases. Exactly one
+is required. This implements the best-common-ancestor definition in
+[Git merge-base](https://git-scm.com/docs/git-merge-base); criss-cross histories
+are explicitly ambiguous instead of selecting an unspecified base. A merge may
+have more parents than one SQL page. Tests use a 600-parent commit and the last
+lexicographic parent to prove traversal reaches the second page.
+
+The tree comparison is merge-base to source, equivalent to a three-dot PR view.
+Equal subtrees are skipped. Leaves include blobs, symlinks and Gitlinks;
+file/directory replacements expand into leaf additions/removals. Regular-file
+modes depend only on the owner executable bit, and directory/link modes use type
+bits, matching Git's `canon_mode` in
+[object.h](https://github.com/git/git/blob/master/object.h) and its use by
+[tree-walk.c](https://github.com/git/git/blob/master/tree-walk.c).
+There is no rename similarity detection, patch computation or text conversion.
+Changed-file tests compare full modes/OIDs/raw paths with
+[git diff-tree](https://git-scm.com/docs/git-diff-tree) using `--raw -r -z --no-renames`.
+
+Files sort lexicographically by raw path bytes and page at 32 rows. Base64 paths
+and cursors use URL-safe encoding without padding and canonical round trips;
+paths reject NUL, empty components, dot/dot-dot components and more than 4096
+bytes. UTF-8 `path` is null when decoding fails. The canonical path remains in
+`path_base64`. A cursor is an exclusive path boundary, not a signed capability.
+The same revision must accompany every page. Current implementation recomputes
+the bounded graph/change set per page; it has no persistent diff cache.
+
+A file preview resolves its path from the merge-base or source tree; it may read
+an unchanged file in that tree too. Symlinks and Gitlinks are not traversed. Blob
+metadata is checked first. Up to 256 KiB of verified raw bytes is returned as
+URL-safe base64 (`included`); larger blobs return `too_large` without reading
+external storage. Gitlinks return `gitlink`, null size and null content. An LFS
+pointer remains ordinary Git blob text, with no LFS object download. Existing
+object reads verify SHA-1 identity and BLAKE3 bytes for returned content.
+
+Resource bounds per request:
+
+| Resource | Limit |
+| --- | --- |
+| Ancestor commits / parent edges | 100,000 / 250,000 |
+| Individual commit/tree bytes read | 8 MiB |
+| Cumulative object bytes read | 64 MiB |
+| Cumulative parsed tree entries | 250,000 |
+| Changed leaves | 10,000 |
+| Traversal depth / path bytes | 128 / 4096 |
+| Queued traversal path bytes | 8 MiB |
+| File content preview | 256 KiB |
+
+Exceeding a budget fails the whole request. A file preview can still succeed
+when listing all changes exceeds its changed-leaf limit. None of these bounds is
+a production capacity claim. The endpoint shares the node's eight transfer
+permits with Git/LFS. Detached request work, blocking graph/tree workers and
+outstanding response frames retain admission until released. Repository residency
+is pinned while Cell reads run. Comparisons use SQLite objects directly and do
+not hydrate the native bare Git cache. Current no-GC storage makes immutable
+object traversal safe; future collection must fence active comparison roots.
+
+No schema, Cell command registration, dependency or lockfile change is needed.
+Merge preparation, review policy, atomic merge publication and line-based review
+remain separate open delivery gates.

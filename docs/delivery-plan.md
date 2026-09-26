@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule and pull/review lifecycle APIs implemented; merge publication, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review and exact-revision comparison APIs implemented; merge publication, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: PR diffs, required reviews and atomic merge;
+5. Continue collaboration as vertical slices: text patches, required reviews and atomic merge;
    issue labels/assignees; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -1039,3 +1039,54 @@ New schema tables require a fresh development prefix. No dependencies changed.
 Approximately 1,000 Rust lines implement the model/read boundary, three guarded
 mutations and six HTTP operations, with shared validation/result handling inside
 the pull module. Full delivery gates and production capacity remain open.
+
+
+## Pull comparison and file preview
+
+Repository HTTP now reads exact-revision changes from Cell Git objects. The
+comparison selects a unique best common ancestor and walks its tree against the
+source tree, skipping equal subtrees. No native cache hydration is required.
+Changed leaves include additions, removals, edits, executable changes, symlinks,
+Gitlinks and file/directory replacements. Paths remain raw bytes with canonical
+base64 transport; optional display paths are UTF-8. Renames are separate removal
+and addition records. File previews return at most 256 KiB; external large blobs
+and Gitlinks expose metadata without fetching their content.
+
+Membership and editorial/ref versions are checked before and after each read.
+The endpoint uses the existing node transfer admission and response lifetime
+accounting. Traversal, output, depth, path memory and elapsed work have explicit
+limits documented in `contracts.md`. Changed-file pagination currently recomputes
+the bounded comparison; caching and large-history performance remain open.
+
+Verified locally:
+
+- Real Git pushes and HTTP reads: native `merge-base --all` and full raw
+  `diff-tree -r -z --no-renames` modes/OIDs/path comparison, including diverged
+  base-only changes, multiple pages, binary bytes, non-UTF-8 names created with
+  index plumbing, symlinks, executable files, Gitlinks and file/directory swaps.
+- Exact before/after previews, large external blob metadata, invalid paths and
+  cursors, repository identity binding, read-scoped token access, and membership
+  revocation while a request body is paused. Source movement and ABA reject old
+  views; repository rename and fresh-local-storage recovery preserve snapshots.
+- A 600-parent merge proves SQL parent-edge pagination. Criss-cross and unrelated
+  histories agree with native Git and produce explicit conflict responses.
+- A 10,001-file change set returns 413 without a partial page, while an individual
+  file remains readable. Oversized HTTP bodies fail. Eight outstanding LFS
+  uploads block comparison admission with 503/Retry-After; other APIs stay live.
+- Unit graph/tree tests, Clippy over all targets with warnings denied, and the
+  release binary build pass. The Python recovery probe parses successfully.
+
+The release S3-compatible process probe passes against RustFS
+`1.0.0-beta.8-glibc` with `--sqlite-chunks --many-objects 256`. Exact comparison
+and preview snapshots survive clean restart and SIGKILL/lease takeover with
+fresh local storage. Existing pull/review retries, branch/check rules, issues,
+Git/LFS, token/ACL recovery, 300 refs, SQLite chunks and dropped-push-reply replay
+also pass. The runner exits successfully; fresh-volume initialization diagnostics
+are unchanged. Hosted CI and target production-store qualification remain open.
+
+Approximately 875 Rust implementation lines own bounded graph/tree traversal,
+file previews and the HTTP admission/lifetime boundary. Existing Git publication
+and storage commands remain the canonical write path. No dependency, lockfile or
+schema changes. Full delivery gates remain open: required-review policy and
+atomic merge publication are the next collaboration work, followed by patches,
+inline discussions and UI.

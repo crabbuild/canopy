@@ -107,6 +107,7 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / POST | `/api/repositories/<name>/pulls` | List summaries / open a pull |
 | GET / PUT | `/api/repositories/<name>/pulls/<number>` | Read / edit, close or reopen |
 | GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
+| POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files or file bytes |
 
 To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
 `source_ref`, `source_oid`, `base_ref`, and `base_oid`. Use fully qualified branch
@@ -148,9 +149,35 @@ grant does not. Lists return up to 32 pull summaries or 16 reviews with numeric
 `after` / `next_after`; pulls support an optional `state` filter. Text limits match
 issues: 256-byte titles, 16 KiB bodies; review comments must be nonblank.
 
-These APIs support proposal and review lifecycle. Diff browsing, inline comments,
-review requirements, merge publication, forks, retargeting and a PR UI remain to
-be delivered. An applicable review currently does not gate direct Git pushes.
+Comparison POSTs require a read-scoped token, current repository membership,
+`repository_id`, the `revision` object above, and one of these queries:
+
+```json
+{"kind":"files","after":null}
+```
+
+```json
+{"kind":"file","path_base64":"UkVBRE1FLm1k","side":"after"}
+```
+
+Changed files compare the unique merge-base tree to the source tree. Responses
+include `comparison` with `merge_base`, `revision`, up to 32 `files`, and
+`next_after`. Each file has a byte-preserving `path_base64`, optional UTF-8 `path`,
+and nullable `before`/`after` entries containing six-digit octal `mode` and `oid`.
+Pass `next_after` as `query.after` with the same revision for the next page.
+Renames appear as deletion plus addition. Unrelated or ambiguous histories and
+moved revisions return 409; traversal limits return 413 without a partial list.
+
+A file query uses `side: "before"` for the merge base or `"after"` for the source.
+The `file` response includes the entry, size, and `content_status`: `included`,
+`too_large`, or `gitlink`. `content_base64` contains at most 256 KiB of raw blob
+bytes when included; otherwise it is null. All base64 uses the URL-safe alphabet
+without padding. Symlinks return target text; Gitlinks and LFS pointers are never
+followed. Large blobs return metadata without fetching external content.
+
+Text patches, inline comments, review requirements, merge publication, forks,
+retargeting and a PR UI remain to be delivered. An applicable review currently
+does not gate direct Git pushes.
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.

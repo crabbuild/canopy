@@ -4,6 +4,7 @@ mod authorization;
 mod branch_rules;
 mod checks;
 mod collaborators;
+mod comparison;
 mod default_branch;
 mod issues;
 mod pulls;
@@ -103,6 +104,10 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/pulls/{number}",
                 get(pulls::read).put(pulls::edit),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/comparison",
+                axum::routing::post(comparison::compare),
             )
             .route(
                 "/api/repositories/{name}/pulls/{number}/reviews",

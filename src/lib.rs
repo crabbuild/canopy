@@ -15,6 +15,7 @@ mod access;
 mod ancestry;
 pub mod branch_rules;
 pub mod checks;
+mod comparison;
 mod default_branch;
 pub mod directory;
 mod git_cache;
