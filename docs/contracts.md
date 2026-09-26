@@ -328,9 +328,16 @@ subprocesses separately retain their cache generation until their work ends.
 External objects and durable Cell state remain intact. Later access acquires
 the idle Cell from its published root and rebuilds the disposable Git cache.
 
-If every repository is pinned or the runtime refuses release, the new request
-returns 503 without evicting active work. Failed release retains local state and
-invalidates the manager's cached handles. Cellule transfer preflight may replace
+Cellule's pinned `ReleaseIdleCell` handler returns
+`Error::Capacity("movement budget")` before transfer preflight when its two-per-second
+movement admission is exhausted. Canopy waits one second and retries that exact
+release once; the runtime rechecks the generation, node lease and settled work.
+This bounded admission wait keeps sequential stock Git clones from failing just
+because eviction reached the current rate window. It holds the manager's existing
+serialization lock and tracked task; it does not retry a Git or Cell mutation.
+Other release errors retain the existing recovery path. An exhausted retry or
+fully pinned residency still returns 503 without evicting active work. Failed
+release retains local state and invalidates the manager's cached handles. Cellule transfer preflight may replace
 the old capability even when release is refused. A later request binds fresh
 handles only if the runtime confirms a serving resident owner. Otherwise it
 returns 503, including a repeated create request for that repository; a terminal

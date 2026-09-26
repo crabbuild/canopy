@@ -257,10 +257,20 @@ impl RepositoryManager {
                 "repository residency",
             )));
         };
-        let result = self
+        let mut result = self
             .node
             .release_idle_cell(cell, self.session, generation)
             .await;
+        // Cellule rejects this exact capacity error before transfer preflight.
+        // Wait one rate window; the retry rechecks generation and settled work.
+        // Other failures can follow release and must retain the recovery path.
+        if matches!(&result, Err(Error::Capacity("movement budget"))) {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            result = self
+                .node
+                .release_idle_cell(cell, self.session, generation)
+                .await;
+        }
         let repository = loaded
             .get_mut(&id)
             .ok_or(ServerError::Repository("eviction candidate is absent"))?;

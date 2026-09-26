@@ -715,7 +715,7 @@ async fn dispatch_repository(
             }
             Ok(None) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
             Err(error) => {
-                tracing::error!(error = %error, "repository routing failed");
+                tracing::error!(error = ?error, "repository routing failed");
                 plain(StatusCode::SERVICE_UNAVAILABLE, "Repository is unavailable")
             }
         };

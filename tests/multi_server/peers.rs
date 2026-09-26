@@ -10,21 +10,7 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
     let files = tempfile::TempDir::new()?;
     let a = available_address().await?;
     let b = available_address().await?;
-    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()])?;
-    let ca = certified.cert.pem().into_bytes();
-    let tls = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
-        tokio_rustls::rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_no_client_auth()
-    .with_single_cert(
-        vec![certified.cert.der().clone()],
-        tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(
-            certified.signing_key.serialize_der(),
-        )
-        .into(),
-    )?;
-    let tls = Arc::new(tls);
+    let (ca, tls) = tls_config()?;
     let (forward_a, lose_reply, _forward_a) = response_loss_proxy(a).await?;
     let (peer_a, _proxy_a) = proxy(forward_a, Arc::clone(&tls)).await?;
     let (peer_b, _proxy_b) = proxy(b, tls).await?;
@@ -381,4 +367,271 @@ async fn proxy(
         }
     });
     Ok((endpoint, Proxy(task)))
+}
+
+fn tls_config() -> Result<(Vec<u8>, Arc<tokio_rustls::rustls::ServerConfig>)> {
+    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()])?;
+    let ca = certified.cert.pem().into_bytes();
+    let tls = tokio_rustls::rustls::ServerConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![certified.cert.der().clone()],
+        tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(
+            certified.signing_key.serialize_der(),
+        )
+        .into(),
+    )?;
+    Ok((ca, Arc::new(tls)))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_repositories_preserve_history_and_serialize_cross_gateway_pushes() -> Result {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    use canopy_server::repository_target;
+    use cellule_runtime::{CellAuthority, CellStorageLayout, ControlState};
+    use cellule_store::Store;
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let files = tempfile::TempDir::new()?;
+    let a = available_address().await?;
+    let b = available_address().await?;
+    let (ca, tls) = tls_config()?;
+    let (peer_a, _proxy_a) = proxy(a, Arc::clone(&tls)).await?;
+    let (peer_b, _proxy_b) = proxy(b, tls).await?;
+    let mut settings_a = config(a, files.path().join("first"));
+    settings_a.peer_endpoint = peer_a;
+    settings_a.peer_ca_pem = Some(ca.clone());
+    let mut settings_b = config(b, files.path().join("second"));
+    settings_b.peer_endpoint = peer_b;
+    settings_b.peer_ca_pem = Some(ca);
+    settings_b.node = NodeId::from_bytes(uuid::Uuid::new_v4().into_bytes());
+    settings_b.signing_key = SigningKey::from_bytes(&[94; 32]);
+    let tenant = settings_a.tenant;
+    let application = settings_a.application;
+    let authority = CellAuthority::new(CellStorageLayout::new(
+        Store::new(Arc::clone(&store)),
+        settings_a.store_prefix.clone(),
+        *application.as_bytes(),
+    ));
+    let first = CanopyServer::start(settings_a, Arc::clone(&store)).await?;
+    let second = CanopyServer::start(settings_b, store).await?;
+    let source = files.path().join("source");
+    run_git(None, &["init", "-b", "main", path_str(&source)?]).await?;
+    run_git(Some(&source), &["config", "user.name", "Canopy Test"]).await?;
+    run_git(
+        Some(&source),
+        &["config", "user.email", "canopy@example.invalid"],
+    )
+    .await?;
+    let client = Client::new();
+    let mut repositories = Vec::new();
+    for index in 0..8 {
+        let name = format!("moving-{index}");
+        let (owner, ingress) = if index % 2 == 0 { (a, b) } else { (b, a) };
+        create_repository(owner, &name).await?;
+        let detail: serde_json::Value = client
+            .get(format!("http://{owner}/api/repositories/{name}"))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let id = uuid::Uuid::parse_str(detail["repository_id"].as_str().ok_or("missing ID")?)?;
+        let target = repository_target(tenant, application, id.into_bytes())?;
+        std::fs::write(source.join("README.md"), name.as_bytes())?;
+        run_git(Some(&source), &["add", "."]).await?;
+        run_git(Some(&source), &["commit", "-m", &name]).await?;
+        let url = format!("http://{ingress}/canopy/{name}.git");
+        run_git(
+            Some(&source),
+            &[
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+                &url,
+                "main",
+            ],
+        )
+        .await?;
+        let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
+        repositories.push((name, target, oid));
+    }
+    let mut moved = false;
+    for round in 0..2 {
+        for (name, target, oid) in &repositories {
+            let before = authority
+                .load(target.cell_id())
+                .await?
+                .ok_or("missing control")?;
+            let ingress = if round == 0 { a } else { b };
+            let phase = format!("round-{round}");
+            clone(&files, ingress, name, &phase).await?;
+            let path = files.path().join(format!("{name}-{phase}"));
+            assert_eq!(&run_git(Some(&path), &["rev-parse", "HEAD"]).await?, oid);
+            let after = authority
+                .load(target.cell_id())
+                .await?
+                .ok_or("missing control")?;
+            moved |= before.value().owner != after.value().owner;
+            assert_eq!(after.value().state, ControlState::Serving);
+            let mut owners = std::collections::HashMap::new();
+            for (_, other, _) in &repositories {
+                let control = authority
+                    .load(other.cell_id())
+                    .await?
+                    .ok_or("missing control")?;
+                if let Some(owner) = &control.value().owner {
+                    *owners.entry(owner.session).or_insert(0) += 1;
+                }
+            }
+            assert!(owners.values().all(|count| *count <= 3));
+        }
+    }
+    assert!(moved, "fixture must exercise owner changes");
+
+    // Both clients start from the same ref and submit distinct commits. A request
+    // through a remote gateway must not bypass the owner's final ref comparison.
+    let (name, _, base) = &repositories[7];
+    let left = files.path().join(format!("{name}-round-0"));
+    let right = files.path().join(format!("{name}-round-1"));
+    for (path, body) in [(&left, "left"), (&right, "right")] {
+        run_git(Some(path), &["config", "user.name", "Canopy Test"]).await?;
+        run_git(
+            Some(path),
+            &["config", "user.email", "canopy@example.invalid"],
+        )
+        .await?;
+        std::fs::write(path.join("race.txt"), body)?;
+        run_git(Some(path), &["add", "."]).await?;
+        run_git(Some(path), &["commit", "-m", body]).await?;
+    }
+    let lease = format!(
+        "--force-with-lease=refs/heads/main:{}",
+        std::str::from_utf8(base)?.trim()
+    );
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let (race_a, _race_a) = push_barrier_proxy(a, Arc::clone(&barrier)).await?;
+    let (race_b, _race_b) = push_barrier_proxy(b, barrier).await?;
+    let push = |path: std::path::PathBuf, address| {
+        let url = format!("http://{address}/canopy/{name}.git");
+        let lease = lease.clone();
+        async move {
+            Command::new("git")
+                .current_dir(path)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args([
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    "http.extraHeader=Authorization: Bearer local-test-token",
+                    "push",
+                    &lease,
+                    &url,
+                    "HEAD:refs/heads/main",
+                ])
+                .output()
+                .await
+        }
+    };
+    let (left_result, right_result) =
+        tokio::join!(push(left.clone(), race_a), push(right.clone(), race_b));
+    let (left_result, right_result) = (left_result?, right_result?);
+    assert_ne!(
+        left_result.status.success(),
+        right_result.status.success(),
+        "left: {}; right: {}",
+        String::from_utf8_lossy(&left_result.stderr),
+        String::from_utf8_lossy(&right_result.stderr)
+    );
+    let rejected = if left_result.status.success() {
+        &right_result
+    } else {
+        &left_result
+    };
+    let rejection = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        rejection.contains("409") || rejection.contains("[remote rejected]"),
+        "expected a ref rejection, not transport or admission failure: {rejection}"
+    );
+    let winner = if left_result.status.success() {
+        &left
+    } else {
+        &right
+    };
+    let winner_oid = run_git(Some(winner), &["rev-parse", "HEAD"]).await?;
+    first.shutdown().await?;
+    for (index, (name, _, oid)) in repositories.iter().enumerate() {
+        clone(&files, b, name, "survivor").await?;
+        let path = files.path().join(format!("{name}-survivor"));
+        let expected = if index == 7 { &winner_oid } else { oid };
+        assert_eq!(
+            &run_git(Some(&path), &["rev-parse", "HEAD"]).await?,
+            expected
+        );
+        if index == 7 {
+            assert_eq!(
+                std::fs::read(path.join("race.txt"))?,
+                std::fs::read(winner.join("race.txt"))?
+            );
+        }
+    }
+    second.shutdown().await?;
+    Ok(())
+}
+
+async fn push_barrier_proxy(
+    upstream: std::net::SocketAddr,
+    barrier: Arc<tokio::sync::Barrier>,
+) -> Result<(std::net::SocketAddr, Proxy)> {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::{Request, Response},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let client = Client::new();
+    let route = move |request: Request<Body>| {
+        let client = client.clone();
+        let barrier = Arc::clone(&barrier);
+        async move {
+            let (mut parts, body) = request.into_parts();
+            let body = to_bytes(body, 1024 * 1024).await.unwrap();
+            if parts.uri.path().ends_with("/git-receive-pack") {
+                // Both stock clients have advertised the same old ref and sent
+                // their entire update before either RPC reaches its gateway.
+                tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                    .await
+                    .unwrap();
+            }
+            parts.headers.remove("host");
+            let response = client
+                .request(parts.method, format!("http://{upstream}{}", parts.uri))
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let content_type = response.headers().get("content-type").cloned();
+            let mut response = Response::new(Body::from(response.bytes().await.unwrap()));
+            *response.status_mut() = status;
+            if let Some(content_type) = content_type {
+                response.headers_mut().insert("content-type", content_type);
+            }
+            response
+        }
+    };
+    let task = tokio::spawn(async move {
+        axum::serve(listener, Router::new().fallback(route))
+            .await
+            .unwrap();
+    });
+    Ok((address, Proxy(task)))
 }

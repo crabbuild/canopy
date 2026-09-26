@@ -484,7 +484,8 @@ Keep the runtime alive until shutdown finishes for graceful cleanup.
 Local recovery currently admits a 512 MiB SQLite database. The node reserves a
 SQL slot for Directory ownership and caches up to three repository gateways,
 each bound to a local or remote Cell. Additional repositories evict an inactive
-gateway; local Cell ownership is released before its slot is reused.
+gateway; local Cell ownership is released before its slot is reused. On a temporary
+Cellule movement-rate denial, admission waits one second before a single retry.
 Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
@@ -626,8 +627,8 @@ absent, and `git push --atomic` rejects the entire mixed update.
 A proxy drops a successful push reply; replay after takeover returns the original
 report without undoing a later branch deletion.
 A final phase runs two nodes behind local HTTPS proxies with a private test CA,
-pushes and clones Git/LFS through the opposite repository owner, kills one node,
-and verifies Directory and repository takeover through the surviving gateway
+pushes and clones eight Git/LFS repositories through the opposite owner, kills
+one node, and verifies Directory and repository takeover through the surviving gateway
 without restarting it. It writes under a unique prefix in the supplied bucket.
 
 Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the

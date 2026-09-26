@@ -1911,3 +1911,50 @@ can fail that request. Concurrent placement, partitions, larger hot sets,
 production storage and throughput, native peak resource bounds, backup/restore,
 GC and telemetry still need qualification or implementation. The service delivery
 gates remain incomplete.
+
+## Eviction admission and cross-gateway ref contention
+
+The two-node, eight-repository integration reproduced a stock Git clone failure
+while both nodes were healthy: the routing boundary returned
+`Runtime(Capacity("movement budget"))` as HTTP 503 during sequential eviction.
+The pinned Cellule actor allows two completed releases per one-second window.
+Its `ReleaseIdleCell` branch returns this exact error before closing admission,
+starting transfer preflight, closing SQLite or publishing ownership changes.
+
+Canopy now waits one second and retries that release once. The runtime rechecks
+its exact Cell generation, lease and settled-work conditions. The wait remains
+inside the tracked, serialized residency operation, so cancellation does not
+abandon ownership work. All other release errors follow the existing state
+retention and handle-refresh path. This is admission waiting, with no Git request
+or Cell mutation replay. Routing logs now include the source error needed to
+distinguish these failures.
+
+The new integration exceeds the combined resident capacity, clones every history
+through each ingress, inspects durable ownership bounds and proves actual owner
+changes. It then gates two stock Git pushes after both clients have sent updates
+based on the same advertised ref. Exactly one succeeds; the other must report a
+ref rejection, and the winning commit and file survive shutdown of the first
+node and cloning all eight repositories through the survivor. The original test
+failed before the admission change and passes with it.
+
+Both HTTPS peer integrations and all six residency/fault integrations pass.
+The strengthened race also passes with an assertion that distinguishes a ref
+rejection from a transport/admission error. All-target Clippy, formatting,
+Python smoke syntax and the release build pass.
+
+The release binary also passes the expanded RustFS process probe with
+`--sqlite-chunks --many-objects 256`: eight Git/LFS repositories exceed residency,
+serve through opposite owners, and restore exact bytes after SIGKILL and lease
+expiry through the surviving gateway without restarting it. Earlier phases retain
+collaboration, branch policies, merge/squash, exact retries, large SQLite objects
+and 300 additional refs across graceful restart and corrupted local state.
+The active Colima engine could not see the external workspace bind mount, so this
+run used a dedicated RustFS container with capped tmpfs data/log mounts. It proves
+Canopy process recovery against a live S3-compatible service; provider disk and
+power-loss durability are outside this run's evidence.
+
+The production change adds ten lines at the existing release boundary. No new
+configuration, dependency, storage format or schema. Shared-manager admission can
+wait for one second under this pressure; the current three-gateway limit remains
+an initial bound, not production capacity. Placement races, partitions, requests
+spanning owner movement and larger hot-set throughput still need broader proof.

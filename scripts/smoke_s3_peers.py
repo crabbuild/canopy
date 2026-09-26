@@ -80,14 +80,15 @@ def qualify(binary, directory, settings, processes):
         first, base_a = start(binary, directory, {**settings, "peer_endpoint": peer_a},
                               "peer-first", listen_address=a)
         processes.append(first)
-        create_repository(base_a, "peer-left")
         second, base_b = start(binary, directory,
                                {**settings, "node_id": str(uuid.uuid4()), "peer_endpoint": peer_b},
                                "peer-second", listen_address=b)
         processes.append(second)
-        create_repository(base_b, "peer-right")
         expected = []
-        for name, ingress in [("peer-left", base_b), ("peer-right", base_a)]:
+        names = ["peer-left", "peer-right", *[f"peer-{index}" for index in range(2, 8)]]
+        for index, name in enumerate(names):
+            owner, ingress = (base_a, base_b) if index % 2 == 0 else (base_b, base_a)
+            create_repository(owner, name)
             local = directory / name
             git("init", "-b", "main", str(local))
             git("config", "user.name", "Canopy Test", cwd=local)
@@ -114,4 +115,4 @@ def qualify(binary, directory, settings, processes):
         second.send_signal(signal.SIGTERM)
         second.wait(timeout=30)
         assert second.returncode == 0
-        print("PASS: two live HTTPS nodes serve Git/LFS through opposite Cell owners; survivor restores Directory and repository after SIGKILL without restarting", flush=True)
+        print("PASS: two live HTTPS nodes serve eight Git/LFS repositories beyond resident capacity through opposite Cell owners; survivor restores Directory and repository after SIGKILL without restarting", flush=True)
