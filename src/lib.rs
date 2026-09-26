@@ -11,6 +11,7 @@ use cellule_runtime::{
 };
 use sha1::{Digest as _, Sha1};
 
+mod access;
 pub mod directory;
 pub mod git_gateway;
 pub mod git_http;
@@ -28,13 +29,17 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation(3)];
+const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation_with_codec(3, 2)];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
 const fn operation(id: u32) -> OperationDescriptor {
+    operation_with_codec(id, 1)
+}
+
+const fn operation_with_codec(id: u32, codec_version: u32) -> OperationDescriptor {
     OperationDescriptor {
         id,
-        codec_version: 1,
+        codec_version,
         schema_min: 1,
         schema_max: 1,
         input_limit: 1 << 20,
@@ -128,6 +133,8 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
+                source.update(include_bytes!("access.rs"));
+                source.update(include_bytes!("lfs.rs"));
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
             },

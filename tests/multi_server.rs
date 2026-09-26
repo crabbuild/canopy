@@ -66,6 +66,37 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
             .len(),
         2
     );
+    let reader_token = format!("cnp_{}", "ab".repeat(32));
+    let account_url = format!("http://{first_address}/api/accounts");
+    assert_eq!(
+        client
+            .post(&account_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"name": "reader", "token": reader_token, "scope": "read"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(&listing_url)
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(&listing_url)
+            .bearer_auth(&reader_token)
+            .json(&serde_json::json!({"name": "reader-repo"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
     let first_id = listing["repositories"]
         .as_array()
         .ok_or("list missing")?
@@ -128,6 +159,118 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
     )
     .await?;
     let other_oid = run_git(Some(&other), &["rev-parse", "HEAD"]).await?;
+    let reader_refs = format!("{first_url}/info/refs?service=git-upload-pack");
+    assert_eq!(
+        client
+            .get(&reader_refs)
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let collaborator_url = format!("{listing_url}/example/collaborators/reader");
+    assert_eq!(
+        client
+            .put(&collaborator_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"role": "read"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(&reader_refs)
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(&reader_refs)
+            .basic_auth("reader", Some(&reader_token))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(&reader_refs)
+            .basic_auth("canopy", Some(&reader_token))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .get(format!("{first_url}/info/refs?service=git-receive-pack"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .put(&collaborator_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"role": "write"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("{first_url}/info/refs?service=git-receive-pack"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .put(&collaborator_url)
+            .bearer_auth("local-test-token")
+            .json(&serde_json::json!({"role": "read"}))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("{other_url}/info/refs?service=git-upload-pack"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let reader_clone = workspace.path().join("reader-clone");
+    let reader_header = format!("http.extraHeader=Authorization: Bearer {reader_token}");
+    run_git(
+        None,
+        &[
+            "-c",
+            &reader_header,
+            "clone",
+            &first_url,
+            path_str(&reader_clone)?,
+        ],
+    )
+    .await?;
+    assert_eq!(
+        run_git(Some(&reader_clone), &["rev-parse", "HEAD"]).await?,
+        original
+    );
     let rename_url = format!("{listing_url}/example");
     assert_eq!(
         client
@@ -203,6 +346,24 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
         store,
     )
     .await?;
+    assert_eq!(
+        client
+            .get(format!("{second_url}/info/refs?service=git-upload-pack"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("http://{second_address}/api/repositories"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
     let clone = workspace.path().join("clone");
     run_git(
         None,
@@ -255,6 +416,26 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
     assert_eq!(
         run_git(Some(&other_clone), &["rev-parse", "HEAD"]).await?,
         other_oid
+    );
+    assert_eq!(
+        client
+            .delete(format!(
+                "http://{second_address}/api/repositories/renamed/collaborators/reader"
+            ))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .get(format!("{second_url}/info/refs?service=git-upload-pack"))
+            .bearer_auth(&reader_token)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::NOT_FOUND
     );
     second.shutdown().await?;
     Ok(())

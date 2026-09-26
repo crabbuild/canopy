@@ -12,12 +12,10 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use url::Url;
 
 use crate::{
-    directory::validate_component,
+    directory::{Principal, TokenScope, validate_component},
     git_gateway::{GatewayError, GitGateway},
     git_http::GitHttpRequest,
     lfs::{LfsError, MAX_LFS_BYTES},
@@ -28,12 +26,10 @@ const MAX_LFS_BATCH_BYTES: usize = 1024 * 1024;
 const MAX_LFS_BATCH_OBJECTS: usize = 100;
 const LFS_JSON: &str = "application/vnd.git-lfs+json";
 
-/// One configured private owner and hashed Git access token.
+/// Git and LFS transport for one private Repository Cell.
 pub struct GitHttpApi {
     gateway: Arc<GitGateway>,
-    owner: String,
     repository_path: String,
-    token_digest: [u8; 32],
     public_url: Url,
     ready: Arc<dyn Fn() -> bool + Send + Sync>,
 }
@@ -43,21 +39,15 @@ impl GitHttpApi {
         gateway: Arc<GitGateway>,
         owner: String,
         repository_name: &str,
-        token: &str,
         public_url: &str,
         ready: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self, &'static str> {
-        if owner.is_empty() || token.is_empty() {
-            return Err("Git owner and token are required");
-        }
         validate_component(&owner).map_err(|_| "invalid repository owner")?;
         validate_component(repository_name).map_err(|_| "invalid repository name")?;
         let public_url = validate_public_url(public_url)?;
         Ok(Self {
             gateway,
             repository_path: format!("/{owner}/{repository_name}.git"),
-            owner,
-            token_digest: Sha256::digest(token.as_bytes()).into(),
             public_url,
             ready,
         })
@@ -74,8 +64,23 @@ impl GitHttpApi {
             .with_state(self)
     }
 
-    fn authorized(&self, authorization: Option<&HeaderValue>) -> bool {
-        authorized(&self.owner, &self.token_digest, authorization)
+    async fn permission(
+        &self,
+        principal: &Principal,
+        required: TokenScope,
+    ) -> Result<(), StatusCode> {
+        if principal.scope < required {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        match self.gateway.access_level(&principal.account).await {
+            Ok(Some(role)) if role >= required => Ok(()),
+            Ok(Some(_)) => Err(StatusCode::FORBIDDEN),
+            Ok(None) => Err(StatusCode::NOT_FOUND),
+            Err(error) => {
+                tracing::error!(error = %error, "repository access check failed");
+                Err(StatusCode::SERVICE_UNAVAILABLE)
+            }
+        }
     }
 }
 
@@ -101,39 +106,26 @@ pub(crate) fn validate_public_url(public_url: &str) -> Result<Url, &'static str>
     Ok(public_url)
 }
 
-pub(crate) fn authorized(
-    owner: &str,
-    token_digest: &[u8; 32],
-    authorization: Option<&HeaderValue>,
-) -> bool {
-    let Some(header) = authorization.and_then(|value| value.to_str().ok()) else {
-        return false;
-    };
-    let token = if let Some(value) = header.strip_prefix("Bearer ") {
-        value
-    } else if let Some(value) = header.strip_prefix("Basic ") {
-        let Ok(decoded) = STANDARD.decode(value) else {
-            return false;
-        };
-        let Ok(decoded) = String::from_utf8(decoded) else {
-            return false;
-        };
-        let Some((user, password)) = decoded.split_once(':') else {
-            return false;
-        };
-        if user != owner {
-            return false;
-        }
-        return matches_token(token_digest, password);
-    } else {
-        return false;
-    };
-    matches_token(token_digest, token)
+pub(crate) struct HttpCredential {
+    pub user: Option<String>,
+    pub token: String,
 }
 
-fn matches_token(token_digest: &[u8; 32], token: &str) -> bool {
-    let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-    bool::from(token_digest.ct_eq(&candidate))
+pub(crate) fn credential(authorization: Option<&HeaderValue>) -> Option<HttpCredential> {
+    let header = authorization?.to_str().ok()?;
+    if let Some(token) = header.strip_prefix("Bearer ") {
+        return Some(HttpCredential {
+            user: None,
+            token: token.to_owned(),
+        });
+    }
+    let decoded = STANDARD.decode(header.strip_prefix("Basic ")?).ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (user, token) = decoded.split_once(':')?;
+    Some(HttpCredential {
+        user: Some(user.to_owned()),
+        token: token.to_owned(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -154,12 +146,12 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
     if !(api.ready)() {
         return unavailable();
     }
+    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+        return lfs_unauthorized();
+    };
     let Some(authorization) = request.headers().get(header::AUTHORIZATION) else {
         return lfs_unauthorized();
     };
-    if !api.authorized(Some(authorization)) {
-        return lfs_unauthorized();
-    }
     let Ok(authorization) = authorization.to_str().map(str::to_owned) else {
         return lfs_unauthorized();
     };
@@ -190,6 +182,14 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"message": "Unsupported LFS batch request"}),
         );
+    }
+    let required = if batch.operation == "upload" {
+        TokenScope::Write
+    } else {
+        TokenScope::Read
+    };
+    if let Err(status) = api.permission(&principal, required).await {
+        return lfs_json(status, json!({"message": "LFS access denied"}));
     }
     let mut objects = Vec::with_capacity(batch.objects.len());
     for requested in batch.objects {
@@ -271,8 +271,11 @@ async fn lfs_get(
     if !(api.ready)() {
         return unavailable();
     }
-    if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
+    let Some(principal) = request.extensions().get::<Principal>() else {
         return lfs_unauthorized();
+    };
+    if let Err(status) = api.permission(principal, TokenScope::Read).await {
+        return lfs_json(status, json!({"message": "LFS access denied"}));
     }
     let Some(oid) = parse_lfs_oid(&oid) else {
         return plain(StatusCode::NOT_FOUND, "LFS object does not exist");
@@ -303,8 +306,11 @@ async fn lfs_put(
     if !(api.ready)() {
         return unavailable();
     }
-    if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
+    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
         return lfs_unauthorized();
+    };
+    if let Err(status) = api.permission(&principal, TokenScope::Write).await {
+        return lfs_json(status, json!({"message": "LFS access denied"}));
     }
     let Some(oid) = parse_lfs_oid(&oid) else {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid LFS object ID");
@@ -312,7 +318,7 @@ async fn lfs_put(
     let Ok(body) = to_bytes(request.into_body(), MAX_LFS_BYTES).await else {
         return plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large");
     };
-    match api.gateway.lfs().put(oid, &body).await {
+    match api.gateway.lfs().put(&principal.account, oid, &body).await {
         Ok(_) if (api.ready)() => plain(StatusCode::OK, ""),
         Ok(_) => unavailable(),
         Err(LfsError::Corrupt) => plain(
@@ -320,6 +326,7 @@ async fn lfs_put(
             "LFS object digest mismatch",
         ),
         Err(LfsError::TooLarge) => plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large"),
+        Err(LfsError::Forbidden) => plain(StatusCode::FORBIDDEN, "LFS access denied"),
         Err(error) => {
             tracing::error!(error = %error, "LFS upload failed");
             plain(StatusCode::INTERNAL_SERVER_ERROR, "LFS upload failed")
@@ -373,15 +380,21 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     if !(api.ready)() {
         return unavailable();
     }
-    if !api.authorized(request.headers().get(header::AUTHORIZATION)) {
+    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
         return unauthorized();
-    }
+    };
     let method = request.method().as_str().to_owned();
     let Some(suffix) = request.uri().path().strip_prefix(&api.repository_path) else {
         return plain(StatusCode::NOT_FOUND, "Repository does not exist");
     };
     let path_info = format!("/repo.git{suffix}");
     let query = request.uri().query().unwrap_or_default().to_owned();
+    let Some(required) = git_required(&method, suffix, &query) else {
+        return plain(StatusCode::NOT_FOUND, "Git service does not exist");
+    };
+    if let Err(status) = api.permission(&principal, required).await {
+        return plain(status, "Repository access denied");
+    }
     let content_type = request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -397,15 +410,18 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     };
     match api
         .gateway
-        .handle(GitHttpRequest {
-            method,
-            path_info,
-            query,
-            content_type,
-            protocol_v2,
-            body: body.to_vec(),
-            authenticated: true,
-        })
+        .handle(
+            GitHttpRequest {
+                method,
+                path_info,
+                query,
+                content_type,
+                protocol_v2,
+                body: body.to_vec(),
+                authenticated: true,
+            },
+            &principal.account,
+        )
         .await
     {
         Ok(cgi) if (api.ready)() => {
@@ -436,6 +452,26 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             tracing::error!(error = %error, "Git request failed");
             plain(StatusCode::INTERNAL_SERVER_ERROR, "Git request failed")
         }
+    }
+}
+
+fn git_required(method: &str, suffix: &str, query: &str) -> Option<TokenScope> {
+    match (method, suffix) {
+        ("POST", "/git-upload-pack") if query.is_empty() => Some(TokenScope::Read),
+        ("POST", "/git-receive-pack") if query.is_empty() => Some(TokenScope::Write),
+        ("GET", "/info/refs") => {
+            let mut parameters = url::form_urlencoded::parse(query.as_bytes());
+            let (name, service) = parameters.next()?;
+            if name != "service" || parameters.next().is_some() {
+                return None;
+            }
+            match service.as_ref() {
+                "git-upload-pack" => Some(TokenScope::Read),
+                "git-receive-pack" => Some(TokenScope::Write),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

@@ -14,7 +14,11 @@ use cellule_runtime::{
 use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, path::Path};
 use sha2::{Digest, Sha256};
 
-use crate::RepositoryCell;
+use crate::{
+    RepositoryCell,
+    access::{access_statement, decode_access},
+    directory::{TokenScope, validate_component},
+};
 
 pub const MAX_LFS_BYTES: usize = 64 * 1024 * 1024;
 
@@ -34,6 +38,8 @@ pub enum LfsError {
     Store(#[from] object_store::Error),
     #[error("LFS object is not recorded")]
     NotFound,
+    #[error("LFS write access denied")]
+    Forbidden,
     #[error("LFS object exceeds the configured byte ceiling")]
     TooLarge,
     #[error("LFS object identity or stored bytes are corrupt")]
@@ -69,7 +75,12 @@ impl LfsService {
     }
 
     /// Uploads immutable bytes before publishing their SQLite reference.
-    pub async fn put(&self, oid: [u8; 32], body: &[u8]) -> Result<LfsObject, LfsError> {
+    pub async fn put(
+        &self,
+        actor: &str,
+        oid: [u8; 32],
+        body: &[u8],
+    ) -> Result<LfsObject, LfsError> {
         if body.len() > MAX_LFS_BYTES {
             return Err(LfsError::TooLarge);
         }
@@ -102,10 +113,14 @@ impl LfsService {
             Err(error) => return Err(error.into()),
         }
         let identity = mutation_identity()?;
-        self.repository
-            .record_lfs_object(identity, object)
+        let committed = self
+            .repository
+            .record_lfs_object(identity, actor, object)
             .await
             .map_err(|error| LfsError::Cell(Box::new(error)))?;
+        if !committed.output {
+            return Err(LfsError::Forbidden);
+        }
         Ok(object)
     }
 
@@ -183,12 +198,14 @@ impl RepositoryCell {
         })
     }
 
-    /// Publishes metadata for an already durable LFS body.
+    /// Publishes metadata for an already durable LFS body, returning false without write access.
     pub async fn record_lfs_object(
         &self,
         identity: MutationIdentity,
+        actor: &str,
         object: LfsObject,
-    ) -> Result<cellule_runtime::Committed<()>, InvocationError<Vec<SqlResultSet>>> {
+    ) -> Result<cellule_runtime::Committed<bool>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(actor).map_err(InvocationError::NotStarted)?;
         let size = i64::try_from(object.size).map_err(|_| {
             InvocationError::NotStarted(Error::Command("LFS object size overflows SQLite"))
         })?;
@@ -198,16 +215,37 @@ impl RepositoryCell {
                 identity,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "INSERT INTO lfs_objects (sha256, size, digest) VALUES (?1, ?2, ?3) ON CONFLICT(sha256) DO NOTHING".into(),
+                        sql: "INSERT INTO lfs_objects (sha256, size, digest) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?4) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?4 AND role = 'write') ON CONFLICT(sha256) DO NOTHING".into(),
                         parameters: vec![
                             SqlValue::Blob(object.sha256.to_vec()),
                             SqlValue::Integer(size),
                             SqlValue::Blob(object.blake3.to_vec()),
+                            SqlValue::Text(actor.into()),
                         ],
-                    }],
+                    }, access_statement(actor)],
                 },
             )
             .await?;
+        let access =
+            committed
+                .output
+                .get(1..)
+                .ok_or_else(|| InvocationError::InvalidPublishedResult {
+                    receipt: committed.receipt,
+                    source: Box::new(Error::Command("LFS access result missing")),
+                })?;
+        let authorized = decode_access(access)
+            .map_err(|error| InvocationError::InvalidPublishedResult {
+                receipt: committed.receipt,
+                source: Box::new(error),
+            })?
+            .is_some_and(|role| role >= TokenScope::Write);
+        if !authorized {
+            return Ok(cellule_runtime::Committed {
+                output: false,
+                receipt: committed.receipt,
+            });
+        }
         let expected = [
             SqlValue::Integer(size),
             SqlValue::Blob(object.blake3.to_vec()),
@@ -236,7 +274,7 @@ impl RepositoryCell {
             });
         }
         Ok(cellule_runtime::Committed {
-            output: (),
+            output: true,
             receipt: committed.receipt,
         })
     }

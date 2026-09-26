@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import secrets
 import signal
 import socket
 import subprocess
@@ -106,10 +107,28 @@ def rename_repository(base_url, old_name, new_name, repository_id):
         return renamed["clone_url"]
 
 
-def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None):
+def api_status(base_url, path, token, method="GET", payload=None):
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token"):
     git(
         "-c",
-        "http.extraHeader=Authorization: Bearer local-test-token",
+        f"http.extraHeader=Authorization: Bearer {token}",
         "clone",
         url,
         str(directory),
@@ -118,7 +137,7 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
         git("lfs", "install", "--local", cwd=directory)
         git(
             "-c",
-            "http.extraHeader=Authorization: Bearer local-test-token",
+            f"http.extraHeader=Authorization: Bearer {token}",
             "lfs",
             "pull",
             cwd=directory,
@@ -196,8 +215,24 @@ def main():
                 cwd=other,
             )
             other_oid = git("rev-parse", "HEAD", cwd=other)
+            reader_token = f"cnp_{secrets.token_hex(32)}"
+            assert api_status(
+                base_url,
+                "/api/accounts",
+                "local-test-token",
+                "POST",
+                {"name": "reader", "token": reader_token, "scope": "read"},
+            ) == 200
+            assert api_status(
+                base_url,
+                "/api/repositories/example/collaborators/reader",
+                "local-test-token",
+                "PUT",
+                {"role": "read"},
+            ) == 200
             url = rename_repository(base_url, "example", "renamed", repository_id)
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body)
+            clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:
@@ -214,12 +249,24 @@ def main():
             processes.append(third)
             url = f"{base_url}/canopy/renamed.git"
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
+            clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
+            assert api_status(
+                base_url,
+                "/api/repositories/renamed/collaborators/reader",
+                "local-test-token",
+                "DELETE",
+            ) == 204
+            assert api_status(
+                base_url,
+                "/canopy/renamed.git/info/refs?service=git-upload-pack",
+                reader_token,
+            ) == 404
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: two repositories and a rename survived restart, disk loss, and lease takeover")
+            print("PASS: two repositories, rename, and collaborator ACL survived restart, disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:

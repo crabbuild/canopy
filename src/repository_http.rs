@@ -10,32 +10,32 @@ use axum::{
     routing::{any, get},
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tower::ServiceExt;
 
 use crate::{
-    directory::{self, RenameOutcome, RepositoryEntry},
+    directory::{
+        self, CreateAccountOutcome, Principal, RenameOutcome, RepositoryEntry, TokenScope,
+    },
     http,
-    server::RepositoryManager,
+    server::{MembershipOutcome, RepositoryManager, ServerError},
     validate_repository_id,
 };
 
 pub(crate) struct RepositoryHttp {
     manager: Arc<RepositoryManager>,
-    token_digest: [u8; 32],
 }
 
 impl RepositoryHttp {
-    pub(crate) fn new(manager: Arc<RepositoryManager>, token_digest: [u8; 32]) -> Self {
-        Self {
-            manager,
-            token_digest,
-        }
+    pub(crate) fn new(manager: Arc<RepositoryManager>) -> Self {
+        Self { manager }
     }
 
     pub(crate) fn router(self: Arc<Self>) -> Router {
         Router::new()
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
+            .route("/api/accounts", axum::routing::post(create_account))
             .route(
                 "/api/repositories",
                 get(list_repositories).post(create_repository),
@@ -44,16 +44,48 @@ impl RepositoryHttp {
                 "/api/repositories/{name}",
                 axum::routing::patch(rename_repository),
             )
+            .route(
+                "/api/repositories/{name}/collaborators/{account}",
+                axum::routing::put(grant_collaborator).delete(revoke_collaborator),
+            )
             .route("/{owner}/{repository}/{*path}", any(dispatch_repository))
             .with_state(self)
     }
 
-    fn authorized(&self, headers: &axum::http::HeaderMap) -> bool {
-        http::authorized(
-            &self.manager.owner,
-            &self.token_digest,
-            headers.get(header::AUTHORIZATION),
-        )
+    async fn principal(
+        &self,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<Option<Principal>, ServerError> {
+        let Some(credential) = http::credential(headers.get(header::AUTHORIZATION)) else {
+            return Ok(None);
+        };
+        let digest = Sha256::digest(credential.token.as_bytes()).into();
+        let principal = self.manager.authenticate(digest).await?;
+        Ok(principal.filter(|principal| {
+            credential
+                .user
+                .as_deref()
+                .is_none_or(|user| user == principal.account)
+        }))
+    }
+
+    async fn require(
+        &self,
+        headers: &axum::http::HeaderMap,
+        scope: TokenScope,
+    ) -> Result<Principal, Response<Body>> {
+        match self.principal(headers).await {
+            Ok(Some(principal)) if principal.scope >= scope => Ok(principal),
+            Ok(Some(_)) => Err(plain(StatusCode::FORBIDDEN, "Token scope is insufficient")),
+            Ok(None) => Err(unauthorized()),
+            Err(error) => {
+                tracing::error!(error = %error, "authentication failed");
+                Err(plain(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Authentication unavailable",
+                ))
+            }
+        }
     }
 }
 
@@ -65,9 +97,23 @@ struct CreateRepositoryRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CreateAccountRequest {
+    name: String,
+    token: String,
+    scope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RenameRepositoryRequest {
     name: String,
     repository_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GrantCollaboratorRequest {
+    role: String,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +155,62 @@ async fn readiness(State(state): State<Arc<RepositoryHttp>>) -> Response<Body> {
     }
 }
 
+async fn create_account(
+    State(state): State<Arc<RepositoryHttp>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(request.headers(), TokenScope::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Account creation is restricted");
+    }
+    let Ok(body) = to_bytes(request.into_body(), 8192).await else {
+        return plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Account request is too large",
+        );
+    };
+    let Ok(input) = serde_json::from_slice::<CreateAccountRequest>(&body) else {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid account request");
+    };
+    let scope = match input.scope.as_str() {
+        "read" => TokenScope::Read,
+        "write" => TokenScope::Write,
+        "admin" => TokenScope::Admin,
+        _ => return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid token scope"),
+    };
+    let valid_token = input.token.strip_prefix("cnp_").is_some_and(|secret| {
+        secret.len() == 64 && secret.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    if directory::validate_component(&input.name).is_err() || !valid_token {
+        return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid account identity");
+    }
+    let digest = Sha256::digest(input.token.as_bytes()).into();
+    match state
+        .manager
+        .create_account(&input.name, digest, scope)
+        .await
+    {
+        Ok(CreateAccountOutcome::Created(account)) if (state.manager.ready)() => json_response(
+            StatusCode::OK,
+            &serde_json::json!({"name": account.account, "scope": input.scope}),
+        ),
+        Ok(CreateAccountOutcome::Created(_)) => {
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
+        }
+        Ok(CreateAccountOutcome::NameTaken) => plain(StatusCode::CONFLICT, "Account name is taken"),
+        Err(error) => {
+            tracing::error!(error = %error, "account creation failed");
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Account creation failed")
+        }
+    }
+}
+
 async fn create_repository(
     State(state): State<Arc<RepositoryHttp>>,
     request: Request<Body>,
@@ -116,8 +218,12 @@ async fn create_repository(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    if !state.authorized(request.headers()) {
-        return unauthorized();
+    let principal = match state.require(request.headers(), TokenScope::Write).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Repository creation is restricted");
     }
     let Ok(body) = to_bytes(request.into_body(), 8192).await else {
         return plain(
@@ -157,8 +263,12 @@ async fn list_repositories(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    if !state.authorized(&headers) {
-        return unauthorized();
+    let principal = match state.require(&headers, TokenScope::Read).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Repository listing is restricted");
     }
     if query
         .after
@@ -198,8 +308,12 @@ async fn rename_repository(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    if !state.authorized(request.headers()) {
-        return unauthorized();
+    let principal = match state.require(request.headers(), TokenScope::Write).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Repository rename is restricted");
     }
     let Ok(body) = to_bytes(request.into_body(), 8192).await else {
         return plain(
@@ -246,6 +360,115 @@ async fn rename_repository(
     }
 }
 
+async fn grant_collaborator(
+    State(state): State<Arc<RepositoryHttp>>,
+    Path((name, account)): Path<(String, String)>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(request.headers(), TokenScope::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if directory::validate_component(&name).is_err()
+        || directory::validate_component(&account).is_err()
+    {
+        return plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid collaborator target",
+        );
+    }
+    let Ok(body) = to_bytes(request.into_body(), 8192).await else {
+        return plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Collaborator request is too large",
+        );
+    };
+    let Ok(input) = serde_json::from_slice::<GrantCollaboratorRequest>(&body) else {
+        return plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid collaborator request",
+        );
+    };
+    let role = match input.role.as_str() {
+        "read" => TokenScope::Read,
+        "write" => TokenScope::Write,
+        _ => {
+            return plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid collaborator role",
+            );
+        }
+    };
+    match state
+        .manager
+        .update_member(&name, &principal.account, &account, Some(role))
+        .await
+    {
+        Ok(MembershipOutcome::Updated) if (state.manager.ready)() => json_response(
+            StatusCode::OK,
+            &serde_json::json!({"account": account, "role": input.role}),
+        ),
+        outcome => membership_response(outcome),
+    }
+}
+
+async fn revoke_collaborator(
+    State(state): State<Arc<RepositoryHttp>>,
+    Path((name, account)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(&headers, TokenScope::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if directory::validate_component(&name).is_err()
+        || directory::validate_component(&account).is_err()
+    {
+        return plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid collaborator target",
+        );
+    }
+    match state
+        .manager
+        .update_member(&name, &principal.account, &account, None)
+        .await
+    {
+        Ok(MembershipOutcome::Updated) if (state.manager.ready)() => {
+            plain(StatusCode::NO_CONTENT, "")
+        }
+        outcome => membership_response(outcome),
+    }
+}
+
+fn membership_response(outcome: Result<MembershipOutcome, ServerError>) -> Response<Body> {
+    match outcome {
+        Ok(MembershipOutcome::Updated) => {
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
+        }
+        Ok(MembershipOutcome::RepositoryMissing | MembershipOutcome::AccountMissing) => plain(
+            StatusCode::NOT_FOUND,
+            "Repository or account does not exist",
+        ),
+        Ok(MembershipOutcome::Forbidden) => {
+            plain(StatusCode::FORBIDDEN, "Repository owner required")
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "repository membership change failed");
+            plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Repository membership change failed",
+            )
+        }
+    }
+}
+
 async fn dispatch_repository(
     State(state): State<Arc<RepositoryHttp>>,
     Path((owner, repository, _path)): Path<(String, String, String)>,
@@ -254,9 +477,10 @@ async fn dispatch_repository(
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
-    if !state.authorized(request.headers()) {
-        return unauthorized();
-    }
+    let principal = match state.require(request.headers(), TokenScope::Read).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
     let Some(name) = repository.strip_suffix(".git") else {
         return plain(StatusCode::NOT_FOUND, "Repository does not exist");
     };
@@ -265,12 +489,13 @@ async fn dispatch_repository(
     }
     tracing::debug!(owner, name, path = %request.uri().path(), "routing repository request");
     match state.manager.resolve(&owner, name).await {
-        Ok(Some(router)) => {
+        Ok(Some(route)) => {
             let (mut parts, body) = request.into_parts();
             // The inner router must extract only its own captures, especially the LFS OID.
             parts.extensions = axum::http::Extensions::new();
+            parts.extensions.insert(principal);
             let request = Request::from_parts(parts, body);
-            match router.oneshot(request).await {
+            match route.router.oneshot(request).await {
                 Ok(response) => {
                     tracing::debug!(owner, name, status = %response.status(), "repository response completed");
                     response

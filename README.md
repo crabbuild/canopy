@@ -27,17 +27,30 @@ lists ready repositories, with an `after` cursor for additional pages.
 `{"name":"new_name","repository_id":"<returned UUID>"}` atomically renames a ready
 repository. The UUID is a precondition and remains unchanged; a retry with
 the same UUID and new name returns the renamed repository. These endpoints
-require the configured token. Git and LFS use
+require the configured owner's token. Git and LFS use
 `/<owner>/<repository_name>.git`. Repository creation reserves a UUID in the
 Directory Cell, provisions its own Repository Cell, then marks the name ready.
 Later requests recover that Cell on demand from the directory.
 
-The current service uses one static token for every repository under one owner,
-buffers requests and responses, and caps Git and LFS
-payloads at 64 MiB. Local recovery currently admits a 512 MiB SQLite database.
-There is no account or organization model, per-repository ACL, multi-node
-routing, backup, repository browser, issue or pull request API, or production
-capacity evidence. `Cargo.toml` pins Cellule to a specific Git revision, so a
+The configured token bootstraps a durable owner account in the Directory Cell.
+`POST /api/accounts` creates another account with a client-generated `cnp_`
+token followed by 64 random hexadecimal digits and a `read`, `write`, or
+`admin` token scope. Its JSON fields are `name`, `token`, and `scope`.
+Only the configured owner can create accounts and change collaborators.
+`PUT /api/repositories/<name>/collaborators/<account>` with
+`{"role":"read"}` or `{"role":"write"}` grants access to one repository;
+`DELETE` on the same URL revokes it. The owner retains access. Git smart HTTP
+and LFS require both sufficient token scope and repository role. A ref update
+rechecks the writer in the ref transaction; an LFS upload rechecks the writer
+when publishing metadata.
+
+The current service supports one repository owner and one token per account.
+It buffers requests and responses and caps Git and LFS payloads at 64 MiB.
+Local recovery currently admits a 512 MiB SQLite database. There is no
+account lifecycle API, organization model, collaborator-visible repository
+listing, multi-node routing, backup, repository browser, issue or pull request
+API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
+Git revision, so a
 fresh Canopy checkout builds without a local Cellule checkout.
 
 ## Run the current service
@@ -56,7 +69,7 @@ CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo run --locke
 
 `GET /healthz` reports process liveness and `GET /readyz` reports Cell
 readiness. Git and LFS requests require `Authorization: Bearer <token>` or
-HTTP Basic credentials using the configured owner and token. Stop with
+HTTP Basic credentials using the matching account name and token. Stop with
 SIGINT or SIGTERM to drain requests and withdraw the node advertisement.
 
 ## Verify the current slice
@@ -84,7 +97,8 @@ python3 scripts/smoke_s3_process.py \
 ```
 
 The script requires `CANOPY_NODE_SIGNING_KEY_HEX` and provider credentials in
-the environment. It pushes two repositories with stock Git and LFS, renames
-one, restarts with fresh local databases, kills the new owner, waits for lease
-expiry, and clones both from a third process. It writes under a unique prefix
-in the supplied bucket.
+the environment. It pushes two repositories with stock Git and LFS, grants a
+collaborator access, renames one repository, restarts with fresh local databases,
+kills the new owner, waits for lease expiry, and clones from a third process.
+It verifies collaborator access after takeover and denial after revocation.
+It writes under a unique prefix in the supplied bucket.

@@ -6,7 +6,10 @@ use std::{
 
 use canopy_server::{
     CanopyApplication, ObjectKind, RepositoryCell, RepositoryModule, build_descriptor,
-    directory::{self, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryState},
+    directory::{
+        self, CreateAccountOutcome, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryState,
+        TokenScope,
+    },
     object_id, repository_target,
 };
 use cellule_app::{ApplicationHandle, CellApplication};
@@ -18,6 +21,7 @@ use cellule_runtime::{
 };
 use cellule_store::Store;
 use object_store::{memory::InMemory, path::Path as StorePath};
+use sha2::{Digest as _, Sha256};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn directory_reservations_recover_two_distinct_repository_cells()
@@ -57,6 +61,37 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         &app_handle(&application, tenant, application_id, directory_handle),
         directory_target.clone(),
     )?;
+    let admin_digest: [u8; 32] = Sha256::digest(b"admin-test-token").into();
+    let reader_digest: [u8; 32] = Sha256::digest(b"reader-test-token").into();
+    assert!(matches!(
+        directory
+            .create_account(identity(11)?, "alice", admin_digest, TokenScope::Admin)
+            .await?
+            .output,
+        CreateAccountOutcome::Created(_)
+    ));
+    assert!(matches!(
+        directory
+            .create_account(identity(12)?, "bob", reader_digest, TokenScope::Read)
+            .await?
+            .output,
+        CreateAccountOutcome::Created(_)
+    ));
+    assert_eq!(
+        directory
+            .create_account(identity(13)?, "bob", admin_digest, TokenScope::Admin)
+            .await?
+            .output,
+        CreateAccountOutcome::NameTaken
+    );
+    assert_eq!(
+        directory
+            .authenticate(reader_digest, None)
+            .await?
+            .output
+            .map(|principal| (principal.account, principal.scope)),
+        Some(("bob".into(), TokenScope::Read))
+    );
     let reserved = directory
         .reserve(identity(1)?, "alice", "alpha", first_id)
         .await?;
@@ -170,6 +205,15 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         &app_handle(&application, tenant, application_id, restored_directory),
         directory_target,
     )?;
+    assert_eq!(
+        directory
+            .authenticate(admin_digest, None)
+            .await?
+            .output
+            .map(|principal| (principal.account, principal.scope)),
+        Some(("alice".into(), TokenScope::Admin))
+    );
+    assert_eq!(directory.authenticate([0; 32], None).await?.output, None);
     let entries = directory.list("alice", "").await?.output;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].repository_id, second_id);

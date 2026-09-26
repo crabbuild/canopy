@@ -24,3 +24,13 @@ CREATE TABLE lfs_objects (
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32)
 ) WITHOUT ROWID;
+
+CREATE TABLE repository_identity (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    owner TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE repository_members (
+    account TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK(role IN ('read', 'write'))
+) WITHOUT ROWID;

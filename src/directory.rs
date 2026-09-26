@@ -116,6 +116,35 @@ pub enum RenameOutcome {
     NameTaken,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TokenScope {
+    Read,
+    Write,
+    Admin,
+}
+
+impl TokenScope {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Admin => "admin",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Principal {
+    pub account: String,
+    pub scope: TokenScope,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CreateAccountOutcome {
+    Created(Principal),
+    NameTaken,
+}
+
 pub struct DirectoryCell {
     sql: SqlCell<DirectoryModule>,
 }
@@ -127,6 +156,114 @@ impl DirectoryCell {
     ) -> cellule_runtime::Result<Self> {
         Ok(Self {
             sql: application.sql::<DirectoryModule>(target)?,
+        })
+    }
+
+    /// Creates one account and its first token or returns the existing identity.
+    pub async fn create_account(
+        &self,
+        identity: MutationIdentity,
+        name: &str,
+        token_digest: [u8; 32],
+        scope: TokenScope,
+    ) -> Result<Committed<CreateAccountOutcome>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(name).map_err(InvocationError::NotStarted)?;
+        let committed = self.sql.batch(identity, SqlBatch {
+            statements: vec![
+                SqlStatement {
+                    sql: "INSERT INTO accounts (name, enabled) SELECT ?1, 1 WHERE NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?2) ON CONFLICT(name) DO NOTHING".into(),
+                    parameters: vec![SqlValue::Text(name.into()), SqlValue::Blob(token_digest.to_vec())],
+                },
+                SqlStatement {
+                    sql: "INSERT INTO access_tokens (digest, account, scope, enabled) SELECT ?2, ?1, ?3, 1 FROM accounts WHERE name = ?1 AND enabled = 1 AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?1) ON CONFLICT(digest) DO NOTHING".into(),
+                    parameters: vec![
+                        SqlValue::Text(name.into()),
+                        SqlValue::Blob(token_digest.to_vec()),
+                        SqlValue::Text(scope.as_str().into()),
+                    ],
+                },
+            ],
+        }).await?;
+        let authenticated = self
+            .authenticate(token_digest, Some(committed.receipt))
+            .await?
+            .output;
+        let output = match authenticated {
+            Some(principal) if principal.account == name && principal.scope == scope => {
+                CreateAccountOutcome::Created(principal)
+            }
+            _ => CreateAccountOutcome::NameTaken,
+        };
+        Ok(Committed {
+            output,
+            receipt: committed.receipt,
+        })
+    }
+
+    /// Resolves one active token digest to its persisted account and scope.
+    pub async fn authenticate(
+        &self,
+        token_digest: [u8; 32],
+        minimum: Option<Receipt>,
+    ) -> Result<Observed<Option<Principal>>, InvocationError<Vec<SqlResultSet>>> {
+        let result = self.sql.query(minimum, SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "SELECT a.name, t.scope FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?1 AND t.enabled = 1 AND a.enabled = 1".into(),
+                parameters: vec![SqlValue::Blob(token_digest.to_vec())],
+            }],
+        }).await?;
+        let principal = result
+            .output
+            .first()
+            .and_then(|set| set.rows.first())
+            .map(|row| {
+                let [SqlValue::Text(account), SqlValue::Text(scope)] = row.as_slice() else {
+                    return Err(Error::Command("invalid account row"));
+                };
+                validate_component(account)?;
+                let scope = match scope.as_str() {
+                    "read" => TokenScope::Read,
+                    "write" => TokenScope::Write,
+                    "admin" => TokenScope::Admin,
+                    _ => return Err(Error::Command("invalid token scope")),
+                };
+                Ok(Principal {
+                    account: account.clone(),
+                    scope,
+                })
+            })
+            .transpose()
+            .map_err(InvocationError::NotStarted)?;
+        Ok(Observed {
+            output: principal,
+            receipt: result.receipt,
+        })
+    }
+
+    /// Checks whether an active account name can receive repository access.
+    pub async fn account_exists(
+        &self,
+        name: &str,
+    ) -> Result<Observed<bool>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(name).map_err(InvocationError::NotStarted)?;
+        let result = self
+            .sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: vec![SqlStatement {
+                        sql: "SELECT 1 FROM accounts WHERE name = ?1 AND enabled = 1".into(),
+                        parameters: vec![SqlValue::Text(name.into())],
+                    }],
+                },
+            )
+            .await?;
+        Ok(Observed {
+            output: result
+                .output
+                .first()
+                .is_some_and(|set| !set.rows.is_empty()),
+            receipt: result.receipt,
         })
     }
 

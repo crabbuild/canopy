@@ -11,6 +11,9 @@ before admitting persistent customer repositories.
 | Repository name | lowercase ASCII owner/name components, each at most 64 bytes | Directory Cell |
 | Name reservation | owner/name row stores one canonical UUID and pending/ready state | Directory Cell |
 | Repository rename | compare expected UUID, move one ready name atomically, keep Cell identity | Directory Cell |
+| Account | lowercase ASCII name, enabled flag | Directory Cell |
+| Access token | SHA-256 digest of bearer secret, account, scope (`read`, `write`, `admin`), enabled flag | Directory Cell |
+| Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
@@ -18,7 +21,8 @@ before admitting persistent customer repositories.
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current buffered ingress |
-| Ref mutation | compare expected OID and monotonic version; apply all updates in one Cell transaction | `FinalizePush` |
+| Ref mutation | check actor's write role, compare expected OID and monotonic version; apply all updates in one Cell transaction | `FinalizePush` |
+| LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
 digest per Git OID. External objects also store SHA-256. Readers verify the
@@ -32,9 +36,19 @@ reads the previously reserved UUID and completes the same Cell instead of
 assigning another identity. The server marks the row ready only after it has
 acquired that Cell. Rename updates only the ready Directory Cell row, so the
 same UUID and repository contents survive a URL change. Ready names route
-through their UUID on demand; one node
-can serve multiple repository Cells. Account identity and repository-specific
-authorization remain open.
+through their UUID on demand; one node can serve multiple repository Cells.
+The Directory Cell authenticates token digests; each Repository Cell authorizes
+its own Git and LFS access. Repeated bootstrap requires the same owner token.
+Account disablement, token rotation/revocation, collaborator-visible listing
+and audit records remain open.
+
+Token scope is checked at request admission. Repository write access is also
+checked in the ref or LFS metadata transaction, so an intervening collaborator
+revocation blocks publication. Previously admitted reads may finish after
+revocation. A denied upload can leave an unreferenced immutable body; no
+collector removes those bodies yet. Account creation is idempotent only for
+the same account, token digest and scope; changing bootstrap credentials fails
+startup instead of replacing the stored account.
 
 Git packs and the bare repository cache are transport and acceleration
 artifacts. Neither is authoritative. The gateway can reconstruct cache objects

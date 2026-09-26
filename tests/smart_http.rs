@@ -2,7 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use canopy_server::{
     CanopyApplication, ObjectStorage, RepositoryCell, RepositoryModule, build_descriptor,
-    git_gateway::GitGateway, http::GitHttpApi, lfs::LfsError, repository_target,
+    directory::TokenScope, git_gateway::GitGateway, http::GitHttpApi, lfs::LfsError,
+    repository_target,
 };
 use cellule_app::{ApplicationHandle, CellApplication};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
@@ -15,6 +16,8 @@ use cellule_store::Store;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
+
+mod support;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
@@ -87,6 +90,9 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             application_id,
         );
         let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
+        repository
+            .ensure_owner(support::identity()?, "canopy")
+            .await?;
         let blob_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
@@ -95,23 +101,47 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         ));
         let invalid_oid = [0; 32];
         assert!(matches!(
-            gateway.lfs().put(invalid_oid, b"wrong digest").await,
+            gateway
+                .lfs()
+                .put("canopy", invalid_oid, b"wrong digest")
+                .await,
             Err(LfsError::Corrupt)
         ));
         assert!(repository.lfs_object(invalid_oid).await?.output.is_none());
+        let denied_body = b"reader LFS object";
+        let denied_oid: [u8; 32] = Sha256::digest(denied_body).into();
+        assert!(matches!(
+            gateway.lfs().put("reader", denied_oid, denied_body).await,
+            Err(LfsError::Forbidden)
+        ));
+        assert!(repository.lfs_object(denied_oid).await?.output.is_none());
+        repository
+            .grant_member(support::identity()?, "canopy", "reader", TokenScope::Write)
+            .await?;
+        gateway.lfs().put("reader", denied_oid, denied_body).await?;
+        assert!(repository.lfs_object(denied_oid).await?.output.is_some());
+        repository
+            .revoke_member(support::identity()?, "canopy", "reader")
+            .await?;
+        let revoked_body = b"revoked LFS object";
+        let revoked_oid: [u8; 32] = Sha256::digest(revoked_body).into();
+        assert!(matches!(
+            gateway.lfs().put("reader", revoked_oid, revoked_body).await,
+            Err(LfsError::Forbidden)
+        ));
+        assert!(repository.lfs_object(revoked_oid).await?.output.is_none());
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let api = Arc::new(GitHttpApi::new(
             gateway,
             "canopy".into(),
             "example",
-            "local-test-token",
             &format!("http://{address}"),
             Arc::new(|| true),
         )?);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            axum::serve(listener, api.router())
+            axum::serve(listener, support::git_router(api))
                 .with_graceful_shutdown(async move {
                     let _ = stop_rx.await;
                 })
@@ -214,13 +244,12 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             gateway,
             "canopy".into(),
             "example",
-            "local-test-token",
             &format!("http://{address}"),
             Arc::new(|| true),
         )?);
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            axum::serve(listener, api.router())
+            axum::serve(listener, support::git_router(api))
                 .with_graceful_shutdown(async move {
                     let _ = stop_rx.await;
                 })

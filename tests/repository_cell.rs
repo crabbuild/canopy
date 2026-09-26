@@ -5,7 +5,7 @@ use std::{
 
 use canopy_server::{
     CanopyApplication, ObjectKind, PushPlan, RefExpectation, RefUpdate, RepositoryCell,
-    RepositoryModule, build_descriptor, object_id, repository_target,
+    RepositoryModule, build_descriptor, directory::TokenScope, object_id, repository_target,
 };
 use cellule_app::{ApplicationHandle, CellApplication};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
@@ -130,6 +130,16 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         let repository = RepositoryCell::new(&application_handle, target)?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        repository
+            .ensure_owner(
+                MutationIdentity {
+                    request_id: RequestId::from_bytes([11; 16]),
+                    issued_at_ms: now_ms,
+                    expires_at_ms: now_ms + 60_000,
+                },
+                "canopy",
+            )
+            .await?;
         let committed = repository
             .put_inline_object(
                 MutationIdentity {
@@ -168,6 +178,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                     expires_at_ms: now_ms + 60_000,
                 },
                 PushPlan {
+                    actor: "canopy".into(),
                     updates: vec![
                         RefUpdate {
                             name: "refs/heads/main".into(),
@@ -203,6 +214,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                     expires_at_ms: now_ms + 60_000,
                 },
                 PushPlan {
+                    actor: "canopy".into(),
                     updates: vec![
                         RefUpdate {
                             name: "refs/heads/main".into(),
@@ -232,6 +244,69 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 .await?
                 .output,
             None
+        );
+        let identity = |byte| MutationIdentity {
+            request_id: RequestId::from_bytes([byte; 16]),
+            issued_at_ms: now_ms,
+            expires_at_ms: now_ms + 60_000,
+        };
+        assert!(
+            repository
+                .grant_member(identity(12), "canopy", "reader", TokenScope::Read)
+                .await?
+                .output
+        );
+        let reader_plan = PushPlan {
+            actor: "reader".into(),
+            updates: vec![RefUpdate {
+                name: "refs/tags/reader".into(),
+                expected: None,
+                new_oid: Some(next.output),
+            }],
+        };
+        assert!(matches!(
+            repository
+                .finalize_push(identity(13), reader_plan.clone())
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        assert!(
+            repository
+                .grant_member(identity(14), "canopy", "reader", TokenScope::Write)
+                .await?
+                .output
+        );
+        assert!(
+            repository
+                .finalize_push(identity(15), reader_plan.clone())
+                .await?
+                .output
+        );
+        assert!(
+            repository
+                .revoke_member(identity(16), "canopy", "reader")
+                .await?
+                .output
+        );
+        assert_eq!(repository.access_level("reader", None).await?.output, None);
+        let after_revoke = PushPlan {
+            actor: "reader".into(),
+            updates: vec![RefUpdate {
+                name: "refs/tags/after-revoke".into(),
+                expected: None,
+                new_oid: Some(next.output),
+            }],
+        };
+        assert!(matches!(
+            repository.finalize_push(identity(17), after_revoke).await,
+            Err(InvocationError::Rejected(_))
+        ));
+        assert!(
+            repository
+                .ref_state("refs/tags/after-revoke", None)
+                .await?
+                .output
+                .is_none()
         );
         Ok(())
     }

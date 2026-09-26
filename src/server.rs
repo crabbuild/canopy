@@ -29,7 +29,8 @@ use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
     build_descriptor,
     directory::{
-        self, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryEntry, RepositoryState,
+        self, CreateAccountOutcome, DirectoryCell, DirectoryModule, Principal, RenameOutcome,
+        RepositoryEntry, RepositoryState, TokenScope,
     },
     git_gateway::GitGateway,
     http::{self, GitHttpApi},
@@ -138,19 +139,55 @@ pub(crate) struct RepositoryManager {
     local_root: PathBuf,
     external_store: Arc<dyn ObjectStore>,
     pub(crate) owner: String,
-    token: String,
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
 }
 
 struct LoadedRepository {
+    repository: Arc<RepositoryCell>,
     gateway: Arc<GitGateway>,
     name: String,
     router: Router,
 }
 
+pub(crate) struct RepositoryRoute {
+    pub(crate) repository: Arc<RepositoryCell>,
+    pub(crate) router: Router,
+}
+
+pub(crate) enum MembershipOutcome {
+    Updated,
+    RepositoryMissing,
+    AccountMissing,
+    Forbidden,
+}
+
 impl RepositoryManager {
+    pub(crate) async fn authenticate(
+        &self,
+        token_digest: [u8; 32],
+    ) -> Result<Option<Principal>, ServerError> {
+        Ok(self
+            .directory
+            .authenticate(token_digest, None)
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn create_account(
+        &self,
+        name: &str,
+        token_digest: [u8; 32],
+        scope: TokenScope,
+    ) -> Result<CreateAccountOutcome, ServerError> {
+        Ok(self
+            .directory
+            .create_account(mutation_identity()?, name, token_digest, scope)
+            .await?
+            .output)
+    }
+
     pub(crate) async fn create(&self, name: &str) -> Result<RepositoryEntry, ServerError> {
         let mut loaded = self.loaded.lock().await;
         let reserved = self
@@ -178,7 +215,7 @@ impl RepositoryManager {
         &self,
         owner: &str,
         name: &str,
-    ) -> Result<Option<Router>, ServerError> {
+    ) -> Result<Option<RepositoryRoute>, ServerError> {
         if owner != self.owner {
             return Ok(None);
         }
@@ -190,6 +227,42 @@ impl RepositoryManager {
         }
         let mut loaded = self.loaded.lock().await;
         Ok(Some(self.load(&entry, &mut loaded).await?))
+    }
+
+    pub(crate) async fn update_member(
+        &self,
+        name: &str,
+        actor: &str,
+        account: &str,
+        role: Option<TokenScope>,
+    ) -> Result<MembershipOutcome, ServerError> {
+        if role.is_some() && !self.directory.account_exists(account).await?.output {
+            return Ok(MembershipOutcome::AccountMissing);
+        }
+        let Some(route) = self.resolve(&self.owner, name).await? else {
+            return Ok(MembershipOutcome::RepositoryMissing);
+        };
+        let authorized = match role {
+            Some(role) => {
+                route
+                    .repository
+                    .grant_member(mutation_identity()?, actor, account, role)
+                    .await?
+                    .output
+            }
+            None => {
+                route
+                    .repository
+                    .revoke_member(mutation_identity()?, actor, account)
+                    .await?
+                    .output
+            }
+        };
+        Ok(if authorized {
+            MembershipOutcome::Updated
+        } else {
+            MembershipOutcome::Forbidden
+        })
     }
 
     pub(crate) async fn rename(
@@ -234,13 +307,16 @@ impl RepositoryManager {
         &self,
         entry: &RepositoryEntry,
         loaded: &mut HashMap<[u8; 16], LoadedRepository>,
-    ) -> Result<Router, ServerError> {
+    ) -> Result<RepositoryRoute, ServerError> {
         if let Some(existing) = loaded.get_mut(&entry.repository_id) {
             if existing.name != entry.name {
                 existing.router = self.router_for(entry, Arc::clone(&existing.gateway))?;
                 existing.name.clone_from(&entry.name);
             }
-            return Ok(existing.router.clone());
+            return Ok(RepositoryRoute {
+                repository: Arc::clone(&existing.repository),
+                router: existing.router.clone(),
+            });
         }
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
         let handle = acquire_sql_cell(
@@ -266,8 +342,11 @@ impl RepositoryManager {
             self.application,
         );
         let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
+        repository
+            .ensure_owner(mutation_identity()?, &entry.owner)
+            .await?;
         let gateway = Arc::new(GitGateway::new(
-            repository,
+            Arc::clone(&repository),
             self.local_root.clone(),
             Arc::clone(&self.external_store),
         ));
@@ -276,11 +355,12 @@ impl RepositoryManager {
             entry.repository_id,
             LoadedRepository {
                 gateway,
+                repository: Arc::clone(&repository),
                 name: entry.name.clone(),
                 router: router.clone(),
             },
         );
-        Ok(router)
+        Ok(RepositoryRoute { repository, router })
     }
 
     fn router_for(
@@ -293,7 +373,6 @@ impl RepositoryManager {
                 gateway,
                 self.owner.clone(),
                 &entry.name,
-                &self.token,
                 &self.public_url,
                 Arc::clone(&self.ready),
             )
@@ -423,6 +502,23 @@ impl CanopyServer {
             let ready: Arc<dyn Fn() -> bool + Send + Sync> =
                 Arc::new(move || ready_node.is_ready() && guard.check().is_ok());
             let token_digest = Sha256::digest(config.token.as_bytes()).into();
+            node.start()?;
+            if !matches!(
+                directory_cell
+                    .create_account(
+                        mutation_identity()?,
+                        &config.owner,
+                        token_digest,
+                        TokenScope::Admin,
+                    )
+                    .await?
+                    .output,
+                CreateAccountOutcome::Created(_)
+            ) {
+                return Err(ServerError::Repository(
+                    "bootstrap account token differs from persisted identity",
+                ));
+            }
             let manager = Arc::new(RepositoryManager {
                 directory: directory_cell,
                 node: Arc::clone(&node),
@@ -435,13 +531,11 @@ impl CanopyServer {
                 local_root: local.path().to_path_buf(),
                 external_store,
                 owner: config.owner,
-                token: config.token,
                 public_url: config.public_url,
                 ready,
                 loaded: Mutex::new(HashMap::new()),
             });
-            let api = Arc::new(RepositoryHttp::new(manager, token_digest));
-            node.start()?;
+            let api = Arc::new(RepositoryHttp::new(manager));
             Ok::<_, ServerError>(api)
         }
         .await;

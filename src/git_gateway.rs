@@ -19,6 +19,7 @@ use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, PushPlan, RefExpectation, RefUpdate,
     RepositoryCell,
+    directory::TokenScope,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore, MAX_EXTERNAL_BLOB_BYTES},
     lfs::LfsService,
@@ -89,8 +90,21 @@ impl GitGateway {
         &self.lfs
     }
 
+    pub async fn access_level(&self, account: &str) -> Result<Option<TokenScope>, GatewayError> {
+        Ok(self
+            .repository
+            .access_level(account, None)
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            .output)
+    }
+
     /// Waits for Cell publication before returning any successful receive-pack body.
-    pub async fn handle(&self, request: GitHttpRequest) -> Result<GitHttpResponse, GatewayError> {
+    pub async fn handle(
+        &self,
+        request: GitHttpRequest,
+        actor: &str,
+    ) -> Result<GitHttpResponse, GatewayError> {
         if !request.authenticated {
             return Err(GatewayError::Unauthorized);
         }
@@ -98,7 +112,7 @@ impl GitGateway {
         if is_push {
             let _push = self.push.lock().await;
             let cache = self.build_cache(self.cell_refs().await?).await?;
-            return self.handle_push(&cache, request).await;
+            return self.handle_push(&cache, request, actor).await;
         }
         let live_refs = self.cell_refs().await?;
         let cached = {
@@ -115,6 +129,7 @@ impl GitGateway {
         &self,
         cached: &CachedRepository,
         request: GitHttpRequest,
+        actor: &str,
     ) -> Result<GitHttpResponse, GatewayError> {
         let before = cached.refs.clone();
         let response = cached.backend.run(request).await?;
@@ -125,7 +140,7 @@ impl GitGateway {
             return Err(GatewayError::RefConflict);
         }
         let after = git_refs(&cached.backend.git_dir()).await?;
-        let plan = diff_refs(&before, &after);
+        let plan = diff_refs(&before, &after, actor);
         if plan.updates.is_empty() {
             return Ok(response);
         }
@@ -400,6 +415,7 @@ async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, [u8; 20]>, GatewayE
 fn diff_refs(
     before: &BTreeMap<String, RefExpectation>,
     after: &BTreeMap<String, [u8; 20]>,
+    actor: &str,
 ) -> PushPlan {
     let names: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
     let updates = names
@@ -418,7 +434,10 @@ fn diff_refs(
             }
         })
         .collect();
-    PushPlan { updates }
+    PushPlan {
+        actor: actor.into(),
+        updates,
+    }
 }
 
 fn parse_oid(oid: &str) -> Result<[u8; 20], GatewayError> {

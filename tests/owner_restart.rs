@@ -23,6 +23,8 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
 use tokio_util::sync::CancellationToken;
 
+mod support;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -85,6 +87,9 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         application_id,
     );
     let repository = Arc::new(RepositoryCell::new(&app_handle, target.clone())?);
+    repository
+        .ensure_owner(support::identity()?, "canopy")
+        .await?;
     let first_gateway = Arc::new(GitGateway::new(
         Arc::clone(&repository),
         first_disk.path().to_path_buf(),
@@ -269,13 +274,12 @@ async fn serve(
         gateway,
         "canopy".into(),
         "example",
-        "local-test-token",
         &format!("http://{address}"),
         Arc::new(|| true),
     )?);
     let (stop, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(listener, api.router())
+        axum::serve(listener, support::git_router(api))
             .with_graceful_shutdown(async move {
                 let _ = stopped.await;
             })

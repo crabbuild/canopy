@@ -4,7 +4,11 @@ use cellule_runtime::{
     WireValue,
 };
 
-use crate::{RepositoryCell, RepositoryModule};
+use crate::{
+    RepositoryCell, RepositoryModule,
+    access::{access_statement, decode_access},
+    directory::{TokenScope, validate_component},
+};
 
 const MAX_UPDATES: usize = 64;
 const MAX_REF_NAME_BYTES: usize = 255;
@@ -27,6 +31,7 @@ pub struct RefUpdate {
 /// Complete ref plan; all updates commit in one Repository Cell transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PushPlan {
+    pub actor: String,
     pub updates: Vec<RefUpdate>,
 }
 
@@ -107,9 +112,13 @@ impl RepositoryCell {
 
 impl WireValue for PushPlan {
     fn encode(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
+        if validate_component(&self.actor).is_err() {
+            return Err(CodecError::Invalid("invalid push actor"));
+        }
         if self.updates.is_empty() || self.updates.len() > MAX_UPDATES {
             return Err(CodecError::Invalid("push update count is outside bounds"));
         }
+        encoder.write_text(&self.actor)?;
         encoder.write_count(self.updates.len())?;
         for update in &self.updates {
             encoder.write_text(&update.name)?;
@@ -127,6 +136,10 @@ impl WireValue for PushPlan {
     }
 
     fn decode(decoder: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        let actor = decoder.read_text()?.to_owned();
+        if validate_component(&actor).is_err() {
+            return Err(CodecError::Invalid("invalid push actor"));
+        }
         let count = decoder.read_count()?;
         if count == 0 || count > MAX_UPDATES {
             return Err(CodecError::Invalid("push update count is outside bounds"));
@@ -153,7 +166,7 @@ impl WireValue for PushPlan {
                 new_oid,
             });
         }
-        Ok(Self { updates })
+        Ok(Self { actor, updates })
     }
 }
 
@@ -170,7 +183,7 @@ pub struct FinalizePush;
 impl Command for FinalizePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 3;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = PushPlan;
     type Output = bool;
 
@@ -179,6 +192,14 @@ impl Command for FinalizePush {
         plan: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
         if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
+            return Ok(CommandResult::Rejected(false));
+        }
+        if validate_component(&plan.actor).is_err()
+            || !decode_access(&context.sql(&SqlBatch {
+                statements: vec![access_statement(&plan.actor)],
+            })?)?
+            .is_some_and(|level| level >= TokenScope::Write)
+        {
             return Ok(CommandResult::Rejected(false));
         }
         for (index, update) in plan.updates.iter().enumerate() {
