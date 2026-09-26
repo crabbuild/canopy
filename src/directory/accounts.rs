@@ -28,11 +28,11 @@ impl DirectoryCell {
         // Authenticate within the mutation: an HTTP precheck may precede token
         // revocation. Keeping account rows also prevents old grants/name reuse
         // from transferring a disabled identity's access to another person.
-        let decision = "CASE WHEN NOT EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?1 AND t.account = ?2 AND t.scope = 'admin' AND t.enabled = 1 AND a.enabled = 1) THEN 'forbidden' WHEN ?3 = ?2 THEN 'site_owner' WHEN NOT EXISTS (SELECT 1 FROM accounts WHERE name = ?3) THEN 'missing' ELSE 'disabled' END";
-        let result = self.sql.batch(identity, SqlBatch { statements: vec![
+        let decision = "CASE WHEN NOT EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?2 AND t.account = ?3 AND t.scope = 'admin' AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1) THEN 'forbidden' WHEN ?4 = ?3 THEN 'site_owner' WHEN NOT EXISTS (SELECT 1 FROM accounts WHERE name = ?4) THEN 'missing' ELSE 'disabled' END";
+        let result = self.credential_command(identity, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT {decision}"), parameters: parameters.clone() },
             SqlStatement {
-                sql: format!("UPDATE accounts SET enabled = 0 WHERE name = ?3 AND enabled = 1 AND ({decision}) = 'disabled'"),
+                sql: format!("UPDATE accounts SET enabled = 0 WHERE name = ?4 AND enabled = 1 AND ({decision}) = 'disabled'"),
                 parameters,
             },
         ] }).await?;

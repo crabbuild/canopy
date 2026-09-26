@@ -19,11 +19,19 @@ impl RepositoryManager {
         id: [u8; 16],
         digest: [u8; 32],
         scope: TokenScope,
+        expires_at_ms: Option<i64>,
     ) -> Result<TokenChange, ServerError> {
         let authority = self.token_authority(actor_digest, account);
         Ok(self
             .directory
-            .issue_token(mutation_identity()?, authority, id, digest, scope)
+            .issue_token(
+                mutation_identity()?,
+                authority,
+                id,
+                digest,
+                scope,
+                expires_at_ms,
+            )
             .await?
             .output)
     }

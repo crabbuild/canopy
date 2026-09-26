@@ -17,7 +17,8 @@ CREATE TABLE access_tokens (
     account TEXT NOT NULL REFERENCES accounts(name),
     scope TEXT NOT NULL CHECK(scope IN ('read', 'write', 'admin')),
     enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
-    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    expires_ms INTEGER CHECK(expires_ms IS NULL OR expires_ms > created_ms)
 ) WITHOUT ROWID;
 
 CREATE INDEX access_tokens_account ON access_tokens(account, id);

@@ -559,17 +559,24 @@ own account's tokens; the configured owner can manage any account's tokens:
 | DELETE | `/api/accounts/<account>/tokens/<UUID>` | Revoke one token; returns 204 |
 
 Choose a new canonical UUID and random secret for each issuance. An exact retry
-with the same active ID, secret and scope succeeds; conflicting or revoked
-identities return 409. Listing returns only ID, scope, enabled state and creation
-time. Revoked IDs and secrets stay reserved. Revoking the site's last admin token
-returns 409, including under concurrent requests.
+with the same active ID, secret, scope and expiry succeeds; conflicting, expired
+or revoked identities return 409. Optional `expires_at_ms` is an absolute Unix
+millisecond timestamp strictly in the future; omitted/null means no expiry.
+Listing includes that timestamp (or null), ID, scope, enabled state and creation
+time. `enabled` records revocation state: an enabled token can still be expired.
+Expired/revoked IDs and secrets stay reserved. Revoking the site's last
+non-expiring admin token returns 409, including under concurrent requests.
+Expiring admins do not satisfy that recovery guard.
 
 For rotation, issue a replacement, verify it, update clients, then revoke the old
 token. For the site owner, also update `CANOPY_GIT_TOKEN` in the deployment before
 retiring its configured credential: startup requires an active owner admin token.
-Revocation blocks subsequent API, Git and LFS authentication. Already admitted
-Git/LFS operations may finish; token issuance, account creation and disablement
-recheck the authorizing credential in their mutation transaction.
+Revocation and expiry block subsequent API, Git and LFS authentication.
+Already admitted Git/LFS operations may finish; token issuance, account creation and disablement
+recheck the authorizing credential and expiry in their mutation transaction.
+Expiry uses the Directory owner's clock at execution; keep fleet clocks
+synchronized.
+Bootstrap and initial account credentials are non-expiring.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget

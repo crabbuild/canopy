@@ -12,7 +12,7 @@ before admitting persistent customer repositories.
 | Name reservation | owner/name row stores one canonical UUID and pending/ready state | Directory Cell |
 | Repository rename | compare expected UUID, move one ready name atomically, keep Cell identity | Directory Cell |
 | Account | lowercase ASCII name, enabled flag | Directory Cell |
-| Access token | unique opaque 16-byte ID, SHA-256 secret digest, account, scope (`read`, `write`, `admin`), enabled flag, creation timestamp | Directory Cell |
+| Access token | unique opaque 16-byte ID, SHA-256 secret digest, account, scope (`read`, `write`, `admin`), enabled flag, creation timestamp, optional absolute expiry | Directory Cell |
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
 | Issues and comments | repository-local numbers, immutable creation UUID/binding, text, author, optimistic version and timestamps | Repository Cell |
@@ -715,32 +715,59 @@ creation uses the same transaction boundary; only trusted startup bootstrap
 uses the credential-free SDK primitive.
 
 `GET /api/accounts/<account>/tokens` returns at most 32 ID-ordered entries with
-`id`, `scope`, `enabled` and `created_at_ms`. It never returns secrets or digests.
+`id`, `scope`, `enabled`, `created_at_ms` and nullable `expires_at_ms`. It never
+returns secrets or digests. `enabled` represents revocation, not effective
+validity; an enabled token may have expired.
 The optional `after` and returned `next_after` are canonical UUID strings.
 Continue while `next_after` is present, including a final empty page after an
 exact multiple of 32. Pagination observes each page independently; new IDs
 inserted before a cursor require a fresh scan. Revoked entries remain listed.
 
 `POST` to that path takes a client-chosen ID, a random `cnp_` secret with 64 hex
-digits and scope. Reception admits 8 KiB with a 30-second deadline. Issuance is
-immutable: an exact retry of an active record returns 204 without changing its
-creation time. Reusing an ID or digest for different fields, or for a revoked
-record, returns 409. Initial account-token IDs use the bootstrap/create command's
-request ID; token creation time uses that mutation's issued timestamp.
+digits, scope and optional `expires_at_ms` (absolute Unix milliseconds).
+Omitted/null expiry creates a non-expiring token. A new expiry at or before
+execution time returns 422. Reception admits 8 KiB with a 30-second deadline.
+Issuance is immutable: an exact retry of an active record returns 204 without changing its
+creation time. Reusing an ID or digest for different fields, or for a
+revoked/expired record, returns 409. Expiry is part of the immutable issuance identity and
+cannot be extended or removed by retrying. Initial account-token IDs use the
+bootstrap/create command's request ID and issued timestamp; these initial tokens are non-expiring.
+Additional tokens record creation time at Directory execution.
 
 `DELETE /api/accounts/<account>/tokens/<id>` returns 204 for revocation and repeat
 revocation by a still-authorized actor. Missing or inaccessible targets return
-404. Revoking the site's final active admin token returns 409; read/write tokens
-do not satisfy that guard. The decision is recorded before the conditional
-update in one Cell transaction, so self-revocation can succeed and concurrent
+404. Revoking the site's final enabled non-expiring admin token returns 409;
+read/write and expiring admin tokens do not satisfy that guard. The decision is
+recorded before the conditional update in one Cell transaction, so self-revocation can succeed and concurrent
 revocations cannot remove both remaining admins. Current authorization is still
 required for every HTTP retry, including after revoking the caller's own token.
 
-Secrets and IDs remain reserved after revocation. Account creation cannot
-reactivate one. Token records have no expiry, retention cleanup or issuance
+Secrets and IDs remain reserved after revocation or expiry. Account creation
+cannot reactivate one. Token records have no retention cleanup or issuance
 quota yet. Rotation is issue → verify replacement → update clients/deployment →
 revoke old ID. A deployment must configure an active owner admin token before
 restart; startup rejects a retired configured token instead of recreating it.
+
+Directory credential command 3 and query 4 bind parameter 1 to one execution
+timestamp for the entire SQL operation. They use the greater of owner wall time
+and Cellule admission time. The pinned runtime captures context time before
+queuing, so the handler samples the clock again after queued work. Commands
+still persist their replay outcome through Cellule; replay does not rerun a
+successful mutation or reactivate an expired record. Normal SQL operations 1/2
+remain for Directory operations that do not make credential-time decisions.
+
+Authentication requires `expires_ms IS NULL OR expires_ms > now_ms`; it does not
+wait for a cleanup job. Token listing/issuance/revocation, account creation and
+account disablement use the same expiry rule for their exact authorizing digest.
+Delayed bodies and queued commands cannot extend credential authority. General
+Git/LFS/collaboration operations retain the existing admission boundary: an
+operation already authenticated may finish after expiry, while repository ACL
+checks still gate publication. Invalid credentials on public routes return 401
+rather than becoming anonymous requests. Fleet clocks must remain synchronized;
+arbitrary wall-clock rollback/skew is not a supported expiry guarantee.
+
+The Directory schema and module digest change. Existing preview deployments
+need a fresh prefix; there is no automatic migration or credential reactivation.
 
 
 ### Issues and comments

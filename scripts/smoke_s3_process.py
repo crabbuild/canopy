@@ -243,6 +243,31 @@ def verify_revoked_token(base_url, token):
                       "POST", {"operation": "download", "objects": []}) == 401
 
 
+def seed_expiring_token(base_url):
+    path = "/api/accounts/canopy/tokens"
+    token = f"cnp_{secrets.token_hex(32)}"
+    expiry = time.time_ns() // 1_000_000 + 5000
+    record = {"id": str(uuid.uuid4()), "token": token, "scope": "read", "expires_at_ms": expiry}
+    assert api_status(base_url, path, "local-test-token", "POST", record) == 204
+    assert api_status(base_url, "/api/repositories", token) == 200
+    assert api_status(base_url, "/canopy/renamed.git/info/refs?service=git-upload-pack", token) == 200
+    assert api_status(base_url, "/canopy/renamed.git/info/lfs/objects/batch", token,
+                      "POST", {"operation": "download", "objects": []}) == 200
+    time.sleep(max(0, (expiry - time.time_ns() // 1_000_000 + 20) / 1000))
+    verify_expiring_token(base_url, record)
+    return record
+
+
+def verify_expiring_token(base_url, record):
+    verify_revoked_token(base_url, record["token"])
+    path = "/api/accounts/canopy/tokens"
+    page = api_get(base_url, path, "local-test-token")["tokens"]
+    stored = next(row for row in page if row["id"] == record["id"])
+    assert stored["expires_at_ms"] == record["expires_at_ms"] and stored["enabled"]
+    assert api_status(base_url, path, "local-test-token", "POST", record) == 409
+    print("PASS: expired token denies API, Git and LFS without revocation; its expiry and identity remain persisted", flush=True)
+
+
 def seed_disabled_account(base_url):
     tokens = [f"cnp_{secrets.token_hex(32)}" for _ in range(2)]
     assert api_status(base_url, "/api/accounts", "local-test-token", "POST",
@@ -661,6 +686,7 @@ def main():
                               {"id": replacement_id, "token": reader_token, "scope": "read"}) == 204
             assert api_status(base_url, f"{token_api}/{tokens[0]['id']}", "local-test-token", "DELETE") == 204
             verify_revoked_token(base_url, revoked_reader)
+            expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
@@ -680,6 +706,7 @@ def main():
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
             verify_revoked_token(base_url, revoked_reader)
+            verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
@@ -712,6 +739,7 @@ def main():
             print("PASS: same-directory restart reclaims abandoned Git/scratch/SQLite state before durable recovery", flush=True)
             verify_revoked_token(base_url, revoked_reader)
             tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
+            verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
             assert len(tokens) == 2
             assert [token["id"] for token in tokens if token["enabled"]] == [replacement_id]

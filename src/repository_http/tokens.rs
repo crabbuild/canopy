@@ -14,6 +14,7 @@ struct IssueRequest {
     id: String,
     token: String,
     scope: String,
+    expires_at_ms: Option<i64>,
 }
 
 async fn authorize(
@@ -81,6 +82,7 @@ pub(super) async fn list(
                         "scope": token.scope.as_str(),
                         "enabled": token.enabled,
                         "created_at_ms": token.created_at_ms,
+                        "expires_at_ms": token.expires_at_ms,
                     })
                 })
                 .collect();
@@ -131,7 +133,7 @@ pub(super) async fn issue(
         &state,
         state
             .manager
-            .issue_token(actor, &account, id, digest, scope)
+            .issue_token(actor, &account, id, digest, scope, input.expires_at_ms)
             .await,
     )
 }
@@ -169,7 +171,11 @@ fn changed(state: &RepositoryHttp, result: Result<TokenChange, ServerError>) -> 
         ),
         Ok(TokenChange::LastAdmin) => plain(
             StatusCode::CONFLICT,
-            "Cannot revoke the site's last admin token",
+            "Cannot revoke the site's last non-expiring admin token",
+        ),
+        Ok(TokenChange::InvalidExpiry) => plain(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Token expiry must be in the future",
         ),
         Err(error) => failed(error),
     }

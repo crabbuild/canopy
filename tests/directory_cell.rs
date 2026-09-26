@@ -1,5 +1,7 @@
 #[path = "directory/accounts.rs"]
 mod accounts;
+#[path = "directory/expiry.rs"]
+mod expiry;
 #[path = "support/objects.rs"]
 mod objects;
 

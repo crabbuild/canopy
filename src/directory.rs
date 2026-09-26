@@ -1,6 +1,7 @@
 //! Durable owner/name to Repository Cell identity mapping.
 
 mod accounts;
+mod timed_sql;
 mod tokens;
 pub use accounts::DisableAccountOutcome;
 pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
@@ -21,8 +22,8 @@ pub const DIRECTORY: NamespaceId = NamespaceId::from_bytes([72; 16]);
 pub const SCHEMA: &str = include_str!("directory_schema.sql");
 pub const REPOSITORY_PAGE_SIZE: usize = 32;
 
-const COMMANDS: [OperationDescriptor; 1] = [operation(1)];
-const QUERIES: [OperationDescriptor; 1] = [operation(2)];
+const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation(3)];
+const QUERIES: [OperationDescriptor; 2] = [operation(2), operation(4)];
 
 const fn operation(id: u32) -> OperationDescriptor {
     OperationDescriptor {
@@ -56,6 +57,7 @@ impl CellModule for DirectoryModule {
                 source.update(include_bytes!("directory.rs"));
                 source.update(include_bytes!("directory/accounts.rs"));
                 source.update(include_bytes!("directory/tokens.rs"));
+                source.update(include_bytes!("directory/timed_sql.rs"));
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
             },
@@ -85,7 +87,9 @@ impl CellModule for DirectoryModule {
     }
 
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
-        register_sql::<Self>(registry)
+        register_sql::<Self>(registry)?;
+        registry.bind_command::<timed_sql::CredentialCommand>()?;
+        registry.bind_query::<timed_sql::CredentialQuery>()
     }
 }
 
@@ -168,6 +172,8 @@ pub enum CreateAccountOutcome {
 
 pub struct DirectoryCell {
     sql: SqlCell<DirectoryModule>,
+    application: ApplicationHandle<CanopyApplication>,
+    target: CellTarget,
 }
 
 impl DirectoryCell {
@@ -176,7 +182,9 @@ impl DirectoryCell {
         target: CellTarget,
     ) -> cellule_runtime::Result<Self> {
         Ok(Self {
-            sql: application.sql::<DirectoryModule>(target)?,
+            sql: application.sql::<DirectoryModule>(target.clone())?,
+            application: application.clone(),
+            target,
         })
     }
 
@@ -222,7 +230,7 @@ impl DirectoryCell {
         validate_component(name).map_err(InvocationError::NotStarted)?;
         // Only trusted bootstrap bypasses an existing credential. HTTP account
         // creation rechecks the site admin in the transaction that issues its token.
-        let authorized = "?6 IS NULL OR EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?6 AND t.account = ?7 AND t.scope = 'admin' AND t.enabled = 1 AND a.enabled = 1)";
+        let authorized = "?7 IS NULL OR EXISTS (SELECT 1 FROM access_tokens t JOIN accounts a ON a.name = t.account WHERE t.digest = ?7 AND t.account = ?8 AND t.scope = 'admin' AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1)";
         let parameters = vec![
             SqlValue::Text(name.into()),
             SqlValue::Blob(token_digest.to_vec()),
@@ -234,15 +242,15 @@ impl DirectoryCell {
             }),
             authority.map_or(SqlValue::Null, |(_, owner)| SqlValue::Text(owner.into())),
         ];
-        let committed = self.sql.batch(identity, SqlBatch {
+        let committed = self.credential_command(identity, SqlBatch {
             statements: vec![
                 SqlStatement { sql: format!("SELECT {authorized}"), parameters: parameters.clone() },
                 SqlStatement {
-                    sql: format!("INSERT INTO accounts (name, enabled) SELECT ?1, 1 WHERE ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?2) ON CONFLICT(name) DO NOTHING"),
+                    sql: format!("INSERT INTO accounts (name, enabled) SELECT ?2, 1 WHERE ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?3) ON CONFLICT(name) DO NOTHING"),
                     parameters: parameters.clone(),
                 },
                 SqlStatement {
-                    sql: format!("INSERT INTO access_tokens (digest, account, scope, enabled, id, created_ms) SELECT ?2, ?1, ?3, 1, ?4, ?5 FROM accounts WHERE name = ?1 AND enabled = 1 AND ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?1) ON CONFLICT DO NOTHING"),
+                    sql: format!("INSERT INTO access_tokens (digest, account, scope, enabled, id, created_ms) SELECT ?3, ?2, ?4, 1, ?5, ?6 FROM accounts WHERE name = ?2 AND enabled = 1 AND ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?2) ON CONFLICT DO NOTHING"),
                     parameters,
                 },
             ],
@@ -282,9 +290,9 @@ impl DirectoryCell {
         token_digest: [u8; 32],
         minimum: Option<Receipt>,
     ) -> Result<Observed<Option<Principal>>, InvocationError<Vec<SqlResultSet>>> {
-        let result = self.sql.query(minimum, SqlBatch {
+        let result = self.credential_query(minimum, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT a.name, t.scope FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?1 AND t.enabled = 1 AND a.enabled = 1".into(),
+                sql: "SELECT a.name, t.scope FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?2 AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1".into(),
                 parameters: vec![SqlValue::Blob(token_digest.to_vec())],
             }],
         }).await?;

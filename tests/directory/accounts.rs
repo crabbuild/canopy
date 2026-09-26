@@ -48,7 +48,8 @@ async fn disable_rechecks_exact_admin_credential_inside_the_directory_transactio
                 authority([1; 32], "owner"),
                 id,
                 digest,
-                scope
+                scope,
+                None
             )
             .await?
             .output,

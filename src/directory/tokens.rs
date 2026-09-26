@@ -15,6 +15,7 @@ pub struct TokenInfo {
     pub scope: TokenScope,
     pub enabled: bool,
     pub created_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -23,11 +24,12 @@ pub enum TokenChange {
     NotFound,
     Conflict,
     LastAdmin,
+    InvalidExpiry,
 }
 
 // The caller supplies site policy, not an authenticated account assertion.
 // Recheck the exact credential in the same SQL transaction as each mutation.
-const AUTHORIZED: &str = "EXISTS (SELECT 1 FROM access_tokens actor JOIN accounts a ON a.name = actor.account WHERE actor.digest = ?1 AND actor.enabled = 1 AND actor.scope = 'admin' AND a.enabled = 1 AND (actor.account = ?2 OR actor.account = ?3)) AND EXISTS (SELECT 1 FROM accounts WHERE name = ?3 AND enabled = 1)";
+const AUTHORIZED: &str = "EXISTS (SELECT 1 FROM access_tokens actor JOIN accounts a ON a.name = actor.account WHERE actor.digest = ?2 AND actor.enabled = 1 AND (actor.expires_ms IS NULL OR actor.expires_ms > ?1) AND actor.scope = 'admin' AND a.enabled = 1 AND (actor.account = ?3 OR actor.account = ?4)) AND EXISTS (SELECT 1 FROM accounts WHERE name = ?4 AND enabled = 1)";
 
 impl TokenAuthority<'_> {
     fn parameters(&self) -> cellule_runtime::Result<Vec<SqlValue>> {
@@ -58,10 +60,10 @@ impl DirectoryCell {
         page_parameters.push(SqlValue::Blob(
             after.map_or_else(Vec::new, |id| id.to_vec()),
         ));
-        let observed = self.sql.query(None, SqlBatch { statements: vec![
+        let observed = self.credential_query(None, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT {AUTHORIZED}"), parameters },
             SqlStatement {
-                sql: format!("SELECT id, scope, enabled, created_ms FROM access_tokens WHERE account = ?3 AND id > ?4 AND ({AUTHORIZED}) ORDER BY id LIMIT {TOKEN_PAGE_SIZE}"),
+                sql: format!("SELECT id, scope, enabled, created_ms, expires_ms FROM access_tokens WHERE account = ?4 AND id > ?5 AND ({AUTHORIZED}) ORDER BY id LIMIT {TOKEN_PAGE_SIZE}"),
                 parameters: page_parameters,
             },
         ] }).await?;
@@ -102,6 +104,7 @@ impl DirectoryCell {
         id: [u8; 16],
         digest: [u8; 32],
         scope: TokenScope,
+        expires_at_ms: Option<i64>,
     ) -> Result<Committed<TokenChange>, InvocationError<Vec<SqlResultSet>>> {
         let mut parameters = authority
             .parameters()
@@ -110,17 +113,16 @@ impl DirectoryCell {
             SqlValue::Blob(id.to_vec()),
             SqlValue::Blob(digest.to_vec()),
             SqlValue::Text(scope.as_str().into()),
+            expires_at_ms.map_or(SqlValue::Null, SqlValue::Integer),
         ]);
         let decision = format!(
-            "CASE WHEN NOT ({AUTHORIZED}) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?4 AND digest = ?5 AND account = ?3 AND scope = ?6 AND enabled = 1) THEN 'applied' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?4 OR digest = ?5) THEN 'conflict' ELSE 'applied' END"
+            "CASE WHEN NOT ({AUTHORIZED}) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND digest = ?6 AND account = ?4 AND scope = ?7 AND enabled = 1 AND expires_ms IS ?8 AND (expires_ms IS NULL OR expires_ms > ?1)) THEN 'applied' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 OR digest = ?6) THEN 'conflict' WHEN ?8 IS NOT NULL AND ?8 <= ?1 THEN 'invalid_expiry' ELSE 'applied' END"
         );
-        let mut insert_parameters = parameters.clone();
-        insert_parameters.push(SqlValue::Integer(identity.issued_at_ms));
-        let result = self.sql.batch(identity, SqlBatch { statements: vec![
-            SqlStatement { sql: format!("SELECT {decision}"), parameters },
+        let result = self.credential_command(identity, SqlBatch { statements: vec![
+            SqlStatement { sql: format!("SELECT {decision}"), parameters: parameters.clone() },
             SqlStatement {
-                sql: format!("INSERT INTO access_tokens (id, digest, account, scope, enabled, created_ms) SELECT ?4, ?5, ?3, ?6, 1, ?7 WHERE ({decision}) = 'applied' ON CONFLICT DO NOTHING"),
-                parameters: insert_parameters,
+                sql: format!("INSERT INTO access_tokens (id, digest, account, scope, enabled, created_ms, expires_ms) SELECT ?5, ?6, ?4, ?7, 1, ?1, ?8 WHERE ({decision}) = 'applied' ON CONFLICT DO NOTHING"),
+                parameters,
             },
         ] }).await?;
         changed(result)
@@ -138,14 +140,14 @@ impl DirectoryCell {
             .map_err(InvocationError::NotStarted)?;
         parameters.push(SqlValue::Blob(id.to_vec()));
         let decision = format!(
-            "CASE WHEN NOT ({AUTHORIZED}) OR NOT EXISTS (SELECT 1 FROM access_tokens WHERE id = ?4 AND account = ?3) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?4 AND enabled = 0) THEN 'applied' WHEN ?3 = ?2 AND EXISTS (SELECT 1 FROM access_tokens WHERE id = ?4 AND scope = 'admin') AND (SELECT count(*) FROM access_tokens WHERE account = ?3 AND scope = 'admin' AND enabled = 1) <= 1 THEN 'last_admin' ELSE 'applied' END"
+            "CASE WHEN NOT ({AUTHORIZED}) OR NOT EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND account = ?4) THEN 'missing' WHEN EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND enabled = 0) THEN 'applied' WHEN ?4 = ?3 AND EXISTS (SELECT 1 FROM access_tokens WHERE id = ?5 AND scope = 'admin' AND expires_ms IS NULL) AND (SELECT count(*) FROM access_tokens WHERE account = ?4 AND scope = 'admin' AND enabled = 1 AND expires_ms IS NULL) <= 1 THEN 'last_admin' ELSE 'applied' END"
         );
         // Record the decision before changing the actor's own token. Reading
         // authorization afterward would report failure for a successful self-revoke.
-        let result = self.sql.batch(identity, SqlBatch { statements: vec![
+        let result = self.credential_command(identity, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT {decision}"), parameters: parameters.clone() },
             SqlStatement {
-                sql: format!("UPDATE access_tokens SET enabled = 0 WHERE id = ?4 AND account = ?3 AND enabled = 1 AND ({decision}) = 'applied'"),
+                sql: format!("UPDATE access_tokens SET enabled = 0 WHERE id = ?5 AND account = ?4 AND enabled = 1 AND ({decision}) = 'applied'"),
                 parameters,
             },
         ] }).await?;
@@ -167,6 +169,7 @@ fn changed(
             "missing" => TokenChange::NotFound,
             "conflict" => TokenChange::Conflict,
             "last_admin" => TokenChange::LastAdmin,
+            "invalid_expiry" => TokenChange::InvalidExpiry,
             _ => {
                 return Err(InvocationError::NotStarted(Error::Command(
                     "invalid token outcome",
@@ -191,6 +194,7 @@ fn token_info(row: &[SqlValue]) -> cellule_runtime::Result<TokenInfo> {
         SqlValue::Text(scope),
         SqlValue::Integer(enabled),
         SqlValue::Integer(created_at_ms),
+        expires_at_ms,
     ] = row
     else {
         return Err(Error::Command("invalid token record"));
@@ -199,6 +203,11 @@ fn token_info(row: &[SqlValue]) -> cellule_runtime::Result<TokenInfo> {
     if ![0, 1].contains(enabled) || *created_at_ms < 0 {
         return Err(Error::Command("invalid token metadata"));
     }
+    let expires_at_ms = match expires_at_ms {
+        SqlValue::Null => None,
+        SqlValue::Integer(value) if value > created_at_ms => Some(*value),
+        _ => return Err(Error::Command("invalid token expiry")),
+    };
     Ok(TokenInfo {
         id: id
             .as_slice()
@@ -207,5 +216,6 @@ fn token_info(row: &[SqlValue]) -> cellule_runtime::Result<TokenInfo> {
         scope,
         enabled: *enabled == 1,
         created_at_ms: *created_at_ms,
+        expires_at_ms,
     })
 }

@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB Git object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -66,9 +66,9 @@ separate product decisions.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
 4. Complete account deletion, administration UI and audit records.
-   Accounts support disablement; tokens support rotation and revocation. Add
-   expiry and issuance quotas;
-   qualify admitted Git/LFS operations during revocation and owner takeover.
+   Accounts support disablement; tokens support rotation, revocation and expiry.
+   Add issuance quotas; qualify admitted Git/LFS operations during revocation
+   and owner takeover.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
@@ -2266,3 +2266,54 @@ refs, collaboration/ACL/token state, exact dropped-reply replay, native Git
 configuration isolation, restart, disk loss and lease takeover. Formatting,
 Python syntax and whitespace checks also pass. No product limit or verification
 was weakened to accommodate the fixture's earlier storage exhaustion.
+
+
+## Credential expiry
+
+On 2026-09-26, account token issuance gained optional absolute `expires_at_ms`.
+The Directory stores expiry with immutable credential identity; omitted/null
+means non-expiring. Authentication and credential administration check expiry
+without a cleanup job. Expired IDs and digests remain reserved, and retries
+cannot extend or remove expiry. The site's final enabled non-expiring admin
+cannot be revoked, even while an expiring admin is still valid.
+
+Directory commands/queries bind one timestamp inside the owner handler. The
+pinned Cellule client captures its context clock before queueing; refreshing
+wall time at execution prevents queued requests from retaining expired authority.
+One timestamp covers every SQL statement in the operation, including the
+self-revocation decision and update. The additional source owns this execution
+boundary; repository operations continue using their existing admission and
+current ACL rules.
+
+Evidence:
+
+- All three Directory integration tests pass, including a deliberately blocked
+  SQL worker: authentication and token issuance queued before expiry both reject
+  after execution resumes. Expired admins cannot list, issue, revoke, create or
+  disable accounts; retries cannot reactivate credentials.
+- Both token HTTP integrations pass. Invalid expiry returns 422, changing an
+  issued expiry returns 409, and delayed token/account creation rejects after
+  the actor expires. Stock Git and LFS accept a valid temporary credential;
+  expired credentials remain rejected after fresh-local-storage recovery, while
+  an unexpired temporary reader still authenticates. Existing rotation,
+  pagination, self-revocation and concurrent last-admin checks pass.
+- The account-disablement recovery integration passes. All-target Clippy with
+  warnings denied, formatting, Python syntax, whitespace and release build pass.
+
+The schema, Directory operation set and module digest change; use a fresh
+preview prefix. No dependency or lockfile change is needed. Fleet clocks must
+remain synchronized. Already admitted Git/LFS/collaboration work may finish after
+expiry. Issuance quotas, token/account administration UI, account deletion,
+audit records and production capacity remain open; gate 2 remains partial.
+
+The final release process smoke passed against RustFS `1.0.0-beta.8-glibc`
+with `--sqlite-chunks --many-objects 256`. A temporary credential first succeeds
+for API, Git and LFS, then expires without explicit revocation. Its stored expiry,
+reserved identity and authentication denial survive clean restart and SIGKILL,
+lease expiry and discarded local SQLite state. The same run passes existing
+collaboration/ACL/replay behavior, large SQLite objects, 256 files and 300 refs,
+eight repositories across two HTTPS peers, anonymous visibility revocation,
+maintenance drain and recovery, and independent backup/restore with 80 MiB and
+empty LFS objects after deletion of every original source object. The bounded
+RustFS tmpfs fixture proves process/storage-API behavior, not provider disk or
+power-loss durability or production capacity.
