@@ -6,6 +6,8 @@ mod chunks;
 mod default_branch;
 #[path = "repository_cell/graph.rs"]
 mod graph;
+#[path = "repository_cell/issues.rs"]
+mod issues;
 #[path = "support/objects.rs"]
 mod objects;
 #[path = "repository_cell/pages.rs"]
@@ -164,6 +166,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 "canopy",
             )
             .await?;
+        issues::exercise(&repository).await?;
         default_branch::empty(&repository).await?;
         let committed = objects::put(&repository,
                 MutationIdentity {

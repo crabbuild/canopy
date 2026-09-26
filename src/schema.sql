@@ -82,3 +82,30 @@ CREATE TABLE push_response_chunks (
     body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
     PRIMARY KEY(response_id, part)
 ) WITHOUT ROWID;
+
+CREATE TABLE issues (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 256),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    state TEXT NOT NULL CHECK(state IN ('open', 'closed')),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX issues_by_state ON issues(state, number);
+
+CREATE TABLE issue_comments (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_number INTEGER NOT NULL REFERENCES issues(number),
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX comments_by_issue ON issue_comments(issue_number, number);

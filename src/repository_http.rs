@@ -3,6 +3,7 @@
 mod authorization;
 mod collaborators;
 mod default_branch;
+mod issues;
 mod tokens;
 
 use authorization::authorized_route;
@@ -71,6 +72,22 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/default-branch",
                 get(default_branch::read).put(default_branch::update),
+            )
+            .route(
+                "/api/repositories/{name}/issues",
+                get(issues::list).post(issues::create),
+            )
+            .route(
+                "/api/repositories/{name}/issues/{number}",
+                get(issues::read).put(issues::edit),
+            )
+            .route(
+                "/api/repositories/{name}/issues/{number}/comments",
+                get(issues::comments).post(issues::create_comment),
+            )
+            .route(
+                "/api/repositories/{name}/issues/{number}/comments/{comment}",
+                axum::routing::put(issues::edit_comment),
             )
             .route(
                 "/api/repositories/{name}/collaborators",

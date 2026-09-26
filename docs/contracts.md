@@ -15,6 +15,7 @@ before admitting persistent customer repositories.
 | Access token | unique opaque 16-byte ID, SHA-256 secret digest, account, scope (`read`, `write`, `admin`), enabled flag, creation timestamp | Directory Cell |
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
+| Issues and comments | repository-local numbers, immutable creation UUID/binding, text, author, optimistic version and timestamps | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
@@ -527,7 +528,8 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery and token-metadata layouts and operation-5 codec change require a fresh development storage prefix;
+HEAD, discovery, token-metadata and issue layouts and the operation-5 codec change
+require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins an immutable public Cellule
@@ -572,3 +574,80 @@ reactivate one. Token records have no expiry, retention cleanup or issuance
 quota yet. Rotation is issue → verify replacement → update clients/deployment →
 revoke old ID. A deployment must configure an active owner admin token before
 restart; startup rejects a retired configured token instead of recreating it.
+
+
+### Issues and comments
+
+Issue state belongs to the Repository Cell. `issues` assigns a monotonically
+increasing repository-local issue number; `issue_comments` assigns a separate
+repository-local comment number and references its parent issue. UUIDs are unique
+within each table. Both records retain author, original creation digest, version,
+creation timestamp and last-edit timestamp. Issue rows additionally hold title,
+body and `open`/`closed` state; comment rows hold body. Comments do not advance the
+parent issue's version or edit timestamp. Closed issues still accept comments.
+No application state is written to the disposable Git cache.
+
+All issue reads check current Repository Cell membership. Creation permits any
+current repository reader; edits permit the record author or a repository writer,
+provided that actor still has repository access. HTTP independently requires a
+read-scoped token for reads and write scope for every mutation. The SDK takes a
+trusted authenticated account assertion, as the existing ACL/ref primitives do.
+Authentication happens at HTTP admission; the Cell rechecks membership and edit
+authority in the mutation transaction. A token revoked after request admission
+may finish an admitted operation; ACL revocation before publication blocks it.
+
+Creation requires a client UUID and stores a length-prefixed BLAKE3 binding of
+original author and text. A comment also binds its parent issue. Exact retries
+with a fresh runtime mutation identity return the existing number and never reset
+later edits, state, timestamps or versions. A UUID used for different original
+input returns conflict. The binding is repository-local and remains in SQLite.
+No retention cleanup or deletion currently removes these identities. Runtime
+replays with an identical mutation identity return the original stored outcome;
+HTTP retries authenticate anew and receive a fresh runtime identity.
+
+Edits replace the complete editable fields and compare `expected_version`.
+They advance the version once and use the greater of the previous edit time and
+the command's issue time. The decision, guarded mutation and result number are
+three bounded SQL statements in one Cell command transaction. The pre-mutation
+decision is captured before version advancement. Competing edits at one version
+cannot both succeed. HTTP does not promise replayable edit responses: after an
+ambiguous reply, GET current state before deciding whether another edit is needed.
+
+The HTTP base path is `/api/repositories/<name>/issues`:
+
+| Method/path | Input | Result |
+| --- | --- | --- |
+| GET base | optional `after` (number), `state` (`open` or `closed`) | `repository_id`, up to 32 `issues` summaries, `next_after` |
+| POST base | `repository_id`, `id`, `title`, `body` | 200 with `number` on creation or exact retry |
+| GET `/<number>` | none | `repository_id` and complete `issue` |
+| PUT `/<number>` | `repository_id`, `expected_version`, `title`, `body`, `state` | 204 |
+| GET `/<number>/comments` | optional `after` (comment number) | `repository_id`, up to 16 `comments`, `next_after` |
+| POST `/<number>/comments` | `repository_id`, `id`, `body` | 200 with comment `number` on creation or exact retry |
+| PUT `/<number>/comments/<comment>` | `repository_id`, `expected_version`, `body` | 204 |
+
+Summaries expose number, UUID, author, title, state, version, `created_at_ms` and
+`updated_at_ms`. Detail adds body. Comments expose the same identity/version/time
+fields with author and body. Creation digests stay private. Every mutation
+requires the expected repository UUID, so rename or name reuse cannot redirect
+a stale write to a different Cell. Canonical lowercase UUIDs with an RFC variant
+and version 1–8 are required. Missing issue/comment/access returns 404; a current
+reader editing another author's record returns 403. Scope failure returns 403;
+identity or version conflict returns 409. Invalid JSON/fields/content return 422;
+malformed path/query types are rejected by the HTTP extractor with 400.
+
+Titles are nonblank, contain no control characters and use at most 256 UTF-8
+bytes. Bodies allow at most 16 KiB and no NUL; issue bodies may be empty, comment
+bodies must contain non-whitespace text. The HTTP request limit is 128 KiB with
+a 30-second body deadline (413/408). The larger JSON envelope admits escaped
+representations without expanding the stored-text limit. Text is unrendered;
+any future UI must escape it and sanitize rendered Markdown.
+
+Lists use ascending number cursors, initially zero, with an index for issue
+state and an `(issue_number, number)` index for comments. Full pages return the
+last number as `next_after`; an exact multiple needs an empty terminal page.
+Continue until null. Pages are independent observations: edits/state changes
+behind a cursor need a fresh scan. Issue lists omit bodies to bound result size;
+comment pages contain at most 256 KiB of body text before wire overhead, below
+the runtime's 1 MiB SQL result limit. These are bounded operations, not measured
+production capacity. There is no edit history, delete/moderation API, labels,
+assignees, attachments, notifications, issue search, or issue UI yet.

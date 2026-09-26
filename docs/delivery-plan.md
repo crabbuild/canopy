@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs, optimistic edits and open/close state implemented; checks/rules, pulls/reviews/merge, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,8 +59,8 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Implement collaboration as vertical slices: issues; checks and branch
-   rules; pull requests, reviews and merge; releases and assets; UI. Each
+5. Continue collaboration as vertical slices: issue labels/assignees; checks and
+   branch rules; pull requests, reviews and merge; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
 Keep LFS bodies and unreferenced Git objects under conservative retention
@@ -792,3 +792,63 @@ fresh-volume initialization warnings; the qualification exits successfully.
 
 No dependency, lockfile, schema or codec changes. This slice adds one read API;
 account disable/delete, audit records and broader collaboration gates remain open.
+
+
+## Repository-local issues and comments
+
+The Repository Cell now stores numbered issues and comments alongside the ACL
+and Git metadata. Seven HTTP operations support creation, list/detail reads,
+comments, complete text edits, closing and reopening. All writes carry the
+expected repository UUID. Read members with a write-scoped token may participate;
+authors and repository writers may edit. The Cell checks current membership and
+edit authority in the mutation transaction, including after body reception.
+
+Client UUIDs bind creation to the original author/content and comment parent.
+Exact retries after edits or recovery return the original number without changing
+current contents. Edits compare an explicit version and reject stale updates.
+The Cell captures the decision, applies its guarded write and records the result
+in one SQL batch. The pinned dependency executes this inside the application
+transaction, and its normal mutation identity records exact command replays.
+
+Issue summary pages contain at most 32 entries; comments contain at most 16
+bodies. Titles admit 256 UTF-8 bytes and bodies 16 KiB. Request reception is
+bounded to 128 KiB / 30 seconds. Indexed number scans, an issue-state index and a
+parent/comment-number index bound each read. Summaries omit bodies; full comment
+pages remain below the SQL result limit. There is no whole-history scan or new
+external content store on these paths.
+
+Proof completed:
+
+- Direct Cell calls: owner/member authorization without HTTP, exact mutation
+  receipt replay, read members creating discussions, writer moderation, stale
+  edits, all four mutations denied after membership revocation, maximum body
+  size and a UTF-8 title near its byte limit.
+- HTTP: two simultaneous retries create one issue; two edits at one version
+  produce one success and one conflict. Creates do not overwrite subsequent
+  edits. Foreign authors, token-scope limits, repository UUID mismatches and
+  comment-parent mismatches are checked.
+- HTTP pagination over 33 issues and 17 comments with maximum-sized bodies,
+  state filters, terminal empty pages, malformed/oversized input and repository
+  isolation. A paused issue upload and paused comment upload both fail after
+  ACL revocation. Rename and fresh-local-storage owner restore retain exact
+  issue/comment content and versions; writes continue after restoration.
+- Existing two-repository Git/LFS recovery, Repository Cell integration, all-target
+  Clippy with warnings denied, formatting and the release binary build pass.
+
+The release process smoke against RustFS `1.0.0-beta.8-glibc`, with
+`--sqlite-chunks --many-objects 256`, passes. It creates an issue/comment, edits
+both and closes the issue, then checks exact content, identities, timestamps and
+versions before shutdown, after clean restart and after SIGKILL/lease expiry on
+fresh local storage. Retrying the original creates at each stage preserves those
+edits. The same run verifies Git/LFS, ACL revocation, token rotation, 300 refs,
+SQLite chunks, mixed/atomic outcomes and lost-push-reply replay. The process exits
+successfully; fresh-volume RustFS startup diagnostics remain as previously noted.
+
+This adds approximately 1,000 Rust source lines for the models, four transactional
+mutations, three bounded reads and seven HTTP operations; their common admission,
+result decoding and text validation are shared within the issue boundary.
+No dependencies or lockfiles changed. This extends the unreleased Repository
+schema and module source digest; old development prefixes require replacement.
+The full collaboration gate remains open: no labels, assignees, edit history,
+attachments, delete/moderation API, notifications, search or UI yet. Aggregate
+issue/comment quotas and retention policy also remain open.

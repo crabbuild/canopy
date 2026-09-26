@@ -38,7 +38,7 @@ fn issue(
         .json(&json!({"id": id, "token": token, "scope": scope}))
 }
 
-async fn paused_upload(
+pub(super) async fn paused_upload(
     address: std::net::SocketAddr,
     path: &str,
     token: &str,
@@ -56,7 +56,11 @@ async fn paused_upload(
     Ok(socket)
 }
 
-async fn finish_upload(mut socket: tokio::net::TcpStream, body: &[u8], status: u16) -> Result {
+pub(super) async fn finish_upload(
+    mut socket: tokio::net::TcpStream,
+    body: &[u8],
+    status: u16,
+) -> Result {
     socket.write_all(body).await?;
     let mut reply = Vec::new();
     tokio::time::timeout(

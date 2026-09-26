@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 import smoke_s3_corpus
+import smoke_s3_issues
 
 
 def port():
@@ -560,8 +561,10 @@ def main():
                 "push", url, "HEAD:refs/heads/trunk", cwd=local)
             selected_head = default_branch(base_url, "example", "refs/heads/trunk")
             url = rename_repository(base_url, "example", "renamed", repository_id)
+            issue_state = smoke_s3_issues.seed(base_url, repository_id)
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
+            smoke_s3_issues.verify(base_url, issue_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             verify_discovery(base_url, "local-test-token", ["renamed", "other"])
             clone_and_verify(url, directory / "renamed-live", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
@@ -597,6 +600,7 @@ def main():
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
+            smoke_s3_issues.verify(base_url, issue_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
@@ -613,6 +617,7 @@ def main():
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
+            smoke_s3_issues.verify(base_url, issue_state)
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token, branch="trunk")

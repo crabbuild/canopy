@@ -12,6 +12,8 @@ mod collaborators;
 mod default_branch;
 #[path = "multi_server/discovery.rs"]
 mod discovery;
+#[path = "multi_server/issues.rs"]
+mod issues;
 #[path = "multi_server/large_objects.rs"]
 mod large_objects;
 #[path = "multi_server/residency.rs"]

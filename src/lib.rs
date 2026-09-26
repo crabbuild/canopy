@@ -21,6 +21,7 @@ pub mod git_input;
 mod git_objects;
 mod graph;
 pub mod http;
+pub mod issues;
 pub mod large_blob;
 pub mod lfs;
 mod object_batch;
@@ -167,6 +168,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
+                source.update(include_bytes!("issues.rs"));
+                source.update(include_bytes!("issues/mutations.rs"));
                 source.update(include_bytes!("lfs.rs"));
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
