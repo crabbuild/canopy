@@ -6,6 +6,7 @@ mod checks;
 mod collaborators;
 mod default_branch;
 mod issues;
+mod pulls;
 mod tokens;
 
 use authorization::authorized_route;
@@ -94,6 +95,18 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/checks/{id}",
                 get(checks::read).put(checks::update),
+            )
+            .route(
+                "/api/repositories/{name}/pulls",
+                get(pulls::list).post(pulls::create),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}",
+                get(pulls::read).put(pulls::edit),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/reviews",
+                get(pulls::reviews).post(pulls::review),
             )
             .route(
                 "/api/repositories/{name}/issues",

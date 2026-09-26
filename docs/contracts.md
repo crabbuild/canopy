@@ -529,7 +529,7 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata, issue, check and branch-rule layouts, operations 7/8, and the operation-5 codec change
+HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review and membership-version layouts, operations 7/8, and the operation-5 codec change
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
@@ -811,3 +811,94 @@ cross-OS hook execution still need production qualification. Rules do not yet
 include PR approval requirements, path policies, tag rules, exemptions or a UI.
 These new tables require a fresh unreleased development prefix; there is no
 backfill path for old object certificates lacking parent rows.
+
+
+### Pull requests and reviews
+
+`pull_requests` owns a repository-local number, UUID, immutable creation digest,
+author, editorial content, open/closed state, draft flag, optimistic version,
+fixed source/base branch names, initial commit OIDs and timestamps. Pull and issue
+numbers have separate sequences. A pull does not store a mutable copy of current
+branch state: reads join the two durable `refs` rows in the same Cell observation.
+This avoids fanout writes to every open pull after a push. Retained ref tombstones
+expose deleted tips as null without losing their versions. Original commit OIDs
+remain available in details. Pulls may share the same source/base pair.
+
+Create binds its UUID to author, title, body, draft and source/base names/OIDs.
+Both names must be distinct valid branches, with live, unequal tips matching the
+request. The branch publication path already guarantees commit type and graph
+closure. A retry with the same binding returns the original number before checking
+current tips, preserving later changes. A conflicting binding returns conflict.
+Current read membership is required even for retries. Edits require the author
+or a current writer, current membership and the expected editorial version.
+Every accepted edit advances that version, invalidating prior review eligibility.
+Neither close/reopen nor draft transitions change Git refs.
+
+`pull_reviews` owns immutable review UUIDs, numbers, original payload digests,
+parent pull number, reviewer, grant generation, kind, body and exact revision:
+pull version, source OID/ref version and base OID/ref version. New reviews require
+an open pull, live unequal source/base tips, and that exact revision in the same
+SQL transaction. Comments admit read members; approvals and requested changes
+require a writer other than the author and a non-draft pull. A pull author has
+no self-approval exemption, including the owner. An exact review retry checks
+current membership and original binding, then returns its historical number;
+it cannot create a newer decision. A new UUID must satisfy current eligibility.
+Body/identity changes and reusing a UUID for another parent conflict.
+
+History reports `applicable` only for non-comment reviews on the current ready,
+open pull and exact pull/source/base versions, with eligible current writer
+membership. It selects that reviewer's newest non-comment review by creation
+number across all revisions. Comments do not hide an approval or objection.
+Source or base ABA cannot revive a decision because retained ref versions change.
+Editorial ABA and close/reopen change the pull version. These flags are current
+observations, not authorization tokens or merge reservations.
+
+`membership_versions(account, version)` survives removal of a grant. Granting a
+new role, changing role, or revoking an existing membership advances that account's
+generation in the same guarded transaction as the ACL mutation. Repeating the
+same role or removing an absent grant does not advance it. A review records the
+generation at submission, and applicability requires it still match. Regranting
+or restoring write access therefore cannot revive an old approval. The immutable
+owner uses generation zero. Unauthorized ACL calls cannot change generations.
+Existing ACL access, roster and check-reporting policy stays the same; check
+results continue to use their configured context versions, as documented above.
+A fresh development prefix is required; old memberships have no generation
+backfill. A future migration must initialize those before enabling these APIs.
+
+All three mutations are bounded guarded SQL batches through the registered Cell
+SQL command. Their recorded pre-mutation domain decision, conditional write and
+result number share the same transaction. Runtime receipt replay preserves the
+original outcome. Application UUID bindings provide HTTP retry semantics across
+fresh command identities. Failed domain decisions leave pull/review content
+unchanged. The SDK accepts an authenticated actor assertion; HTTP authenticates
+before reading the body and the Cell rechecks membership/authority at mutation.
+As with issues, already admitted token revocation follows the existing admission
+boundary; repository revocation is checked again in the write.
+
+Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
+collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation
+carries the repository UUID, checked against the resolved Cell. Create/review
+returns 200 with `number`; edits return 204. Missing access/resources yield 404,
+insufficient scope/authority 403, identity/version/revision conflicts 409, and
+invalid JSON or values 422. Extractor failures can return 400. Bodies are capped
+at 128 KiB with a 30-second deadline. Titles allow 256 UTF-8 bytes without control
+characters; bodies allow 16 KiB without NUL. Comment reviews require nonblank
+body text. No text is rendered as HTML by these APIs.
+
+Pull lists omit bodies, optionally filter by open/closed state and contain at
+most 32 number-ordered summaries. Review history pages contain at most 16 full
+reviews, bounding body content to 256 KiB before metadata. Both use numeric
+`after`/`next_after`; each page independently observes current state. Pull/state
+and review/pull indexes support scans. A partial `(pull_number, reviewer, number)`
+index over non-comment reviews supports each newest-decision lookup without
+scanning comment history. Grant generation and ref lookups use primary keys.
+No aggregate approval count, mergeability or diff computation runs on these reads.
+
+Future merge publication must recheck current review requirements, grant/ref/pull
+versions and branch checks in the same transaction as the base ref and merged
+state. Git pushes do not currently require a PR review. Required reviewer policy,
+diff/file browsing, inline threads, merge commits/squash/rebase, conflict UI,
+cross-repository pulls, retargeting, review dismissal, deletion/moderation,
+notifications and UI remain open. A future collector must retain initial pull
+OIDs, historical review OIDs and merge preparation roots in addition to live refs.
+Aggregate retention/quotas and production throughput evidence remain open.

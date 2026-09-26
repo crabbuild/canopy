@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment APIs, configured checks and exact branch rules implemented; pulls/reviews/merge, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule and pull/review lifecycle APIs implemented; merge publication, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: pull requests, reviews and merge;
+5. Continue collaboration as vertical slices: PR diffs, required reviews and atomic merge;
    issue labels/assignees; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -976,3 +976,66 @@ certificate retention, native Git scratch peaks and cross-OS hook proof. PR
 approval policy and PR/review/merge APIs are the next collaboration slice. Full
 hosting delivery gates above remain open. No dependency or lockfile changes;
 new schema tables and operation registrations require a fresh development prefix.
+
+
+## Pull request and review lifecycle
+
+Repository Cells now store proposals and immutable reviews alongside refs and ACL.
+Six HTTP operations open/list/read/edit pulls and submit/list reviews. Source/base
+names remain fixed; creation pins expected live tips, while reads join current
+ref state rather than copying it into every pull after a push. Closing, reopening
+and draft changes advance an editorial version. Exact create retries preserve
+later edits and original numbers.
+
+Reviews bind to exact source/base OIDs, retained ref versions and pull version.
+Only other repository writers can approve or request changes on ready pulls;
+members can comment. Newest decisions per reviewer supersede older decisions,
+while comments and old retries leave that order unchanged. Eligibility reflects
+current state. Branch/editorial ABA cannot revive a review. Membership generations
+advance with grant changes and survive removal, preventing revoke/regrant from
+reviving an approval. Repeated identical grants keep their generation.
+
+Verified locally:
+
+- HTTP with real Git source/base commits: concurrent exact create/review retries,
+  conflicting identities, expected versions, author and token boundaries, old
+  retry ordering, source/base movement, ABA, draft/close/reopen, deletion and
+  recreation, role downgrade/regrant, same-role retry, and a paused review upload
+  rejected after revocation. Lists page through 33 pulls and maximum-size review
+  bodies. Rename and fresh-local-storage recovery preserve edited pulls and
+  review history; new decisions after recovery retain correct ordering.
+- Direct Cell: SDK authority without HTTP, exact receipt replay, mismatched parent
+  UUID binding, stale ref versions, maximum text sizes, unauthorized ACL changes,
+  revoke/regrant, immutable owner review authority and retry preservation after
+  edits. Existing graph/ref/check/issue integration still passes.
+- Existing collaborator roster and two-repository HTTP/Git/LFS recovery pass;
+  Clippy with warnings denied passes.
+
+The release binary build and S3-compatible process smoke against RustFS
+`1.0.0-beta.8-glibc`, with `--sqlite-chunks --many-objects 256`, pass. The probe
+records an edited/reopened pull and reviews, then checks exact snapshots and old
+create/review retries through clean restart and SIGKILL/lease takeover with fresh
+local storage. Later edits and newest review applicability remain unchanged.
+The same run retains branch/check policy, issues, Git/LFS, token/ACL recovery,
+SQLite chunks, 300 refs, mixed/atomic outcomes and lost-push-reply replay. The
+process exits successfully; fresh-volume initialization diagnostics are unchanged.
+
+The API remains a proposal/review lifecycle, not a merge endpoint. Next work must
+close the path from reviewed changes to durable Git side effects:
+
+1. Add bounded comparison/file APIs against explicit source/base snapshots.
+2. Add versioned review requirements to branch policy, with a single eligibility
+   decision reused by read views and authoritative merge publication.
+3. Prepare real merge candidates with native Git; persist candidate objects and
+   surface conflicts before asking clients to merge. Preserve original ref/pull
+   preconditions and support the selected merge strategy explicitly.
+4. Apply current ACL, branch checks, reviews and ref CAS with the merged pull
+   state in one Cell command. Replays return the original merge result without
+   moving refs again. Direct pushes must honor any required-PR rule too.
+5. Prove competing merges, new pushes/reviews during preparation, owner failure,
+   lost replies, and stock-Git clone of the published merge result after recovery.
+
+New schema tables require a fresh development prefix. No dependencies changed.
+Approximately 1,000 Rust lines implement the model/read boundary, three guarded
+mutations and six HTTP operations, with shared validation/result handling inside
+the pull module. Full delivery gates and production capacity remain open.

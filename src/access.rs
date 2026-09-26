@@ -162,7 +162,12 @@ impl RepositoryCell {
             )));
         }
         let committed = self.sql.batch(identity, SqlBatch {
+            // Preserve grant generations after revocation. Reviews from an earlier
+            // grant must not regain authority when the same account is re-added.
             statements: vec![SqlStatement {
+                sql: "INSERT INTO membership_versions (account, version) SELECT ?2, 1 WHERE EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) AND NOT EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?2) AND NOT EXISTS (SELECT 1 FROM repository_members WHERE account = ?2 AND role = ?3) ON CONFLICT(account) DO UPDATE SET version = version + 1".into(),
+                parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(account.into()), SqlValue::Text(role.as_str().into())],
+            }, SqlStatement {
                 sql: "INSERT INTO repository_members (account, role) SELECT ?2, ?3 WHERE EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) AND NOT EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?2) ON CONFLICT(account) DO UPDATE SET role = excluded.role".into(),
                 parameters: vec![
                     SqlValue::Text(actor.into()),
@@ -173,7 +178,7 @@ impl RepositoryCell {
         }).await?;
         let changed = committed
             .output
-            .first()
+            .get(1)
             .is_some_and(|set| set.rows_affected == 1);
         if changed
             && self
@@ -205,6 +210,10 @@ impl RepositoryCell {
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![
                 SqlStatement {
+                    sql: "UPDATE membership_versions SET version = version + 1 WHERE account = ?2 AND EXISTS (SELECT 1 FROM repository_members WHERE account = ?2) AND EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)".into(),
+                    parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(account.into())],
+                },
+                SqlStatement {
                     sql: "DELETE FROM repository_members WHERE account = ?2 AND EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)".into(),
                     parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(account.into())],
                 },
@@ -216,7 +225,7 @@ impl RepositoryCell {
         }).await?;
         let authorized = committed
             .output
-            .get(1)
+            .get(2)
             .is_some_and(|set| !set.rows.is_empty());
         Ok(Committed {
             output: authorized,

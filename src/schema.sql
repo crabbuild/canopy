@@ -60,6 +60,11 @@ CREATE TABLE repository_members (
     role TEXT NOT NULL CHECK(role IN ('read', 'write'))
 ) WITHOUT ROWID;
 
+CREATE TABLE membership_versions (
+    account TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0)
+) WITHOUT ROWID;
+
 CREATE TABLE pushes (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),
     actor TEXT NOT NULL,
@@ -159,3 +164,41 @@ CREATE TABLE branch_required_checks (
     PRIMARY KEY(reference, context)
 ) WITHOUT ROWID;
 CREATE INDEX branch_rules_by_enabled ON branch_rules(enabled, reference);
+
+CREATE TABLE pull_requests (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 256),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    state TEXT NOT NULL CHECK(state IN ('open', 'closed')),
+    draft INTEGER NOT NULL CHECK(draft IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    source_ref TEXT NOT NULL REFERENCES refs(name),
+    base_ref TEXT NOT NULL REFERENCES refs(name) CHECK(source_ref != base_ref),
+    initial_source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_source_oid) = 20),
+    initial_base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_base_oid) = 20),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX pulls_by_state ON pull_requests(state, number);
+
+CREATE TABLE pull_reviews (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    reviewer TEXT NOT NULL,
+    membership_version INTEGER NOT NULL CHECK(membership_version >= 0),
+    kind TEXT NOT NULL CHECK(kind IN ('comment', 'approve', 'request_changes')),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) = 20),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) = 20),
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
+);
+CREATE INDEX reviews_by_pull ON pull_reviews(pull_number, number);
+CREATE INDEX reviews_by_reviewer ON pull_reviews(pull_number, reviewer, number) WHERE kind != 'comment';

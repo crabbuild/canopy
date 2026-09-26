@@ -1,3 +1,5 @@
+#[path = "multi_server/pulls.rs"]
+mod pulls;
 use std::{path::Path, sync::Arc};
 
 use canopy_server::server::{CanopyServer, ServerConfig};

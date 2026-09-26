@@ -16,6 +16,8 @@ mod issues;
 mod objects;
 #[path = "repository_cell/pages.rs"]
 mod pages;
+#[path = "repository_cell/pulls.rs"]
+mod pulls;
 
 use std::{
     sync::Arc,
@@ -436,6 +438,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         default_branch::verify(&repository).await?;
         graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
         branch_rules::verify(&repository, &graph_sql, &application_handle, &target).await?;
+        pulls::verify(&repository).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }

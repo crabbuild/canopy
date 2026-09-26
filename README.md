@@ -100,6 +100,58 @@ lists optionally accept `state=open` or `state=closed`; the default includes bot
 Pages observe current state independently. Bodies are returned as raw text; no
 Markdown or HTML rendering, attachments, labels, assignees, or deletion API yet.
 
+Pull requests and reviews are repository-local SQLite records:
+
+| Method | Path | Action |
+| --- | --- | --- |
+| GET / POST | `/api/repositories/<name>/pulls` | List summaries / open a pull |
+| GET / PUT | `/api/repositories/<name>/pulls/<number>` | Read / edit, close or reopen |
+| GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
+
+To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
+`source_ref`, `source_oid`, `base_ref`, and `base_oid`. Use fully qualified branch
+names and current lowercase SHA-1 tips from Git. Both branches must exist in this
+repository and point to different commits. Creation returns `{"number":1}`.
+Exact UUID/payload retries preserve the original number and later edits.
+
+GET returns editorial `version`, source/base objects with `reference`, current
+`oid` and ref `version`, and the original commit identities. A deleted branch has
+`oid: null`; deletion retains its ref version. PUT supplies `repository_id`,
+`expected_version`, `title`, `body`, `state` (`open` or `closed`), and `draft`.
+The author or a repository writer may edit; branch names remain fixed. PUT
+returns 204, or 409 for a stale version. Closing a pull never changes Git refs.
+
+Review POST supplies `repository_id`, a fresh UUID `id`, `kind` (`comment`,
+`approve`, or `request_changes`), `body`, and this revision copied from GET:
+
+```json
+{
+  "pull_version": 1,
+  "source_oid": "<source SHA-1>",
+  "source_version": 1,
+  "base_oid": "<base SHA-1>",
+  "base_version": 1
+}
+```
+
+Reviews are immutable; new decisions use new UUIDs. Review creation returns its
+`number`. An exact retry preserves that number and ordering. Members may open
+pulls and comment using write-scoped tokens. Approval or requested changes require
+a repository writer other than the author, on an open, ready pull. All reviews
+require the exact current revision; stale, deleted or equal tips return 409.
+
+History marks a decision `applicable` only for the current pull/ref versions and
+reviewer's current grant, and only for that reviewer's newest decision. Comments
+do not replace decisions. Branch movement, editorial edits, close/reopen and
+revoke/regrant invalidate earlier decisions. Repeating an unchanged membership
+grant does not. Lists return up to 32 pull summaries or 16 reviews with numeric
+`after` / `next_after`; pulls support an optional `state` filter. Text limits match
+issues: 256-byte titles, 16 KiB bodies; review comments must be nonblank.
+
+These APIs support proposal and review lifecycle. Diff browsing, inline comments,
+review requirements, merge publication, forks, retargeting and a PR UI remain to
+be delivered. An applicable review currently does not gate direct Git pushes.
+
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.
 
@@ -220,7 +272,7 @@ no repository can be safely released. A terminal ownership-release failure leave
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account disable/delete API, organization model, multi-node routing, backup,
-repository browser, pull request API, or production capacity evidence.
+repository browser, merge API, or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.
 

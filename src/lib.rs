@@ -30,6 +30,7 @@ pub mod lfs;
 mod object_batch;
 mod object_chunks;
 mod object_reads;
+pub mod pulls;
 mod push;
 mod refs;
 mod repository_http;
@@ -178,6 +179,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("checks.rs"));
                 source.update(include_bytes!("checks/mutations.rs"));
+                source.update(include_bytes!("pulls.rs"));
+                source.update(include_bytes!("pulls/mutations.rs"));
                 source.update(include_bytes!("issues.rs"));
                 source.update(include_bytes!("issues/mutations.rs"));
                 source.update(include_bytes!("lfs.rs"));
