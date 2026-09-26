@@ -1,3 +1,5 @@
+#[path = "directory/accounts.rs"]
+mod accounts;
 #[path = "support/objects.rs"]
 mod objects;
 

@@ -205,6 +205,25 @@ impl RepositoryManager {
             .output)
     }
 
+    pub(crate) async fn disable_account(
+        &self,
+        actor_digest: [u8; 32],
+        account: &str,
+    ) -> Result<directory::DisableAccountOutcome, ServerError> {
+        Ok(self
+            .directory
+            .disable_account(
+                mutation_identity()?,
+                directory::TokenAuthority {
+                    actor_digest,
+                    site_owner: &self.owner,
+                    account,
+                },
+            )
+            .await?
+            .output)
+    }
+
     pub(crate) async fn create(
         self: &Arc<Self>,
         name: &str,

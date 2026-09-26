@@ -2,7 +2,7 @@ use super::*;
 
 pub const TOKEN_PAGE_SIZE: usize = 32;
 
-/// Credential and trusted site policy used for one atomic token-management operation.
+/// Credential and trusted site policy used for one atomic account or token operation.
 pub struct TokenAuthority<'a> {
     pub actor_digest: [u8; 32],
     pub site_owner: &'a str,

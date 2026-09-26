@@ -1,5 +1,6 @@
 //! HTTP API for dynamic repository creation and Git routing.
 
+mod accounts;
 mod authorization;
 mod branch_rules;
 mod browse;
@@ -69,6 +70,10 @@ impl RepositoryHttp {
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
             .route("/api/accounts", axum::routing::post(create_account))
+            .route(
+                "/api/accounts/{account}/disable",
+                axum::routing::post(accounts::disable),
+            )
             .route(
                 "/api/accounts/{account}/tokens",
                 get(tokens::list).post(tokens::issue),

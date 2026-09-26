@@ -241,6 +241,31 @@ def verify_revoked_token(base_url, token):
                       "POST", {"operation": "download", "objects": []}) == 401
 
 
+def seed_disabled_account(base_url):
+    tokens = [f"cnp_{secrets.token_hex(32)}" for _ in range(2)]
+    assert api_status(base_url, "/api/accounts", "local-test-token", "POST",
+                      {"name": "disabled", "token": tokens[0], "scope": "admin"}) == 200
+    assert api_status(base_url, "/api/accounts/disabled/tokens", tokens[0], "POST",
+                      {"id": str(uuid.uuid4()), "token": tokens[1], "scope": "read"}) == 204
+    for token in tokens:
+        assert api_status(base_url, "/api/repositories", token) == 200
+    assert api_status(base_url, "/api/accounts/canopy/disable", "local-test-token", "POST") == 409
+    assert api_status(base_url, "/api/accounts/disabled/disable", tokens[0], "POST") == 403
+    assert api_status(base_url, "/api/accounts/disabled/disable", "local-test-token", "POST") == 204
+    verify_disabled_account(base_url, tokens)
+    return tokens
+
+
+def verify_disabled_account(base_url, tokens):
+    # Check before retrying the disable: a replay must not mask lost state.
+    for token in tokens:
+        verify_revoked_token(base_url, token)
+    assert api_status(base_url, "/api/accounts", "local-test-token", "POST",
+                      {"name": "disabled", "token": tokens[0], "scope": "admin"}) == 409
+    assert api_status(base_url, "/api/accounts/disabled/disable", "local-test-token", "POST") == 204
+    print("PASS: disabled account denies every credential for API, Git and LFS; its name stays reserved", flush=True)
+
+
 def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs=None, token="local-test-token", branch="main"):
     git(
         "-c",
@@ -633,6 +658,7 @@ def main():
                               {"id": replacement_id, "token": reader_token, "scope": "read"}) == 204
             assert api_status(base_url, f"{token_api}/{tokens[0]['id']}", "local-test-token", "DELETE") == 204
             verify_revoked_token(base_url, revoked_reader)
+            disabled_tokens = seed_disabled_account(base_url)
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
@@ -651,6 +677,7 @@ def main():
             second, base_url = start(args.binary, directory, settings, "second")
             processes.append(second)
             verify_revoked_token(base_url, revoked_reader)
+            verify_disabled_account(base_url, disabled_tokens)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
@@ -682,6 +709,7 @@ def main():
             print("PASS: same-directory restart reclaims abandoned Git/scratch/SQLite state before durable recovery", flush=True)
             verify_revoked_token(base_url, revoked_reader)
             tokens = api_get(base_url, token_api, "local-test-token")["tokens"]
+            verify_disabled_account(base_url, disabled_tokens)
             assert len(tokens) == 2
             assert [token["id"] for token in tokens if token["enabled"]] == [replacement_id]
             print("PASS: rotated token survives takeover; revoked token remains denied for API, Git and LFS", flush=True)

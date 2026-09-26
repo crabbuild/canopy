@@ -95,6 +95,12 @@ The configured token bootstraps a durable owner account in the Directory Cell.
 token followed by 64 random hexadecimal digits and a `read`, `write`, or
 `admin` token scope. Its JSON fields are `name`, `token`, and `scope`.
 Only the configured owner can create accounts and change collaborators.
+`POST /api/accounts/<account>/disable` with an admin-scoped owner credential
+disables an account and returns 204, including on repeat requests. The site owner
+cannot be disabled (409). All of the account's credentials then fail new API,
+Git and LFS authentication. Its name, repository grants and authored data remain
+reserved; account creation cannot reactivate it. There is no re-enable or account
+deletion endpoint yet. Requests authenticated before disablement may finish.
 `PUT /api/repositories/<name>/collaborators/<account>` with
 `{"role":"read"}` or `{"role":"write"}` grants access to one repository;
 `DELETE` on the same URL revokes it. The owner retains access. Git smart HTTP
@@ -428,8 +434,8 @@ For rotation, issue a replacement, verify it, update clients, then revoke the ol
 token. For the site owner, also update `CANOPY_GIT_TOKEN` in the deployment before
 retiring its configured credential: startup requires an active owner admin token.
 Revocation blocks subsequent API, Git and LFS authentication. Already admitted
-Git/LFS operations may finish; token issuance and account creation recheck the
-authorizing credential in their mutation transaction.
+Git/LFS operations may finish; token issuance, account creation and disablement
+recheck the authorizing credential in their mutation transaction.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
@@ -475,7 +481,7 @@ Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
-account disable/delete API, organization model, multi-node routing, backup
+account deletion API, organization model, multi-node routing, backup
 or production capacity evidence.
 `Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
 builds without a local Cellule checkout.

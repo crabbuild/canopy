@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account disable/delete remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation, repository roles/rosters, default branches and authorized repository list/get survive recovery; account deletion and administration UI remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
@@ -64,8 +64,9 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account disable/delete and audit records.
-   Tokens now support rotation and revocation. Add expiry and issuance quotas;
+4. Complete account deletion, administration UI and audit records.
+   Accounts support disablement; tokens support rotation and revocation. Add
+   expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
@@ -1811,3 +1812,41 @@ The production code grows by 24 lines to move the invariant into the workspace
 owner. No dependency, schema, configuration or wire contract changes. OS power
 loss, unusual filesystems, Windows process containment and native peak resource
 limits remain open, along with the other service delivery gates above.
+
+## Durable account disablement qualification
+
+On 2026-09-26, `POST /api/accounts/<account>/disable` added site-owner account
+disablement. The Directory Cell checks the exact active admin credential and
+protects the configured site owner inside the mutation transaction. Repeating
+disablement returns 204. The existing enabled-account authentication join fences
+all credentials on subsequent API, Git and LFS requests, without walking token
+records or Repository Cells. Disabled names remain reserved.
+
+Evidence:
+
+- A direct Directory Cell test rejects a revoked owner credential, an owner
+  read token, another account's admin token and an unknown credential. It proves
+  site-owner protection, missing-account handling, exact mutation replay, denied
+  authentication and rejection of account recreation with a new secret.
+- The HTTP integration clones with a member credential before disablement,
+  disables an account with multiple credentials, and rejects every credential
+  through API, both Git advertisements/RPCs and LFS batch/object GET/PUT routes.
+  A token issuance body admitted before disablement cannot create a replacement.
+  A fresh local node restores the denial, reserved name, original issue content
+  and attribution. The owner can still clone exact repository bytes and run fsck.
+- The existing Directory recovery, token rotation, collaborator roster and
+  33-repository discovery integrations pass. Discovery recovers through its
+  existing movement-budget retries. All-target Clippy, formatting, Python smoke
+  syntax and release build pass.
+- The RustFS release process probe passes with `--sqlite-chunks --many-objects
+  256`. It checks disabled credentials before repeating the operation after both
+  graceful restart and SIGKILL/lease takeover with corrupted local SQLite.
+  Git/LFS, collaboration, branch rules, merge/squash, exact retries, large SQLite
+  objects and 300 additional refs also preserve their durable state.
+
+The added production surface implements one Directory mutation and its HTTP
+entry point, reusing the existing account column and authentication path. No
+dependency, configuration or schema change. Requests authenticated before
+disablement may finish under existing repository ACL rules. Re-enablement,
+deletion, account listing, administrative UI, audit records, token expiry and
+quotas remain open. The full hosting-service goal is still incomplete.

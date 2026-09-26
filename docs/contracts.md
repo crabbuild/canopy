@@ -614,6 +614,34 @@ persistent preview. The current build pins an immutable public Cellule
 revision; its UUID partition contract is proposed in
 [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5).
 
+### Account disablement
+
+`POST /api/accounts/<account>/disable` accepts an admin-scoped credential of the
+configured site owner and no body. Success and repeat disablement return 204.
+Unknown accounts return 404; an unauthenticated caller returns 401; an
+insufficient scope or a different account returns 403. Disabling the site owner
+returns 409 even if that account has multiple admin tokens.
+
+`DirectoryCell::disable_account` checks the exact authorizing token digest,
+scope and enabled account inside the same SQL batch that changes
+`accounts.enabled`. Its decision precedes the update; revoked admin credentials
+cannot mutate state through the SDK even if an earlier HTTP check succeeded.
+The operation uses the existing Directory Cell and account column; it does not
+need to visit every Repository Cell or update every token.
+
+Authentication joins token state with account state. Every credential belonging
+to a disabled account fails subsequent API, Git and LFS admission. A request
+authenticated before disablement may finish under the existing repository ACL
+rules. Token issuance rechecks account state in its Directory transaction, so a
+body admitted before disablement cannot issue a usable replacement afterward.
+
+The account name, token identities, repository grants and authored records remain
+reserved. Existing repository data stays available to other authorized accounts;
+the collaborator roster continues to show stored grants. New grants to a disabled
+account are rejected. Neither account creation nor token issuance re-enables it.
+Re-enablement, account deletion, account listing and an administrative UI remain
+undelivered. An HTTP retry rechecks current administrator authorization.
+
 ### Token lifecycle
 
 Account token routes list, issue and revoke credentials in the Directory Cell.

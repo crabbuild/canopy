@@ -1,3 +1,5 @@
+#[path = "multi_server/accounts.rs"]
+mod accounts;
 #[path = "multi_server/browse.rs"]
 mod browse;
 #[path = "multi_server/candidates.rs"]

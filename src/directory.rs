@@ -1,6 +1,8 @@
 //! Durable owner/name to Repository Cell identity mapping.
 
+mod accounts;
 mod tokens;
+pub use accounts::DisableAccountOutcome;
 pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
 
 use std::sync::OnceLock;
@@ -52,6 +54,7 @@ impl CellModule for DirectoryModule {
             source_digest: {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("directory.rs"));
+                source.update(include_bytes!("directory/accounts.rs"));
                 source.update(include_bytes!("directory/tokens.rs"));
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
