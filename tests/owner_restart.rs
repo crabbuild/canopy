@@ -121,6 +121,59 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
     )
     .await?;
     let original = run_git(Some(&local), &["rev-parse", "HEAD"]).await?;
+    tokio::fs::write(
+        local.join("accepted.txt"),
+        b"accepted ref in a mixed push\n",
+    )
+    .await?;
+    run_git(Some(&local), &["add", "accepted.txt"]).await?;
+    run_git(Some(&local), &["commit", "-m", "Mixed push commit"]).await?;
+    let partial_oid = run_git(Some(&local), &["rev-parse", "HEAD"]).await?;
+    let blob = run_git(Some(&local), &["rev-parse", "HEAD:accepted.txt"]).await?;
+    let blob = std::str::from_utf8(&blob)?.trim();
+    for (atomic, accepted, rejected) in [
+        (false, "partial", "rejected"),
+        (true, "atomic-accepted", "atomic-rejected"),
+    ] {
+        let mut push = Command::new("git");
+        push.current_dir(&local)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args([
+                "-c",
+                "credential.helper=",
+                "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token",
+                "push",
+            ]);
+        if atomic {
+            push.arg("--atomic");
+        }
+        let output = push
+            .args([
+                &first_url,
+                &format!("HEAD:refs/heads/{accepted}"),
+                &format!("+{blob}:refs/heads/{rejected}"),
+            ])
+            .output()
+            .await?;
+        assert!(!output.status.success());
+        assert_eq!(
+            repository
+                .ref_state(&format!("refs/heads/{accepted}"), None)
+                .await?
+                .output
+                .is_some(),
+            !atomic
+        );
+        assert!(
+            repository
+                .ref_state(&format!("refs/heads/{rejected}"), None)
+                .await?
+                .output
+                .is_none()
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("[remote rejected]"));
+    }
     let original_ref = repository
         .ref_state("refs/heads/reused", None)
         .await?
@@ -222,6 +275,39 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
     assert_eq!(
         run_git(Some(&clone), &["rev-parse", "HEAD"]).await?,
         original
+    );
+    assert_eq!(
+        run_git(Some(&clone), &["rev-parse", "refs/remotes/origin/partial"]).await?,
+        partial_oid
+    );
+    assert_eq!(
+        run_git(
+            Some(&clone),
+            &["show", "refs/remotes/origin/partial:accepted.txt"]
+        )
+        .await?,
+        b"accepted ref in a mixed push\n"
+    );
+    assert!(
+        repository
+            .ref_state("refs/heads/rejected", None)
+            .await?
+            .output
+            .is_none()
+    );
+    assert!(
+        repository
+            .ref_state("refs/heads/atomic-accepted", None)
+            .await?
+            .output
+            .is_none()
+    );
+    assert!(
+        repository
+            .ref_state("refs/heads/atomic-rejected", None)
+            .await?
+            .output
+            .is_none()
     );
     assert!(
         run_git(

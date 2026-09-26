@@ -133,12 +133,11 @@ impl GitGateway {
     ) -> Result<GitHttpResponse, GatewayError> {
         let before = cached.refs.clone();
         let response = cached.backend.run(request).await?;
-        if has_rejected_ref(&response.body) {
-            return Err(GatewayError::RefConflict);
-        }
         if response.status != 200 {
-            return Err(GatewayError::RefConflict);
+            return Ok(response);
         }
+        // Git may accept some refs and reject others unless atomic was requested.
+        // Publish its actual changes before forwarding the unmodified per-ref report.
         let after = git_refs(&cached.backend.git_dir()).await?;
         let plan = diff_refs(&before, &after, actor);
         if plan.updates.is_empty() {
@@ -472,10 +471,4 @@ fn new_identity() -> Result<MutationIdentity, GatewayError> {
         issued_at_ms: now_ms,
         expires_at_ms: now_ms + 60_000,
     })
-}
-
-fn has_rejected_ref(body: &[u8]) -> bool {
-    body.windows(3).any(|window| window == b"ng ")
-        || body.windows(7).any(|window| window == b"unpack ")
-            && !body.windows(9).any(|window| window == b"unpack ok")
 }

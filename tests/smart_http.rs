@@ -154,6 +154,47 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             .output()
             .await?;
         assert!(!unauthenticated.status.success());
+        let client = reqwest::Client::new();
+        let unsupported = client
+            .post(format!("{url}/git-receive-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "text/plain")
+            .body(Vec::new())
+            .send()
+            .await?;
+        assert_eq!(
+            unsupported.status(),
+            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        let command = format!(
+            "{} {} refs/heads/bad-pack\0report-status side-band-64k\n",
+            "0".repeat(40),
+            "1".repeat(40)
+        );
+        let mut request = format!("{:04x}{command}0000", command.len() + 4).into_bytes();
+        request.extend_from_slice(b"not a pack!!");
+        let response = client
+            .post(format!("{url}/git-receive-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "application/x-git-receive-pack-request")
+            .timeout(std::time::Duration::from_secs(5))
+            .body(request)
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let report = response.bytes().await?;
+        assert!(
+            report
+                .windows(b"ng refs/heads/bad-pack".len())
+                .any(|part| part == b"ng refs/heads/bad-pack")
+        );
+        assert!(
+            repository
+                .ref_state("refs/heads/bad-pack", None)
+                .await?
+                .output
+                .is_none()
+        );
 
         let local = scratch.path().join("local");
         run_git(

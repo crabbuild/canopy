@@ -103,4 +103,6 @@ kills the new owner, waits for lease expiry, and clones from a third process.
 It verifies collaborator access after takeover and denial after revocation.
 It also verifies that a deleted branch stays absent through takeover and can
 then be recreated through stock Git.
+Mixed push checks prove accepted refs survive recovery, rejected refs stay
+absent, and `git push --atomic` rejects the entire mixed update.
 It writes under a unique prefix in the supplied bucket.

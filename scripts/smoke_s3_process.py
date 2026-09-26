@@ -220,6 +220,33 @@ def main():
                 cwd=other,
             )
             other_oid = git("rev-parse", "HEAD", cwd=other)
+            (other / "accepted.txt").write_bytes(b"Accepted part of a mixed push\n")
+            git("add", "accepted.txt", cwd=other)
+            git("commit", "-m", "Mixed push commit", cwd=other)
+            partial_oid = git("rev-parse", "HEAD", cwd=other)
+            blob = git("rev-parse", "HEAD:accepted.txt", cwd=other).decode()
+            for atomic, accepted, rejected in (
+                (False, "partial", "rejected"),
+                (True, "atomic-accepted", "atomic-rejected"),
+            ):
+                command = [
+                    "git", "-c", "credential.helper=", "-c",
+                    "http.extraHeader=Authorization: Bearer local-test-token", "push",
+                ]
+                if atomic:
+                    command.append("--atomic")
+                result = subprocess.run(
+                    [*command, other_url, f"HEAD:refs/heads/{accepted}", f"+{blob}:refs/heads/{rejected}"],
+                    cwd=other, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                    capture_output=True, timeout=30, check=False,
+                )
+                assert result.returncode != 0
+                assert b"[remote rejected]" in result.stderr
+                published = git(
+                    "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                    "ls-remote", other_url, f"refs/heads/{accepted}",
+                )
+                assert published == (b"" if atomic else partial_oid + b"\trefs/heads/partial")
             reader_token = f"cnp_{secrets.token_hex(32)}"
             assert api_status(
                 base_url,
@@ -256,6 +283,13 @@ def main():
             clone_and_verify(url, directory / "takeover-clone", oid, b"Canopy process smoke\n", lfs_body)
             clone_and_verify(url, directory / "reader-takeover", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "takeover-other", other_oid, other_readme)
+            assert git("rev-parse", "refs/remotes/origin/partial", cwd=directory / "takeover-other") == partial_oid
+            assert git("show", "refs/remotes/origin/partial:accepted.txt", cwd=directory / "takeover-other") == b"Accepted part of a mixed push"
+            assert not git(
+                "-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "ls-remote", f"{base_url}/canopy/other.git",
+                "refs/heads/rejected", "refs/heads/atomic-accepted", "refs/heads/atomic-rejected",
+            )
             assert not git(
                 "-c", "http.extraHeader=Authorization: Bearer local-test-token",
                 "ls-remote", url, "refs/heads/reused",
@@ -283,7 +317,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: repositories, rename, ACL, and deleted branch recreation survived restart, disk loss, and lease takeover")
+            print("PASS: repositories, ACL, ref recreation, and mixed push outcomes survived restart, disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:

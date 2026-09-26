@@ -34,9 +34,16 @@ after a ref returns to the same OID or to a deleted state. Deleted rows remain
 in SQLite and are excluded from Git advertisements and namespace conflicts.
 They must not be collected without a replacement mechanism for fencing stale
 ref plans. `FinalizePush` uses codec version 3 for this expectation shape.
-A successful push persists all
-new objects before `FinalizePush` publishes any ref. Rejected or interrupted
+Before reporting accepted refs, a push persists all new objects and publishes
+the accepted ref changes through `FinalizePush`. Rejected or interrupted
 pushes may leave unreferenced objects; collection is not implemented yet.
+
+Git owns the [per-ref report and atomic capability](https://git-scm.com/docs/protocol-capabilities#_report_status).
+An ordinary push may accept some refs and reject others. The gateway publishes
+the actual accepted changes in one Cell transaction before forwarding Git's
+report unchanged. A rejected atomic push changes no refs. Malformed packs
+retain Git's unpack failure report and publish no refs. The gateway does not
+infer transaction success by searching diagnostic text for status fragments.
 
 All branches currently permit deletion by an authorized writer. The gateway
 sets `receive.denyDeleteCurrent=ignore` because its synthetic HEAD must not
