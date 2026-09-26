@@ -80,7 +80,7 @@ async fn protected_pushes_preserve_native_reports_and_policy_across_recovery() -
     let next = String::from_utf8(run_git(Some(&local), &["rev-parse", "HEAD"]).await?)?
         .trim()
         .to_owned();
-    let mut rule = json!({"repository_id":repository,"rule":{"reference":"refs/heads/main", "expected_version":0,"enabled":true,"deny_deletions":true,"fast_forward_only":true,"required_checks":["unit"]}});
+    let mut rule = json!({"repository_id":repository,"rule":{"reference":"refs/heads/main", "expected_version":0,"enabled":true,"deny_deletions":true,"fast_forward_only":true,"require_pull_request":false,"required_approvals":0,"required_checks":["unit"]}});
     status(client.get(&api), StatusCode::UNAUTHORIZED).await?;
     status(
         client.put(&api).bearer_auth(OWNER).json(&rule),

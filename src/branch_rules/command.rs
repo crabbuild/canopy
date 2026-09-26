@@ -23,6 +23,8 @@ impl WireValue for RuleChange {
         out.write_bool(self.edit.enabled)?;
         out.write_bool(self.edit.deny_deletions)?;
         out.write_bool(self.edit.fast_forward_only)?;
+        out.write_bool(self.edit.require_pull_request)?;
+        out.write_i64(i64::from(self.edit.required_approvals))?;
         out.write_count(self.edit.required_checks.len())?;
         for check in &self.edit.required_checks {
             out.write_text(check)?;
@@ -36,6 +38,9 @@ impl WireValue for RuleChange {
         let enabled = input.read_bool()?;
         let deny_deletions = input.read_bool()?;
         let fast_forward_only = input.read_bool()?;
+        let require_pull_request = input.read_bool()?;
+        let required_approvals = u8::try_from(input.read_i64()?)
+            .map_err(|_| CodecError::Invalid("invalid approval count"))?;
         let count = input.read_count()?;
         if count > 16 {
             return Err(CodecError::Invalid("too many required checks"));
@@ -53,6 +58,8 @@ impl WireValue for RuleChange {
                 deny_deletions,
                 fast_forward_only,
                 required_checks,
+                require_pull_request,
+                required_approvals,
             },
         };
         if validate_component(&result.actor).is_err() || !valid_edit(&result.edit) {
@@ -66,7 +73,7 @@ pub(crate) struct SetBranchRule;
 impl Command for SetBranchRule {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 8;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = RuleChange;
     type Output = bool;
     fn execute(
@@ -107,8 +114,8 @@ impl Command for SetBranchRule {
         }
         context.sql(&SqlBatch { statements: vec![
             SqlStatement {
-                sql: "INSERT INTO branch_rules (reference, version, enabled, deny_deletions, fast_forward) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(reference) DO UPDATE SET version = excluded.version, enabled = excluded.enabled, deny_deletions = excluded.deny_deletions, fast_forward = excluded.fast_forward".into(),
-                parameters: vec![SqlValue::Text(edit.reference.clone()), SqlValue::Integer(edit.expected_version + 1), SqlValue::Integer(i64::from(edit.enabled)), SqlValue::Integer(i64::from(edit.deny_deletions)), SqlValue::Integer(i64::from(edit.fast_forward_only))],
+                sql: "INSERT INTO branch_rules (reference, version, enabled, deny_deletions, fast_forward, require_pull_request, required_approvals) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(reference) DO UPDATE SET version = excluded.version, enabled = excluded.enabled, deny_deletions = excluded.deny_deletions, fast_forward = excluded.fast_forward, require_pull_request = excluded.require_pull_request, required_approvals = excluded.required_approvals".into(),
+                parameters: vec![SqlValue::Text(edit.reference.clone()), SqlValue::Integer(edit.expected_version + 1), SqlValue::Integer(i64::from(edit.enabled)), SqlValue::Integer(i64::from(edit.deny_deletions)), SqlValue::Integer(i64::from(edit.fast_forward_only)), SqlValue::Integer(i64::from(edit.require_pull_request)), SqlValue::Integer(i64::from(edit.required_approvals))],
             },
             SqlStatement { sql: "DELETE FROM branch_required_checks WHERE reference = ?1".into(), parameters: vec![SqlValue::Text(edit.reference.clone())] },
         ] })?;

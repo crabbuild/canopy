@@ -16,7 +16,7 @@ use crate::{
     access::{access_statement, decode_access},
     directory::TokenScope,
     git_http::GitHttpResponse,
-    refs::apply_push,
+    refs::apply_refs,
 };
 
 const CHUNK_BYTES: usize = 512 * 1024;
@@ -334,7 +334,7 @@ impl Command for CompletePush {
             return Ok(CommandResult::Rejected(false));
         }
         let allowed = match &input.plan {
-            Some(plan) => plan.actor == input.actor && apply_push(context, plan)?,
+            Some(plan) => plan.actor == input.actor && apply_refs(context, plan, None)?,
             None => decode_access(&context.sql(&SqlBatch {
                 statements: vec![access_statement(&input.actor)],
             })?)?

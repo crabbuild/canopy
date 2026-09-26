@@ -156,7 +156,9 @@ CREATE TABLE branch_rules (
     version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
     enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
     deny_deletions INTEGER NOT NULL CHECK(deny_deletions IN (0, 1)),
-    fast_forward INTEGER NOT NULL CHECK(fast_forward IN (0, 1))
+    fast_forward INTEGER NOT NULL CHECK(fast_forward IN (0, 1)),
+    require_pull_request INTEGER NOT NULL CHECK(require_pull_request IN (0, 1)),
+    required_approvals INTEGER NOT NULL CHECK(required_approvals BETWEEN 0 AND 16 AND (require_pull_request = 1 OR required_approvals = 0))
 ) WITHOUT ROWID;
 CREATE TABLE branch_required_checks (
     reference TEXT NOT NULL REFERENCES branch_rules(reference),
@@ -172,7 +174,7 @@ CREATE TABLE pull_requests (
     author TEXT NOT NULL,
     title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 256),
     body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
-    state TEXT NOT NULL CHECK(state IN ('open', 'closed')),
+    state TEXT NOT NULL CHECK(state IN ('open', 'closed', 'merged')),
     draft INTEGER NOT NULL CHECK(draft IN (0, 1)),
     version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
     source_ref TEXT NOT NULL REFERENCES refs(name),
@@ -201,4 +203,18 @@ CREATE TABLE pull_reviews (
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
 );
 CREATE INDEX reviews_by_pull ON pull_reviews(pull_number, number);
-CREATE INDEX reviews_by_reviewer ON pull_reviews(pull_number, reviewer, number) WHERE kind != 'comment';
+
+CREATE TABLE pull_review_heads (
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    reviewer TEXT NOT NULL,
+    review_number INTEGER NOT NULL REFERENCES pull_reviews(number),
+    PRIMARY KEY(pull_number, reviewer)
+) WITHOUT ROWID;
+
+CREATE TABLE pull_merges (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    binding BLOB NOT NULL CHECK(length(binding) = 32),
+    pull_number INTEGER NOT NULL UNIQUE REFERENCES pull_requests(number),
+    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
+    merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0)
+) WITHOUT ROWID;

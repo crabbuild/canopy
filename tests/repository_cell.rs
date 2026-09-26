@@ -12,6 +12,8 @@ mod default_branch;
 mod graph;
 #[path = "repository_cell/issues.rs"]
 mod issues;
+#[path = "repository_cell/merge.rs"]
+mod merge;
 #[path = "support/objects.rs"]
 mod objects;
 #[path = "repository_cell/pages.rs"]
@@ -439,6 +441,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         graph::verify(&repository, &graph_sql, &application_handle, &target).await?;
         branch_rules::verify(&repository, &graph_sql, &application_handle, &target).await?;
         pulls::verify(&repository).await?;
+        merge::verify(&repository, &graph_sql, &application_handle, &target).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }

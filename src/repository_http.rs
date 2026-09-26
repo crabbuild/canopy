@@ -7,6 +7,7 @@ mod collaborators;
 mod comparison;
 mod default_branch;
 mod issues;
+mod merge;
 mod pulls;
 mod tokens;
 
@@ -104,6 +105,14 @@ impl RepositoryHttp {
             .route(
                 "/api/repositories/{name}/pulls/{number}",
                 get(pulls::read).put(pulls::edit),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/review-policy",
+                get(merge::policy),
+            )
+            .route(
+                "/api/repositories/{name}/pulls/{number}/merge",
+                axum::routing::post(merge::publish),
             )
             .route(
                 "/api/repositories/{name}/pulls/{number}/comparison",

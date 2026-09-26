@@ -108,6 +108,8 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / PUT | `/api/repositories/<name>/pulls/<number>` | Read / edit, close or reopen |
 | GET / POST | `/api/repositories/<name>/pulls/<number>/reviews` | Read history / submit a review |
 | POST | `/api/repositories/<name>/pulls/<number>/comparison` | Read exact-revision changed files or file bytes |
+| GET | `/api/repositories/<name>/pulls/<number>/review-policy` | Read current review requirements and counts |
+| POST | `/api/repositories/<name>/pulls/<number>/merge` | Atomically publish a reviewed fast-forward |
 
 To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
 `source_ref`, `source_oid`, `base_ref`, and `base_oid`. Use fully qualified branch
@@ -175,9 +177,37 @@ bytes when included; otherwise it is null. All base64 uses the URL-safe alphabet
 without padding. Symlinks return target text; Gitlinks and LFS pointers are never
 followed. Large blobs return metadata without fetching external content.
 
-Text patches, inline comments, review requirements, merge publication, forks,
-retargeting and a PR UI remain to be delivered. An applicable review currently
-does not gate direct Git pushes.
+Merge POSTs require a write-scoped token and current repository write access:
+
+```json
+{
+  "repository_id": "<repository UUID>",
+  "id": "<new merge request UUID>",
+  "revision": {
+    "pull_version": 1,
+    "source_oid": "<source SHA-1>",
+    "source_version": 1,
+    "base_oid": "<base SHA-1>",
+    "base_version": 1
+  },
+  "strategy": "fast_forward"
+}
+```
+
+The source must descend from the current base. Current reviews, required checks
+and exact ref versions are checked in the transaction that advances the base and
+marks the pull `merged`. The response contains `merge` with `id`, `number`, `oid`
+and `merged_at_ms`; pull details retain that record. Exact retries with the same
+UUID and payload return the original result, including after a lost reply or
+later branch movement. Changed payloads or actors conflict. Retry an uncertain
+result with the original request ID and revision. Merged pulls cannot be reopened
+or edited; `state=merged` is available on the list endpoint.
+
+The review-policy response reports its observed `revision`, `ready`, rule version,
+required approvals, eligible approval count, outstanding requested changes and
+`reviews_satisfied`. It does not claim checks have passed or history can merge.
+Text patches, merge commits, squash/rebase, conflict handling, inline comments,
+forks, retargeting and a PR UI remain to be delivered.
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.
@@ -220,7 +250,9 @@ admin-scoped owner `PUT` to that URL:
     "enabled": true,
     "deny_deletions": true,
     "fast_forward_only": true,
-    "required_checks": ["unit-tests"]
+    "required_checks": ["unit-tests"],
+    "require_pull_request": true,
+    "required_approvals": 1
   }
 }
 ```
@@ -229,7 +261,7 @@ Rules name exact branch refs and apply to every writer, including the owner.
 Configure required check contexts first. The newest attempt for each required
 context at its current version must be `success`; missing, pending, failed, or
 stale results reject the update. Push a candidate to an unprotected branch, run
-and report its checks, then promote that commit to the protected branch.
+and report its checks, then merge its reviewed pull into the protected branch.
 Previously accepted results remain trusted after reporter access is revoked;
 disable or update the context to invalidate them.
 
@@ -239,6 +271,15 @@ Disable with `enabled: false`; the name/version remains reserved. GET is availab
 to repository readers and returns `repository_id`, `rules`, and `next_after` with
 up to 32 ref-ordered rules per page, including disabled ones. Each rule lists its
 version and complete policy. Up to 16 unique contexts are permitted per rule.
+
+Every rule replacement supplies `require_pull_request` and `required_approvals`.
+An enabled required-PR rule rejects direct pushes, deletion and recreation,
+including owner pushes; a merge must have enough eligible approvals and no
+applicable requested changes. Counts range from 0 through 16. Zero still requires
+a pull when `require_pull_request` is true. Set both false/zero to permit direct
+pushes under the other branch checks. Establish the base branch before enabling
+a required-PR rule. Current reviewers must still have the same write grant;
+old approval retries, new comments and revoke/regrant cannot restore eligibility.
 
 Ordinary pushes retain allowed sibling refs when another ref is rejected;
 `git push --atomic` rejects the group. The final Cell transaction rechecks policy,

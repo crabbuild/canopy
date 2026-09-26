@@ -67,6 +67,7 @@ impl RepositoryCell {
     ) -> Result<Committed<PullChange>, Invocation> {
         validate_component(actor).map_err(Invocation::NotStarted)?;
         if number < 1
+            || input.state == PullState::Merged
             || !(1..i64::MAX).contains(&input.expected_version)
             || !valid_issue_text(input.title, input.body)
         {
@@ -78,7 +79,7 @@ impl RepositoryCell {
             SqlValue::Integer(input.expected_version),
         ];
         let decision = format!(
-            "CASE WHEN NOT ({ACCESS}) OR NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2) THEN 'missing' WHEN NOT ({WRITE}) AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2 AND author = ?1) THEN 'forbidden' WHEN NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2 AND version = ?3) THEN 'conflict' ELSE 'applied' END"
+            "CASE WHEN NOT ({ACCESS}) OR NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2) THEN 'missing' WHEN NOT ({WRITE}) AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2 AND author = ?1) THEN 'forbidden' WHEN NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2 AND version = ?3 AND state != 'merged') THEN 'conflict' ELSE 'applied' END"
         );
         let check = SqlStatement {
             sql: format!("SELECT {decision}"),
@@ -151,8 +152,13 @@ impl RepositoryCell {
             SqlValue::Text(input.body.into()),
             SqlValue::Integer(identity.issued_at_ms),
         ]);
+        let review_binding = parameters[3].clone();
         self.pull_change(identity, vec![check,
             SqlStatement { sql: format!("INSERT INTO pull_reviews (id, creation_digest, pull_number, reviewer, membership_version, kind, body, pull_version, source_oid, source_version, base_oid, base_version, created_ms) SELECT ?3, ?4, ?2, ?1, CASE WHEN EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1) THEN 0 ELSE (SELECT version FROM membership_versions WHERE account = ?1) END, ?5, ?11, ?6, ?7, ?8, ?9, ?10, ?12 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM pull_reviews WHERE id = ?3)"), parameters },
+            // Only an inserted or exact-bound decision can advance its reviewer's
+            // head. Historical retries cannot replace a newer decision; comments
+            // never enter this table.
+            SqlStatement { sql: "INSERT INTO pull_review_heads (pull_number, reviewer, review_number) SELECT pull_number, reviewer, number FROM pull_reviews WHERE id = ?1 AND creation_digest = ?2 AND pull_number = ?3 AND kind != 'comment' AND (EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?4) OR EXISTS (SELECT 1 FROM repository_members WHERE account = ?4)) ON CONFLICT(pull_number, reviewer) DO UPDATE SET review_number = excluded.review_number WHERE excluded.review_number > pull_review_heads.review_number".into(), parameters: vec![SqlValue::Blob(input.id.to_vec()), review_binding, SqlValue::Integer(number), SqlValue::Text(actor.into())] },
             SqlStatement { sql: "SELECT number FROM pull_reviews WHERE id = ?1".into(), parameters: vec![SqlValue::Blob(input.id.to_vec())] },
         ]).await
     }
@@ -173,7 +179,7 @@ impl RepositoryCell {
         })
     }
 }
-fn binding(fields: &[&str]) -> Vec<u8> {
+pub(super) fn binding(fields: &[&str]) -> Vec<u8> {
     let mut hash = blake3::Hasher::new();
     hash.update(b"canopy-pull-record-v1");
     for field in fields {
@@ -192,7 +198,7 @@ fn change(sets: &[SqlResultSet]) -> cellule_runtime::Result<PullChange> {
         Some([SqlValue::Text(value)]) if value == "forbidden" => Ok(PullChange::Forbidden),
         Some([SqlValue::Text(value)]) if value == "conflict" => Ok(PullChange::Conflict),
         Some([SqlValue::Text(value)]) if value == "applied" => match sets
-            .get(2)
+            .last()
             .and_then(|set| set.rows.first())
             .map(Vec::as_slice)
         {

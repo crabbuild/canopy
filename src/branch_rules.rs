@@ -25,6 +25,8 @@ pub struct BranchRule {
     pub deny_deletions: bool,
     pub fast_forward_only: bool,
     pub required_checks: Vec<String>,
+    pub require_pull_request: bool,
+    pub required_approvals: u8,
 }
 
 /// Complete policy replacement, with zero as the version of a never-used name.
@@ -37,11 +39,15 @@ pub struct BranchRuleEdit {
     pub deny_deletions: bool,
     pub fast_forward_only: bool,
     pub required_checks: Vec<String>,
+    pub require_pull_request: bool,
+    pub required_approvals: u8,
 }
 
 pub(crate) fn valid_edit(edit: &BranchRuleEdit) -> bool {
     valid_default_branch(&edit.reference)
         && (0..i64::MAX).contains(&edit.expected_version)
+        && edit.required_approvals <= 16
+        && (edit.require_pull_request || edit.required_approvals == 0)
         && edit.required_checks.len() <= 16
         && edit
             .required_checks
@@ -100,7 +106,7 @@ impl RepositoryCell {
         let result = self.sql.query(None, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![SqlValue::Text(actor.into())] },
             SqlStatement {
-                sql: format!("SELECT b.reference, b.version, b.enabled, b.deny_deletions, b.fast_forward, coalesce((SELECT group_concat(context, ',') FROM (SELECT context FROM branch_required_checks WHERE reference = b.reference ORDER BY context)), '') FROM branch_rules b WHERE b.reference > ?2 AND ({ACCESS}) ORDER BY b.reference LIMIT {RULE_PAGE_SIZE}"),
+                sql: format!("SELECT b.reference, b.version, b.enabled, b.deny_deletions, b.fast_forward, coalesce((SELECT group_concat(context, ',') FROM (SELECT context FROM branch_required_checks WHERE reference = b.reference ORDER BY context)), ''), b.require_pull_request, b.required_approvals FROM branch_rules b WHERE b.reference > ?2 AND ({ACCESS}) ORDER BY b.reference LIMIT {RULE_PAGE_SIZE}"),
                 parameters: vec![SqlValue::Text(actor.into()), SqlValue::Text(after.unwrap_or("").into())],
             },
         ] }).await?;
@@ -202,7 +208,10 @@ impl RepositoryCell {
                 })
             })?;
             if policy.is_some_and(|policy| {
-                policy.fast_forward_only && policy.checks_pass && !policy.ancestry
+                !policy.require_pull_request
+                    && policy.fast_forward_only
+                    && policy.checks_pass
+                    && !policy.ancestry
             }) {
                 self.prepare_ancestry(old, new).await?;
             }
@@ -216,9 +225,13 @@ pub(crate) struct Policy {
     pub fast_forward_only: bool,
     checks_pass: bool,
     ancestry: bool,
+    require_pull_request: bool,
 }
 impl Policy {
     pub(crate) fn allows(&self, update: &RefUpdate, require_ancestry: bool) -> bool {
+        !self.require_pull_request && self.allows_ref(update, require_ancestry)
+    }
+    fn allows_ref(&self, update: &RefUpdate, require_ancestry: bool) -> bool {
         if update.new_oid.is_none() {
             return !self.deny_deletions;
         }
@@ -229,11 +242,14 @@ impl Policy {
 pub(crate) fn policies_allow(
     context: &cellule_runtime::CommandContext<'_, '_>,
     plan: &PushPlan,
+    merge: Option<&crate::pulls::merge::ReviewedMerge>,
 ) -> cellule_runtime::Result<bool> {
     for update in &plan.updates {
-        if decode_policy(&context.sql(&policy_query(update))?)?
-            .is_some_and(|policy| !policy.allows(update, true))
-        {
+        if decode_policy(&context.sql(&policy_query(update))?)?.is_some_and(|policy| {
+            !policy.allows_ref(update, true)
+                || (policy.require_pull_request
+                    && !merge.is_some_and(|merge| merge.authorizes(update)))
+        }) {
             return Ok(false);
         }
     }
@@ -243,7 +259,7 @@ pub(crate) fn policies_allow(
 fn policy_query(update: &RefUpdate) -> SqlBatch {
     let old = update.expected.as_ref().and_then(|old| old.oid);
     SqlBatch { statements: vec![SqlStatement {
-        sql: "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), (?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3)) FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1".into(),
+        sql: "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), (?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3)), b.require_pull_request FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1".into(),
         parameters: vec![SqlValue::Text(update.name.clone()), old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())), update.new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec()))],
     }] }
 }
@@ -259,6 +275,7 @@ fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy
         SqlValue::Integer(ff),
         SqlValue::Integer(checks),
         SqlValue::Integer(ancestry),
+        SqlValue::Integer(pull),
     ] = row.as_slice()
     else {
         return Err(Error::Command("invalid branch policy"));
@@ -268,6 +285,7 @@ fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy
         fast_forward_only: *ff == 1,
         checks_pass: *checks == 1,
         ancestry: *ancestry == 1,
+        require_pull_request: *pull == 1,
     }))
 }
 fn decode_rule(row: &[SqlValue]) -> cellule_runtime::Result<BranchRule> {
@@ -278,6 +296,8 @@ fn decode_rule(row: &[SqlValue]) -> cellule_runtime::Result<BranchRule> {
         SqlValue::Integer(delete),
         SqlValue::Integer(ff),
         SqlValue::Text(checks),
+        SqlValue::Integer(pull),
+        SqlValue::Integer(approvals),
     ] = row
     else {
         return Err(Error::Command("invalid branch rule"));
@@ -288,6 +308,9 @@ fn decode_rule(row: &[SqlValue]) -> cellule_runtime::Result<BranchRule> {
         enabled: *enabled == 1,
         deny_deletions: *delete == 1,
         fast_forward_only: *ff == 1,
+        require_pull_request: *pull == 1,
+        required_approvals: u8::try_from(*approvals)
+            .map_err(|_| Error::Command("invalid approval count"))?,
         required_checks: if checks.is_empty() {
             Vec::new()
         } else {

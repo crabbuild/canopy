@@ -28,6 +28,7 @@ import smoke_s3_checks
 import smoke_s3_corpus
 import smoke_s3_issues
 import smoke_s3_pulls
+import smoke_s3_merge
 
 
 def port():
@@ -546,6 +547,7 @@ def main():
                 assert published == (b"" if atomic else partial_oid + b"\trefs/heads/partial")
             replay_id, lost_reply = push_with_lost_reply(base_url, other)
             pull_state = smoke_s3_pulls.seed(base_url, other_id, partial_oid.decode(), other_oid.decode())
+            merge_state = smoke_s3_merge.seed(base_url, other_id, other, partial_oid.decode(), other_oid.decode(), pull_state[1])
             reader_token = f"cnp_{secrets.token_hex(32)}"
             assert api_status(
                 base_url,
@@ -576,6 +578,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_checks.verify(base_url, check_state)
             smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
@@ -615,6 +618,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_checks.verify(base_url, check_state)
             smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
@@ -635,6 +639,7 @@ def main():
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
             smoke_s3_issues.verify(base_url, issue_state)
             smoke_s3_pulls.verify(base_url, pull_state)
+            smoke_s3_merge.verify(base_url, other, merge_state)
             smoke_s3_checks.verify(base_url, check_state)
             smoke_s3_branch_rules.verify(base_url, local, branch_state)
             verify_discovery(base_url, reader_token, ["renamed"])
@@ -659,7 +664,7 @@ def main():
             assert api_status(base_url, "/api/repositories/other/branch-rules",
                               "local-test-token", "PUT", {"repository_id": other_id,
                               "rule": {"reference": "refs/heads/replayed", "expected_version": 0,
-                                       "enabled": True, "deny_deletions": True, "fast_forward_only": True,
+                                       "enabled": True, "deny_deletions": True, "fast_forward_only": True, "require_pull_request": False, "required_approvals": 0,
                                        "required_checks": ["replay-ci"]}}) == 204
             replay = urllib.request.Request(
                 f"{other_restored_url}/git-receive-pack", data=lost_reply["body"],

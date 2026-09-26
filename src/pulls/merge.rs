@@ -1,0 +1,236 @@
+//! Revision-bound review requirements and atomic fast-forward merge publication.
+
+pub(crate) mod command;
+use super::*;
+use crate::{RefExpectation, RefUpdate, directory::TokenScope};
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStrategy {
+    FastForward,
+}
+/// Retry identity and exact reviewed branches for a selected merge strategy.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MergeRequest {
+    pub id: String,
+    pub revision: PullRevision,
+    pub strategy: MergeStrategy,
+}
+/// Durable merge result, replayed unchanged for an exact application request ID.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MergeRecord {
+    pub id: String,
+    pub number: i64,
+    pub oid: String,
+    pub merged_at_ms: i64,
+}
+/// Current review requirements; this does not assert Git mergeability or check success.
+#[derive(Debug, Serialize)]
+pub struct ReviewPolicy {
+    pub revision: Option<PullRevision>,
+    pub ready: bool,
+    pub rule_version: i64,
+    pub require_pull_request: bool,
+    pub required_approvals: i64,
+    pub approvals: i64,
+    pub changes_requested: bool,
+    pub reviews_satisfied: bool,
+}
+/// The final transaction's domain outcome; only Applied moves refs.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MergeOutcome {
+    Applied { merge: MergeRecord },
+    NotFound,
+    Forbidden,
+    Conflict,
+    ReviewsRequired,
+    NotFastForward,
+    BranchPolicy,
+}
+
+// Only the merge command constructs this after checking the exact pull and
+// current review policy. It authorizes one ref update, never an arbitrary push.
+pub(crate) struct ReviewedMerge {
+    update: RefUpdate,
+}
+impl ReviewedMerge {
+    pub(crate) fn authorizes(&self, update: &RefUpdate) -> bool {
+        self.update == *update
+    }
+}
+struct ReviewState {
+    policy: ReviewPolicy,
+    base: String,
+    writable: bool,
+}
+
+pub(crate) fn valid_request(request: &MergeRequest) -> bool {
+    uuid::Uuid::parse_str(&request.id).ok().is_some_and(|id| {
+        id.to_string() == request.id && validate_repository_id(id.into_bytes()).is_ok()
+    }) && (1..i64::MAX).contains(&request.revision.pull_version)
+        && (1..i64::MAX).contains(&request.revision.source_version)
+        && (1..i64::MAX).contains(&request.revision.base_version)
+        && parse_oid(&request.revision.source_oid).is_some()
+        && parse_oid(&request.revision.base_oid).is_some()
+}
+
+impl RepositoryCell {
+    /// Reads current review requirements and eligible decisions in one Cell observation.
+    pub async fn pull_review_policy(
+        &self,
+        actor: &str,
+        number: i64,
+    ) -> Result<Observed<Option<ReviewPolicy>>, Invocation> {
+        validate_component(actor).map_err(Invocation::NotStarted)?;
+        let result = self
+            .sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: vec![policy_statement(actor, number)],
+                },
+            )
+            .await?;
+        Ok(Observed {
+            output: policy_state(&result.output)
+                .map_err(Invocation::NotStarted)?
+                .map(|state| state.policy),
+            receipt: result.receipt,
+        })
+    }
+    /// Prepares ancestry facts and atomically merges an exact reviewed fast-forward.
+    ///
+    /// Current write authority, reviews, checks and ref versions are rechecked at
+    /// publication. Exact request retries preserve the original merge record.
+    pub async fn merge_pull(
+        &self,
+        identity: MutationIdentity,
+        actor: &str,
+        number: i64,
+        request: MergeRequest,
+    ) -> Result<Committed<MergeOutcome>, InvocationError<MergeOutcome>> {
+        if !valid_request(&request) || number < 1 || validate_component(actor).is_err() {
+            return Err(InvocationError::NotStarted(Error::Command(
+                "invalid merge request",
+            )));
+        }
+        let observed = self
+            .sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: vec![policy_statement(actor, number)],
+                },
+            )
+            .await
+            .map_err(preparation)?;
+        let state = policy_state(&observed.output).map_err(InvocationError::NotStarted)?;
+        if state.is_some_and(|state| {
+            state.writable
+                && state.policy.ready
+                && state.policy.reviews_satisfied
+                && state.policy.revision.as_ref() == Some(&request.revision)
+        }) {
+            let base = oid(&request.revision.base_oid).map_err(InvocationError::NotStarted)?;
+            let source = oid(&request.revision.source_oid).map_err(InvocationError::NotStarted)?;
+            self.prepare_ancestry(base, source)
+                .await
+                .map_err(preparation)?;
+        }
+        self.application
+            .command::<command::MergePull>(
+                &self.target,
+                identity,
+                command::MergeInput {
+                    actor: actor.into(),
+                    number,
+                    request,
+                    issued_at_ms: identity.issued_at_ms,
+                },
+            )
+            .await
+    }
+}
+fn preparation(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> InvocationError<MergeOutcome> {
+    InvocationError::NotStarted(Error::Facility {
+        name: "merge preparation",
+        source: Box::new(error),
+    })
+}
+fn oid(text: &str) -> cellule_runtime::Result<[u8; 20]> {
+    parse_oid(text)
+        .and_then(|value| value.try_into().ok())
+        .ok_or(Error::Command("invalid merge object ID"))
+}
+fn policy_statement(actor: &str, number: i64) -> SqlStatement {
+    // Heads bound this aggregation to one decision per reviewer. Historical
+    // retries and comments cannot increase the count or restore old decisions.
+    SqlStatement {
+        sql: format!(
+            "SELECT p.version, p.state, p.draft, p.source_ref, s.oid, s.version, p.base_ref, b.oid, b.version, coalesce(q.version,0), coalesce(q.enabled = 1 AND q.require_pull_request = 1,0), CASE WHEN q.enabled = 1 THEN q.required_approvals ELSE 0 END, (SELECT count(*) FROM pull_review_heads h JOIN pull_reviews r ON r.number = h.review_number WHERE h.pull_number = p.number AND r.kind = 'approve' AND ({APPLICABLE})), EXISTS (SELECT 1 FROM pull_review_heads h JOIN pull_reviews r ON r.number = h.review_number WHERE h.pull_number = p.number AND r.kind = 'request_changes' AND ({APPLICABLE})), ({WRITE}) FROM {JOINS} LEFT JOIN branch_rules q ON q.reference = p.base_ref WHERE p.number = ?2 AND ({ACCESS})"
+        ),
+        parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
+    }
+}
+fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<ReviewState>> {
+    let set = sets
+        .first()
+        .ok_or(Error::Command("missing review policy result"))?;
+    let Some(row) = set.rows.first() else {
+        return Ok(None);
+    };
+    let [
+        SqlValue::Integer(version),
+        SqlValue::Text(state),
+        SqlValue::Integer(draft),
+        SqlValue::Text(_source),
+        source_oid,
+        SqlValue::Integer(source_version),
+        SqlValue::Text(base),
+        base_oid,
+        SqlValue::Integer(base_version),
+        SqlValue::Integer(rule_version),
+        SqlValue::Integer(required),
+        SqlValue::Integer(needed),
+        SqlValue::Integer(approvals),
+        SqlValue::Integer(changes),
+        SqlValue::Integer(write),
+    ] = row.as_slice()
+    else {
+        return Err(Error::Command("invalid review policy result"));
+    };
+    let source_oid = optional_oid(source_oid)?;
+    let base_oid = optional_oid(base_oid)?;
+    let ready = state == "open"
+        && *draft == 0
+        && source_oid.is_some()
+        && base_oid.is_some()
+        && source_oid != base_oid;
+    let revision = source_oid
+        .zip(base_oid)
+        .map(|(source_oid, base_oid)| PullRevision {
+            pull_version: *version,
+            source_oid,
+            source_version: *source_version,
+            base_oid,
+            base_version: *base_version,
+        });
+    Ok(Some(ReviewState {
+        base: base.clone(),
+        writable: *write == 1,
+        policy: ReviewPolicy {
+            revision,
+            ready,
+            rule_version: *rule_version,
+            require_pull_request: *required == 1,
+            required_approvals: *needed,
+            approvals: *approvals,
+            changes_requested: *changes == 1,
+            reviews_satisfied: *required == 0 || (*approvals >= *needed && *changes == 0),
+        },
+    }))
+}

@@ -128,6 +128,7 @@ impl RepositoryCell {
         }
         let mut previous: HashMap<Oid, Option<Oid>> = HashMap::from([(descendant, None)]);
         let mut pending = vec![(descendant, None::<Oid>)];
+        let mut edges = 0;
         while let Some((child, after)) = pending.pop() {
             let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
                 sql: format!("SELECT parent, EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?3 AND descendant = p.parent) FROM commit_parents p WHERE child = ?1 AND parent > ?2 ORDER BY parent LIMIT {PAGE}"),
@@ -138,6 +139,10 @@ impl RepositoryCell {
                 .first()
                 .ok_or(Error::Command("missing commit parents"))?
                 .rows;
+            edges += rows.len();
+            if edges > 250_000 {
+                return Err(Error::Command("commit ancestry traversal limit").into());
+            }
             let mut parents = Vec::with_capacity(rows.len());
             for row in rows {
                 let [SqlValue::Blob(parent), SqlValue::Integer(known)] = row.as_slice() else {
@@ -152,6 +157,9 @@ impl RepositoryCell {
                     continue;
                 };
                 entry.insert(Some(child));
+                if previous.len() > 100_000 {
+                    return Err(Error::Command("commit ancestry traversal limit").into());
+                }
                 if parent == ancestor || *known == 1 {
                     let mut steps = Vec::new();
                     let mut parent = parent;

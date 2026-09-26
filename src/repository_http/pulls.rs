@@ -57,7 +57,7 @@ struct Review {
     body: String,
 }
 
-async fn writable_route(
+pub(super) async fn writable_route(
     state: &RepositoryHttp,
     name: &str,
     headers: &axum::http::HeaderMap,
@@ -68,7 +68,9 @@ async fn writable_route(
     }
     Ok(authorized)
 }
-async fn input<T: DeserializeOwned>(request: Request<Body>) -> Result<T, Response<Body>> {
+pub(super) async fn input<T: DeserializeOwned>(
+    request: Request<Body>,
+) -> Result<T, Response<Body>> {
     let body = match tokio::time::timeout(
         Duration::from_secs(30),
         to_bytes(request.into_body(), 128 * 1024),
@@ -101,7 +103,7 @@ fn canonical_id(value: &str) -> Option<[u8; 16]> {
     (id.to_string() == value && validate_repository_id(id.into_bytes()).is_ok())
         .then(|| id.into_bytes())
 }
-fn identity(
+pub(super) fn identity(
     route: &RepositoryRoute,
     expected: &str,
 ) -> Result<MutationIdentity, Box<Response<Body>>> {
@@ -264,6 +266,7 @@ pub(super) async fn edit(
         Err(response) => return response,
     };
     if number < 1
+        || input.state == PullState::Merged
         || !(1..i64::MAX).contains(&input.expected_version)
         || !valid_issue_text(&input.title, &input.body)
     {

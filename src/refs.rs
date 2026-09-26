@@ -241,7 +241,7 @@ impl Command for FinalizePush {
         context: &mut CommandContext<'_, '_>,
         plan: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
-        Ok(if apply_push(context, &plan)? {
+        Ok(if apply_refs(context, &plan, None)? {
             CommandResult::Success(true)
         } else {
             CommandResult::Rejected(false)
@@ -249,9 +249,10 @@ impl Command for FinalizePush {
     }
 }
 
-pub(crate) fn apply_push(
+pub(crate) fn apply_refs(
     context: &mut CommandContext<'_, '_>,
     plan: &PushPlan,
+    merge: Option<&crate::pulls::merge::ReviewedMerge>,
 ) -> cellule_runtime::Result<bool> {
     if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
         return Ok(false);
@@ -298,7 +299,7 @@ pub(crate) fn apply_push(
         }
     }
     if !crate::graph::certified_roots(context, plan)?
-        || !crate::branch_rules::policies_allow(context, plan)?
+        || !crate::branch_rules::policies_allow(context, plan, merge)?
     {
         return Ok(false);
     }

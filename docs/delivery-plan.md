@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review and exact-revision comparison APIs implemented; merge publication, releases and UI remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements and atomic fast-forward merges implemented; synthesized merge strategies, releases and UI remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Open |
 
@@ -59,7 +59,7 @@ separate product decisions.
 4. Complete account disable/delete and audit records.
    Tokens now support rotation and revocation. Add expiry and issuance quotas;
    qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: text patches, required reviews and atomic merge;
+5. Continue collaboration as vertical slices: native merge/squash/rebase candidates and conflicts; text patches;
    issue labels/assignees; releases and assets; UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -907,7 +907,7 @@ Branch protection implementation checklist (delivered in the following section):
    one ref; ordinary pushes must retain allowed siblings, while `--atomic` must
    reject the whole requested group. Use bounded request/ref inputs and retain
    the existing encoded-input and subprocess resource limits.
-3. Enforce current rules and the newest matching check result in `refs::apply_push`,
+3. Enforce current rules and the newest matching check result in `refs::apply_refs`,
    shared by `FinalizePush` and `CompletePush`. A hook snapshot alone is insufficient:
    context/rule changes or a new queued run during the push must not bypass policy.
    Force-update decisions need ancestry evidence verified from immutable Git
@@ -1020,8 +1020,7 @@ The same run retains branch/check policy, issues, Git/LFS, token/ACL recovery,
 SQLite chunks, 300 refs, mixed/atomic outcomes and lost-push-reply replay. The
 process exits successfully; fresh-volume initialization diagnostics are unchanged.
 
-The API remains a proposal/review lifecycle, not a merge endpoint. Next work must
-close the path from reviewed changes to durable Git side effects:
+At the proposal/review milestone, the remaining publication work was:
 
 1. Add bounded comparison/file APIs against explicit source/base snapshots.
 2. Add versioned review requirements to branch policy, with a single eligibility
@@ -1087,6 +1086,78 @@ are unchanged. Hosted CI and target production-store qualification remain open.
 Approximately 875 Rust implementation lines own bounded graph/tree traversal,
 file previews and the HTTP admission/lifetime boundary. Existing Git publication
 and storage commands remain the canonical write path. No dependency, lockfile or
-schema changes. Full delivery gates remain open: required-review policy and
-atomic merge publication are the next collaboration work, followed by patches,
-inline discussions and UI.
+schema changes. Full delivery gates remain open. The following milestone adds review policy
+and atomic fast-forward publication; synthesized candidates, patches, inline
+discussions and UI remain.
+
+
+## Reviewed fast-forward merges
+
+An explicit fast-forward strategy now closes the path from PR review to durable
+Git side effect. One command validates the exact proposal/ref revision, current
+writer authority, current review requirements and ancestry, then uses the shared
+ref publisher for graph/CAS/namespace/check policy. Base movement, merged state
+and a retry record commit together. Exact HTTP request retries recover the
+original result without moving refs again, including after branch deletion and
+repository rename. Merged pulls are terminal and retain their result details.
+
+Versioned exact-branch rules add mandatory `require_pull_request` and
+`required_approvals` fields. Required-PR rules reject every direct publication,
+including owner pushes, deletion and recreation. The merge command alone creates
+an internal capability for one validated base update. The canonical ref publisher
+still enforces every other check. Counts use one latest decision per reviewer,
+updated with the review transaction; history flags and publication share the
+same eligibility predicate. This avoids history scans for approval counts.
+Ancestry preparation now caps discovered commits and parent edges.
+
+Verified locally:
+
+- HTTP/native Git: two-reviewer policy, newest decision and old retry ordering,
+  comment preservation, revoke/regrant, objections arriving during paused merge
+  upload, required check results, insufficient scopes, source movement/ABA,
+  editorial/draft changes, unrelated histories and writer revocation mid-upload.
+- Required-PR owner pushes/deletions fail. Ordinary mixed pushes preserve the
+  allowed sibling; atomic pushes reject the group. Even approved proposals do
+  not make direct Git pushes eligible. Existing branch-policy recovery tests pass.
+- Concurrent exact requests return one durable result. Competing pulls publish
+  exactly one winner against a base version. Changed intent/actor and fresh IDs
+  after completion conflict. Terminal pulls cannot reopen. Source deletion,
+  rename, fresh local storage and stock Git clone/fsck retain the merged commit.
+- Direct Cell: raw `FinalizePush` cannot bypass required PRs; unauthorized merge
+  attempts and current review checks apply without HTTP. Exact runtime rejection
+  replay remains rejected after later approval. A constraint failure injected
+  after ref/pull writes rolls back ref, ref generation and pull state. A fresh
+  merge succeeds after removing the injected fault. Runtime receipt and
+  application request replay preserve the result under stronger later policy.
+- Shared Git/LFS/comparison/merge admission and existing PR/review lifecycle pass.
+  Clippy with warnings denied and the release build pass.
+
+The release S3-compatible process probe passes against RustFS
+`1.0.0-beta.8-glibc` with `--sqlite-chunks --many-objects 256`. It sends a reviewed
+merge on a dedicated branch, observes publication through a second connection,
+and discards the original reply. Exact replay, merge/pull snapshots and stock-Git
+clone/fsck match after clean restart and SIGKILL/lease takeover with fresh local
+storage. Existing comparisons, reviews, checks, issues, Git/LFS, token/ACL recovery,
+SQLite chunks, 300 refs and dropped-push-reply replay also pass. The runner exits
+successfully; fresh-volume initialization diagnostics are unchanged.
+
+Approximately 700 new/changed Rust implementation lines cover review requirements,
+the indexed decision heads, merge command/result contract and HTTP endpoints.
+Ownership stays in the Repository Cell; Git publication has one canonical path.
+Schema version 1 is unreleased: new merge/head tables, rule fields and operation
+8 codec 2 / operation 9 require a fresh development storage prefix. No dependencies
+or lockfiles changed.
+
+Remaining collaboration work keeps the full hosting scope intact:
+
+1. Native Git preparation of merge commits, squash and rebase, explicit conflicts,
+   candidate object retention and checks bound to the selected candidate.
+2. Reuse authoritative publication for those strategies with validated candidate
+   identity, original revision preconditions and exact replay.
+3. Fault injection across every preparation/publication ownership boundary,
+   quota/retention policies and measured history/concurrency capacity.
+4. Text patches, line discussions, releases/assets and repository UI.
+
+Other delivery gates above, including routing, backup/GC, production limits and
+public-service functionality, remain open. Fast-forward success does not satisfy
+the synthesized-merge or full hosting gates.

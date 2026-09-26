@@ -1,5 +1,7 @@
 #[path = "multi_server/comparison.rs"]
 mod comparison;
+#[path = "multi_server/merge.rs"]
+mod merge;
 #[path = "multi_server/pulls.rs"]
 mod pulls;
 use std::{path::Path, sync::Arc};

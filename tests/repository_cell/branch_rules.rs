@@ -8,7 +8,7 @@ use cellule_runtime::{SqlBatch, SqlCell, SqlStatement, SqlValue};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Oid = [u8; 20];
-fn identity() -> Result<MutationIdentity> {
+pub(super) fn identity() -> Result<MutationIdentity> {
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
     Ok(MutationIdentity {
         request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
@@ -23,10 +23,12 @@ fn rule(version: i64, checks: &[&str]) -> BranchRuleEdit {
         enabled: true,
         deny_deletions: true,
         fast_forward_only: true,
+        require_pull_request: false,
+        required_approvals: 0,
         required_checks: checks.iter().map(|s| (*s).into()).collect(),
     }
 }
-async fn plan(repo: &RepositoryCell, name: &str, oid: Option<Oid>) -> Result<PushPlan> {
+pub(super) async fn plan(repo: &RepositoryCell, name: &str, oid: Option<Oid>) -> Result<PushPlan> {
     Ok(PushPlan {
         actor: "canopy".into(),
         updates: vec![RefUpdate {
@@ -36,7 +38,12 @@ async fn plan(repo: &RepositoryCell, name: &str, oid: Option<Oid>) -> Result<Pus
         }],
     })
 }
-async fn commit(repo: &RepositoryCell, tree: Oid, parents: &[Oid], message: &str) -> Result<Oid> {
+pub(super) async fn commit(
+    repo: &RepositoryCell,
+    tree: Oid,
+    parents: &[Oid],
+    message: &str,
+) -> Result<Oid> {
     let parents: String = parents
         .iter()
         .map(|oid| format!("parent {}\n", hex::encode(oid)))

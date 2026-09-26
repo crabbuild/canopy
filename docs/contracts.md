@@ -529,7 +529,8 @@ native scratch enforcement remains a release gate. These reservations are
 shared node admission, not per-account durable storage quotas.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review and membership-version layouts, operations 7/8, and the operation-5 codec change
+HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge and membership-version layouts, operations 7–9,
+and the operation-5/8 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
@@ -752,22 +753,23 @@ and a read-scoped token. It returns `repository_id`, `rules`, and `next_after`;
 32 sorted rules per page, disabled included. A full final page may lead to an
 empty terminal page. Each observation is independent. PUT requires an
 admin-scoped owner token and `{repository_id, rule}`. `rule` contains `reference`,
-`expected_version`, `enabled`, `deny_deletions`, `fast_forward_only`, and
-`required_checks`. Success is 204; version/context conflict is 409; bad values
+`expected_version`, `enabled`, `deny_deletions`, `fast_forward_only`,
+`required_checks`, `require_pull_request` and `required_approvals`. Success is 204; version/context conflict is 409; bad values
 are 422. Repository identity is a UUID precondition. The body limit is 16 KiB
 with a 30-second receive deadline. The Cell command rechecks owner authority.
 
-The one authoritative `refs::apply_push` function applies to both typed
-`FinalizePush` and HTTP `CompletePush`. Before any ref writes, each enabled rule
+The one authoritative `refs::apply_refs` function applies to typed
+`FinalizePush`, HTTP `CompletePush`, and `MergePull`. Before any ref writes, each enabled rule
 checks deletion policy, ancestry and every required check. For a non-deletion,
 the selected attempt is the greatest creation number matching the proposed
 commit, context and current context version. It must have state `success` and
 the configured reporter. Missing/disabled contexts, missing attempts and all
 other states reject. Current reporter membership is required to report results,
 but does not retroactively invalidate an already accepted result. Rules apply
-to every writer without an owner bypass. Deletion depends on `deny_deletions`;
-checks and fast-forward policy govern non-deletions. Branch creation needs checks
-but has no old ancestry to prove.
+to every writer without an owner bypass. A required-PR rule rejects every direct
+ref mutation, including deletion and recreation. Otherwise deletion depends on
+`deny_deletions`; checks and fast-forward policy govern non-deletions. Branch
+creation needs checks but has no old ancestry to prove.
 
 Verified commit objects provide `commit_parents(child, parent)` when graph
 closure is certified. Only commit-parent edges enter that table. Immutable
@@ -805,10 +807,11 @@ published. Final publication always checks current rules, even if none existed
 at preflight. An `(enabled, reference)` index bounds the presence probe; rule and
 requirement primary keys and the check-attempt index bound final policy lookups.
 
-Reads, proof commands and final per-ref decisions are bounded. Total ancestry
-search memory/time, retained certificate growth, native Git scratch peaks and
-cross-OS hook execution still need production qualification. Rules do not yet
-include PR approval requirements, path policies, tag rules, exemptions or a UI.
+Reads, proof commands and final per-ref decisions are bounded. Ancestry search
+limits discovered commits to 100,000 and parent edges to 250,000; exhaustion is
+an error, never a positive certificate. Retained certificate growth, ancestry
+latency, native Git scratch peaks and cross-OS hook execution still need
+production qualification. Path policies, tag rules, exemptions and UI remain open.
 These new tables require a fresh unreleased development prefix; there is no
 backfill path for old object certificates lacking parent rows.
 
@@ -885,22 +888,23 @@ at 128 KiB with a 30-second deadline. Titles allow 256 UTF-8 bytes without contr
 characters; bodies allow 16 KiB without NUL. Comment reviews require nonblank
 body text. No text is rendered as HTML by these APIs.
 
-Pull lists omit bodies, optionally filter by open/closed state and contain at
+Pull lists omit bodies, optionally filter by open/closed/merged state and contain at
 most 32 number-ordered summaries. Review history pages contain at most 16 full
 reviews, bounding body content to 256 KiB before metadata. Both use numeric
 `after`/`next_after`; each page independently observes current state. Pull/state
-and review/pull indexes support scans. A partial `(pull_number, reviewer, number)`
-index over non-comment reviews supports each newest-decision lookup without
-scanning comment history. Grant generation and ref lookups use primary keys.
+and review/pull indexes support scans. `pull_review_heads(pull_number, reviewer)`
+selects one latest non-comment review per reviewer. New decisions advance this
+head in the review transaction; comments and historical retries leave it intact.
+The old history index is replaced by these bounded head lookups. Grant generation and ref lookups use primary keys.
 No aggregate approval count, mergeability or diff computation runs on these reads.
 
-Future merge publication must recheck current review requirements, grant/ref/pull
-versions and branch checks in the same transaction as the base ref and merged
-state. Git pushes do not currently require a PR review. Required reviewer policy,
-text patches, general file browsing, inline threads, merge commits/squash/rebase, conflict UI,
+Fast-forward merge publication rechecks current review requirements, grant/ref/pull
+versions and branch checks in the transaction that advances the base ref and marks
+the pull merged, as specified below. Required-PR branches reject direct pushes.
+Text patches, general file browsing, inline threads, merge commits/squash/rebase, conflict UI,
 cross-repository pulls, retargeting, review dismissal, deletion/moderation,
 notifications and UI remain open. A future collector must retain initial pull
-OIDs, historical review OIDs and merge preparation roots in addition to live refs.
+OIDs, historical review OIDs, merge result OIDs and merge preparation roots in addition to live refs.
 Aggregate retention/quotas and production throughput evidence remain open.
 
 
@@ -986,5 +990,101 @@ not hydrate the native bare Git cache. Current no-GC storage makes immutable
 object traversal safe; future collection must fence active comparison roots.
 
 No schema, Cell command registration, dependency or lockfile change is needed.
-Merge preparation, review policy, atomic merge publication and line-based review
-remain separate open delivery gates.
+Fast-forward review policy and atomic publication are implemented below. Native
+merge candidate preparation and line-based review remain open delivery gates.
+
+
+### Required reviews and fast-forward merge publication
+
+An enabled exact-branch rule can set `require_pull_request: true` and
+`required_approvals: 0..16`. A nonzero count requires the flag. Disabled rules
+retain their version and fields but impose no review requirements. Both fields
+are mandatory on rule replacement. Required-PR policy rejects direct pushes,
+deletions and branch recreation even if deletion/fast-forward flags are false.
+It has no owner bypass. The base branch must exist before enabling that rule.
+Rule operation 8 now uses codec 2; this unreleased schema requires a fresh prefix.
+
+`GET /api/repositories/<name>/pulls/<number>/review-policy` returns the current
+repository UUID and a `policy` observation. Read scope and membership suffice.
+One SQL statement binds editorial state, source/base ref versions, current branch
+rule, writer grants and review heads. Its `revision` is null if a ref is deleted.
+`ready` means open, non-draft and live unequal tips. `reviews_satisfied` is true
+when review policy is disabled, or when the count meets the requirement and no
+applicable `request_changes` exists. It does not imply Git mergeability, check
+success, or permission for this reader to merge. Missing access/pull is 404.
+
+`pull_review_heads` is a projection updated in the same transaction as a new
+review. Its key is `(pull_number, reviewer)`, and it advances only to a larger
+non-comment creation number with an exact payload/parent binding and current
+membership. Counts aggregate these heads rather than scanning review history.
+History flags, policy observations and authoritative publication use one shared
+eligibility predicate: ready pull, exact pull/ref versions and OIDs, non-author
+reviewer, current write authority, unchanged membership generation, and that
+reviewer's latest decision. New comments and old retries cannot reorder heads.
+A writer revoke/regrant requires a new review. No team/code-owner policy exists.
+
+`POST /api/repositories/<name>/pulls/<number>/merge` accepts `repository_id`, UUID
+`id`, exact `revision`, and `strategy: "fast_forward"`. Unknown fields/strategies,
+invalid canonical IDs/OIDs or nonpositive/exhausted versions are 422. A
+write-scoped token and current repository writer are required. The body limit is
+128 KiB with a 30-second upload deadline. Merge work shares eight node transfer
+permits with Git/LFS/comparisons and has a 120-second deadline. Its runtime command
+identity lasts 180 seconds, covering preparation plus the ordinary 60-second
+publication window; this is within the pinned runtime's 24-hour maximum. SDK
+callers choose identities that cover their own preparation window. The tracked task
+continues after a client disconnect. A timeout or unavailable result instructs
+the client to retry the same request ID and revision; it never promises failure
+when publication could have succeeded.
+
+Preparation validates current authority and view before searching verified
+commit-parent links. It records bounded positive ancestry certificates; it never
+moves refs. Source must descend from base for this strategy even when the branch
+rule does not require fast-forward pushes. Non-ancestor or unrelated histories
+conflict. There is no synthesized commit, implicit rebase or strategy fallback.
+
+Operation 9, codec 1 publishes the merge in one Repository Cell command:
+
+1. Check current write authority. For an existing application UUID, compare its
+   binding to actor, pull number, full requested revision and strategy; an exact
+   retry returns its original record before testing today's policy or refs.
+2. Require the exact current open, non-draft pull and live unequal source/base
+   tips, including retained ref versions. Evaluate current approval count and
+   requested changes using the shared predicate and current base rule.
+3. Require a verified base-to-source ancestry certificate. Construct a private
+   `ReviewedMerge` capability for this exact base update. Only this command can
+   construct it; callers cannot opt a general push into merge authority.
+4. Use canonical `refs::apply_refs` for current writer authority, ref CAS,
+   namespace rules, graph certificates, current required checks and branch
+   policy. The private capability only satisfies the required-PR gate for its
+   exact update. Other checks remain mandatory.
+5. Mark the pull `merged`, advance its editorial version, and insert its unique
+   `pull_merges` record with request binding, result OID and timestamp. Ref
+   generation advances with publication. All changes commit together.
+
+Success returns 200 and `merge: {id, number, oid, merged_at_ms}`. Missing resources
+are 404, insufficient authority 403, and stale/conflicting intent, insufficient
+reviews, non-fast-forward history or failed branch policy are distinct 409
+responses. Service errors are 503 and elapsed work is 504. State is not edited to
+`merged` through the ordinary PUT API; such requests return 422. Merged pulls
+reject all editorial edits and cannot reopen. Pull details retain their merge
+record even after source deletion; list filtering accepts `state=merged`.
+
+Application retry identity survives new runtime command identities, policy
+changes, source deletion, repository rename and recovery. Its binding includes
+the actor, so another writer cannot reuse the UUID. Current write authority is
+still required. Exact runtime receipt replay keeps the runtime's original
+success/rejection semantics. New IDs after a successful merge conflict. Racing
+pulls against the same base revision can publish at most one winner.
+
+The runtime transaction contract is verified in the pinned Cellule executor:
+application writes are under its savepoint; rejected handlers roll them back
+before recording the rejection, and handler errors abort the enclosing SQLite
+transaction. A direct-Cell test injects a unique-parent constraint failure after
+ref and pull writes, then proves the ref, ref generation and pull state remain
+unchanged. Removing only the injected record permits a subsequent merge. Other
+tests prove direct `FinalizePush` cannot use approvals as a policy bypass.
+
+This is the fast-forward strategy. Merge commit/squash/rebase candidate objects,
+conflict resolution, candidate-check policy, merge queues and line review remain
+open. The owner-loss matrix at every merge publication boundary and production
+capacity qualification also remain open. No dependency or lockfile changed.

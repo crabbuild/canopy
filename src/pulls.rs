@@ -1,5 +1,6 @@
 //! Repository-local pull requests and immutable reviews tied to live ref versions.
 
+pub mod merge;
 mod mutations;
 
 use crate::{
@@ -24,18 +25,23 @@ const JOINS: &str =
     "pull_requests p JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref";
 const COLUMNS: &str = "p.number, p.id, p.author, p.title, p.state, p.draft, p.version, p.source_ref, s.oid, s.version, p.base_ref, b.oid, b.version, p.created_ms, p.updated_ms";
 
-/// Editable lifecycle state; closing does not merge or move any Git ref.
+// One eligibility predicate serves history, review policy reads and merge publication.
+const APPLICABLE: &str = "r.kind != 'comment' AND p.state = 'open' AND p.draft = 0 AND r.pull_version = p.version AND r.source_oid = s.oid AND r.source_version = s.version AND r.base_oid = b.oid AND r.base_version = b.version AND r.reviewer != p.author AND (EXISTS (SELECT 1 FROM repository_identity WHERE owner = r.reviewer AND r.membership_version = 0) OR EXISTS (SELECT 1 FROM repository_members m JOIN membership_versions v ON v.account = m.account WHERE m.account = r.reviewer AND m.role = 'write' AND v.version = r.membership_version)) AND r.number = (SELECT review_number FROM pull_review_heads WHERE pull_number = p.number AND reviewer = r.reviewer)";
+
+/// Pull lifecycle state; only merge publication can enter the terminal Merged state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PullState {
     Open,
     Closed,
+    Merged,
 }
 impl PullState {
     fn as_str(self) -> &'static str {
         match self {
             Self::Open => "open",
             Self::Closed => "closed",
+            Self::Merged => "merged",
         }
     }
 }
@@ -69,6 +75,7 @@ pub struct PullRequest {
     pub body: String,
     pub initial_source_oid: String,
     pub initial_base_oid: String,
+    pub merge: Option<merge::MergeRecord>,
 }
 /// Exact pull/ref revision reviewed by a client; ref versions prevent ABA reuse.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,7 +220,7 @@ impl RepositoryCell {
     ) -> Result<Observed<Option<PullRequest>>, Invocation> {
         validate_component(actor).map_err(Invocation::NotStarted)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-            sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid FROM {JOINS} WHERE p.number = ?2 AND ({ACCESS})"),
+            sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid, merged.id, merged.oid, merged.merged_ms FROM {JOINS} LEFT JOIN pull_merges merged ON merged.pull_number = p.number WHERE p.number = ?2 AND ({ACCESS})"),
             parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)],
         }] }).await?;
         let rows = result
@@ -229,7 +236,7 @@ impl RepositoryCell {
                     SqlValue::Blob(source),
                     SqlValue::Blob(base),
                 ] = row
-                    .get(15..)
+                    .get(15..18)
                     .ok_or(Error::Command("invalid pull details"))?
                 else {
                     return Err(Error::Command("invalid pull details"));
@@ -239,6 +246,25 @@ impl RepositoryCell {
                     body: body.clone(),
                     initial_source_oid: hex::encode(source),
                     initial_base_oid: hex::encode(base),
+                    merge: match row.get(18..) {
+                        Some([SqlValue::Null, SqlValue::Null, SqlValue::Null]) => None,
+                        Some(
+                            [
+                                SqlValue::Blob(id),
+                                SqlValue::Blob(oid),
+                                SqlValue::Integer(at),
+                            ],
+                        ) if oid.len() == 20 => Some(merge::MergeRecord {
+                            id: record_id(id)?,
+                            number: match row.first() {
+                                Some(SqlValue::Integer(n)) => *n,
+                                _ => return Err(Error::Command("invalid merged pull number")),
+                            },
+                            oid: hex::encode(oid),
+                            merged_at_ms: *at,
+                        }),
+                        _ => return Err(Error::Command("invalid pull merge details")),
+                    },
                 })
             })
             .transpose()
@@ -259,12 +285,9 @@ impl RepositoryCell {
             return Err(invalid("invalid review cursor"));
         }
         validate_component(actor).map_err(Invocation::NotStarted)?;
-        // Match exact ref versions as well as OIDs. Returning to an old commit or
-        // reopening a pull must never silently reactivate an earlier approval.
-        let applicable = "r.kind != 'comment' AND p.state = 'open' AND p.draft = 0 AND r.pull_version = p.version AND r.source_oid = s.oid AND r.source_version = s.version AND r.base_oid = b.oid AND r.base_version = b.version AND r.reviewer != p.author AND (EXISTS (SELECT 1 FROM repository_identity WHERE owner = r.reviewer AND r.membership_version = 0) OR EXISTS (SELECT 1 FROM repository_members m JOIN membership_versions v ON v.account = m.account WHERE m.account = r.reviewer AND m.role = 'write' AND v.version = r.membership_version)) AND r.number = (SELECT number FROM pull_reviews WHERE pull_number = p.number AND reviewer = r.reviewer AND kind != 'comment' ORDER BY number DESC LIMIT 1)";
         let result = self.pull_rows(
             SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number)] },
-            SqlStatement { sql: format!("SELECT r.number, r.id, r.reviewer, r.kind, r.body, r.pull_version, r.source_oid, r.source_version, r.base_oid, r.base_version, coalesce(({applicable}), 0), r.created_ms FROM pull_reviews r JOIN pull_requests p ON p.number = r.pull_number JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref WHERE r.pull_number = ?2 AND r.number > ?3 AND ({ACCESS}) ORDER BY r.number LIMIT {REVIEW_PAGE_SIZE}"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number), SqlValue::Integer(after)] },
+            SqlStatement { sql: format!("SELECT r.number, r.id, r.reviewer, r.kind, r.body, r.pull_version, r.source_oid, r.source_version, r.base_oid, r.base_version, coalesce(({APPLICABLE}), 0), r.created_ms FROM pull_reviews r JOIN pull_requests p ON p.number = r.pull_number JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref WHERE r.pull_number = ?2 AND r.number > ?3 AND ({ACCESS}) ORDER BY r.number LIMIT {REVIEW_PAGE_SIZE}"), parameters: vec![SqlValue::Text(actor.into()), SqlValue::Integer(number), SqlValue::Integer(after)] },
         ).await?;
         let output = result
             .output
@@ -334,6 +357,7 @@ fn summary(row: &[SqlValue]) -> cellule_runtime::Result<PullSummary> {
     let state = match state.as_str() {
         "open" => PullState::Open,
         "closed" => PullState::Closed,
+        "merged" => PullState::Merged,
         _ => return Err(Error::Command("invalid pull state")),
     };
     Ok(PullSummary {

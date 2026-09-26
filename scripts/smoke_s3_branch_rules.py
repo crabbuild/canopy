@@ -28,7 +28,7 @@ def seed(base_url, repository_id, local, oid):
     request(base_url, f"{REPOSITORY}/branch-rules", "PUT", {
         "repository_id": repository_id,
         "rule": {"reference": reference, "expected_version": 0, "enabled": True,
-                 "deny_deletions": True, "fast_forward_only": True,
+                 "deny_deletions": True, "fast_forward_only": True, "require_pull_request": False, "required_approvals": 0,
                  "required_checks": ["branch-ci"]},
     })
     # An isolated commit advances the protected branch without changing the
