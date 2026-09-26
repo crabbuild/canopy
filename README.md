@@ -55,12 +55,26 @@ Retries use the same UUID while it remains the current operation. Replaying its
 completed begin does not start a new drain. Once another operation starts, do not
 replay older UUIDs; completed operation history is not retained.
 
-Administration needs object-store credentials; it does not need the Git token or
-node signing key. No force-resume, stale-owner repair, upgrade/migration or backup
-command is provided yet. In particular, a crash during drain can require a future
-fenced recovery procedure; this preview does not silently declare it complete.
-This maintenance boundary is a prerequisite for offline restore and collection,
-not a delivered backup system.
+The begin/status/end commands need object-store credentials, but no Git token or
+node signing key. If a node dies during drain, wait for its lease to expire and
+run the recovery worker with the same operation UUID:
+
+```bash
+canopy maintenance config.json recover <operation-uuid>
+canopy maintenance config.json status
+canopy maintenance config.json end <operation-uuid>
+```
+
+Recovery needs `CANOPY_NODE_SIGNING_KEY_HEX` and an exclusively available local
+`data_dir`. It enrolls a temporary node, fences expired owners, restores their
+Cells one at a time and releases them. It opens no HTTP listener and needs no Git
+token. Live owners, conflicting recovery claims, unresolved follower logs and
+failed root verification return an error. Retry the same operation after the
+reported condition is resolved; recovery never resumes serving automatically.
+Do not remove authority records or force `drained` to bypass an error.
+
+Upgrade/migration, backups and object collection remain pending. Maintenance
+and owner recovery do not provide a separate backup copy.
 
 ### Public repositories
 

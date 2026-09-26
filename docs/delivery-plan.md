@@ -15,7 +15,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
-| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation and conservative maintenance admission implemented; maintenance crash recovery, full routing fault matrix, backup, GC and telemetry remain |
+| 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation conservative maintenance admission and enrolled owner recovery implemented; full maintenance/routing fault matrices, backup, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 
 The **internal preview** requires gates 0–5, including real storage and
@@ -74,11 +74,12 @@ separate product decisions.
    slice ships with its own public action and owner-recovery proof.
 
 6. Complete offline operations in this order:
-   - Recover a maintenance drain interrupted by node death. Fence the exact stale
-     advertisement and Cell owner using runtime authority, recover its pinned
-     publication, then release the Cell. Acceptance: SIGKILL at each drain
-     boundary, no old writer can publish, and resume stays denied until every
-     catalog entry is settled. A force-resume flag is not sufficient evidence.
+   - Expand the implemented maintenance recovery into a complete fault matrix.
+     The enrolled worker fences expired sessions, restores their pinned roots
+     and releases their Cells. Remaining acceptance: SIGKILL at each claim,
+     restore and drain boundary; competing workers and long lease failures;
+     no old writer can publish, and resume stays denied until every catalog entry
+     is settled. A force-resume flag is not sufficient evidence.
    - Add backup capture with a runtime pin and a verified manifest of every
      external Git blob/LFS body reachable from the pinned SQLite roots. The
      capture coordinator must participate in maintenance drain. Acceptance:
@@ -2088,3 +2089,51 @@ integration; it does not add another Cell state machine. Gates 1 and 8 remain
 partial. A crash during maintenance can leave a conservative unfinished drain;
 fenced recovery, retained operation history, backup capture/restore, upgrades,
 GC and operational telemetry still need their own acceptance evidence.
+
+## Interrupted maintenance recovery
+
+On 2026-09-26, `canopy maintenance <config.json> recover <operation-uuid>` gained
+an enrolled recovery worker. It validates the exact maintenance operation and
+release, uses the existing workspace exclusion and disk budget, then fences
+expired sessions with the runtime's takeover API. One SQLite worker restores
+existing catalog entries sequentially. Each handle drains and releases before
+its scratch directory is removed. Normal service startup and offline recovery
+share the same SQL bootstrap/takeover implementation.
+
+Evidence:
+
+- Eight deployment unit tests pass. New cases repair both abandoned catalog
+  entries and unpublished owners, repeat a completed recovery, reject live owners
+  and other operation IDs, and reject a missing published root while preserving
+  its authority reference and the Maintenance release.
+- All six lifecycle integration tests pass. Cancellation of the recovery caller
+  leaves the supervisor enrolled and the workspace locked until its admitted
+  Cell finishes publishing, draining and releasing. Maintenance end remains
+  denied while the injected control publication is paused.
+- The two-node maintenance/Git integration test passes with the shared acquisition
+  path. All-target Clippy with warnings denied, Rust formatting, Python syntax,
+  whitespace checks and the release build pass.
+- The release process smoke passes against RustFS `1.0.0-beta.8-glibc`. After the
+  existing two-node owner-loss checks, it pauses a serving node, begins maintenance
+  and SIGKILLs that node. Status retains unfinished Cells and end is rejected.
+  After lease expiry, the real recovery CLI fences the owner, restores and releases
+  its Cells, and reports drained while leaving the release in Maintenance.
+  Explicit end then allows a new node with fresh local storage to clone exact Git
+  and LFS contents. Normal SIGTERM shutdown also succeeds.
+- The same run retains the earlier coverage: eight repositories across two HTTPS
+  peers, anonymous visibility/revocation, Git/LFS, collaboration and permissions,
+  replay after lost replies, large tree/commit/tag SQLite chunks, a 256-file history
+  and 300 additional refs through restart, disk loss and takeover.
+
+Recovery requires a node signing key and local workspace, but no Git token or
+HTTP listener. The begin/status/end commands still require neither node secrets
+nor local runtime startup. Diagnostics use stderr; successful administration
+commands emit one JSON status object on stdout.
+
+The new source implements actual recovery coordination and shares acquisition
+and settled-control policy with the existing service. It adds no schema, dependency
+or lockfile changes. The RustFS fixture uses bounded Docker tmpfs; it is process
+recovery evidence, not provider disk/power-loss qualification. Full claim,
+publication and long-restore lease fault coverage remains open, alongside backup,
+restore to an isolated destination, retention/GC, upgrades and production capacity.
+Gates 1 and 8 remain partial.

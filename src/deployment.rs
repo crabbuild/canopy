@@ -11,6 +11,9 @@ use cellule_store::Store;
 use object_store::path::Path;
 use serde::Serialize;
 
+mod recovery;
+pub use recovery::RecoveryConfig;
+
 /// Application-wide admission shared by nodes and offline administration.
 #[derive(Clone)]
 pub struct Deployment {
@@ -21,6 +24,7 @@ pub struct Deployment {
     nodes: NodeDirectory,
     registry: Arc<Registry>,
     image: String,
+    image_digest: Digest,
 }
 
 /// A current release observation with conservative fleet drain evidence.
@@ -55,6 +59,7 @@ impl Deployment {
             identity,
             registry,
             image: format!("sha256:{}", hex::encode(image.as_bytes())),
+            image_digest: image,
         })
     }
 
@@ -142,6 +147,16 @@ impl Deployment {
         Ok(())
     }
 
+    async fn require_maintenance(&self, operation: RequestId) -> Result<()> {
+        self.identities.layout(self.identity).await?;
+        let record = self.record().await?;
+        self.require_compiled(&record).await?;
+        if record.state() != ReleaseState::Maintenance || record.operation() != operation {
+            return Err(Error::Release("exact maintenance operation is not active"));
+        }
+        Ok(())
+    }
+
     async fn record(&self) -> Result<ReleaseRecord> {
         Ok(self
             .releases
@@ -211,12 +226,7 @@ impl Deployment {
             while let Some(page) = scan.next_page().await? {
                 for proof in page.entries() {
                     let control = authority.load(proof.entry().cell()).await?;
-                    let settled = control.is_some_and(|c| {
-                        let c = c.value();
-                        c.owner.is_none()
-                            && (c.state == ControlState::Tombstoned
-                                || c.state == ControlState::Idle && c.root.is_some())
-                    });
+                    let settled = control.is_some_and(|c| settled(c.value()));
                     if !settled {
                         unsettled_cells += 1;
                     }
@@ -258,6 +268,12 @@ impl Deployment {
             .complete_maintenance(record.revision(), operation)
             .await
     }
+}
+
+fn settled(control: &cellule_runtime::Control) -> bool {
+    control.owner.is_none()
+        && (control.state == ControlState::Tombstoned
+            || control.state == ControlState::Idle && control.root.is_some())
 }
 
 #[cfg(test)]

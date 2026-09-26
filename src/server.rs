@@ -45,14 +45,14 @@ mod lifecycle;
 pub(crate) mod peer;
 mod residency;
 mod tokens;
-mod workspace;
+pub(crate) mod workspace;
 
 use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
 
 const RESIDENT_REPOSITORIES: usize = 3;
-const LEASE_MS: i64 = 10_000;
-const RENEW_INTERVAL: Duration = Duration::from_secs(3);
+pub(crate) const LEASE_MS: i64 = 10_000;
+pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -596,12 +596,12 @@ async fn renew_lease(
     }
 }
 
-struct SqlCellSpec<'a> {
-    target: &'a CellTarget,
-    module: &'static str,
-    schema: &'static str,
-    max_database_bytes: u64,
-    destination: PathBuf,
+pub(crate) struct SqlCellSpec<'a> {
+    pub(crate) target: &'a CellTarget,
+    pub(crate) module: &'static str,
+    pub(crate) schema: &'static str,
+    pub(crate) max_database_bytes: u64,
+    pub(crate) destination: PathBuf,
 }
 
 async fn acquire_sql_cell(
@@ -612,16 +612,10 @@ async fn acquire_sql_cell(
     session: SessionId,
     endpoint: &str,
 ) -> Result<cellule_runtime::CellHandle, ServerError> {
-    let SqlCellSpec {
-        target,
-        module,
-        schema,
-        max_database_bytes,
-        destination,
-    } = spec;
+    let target = spec.target;
     let registry = node.application().registry();
     let code = registry
-        .module_code(module)
+        .module_code(spec.module)
         .ok_or(ServerError::Repository("SQL module is absent"))?;
     let catalog = CellCatalog::new(layout.clone(), target.tenant());
     let releases = ReleaseStore::new(
@@ -635,6 +629,25 @@ async fn acquire_sql_cell(
             CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
         )
         .await?;
+    acquire_provisioned_sql_cell(node, layout, directory, spec, session, endpoint, proof).await
+}
+
+pub(crate) async fn acquire_provisioned_sql_cell(
+    node: &CellNode,
+    layout: &CellStorageLayout,
+    directory: &NodeDirectory,
+    spec: SqlCellSpec<'_>,
+    session: SessionId,
+    endpoint: &str,
+    proof: cellule_runtime::CatalogProof,
+) -> Result<cellule_runtime::CellHandle, ServerError> {
+    let SqlCellSpec {
+        target,
+        module: _,
+        schema,
+        max_database_bytes,
+        destination,
+    } = spec;
     let authority = CellAuthority::new(layout.clone());
     let owner = Owner {
         session,
@@ -729,7 +742,7 @@ async fn acquire_sql_cell(
     }
 }
 
-fn unix_now_ms() -> Result<i64, ServerError> {
+pub(crate) fn unix_now_ms() -> Result<i64, ServerError> {
     i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

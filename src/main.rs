@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use canopy_server::{
     CanopyApplication, build_descriptor,
-    deployment::Deployment,
+    deployment::{Deployment, RecoveryConfig},
     server::{CanopyServer, ServerConfig, ServerError},
 };
 use cellule_app::CellApplication;
@@ -34,7 +34,7 @@ struct FileConfig {
 #[derive(Debug, Error)]
 enum StartupError {
     #[error(
-        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|end <operation-uuid>"
+        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid>"
     )]
     Usage,
     #[error("cannot read configuration")]
@@ -62,6 +62,7 @@ enum StartupError {
 #[tokio::main]
 async fn main() -> Result<(), StartupError> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let mut args = std::env::args_os();
@@ -88,9 +89,7 @@ async fn main() -> Result<(), StartupError> {
     if token.is_empty() {
         return Err(StartupError::MissingSecret("CANOPY_GIT_TOKEN"));
     }
-    let signing_key = std::env::var("CANOPY_NODE_SIGNING_KEY_HEX")
-        .map_err(|_| StartupError::MissingSecret("CANOPY_NODE_SIGNING_KEY_HEX"))?;
-    let signing_key = SigningKey::from_bytes(&decode_fixed(&signing_key)?);
+    let signing_key = signing_key()?;
     let provider = build_url_object_store(&file.storage_url)?;
     let config = ServerConfig {
         tenant: TenantId::from_bytes(Uuid::parse_str(&file.tenant_id)?.into_bytes()),
@@ -137,6 +136,12 @@ fn decode_fixed(value: &str) -> Result<[u8; 32], StartupError> {
         .map_err(|_| StartupError::Length)
 }
 
+fn signing_key() -> Result<SigningKey, StartupError> {
+    let value = std::env::var("CANOPY_NODE_SIGNING_KEY_HEX")
+        .map_err(|_| StartupError::MissingSecret("CANOPY_NODE_SIGNING_KEY_HEX"))?;
+    Ok(SigningKey::from_bytes(&decode_fixed(&value)?))
+}
+
 async fn maintenance(
     file: FileConfig,
     action: std::ffi::OsString,
@@ -144,7 +149,7 @@ async fn maintenance(
 ) -> Result<(), StartupError> {
     let operation = match (action.to_str(), operation) {
         (Some("status"), None) => None,
-        (Some("begin" | "end"), Some(value)) => Some(RequestId::from_bytes(
+        (Some("begin" | "recover" | "end"), Some(value)) => Some(RequestId::from_bytes(
             Uuid::parse_str(value.to_str().ok_or(StartupError::Usage)?)?.into_bytes(),
         )),
         _ => return Err(StartupError::Usage),
@@ -174,6 +179,16 @@ async fn maintenance(
     match (action.to_str(), operation) {
         (Some("begin"), Some(operation)) => {
             deployment.begin_maintenance(operation).await?;
+        }
+        (Some("recover"), Some(operation)) => {
+            let config = RecoveryConfig {
+                node: NodeId::from_bytes(Uuid::parse_str(&file.node_id)?.into_bytes()),
+                signing_key: signing_key()?,
+                endpoint: file.peer_endpoint,
+                data_dir: file.data_dir,
+                local_disk_limit_bytes: file.local_disk_limit_bytes,
+            };
+            deployment.recover_maintenance(operation, config).await?;
         }
         (Some("end"), Some(operation)) => {
             deployment.end_maintenance(operation, now()?).await?;

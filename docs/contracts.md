@@ -1711,7 +1711,10 @@ to check the descriptor and Ready/activation contract before and after catalog
 publication. The release watcher shares the three-second lease-renewal loop.
 Missing, unreadable, non-Ready or mismatched release selection closes HTTP
 readiness and requests the existing supervised shutdown. Accepted work can drain;
-lease renewal continues until SQL workers close and exact advertisements withdraw.
+lease renewal continues while accepted HTTP work drains. Final CellNode shutdown
+cancels its task group and applies runtime lease fencing while closing SQL;
+advertisement withdrawal follows the shutdown attempt. Unsettled controls still
+prevent maintenance completion if that attempt fails.
 The executable observes supervisor completion as well as OS stop signals.
 
 Maintenance administration prepares the same compiled descriptor and enters
@@ -1741,11 +1744,55 @@ admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
 there is no fallback to an unregistered release.
 
-This does not implement an upgrade controller or force maintenance recovery.
-A node killed before releasing its Cells is conservatively unfinished. Backup
-remains separate work: Cellule `BackupPinStore::create` validates a Ready release
+This does not implement an upgrade controller or force resume. A node killed
+before releasing its Cells remains unfinished until fenced recovery completes.
+Backup remains separate work: Cellule `BackupPinStore::create` validates a Ready release
 and requires participation in maintenance drain, while its restore covers only
 runtime objects. Canopy still needs a backup coordinator enrolled through capture,
 external blob/LFS manifests and copies, operation retention, destination fencing,
 and verified restores from an isolated backup. Maintenance alone is not backup
 or recovery proof.
+
+
+## Recovering interrupted maintenance
+
+`Deployment::recover_maintenance` requires the exact active Maintenance operation
+and compiled release before opening its workspace, again after enrollment, and
+before each Cell. Its short-lived signed node has a ten-second lease, refreshed
+every three seconds while recovery runs. The worker has no HTTP listener, uses
+one SQLite worker slot, and restores into disk-accounted local scratch protected
+by the same process/worker exclusion as a serving node.
+
+The worker first enumerates advertised sessions and calls the pinned runtime's
+`NodeDirectory::claim_expired_for_takeover` for each other session. That API
+validates the live claimant, fences the exact expired advertisement with ETag
+CAS, and refuses active follower logs. It also handles a node that died before
+acquiring any Cells. Existing tombstones are retained; competing, unexpired
+recovery claims remain conflicts rather than being overwritten.
+
+A bounded scan of the catalog then skips already settled controls. Each remaining
+entry must match a known Canopy namespace and the current registry descriptor.
+Missing controls bootstrap from the published catalog proof. Unpublished owners
+use `takeover_unpublished`; published owners use `takeover_restored`, which verifies
+the authority-pinned root and materializes attached recovery through Cellule.
+The same acquisition implementation serves normal node startup and maintenance;
+only normal acquisition provisions new catalog entries through release admission.
+Recovery consumes existing catalog proofs and does not bypass a Ready gate to
+serve user requests.
+
+Each acquired handle drains before its local restore directory is removed.
+The supervisor completes node shutdown before withdrawing the recovery worker's
+advertisement. Caller cancellation does not cancel that supervisor. Failed drain
+keeps local exclusion until process exit, and errors are logged even if the caller
+has disappeared. A killed recovery worker itself leaves an expired enrollment
+and/or unfinished controls for another enrolled worker to fence after the relevant
+lease/claim expires. No TTL alone means a writer is closed.
+
+Recovery does not call maintenance end. An acquisition or root verification error
+is returned without changing the release to Ready. `drained` describes writer
+closure, not data integrity: it is not an fsck or backup-verification result, and
+operators must resolve a reported restoration error before resuming. CLI logs go
+to stderr so successful administration output remains a single JSON status object.
+
+Crash qualification at every individual publication/claim boundary, long restore
+lease failures and production-store power loss remain part of the fault matrix.

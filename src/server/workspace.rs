@@ -10,14 +10,14 @@ use std::{
 const MARKER: &str = ".canopy-runtime";
 const FORMAT: &[u8] = b"canopy-runtime-v1\n";
 
-pub(super) struct Workspace {
+pub(crate) struct Workspace {
     root: PathBuf,
     owner: Option<File>,
     requires_drain: AtomicBool,
 }
 
 impl Workspace {
-    pub(super) fn open(directory: &Path) -> io::Result<Self> {
+    pub(crate) fn open(directory: &Path) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         let directory = fs::canonicalize(directory)?;
         let owner = crate::native_git::lock_file(&directory.join(".canopy-owner.lock"))?;
@@ -80,15 +80,15 @@ impl Workspace {
         })
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.root
     }
 
-    pub(super) fn require_drain(&self) {
+    pub(crate) fn require_drain(&self) {
         self.requires_drain.store(true, Ordering::Release);
     }
 
-    pub(super) fn confirm_drained(&self) {
+    pub(crate) fn confirm_drained(&self) {
         self.requires_drain.store(false, Ordering::Release);
     }
 }

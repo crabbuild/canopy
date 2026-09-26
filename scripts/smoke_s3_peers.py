@@ -141,8 +141,10 @@ def qualify(binary, directory, settings, processes):
             arguments = [str(binary), "maintenance", str(configuration), action]
             if operation_id is not None:
                 arguments.append(operation_id)
-            environment = {key: value for key, value in os.environ.items()
-                           if key not in ("CANOPY_GIT_TOKEN", "CANOPY_NODE_SIGNING_KEY_HEX")}
+            excluded = {"CANOPY_GIT_TOKEN"}
+            if action != "recover":
+                excluded.add("CANOPY_NODE_SIGNING_KEY_HEX")
+            environment = {key: value for key, value in os.environ.items() if key not in excluded}
             result = subprocess.run(arguments, check=True, capture_output=True, env=environment)
             return json.loads(result.stdout)
         assert maintenance("begin", operation)["release"]["state"] == "maintenance"
@@ -156,8 +158,32 @@ def qualify(binary, directory, settings, processes):
         processes.append(restored)
         clone_and_verify(f"{restored_url}/canopy/{public_name}.git", directory / "maintenance-resume",
                          public_oid, public_readme, public_lfs)
-        restored.send_signal(signal.SIGTERM)
-        restored.wait(timeout=30)
-        assert restored.returncode == 0
         print("PASS: CLI maintenance drains the surviving process, proves closed writers, and resumes the same Git/LFS repository without node secrets", flush=True)
+        interrupted_operation = str(uuid.uuid4())
+        restored.send_signal(signal.SIGSTOP)
+        assert maintenance("begin", interrupted_operation)["release"]["state"] == "maintenance"
+        restored.kill()
+        restored.wait(timeout=30)
+        interrupted = maintenance("status")
+        assert not interrupted["drained"] and interrupted["unsettled_cells"] > 0
+        try:
+            maintenance("end", interrupted_operation)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            raise AssertionError("maintenance resumed before crashed-owner recovery")
+        time.sleep(11)  # Node lease is 10 seconds; expiry still requires a fencing CAS.
+        recovered = maintenance("recover", interrupted_operation)
+        assert recovered["drained"] and recovered["release"]["state"] == "maintenance"
+        assert maintenance("end", interrupted_operation)["release"]["state"] == "ready"
+        final_node, final_url = start(binary, directory,
+            {**settings, "node_id": str(uuid.uuid4()), "peer_endpoint": peer_b},
+            "peer-recovered", listen_address=b)
+        processes.append(final_node)
+        clone_and_verify(f"{final_url}/canopy/{public_name}.git", directory / "maintenance-recovered",
+                         public_oid, public_readme, public_lfs)
+        final_node.send_signal(signal.SIGTERM)
+        final_node.wait(timeout=30)
+        assert final_node.returncode == 0
+        print("PASS: SIGKILL during maintenance leaves resume blocked; enrolled recovery fences the expired owner, restores and releases Cells, and fresh Git/LFS clone matches", flush=True)
         print("PASS: two live HTTPS nodes serve eight Git/LFS repositories beyond resident capacity through opposite Cell owners; survivor restores Directory and repository after SIGKILL without restarting", flush=True)

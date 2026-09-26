@@ -336,3 +336,93 @@ async fn maintenance_waits_for_confirmed_cell_release() -> Result {
     deployment.end_maintenance(operation, now).await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() -> Result {
+    use canopy_server::{
+        CanopyApplication, RepositoryModule, build_descriptor,
+        deployment::{Deployment, RecoveryConfig},
+        repository_target,
+    };
+    use cellule_app::CellApplication;
+    use cellule_runtime::{
+        ApplicationIdentity, CatalogEntry, CatalogRole, CellCatalog, CellModule, CellStorageLayout,
+        RequestId,
+    };
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let settings = config(available_address().await?, files.path().join("original"));
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let deployment = Deployment::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        ApplicationIdentity::new(settings.tenant, settings.application),
+        settings.fleet,
+        settings.image,
+        application.registry(),
+    )?;
+    let layout = CellStorageLayout::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        *settings.application.as_bytes(),
+    );
+    let catalog = CellCatalog::new(layout, settings.tenant);
+    let target = repository_target(
+        settings.tenant,
+        settings.application,
+        uuid::Uuid::new_v4().into_bytes(),
+    )?;
+    let worker_data = files.path().join("recovery");
+    let recovery = RecoveryConfig {
+        node: settings.node,
+        signing_key: settings.signing_key.clone(),
+        endpoint: settings.peer_endpoint.clone(),
+        data_dir: worker_data.clone(),
+        local_disk_limit_bytes: settings.local_disk_limit_bytes,
+    };
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    server.shutdown().await?;
+    catalog
+        .provision(CatalogEntry::new(
+            &target,
+            CatalogRole::Sql,
+            application
+                .registry()
+                .module_code(RepositoryModule::NAME)
+                .ok_or("missing module")?,
+            1,
+        )?)
+        .await?;
+    let operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
+    deployment.begin_maintenance(operation).await?;
+    store.arm(ControlState::Recovering);
+    let worker = deployment.clone();
+    let pending =
+        tokio::spawn(async move { worker.recover_maintenance(operation, recovery).await });
+    store.wait().await?;
+    pending.abort();
+    assert!(pending.await.is_err_and(|error| error.is_cancelled()));
+    assert!(matches!(
+        workspace_lock(&worker_data)?.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    let now = || -> Result<i64> {
+        Ok(i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?)
+    };
+    let status = deployment.status(now()?).await?;
+    assert_eq!(status.advertised_sessions, 1);
+    assert!(!status.drained);
+    assert!(deployment.end_maintenance(operation, now()?).await.is_err());
+    store.proceed.notify_one();
+    wait_for_cleanup(&worker_data).await?;
+    assert!(deployment.status(now()?).await?.drained);
+    deployment.end_maintenance(operation, now()?).await?;
+    Ok(())
+}
