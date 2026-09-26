@@ -220,6 +220,7 @@ dependencies = [
  "flate2",
  "futures-core",
  "hex",
+ "http-body",
  "libc",
  "object_store",
  "reqwest 0.12.28",

@@ -11,7 +11,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tower::ServiceExt;
 
 use crate::{
     directory::{
@@ -495,13 +494,9 @@ async fn dispatch_repository(
             parts.extensions = axum::http::Extensions::new();
             parts.extensions.insert(principal);
             let request = Request::from_parts(parts, body);
-            match route.router.oneshot(request).await {
-                Ok(response) => {
-                    tracing::debug!(owner, name, status = %response.status(), "repository response completed");
-                    response
-                }
-                Err(error) => match error {},
-            }
+            let response = route.dispatch(request).await;
+            tracing::debug!(owner, name, status = %response.status(), "repository response completed");
+            response
         }
         Ok(None) => plain(StatusCode::NOT_FOUND, "Repository does not exist"),
         Err(error) => {

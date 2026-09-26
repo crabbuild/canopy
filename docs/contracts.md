@@ -16,6 +16,7 @@ before admitting persistent customer repositories.
 | Repository access | immutable owner identity plus collaborator role (`read`, `write`); only owner has repository admin access | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
+| Local residency | one pinned Directory Cell plus at most three Repository Cells; inactive repositories release ownership before their slot is reused | Repository manager and Cellule transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Object publication | at most 128 records and 768 KiB aggregate inline bytes per atomic command | `PutObjects`, operation 5, codec 1 |
@@ -123,6 +124,32 @@ The Directory Cell authenticates token digests; each Repository Cell authorizes
 its own Git and LFS access. Repeated bootstrap requires the same owner token.
 Account disablement, token rotation/revocation, collaborator-visible listing
 and audit records remain open.
+
+Repository residency is bounded independently of the number of directory
+entries. A request pins its loaded repository before using its Cell or Git/LFS
+router. That pin lasts through request processing and the complete response
+body, including trailers; EOF, body errors and disconnects release it. Membership
+changes and repository initialization also retain their route while using it.
+The Directory Cell stays resident for authentication and routing.
+
+When all repository slots are occupied, the manager selects the least recently
+used unpinned repository among Cellule's settled transfer candidates. It calls
+`release_idle_cell` with the exact Cell generation and current node session.
+Cellule rechecks obligations and admission, closes SQLite and confirms durable
+owner release before returning success. Only then does Canopy drop its cached
+handles and remove that repository's local SQLite directory. Existing Git
+subprocesses separately retain their cache generation until their work ends.
+External objects and durable Cell state remain intact. Later access acquires
+the idle Cell from its published root and rebuilds the disposable Git cache.
+
+If every repository is pinned or the runtime refuses release, the new request
+returns 503 without evicting active work. Failed or ambiguous release retains
+local state; recovery from release faults still needs qualification. Acquisition
+and release run in tracked tasks so a client disconnect cannot interrupt their
+local lifecycle update. Graceful shutdown waits for those tasks before draining
+the Cell node. Owner initialization retains an acquired entry on failure and
+retries its idempotent setup on later access. The residency bound does not yet
+account Git cache bytes or establish throughput for a larger concurrent hot set.
 
 Token scope is checked at request admission. Repository write access is also
 checked in the ref or LFS metadata transaction, so an intervening collaborator

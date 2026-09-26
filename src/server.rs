@@ -7,7 +7,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use axum::Router;
 use cellule_app::CellApplication;
 use cellule_host::{CellNode, CellNodeBuilder};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits, LtxError};
@@ -23,21 +22,24 @@ use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
 use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
-    build_descriptor,
+    CanopyApplication, build_descriptor,
     directory::{
         self, CreateAccountOutcome, DirectoryCell, DirectoryModule, Principal, RenameOutcome,
         RepositoryEntry, RepositoryState, TokenScope,
     },
-    git_gateway::GitGateway,
-    http::{self, GitHttpApi},
+    http,
     repository_http::RepositoryHttp,
-    repository_target,
 };
 
+mod residency;
+
+use residency::LoadedRepository;
+pub(crate) use residency::RepositoryRoute;
+
+const RESIDENT_REPOSITORIES: usize = 3;
 const LEASE_MS: i64 = 10_000;
 const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -124,6 +126,7 @@ pub struct CanopyServer {
     stop: CancellationToken,
     ingress_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
+    transitions: TaskTracker,
     _local: tempfile::TempDir,
 }
 
@@ -143,18 +146,7 @@ pub(crate) struct RepositoryManager {
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
-}
-
-struct LoadedRepository {
-    repository: Arc<RepositoryCell>,
-    gateway: Arc<GitGateway>,
-    name: String,
-    router: Router,
-}
-
-pub(crate) struct RepositoryRoute {
-    pub(crate) repository: Arc<RepositoryCell>,
-    pub(crate) router: Router,
+    transitions: TaskTracker,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -189,8 +181,10 @@ impl RepositoryManager {
             .output)
     }
 
-    pub(crate) async fn create(&self, name: &str) -> Result<RepositoryEntry, ServerError> {
-        let mut loaded = self.loaded.lock().await;
+    pub(crate) async fn create(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<RepositoryEntry, ServerError> {
         let reserved = self
             .directory
             .reserve(
@@ -201,7 +195,7 @@ impl RepositoryManager {
             )
             .await?
             .output;
-        let _ = self.load(&reserved, &mut loaded).await?;
+        let _route = self.load(reserved.clone()).await?;
         if reserved.state == RepositoryState::Ready {
             return Ok(reserved);
         }
@@ -213,7 +207,7 @@ impl RepositoryManager {
     }
 
     pub(crate) async fn resolve(
-        &self,
+        self: &Arc<Self>,
         owner: &str,
         name: &str,
     ) -> Result<Option<RepositoryRoute>, ServerError> {
@@ -226,12 +220,11 @@ impl RepositoryManager {
         if entry.state != RepositoryState::Ready {
             return Ok(None);
         }
-        let mut loaded = self.loaded.lock().await;
-        Ok(Some(self.load(&entry, &mut loaded).await?))
+        Ok(Some(self.load(entry).await?))
     }
 
     pub(crate) async fn update_member(
-        &self,
+        self: &Arc<Self>,
         name: &str,
         actor: &str,
         account: &str,
@@ -303,85 +296,6 @@ impl RepositoryManager {
             next,
         ))
     }
-
-    async fn load(
-        &self,
-        entry: &RepositoryEntry,
-        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
-    ) -> Result<RepositoryRoute, ServerError> {
-        if let Some(existing) = loaded.get_mut(&entry.repository_id) {
-            if existing.name != entry.name {
-                existing.router = self.router_for(entry, Arc::clone(&existing.gateway))?;
-                existing.name.clone_from(&entry.name);
-            }
-            return Ok(RepositoryRoute {
-                repository: Arc::clone(&existing.repository),
-                router: existing.router.clone(),
-            });
-        }
-        let target = repository_target(self.tenant, self.application, entry.repository_id)?;
-        let handle = acquire_sql_cell(
-            &self.node,
-            &self.layout,
-            &self.node_directory,
-            SqlCellSpec {
-                target: &target,
-                module: RepositoryModule::NAME,
-                schema: include_str!("schema.sql"),
-                max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
-                destination: self
-                    .local_root
-                    .join(format!("{}.sqlite", hex::encode(entry.repository_id))),
-            },
-            self.session,
-            &self.endpoint,
-        )
-        .await?;
-        let application_handle = self.node.application_handle::<CanopyApplication>(
-            CellClient::local(self.node.application().registry(), handle),
-            self.tenant,
-            self.application,
-        );
-        let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
-        repository
-            .ensure_owner(mutation_identity()?, &entry.owner)
-            .await?;
-        let gateway = Arc::new(GitGateway::new(
-            Arc::clone(&repository),
-            self.local_root.clone(),
-            Arc::clone(&self.external_store),
-            self.disk_budget.clone(),
-        ));
-        let router = self.router_for(entry, Arc::clone(&gateway))?;
-        loaded.insert(
-            entry.repository_id,
-            LoadedRepository {
-                gateway,
-                repository: Arc::clone(&repository),
-                name: entry.name.clone(),
-                router: router.clone(),
-            },
-        );
-        Ok(RepositoryRoute { repository, router })
-    }
-
-    fn router_for(
-        &self,
-        entry: &RepositoryEntry,
-        gateway: Arc<GitGateway>,
-    ) -> Result<Router, ServerError> {
-        Ok(Arc::new(
-            GitHttpApi::new(
-                gateway,
-                self.owner.clone(),
-                &entry.name,
-                &self.public_url,
-                Arc::clone(&self.ready),
-            )
-            .map_err(ServerError::Http)?,
-        )
-        .router())
-    }
 }
 
 impl CanopyServer {
@@ -447,7 +361,10 @@ impl CanopyServer {
         let disk_budget = DiskBudget::new(config.local_disk_limit_bytes);
         let node = Arc::new(
             CellNodeBuilder::new(Arc::clone(&application))
-                .with_runtime(SqlWorkerPool::new(1, 4)?, 64 * 1024 * 1024)
+                .with_runtime(
+                    SqlWorkerPool::new(1, RESIDENT_REPOSITORIES + 1)?,
+                    64 * 1024 * 1024,
+                )
                 .with_replica_host(Host::default().with_local_disk_budget(disk_budget.clone()))
                 .with_session(session)
                 .build()?,
@@ -457,6 +374,7 @@ impl CanopyServer {
         node.require_storage_capabilities(&probe)?;
         let observed = directory.create(identity.sign(1, now_ms)?, now_ms).await?;
         let advertisement = Arc::new(Mutex::new(observed));
+        let transitions = TaskTracker::new();
         let startup = async {
             let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
             node.install_node_lease_for_startup(guard.clone())?;
@@ -535,6 +453,7 @@ impl CanopyServer {
                 public_url: config.public_url,
                 ready,
                 loaded: Mutex::new(HashMap::new()),
+                transitions: transitions.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager));
             Ok::<_, ServerError>(api)
@@ -564,6 +483,7 @@ impl CanopyServer {
             stop,
             ingress_stop,
             serving,
+            transitions,
             _local: local,
         })
     }
@@ -577,6 +497,8 @@ impl CanopyServer {
     pub async fn shutdown(self) -> Result<(), ServerError> {
         self.ingress_stop.cancel();
         let serving = self.serving.await;
+        self.transitions.close();
+        self.transitions.wait().await;
         let drained = self.node.shutdown().await;
         self.stop.cancel();
         let observed = self.advertisement.lock().await;

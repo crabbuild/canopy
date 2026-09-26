@@ -6,6 +6,9 @@ use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command};
 
+#[path = "multi_server/residency.rs"]
+mod residency;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn leased_server_recovers_two_repositories_with_git_and_lfs()
 -> Result<(), Box<dyn std::error::Error>> {

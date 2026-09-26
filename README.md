@@ -50,9 +50,11 @@ as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
 transfers and individual external Git blobs remain capped at 64 MiB.
-Local recovery currently admits a 512 MiB SQLite database. The node admits four
-active Cells (one directory and three repositories); resident Cell eviction
-remains to be implemented. There is no
+Local recovery currently admits a 512 MiB SQLite database. The node keeps the
+Directory Cell and up to three Repository Cells resident. Additional repositories
+evict an inactive repository and restore from durable state when accessed again.
+Requests and streamed responses pin their repository; admission returns 503 when
+no repository can be safely released. There is no
 account lifecycle API, organization model, collaborator-visible repository
 listing, multi-node routing, backup, repository browser, issue or pull request
 API, or production capacity evidence. `Cargo.toml` pins Cellule to a specific
@@ -157,8 +159,9 @@ pack larger than 64 MiB, reproduce both file hashes and pass `git fsck`. This is
 a transfer-size qualification; it does not establish production capacity.
 
 Add `--many-objects 256` to qualify a 256-file initial push, a one-file update
-with an annotated tag, and a verified clone after takeover. Run this separately
-from `--large-clone` while the node has a four-Cell admission limit. For local
-container stores, place data and logs on the mounted workspace and verify free
+with an annotated tag, and a verified clone after takeover. Combine it with
+`--large-clone` to exercise four repositories through resident eviction and
+verify Git/LFS recovery on the same node before restart. For local container
+stores, place data and logs on the mounted workspace and verify free
 inodes as well as bytes before qualification. A full container filesystem can
 turn storage publications into unresolved mutations even with free byte space.

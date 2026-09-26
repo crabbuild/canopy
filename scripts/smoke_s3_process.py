@@ -423,6 +423,10 @@ def main():
             clone_and_verify(url, directory / "reader-live", oid, b"Canopy process smoke\n", lfs_body, reader_token)
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
+            if large is not None and many is not None:
+                clone_and_verify(f"{base_url}/canopy/other.git", directory / "evicted-other", other_oid, other_readme)
+                clone_and_verify(url, directory / "evicted-renamed", oid, b"Canopy process smoke\n", lfs_body)
+                print("PASS: four repository Cells restored Git/LFS through resident eviction on one node", flush=True)
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             if first.returncode:

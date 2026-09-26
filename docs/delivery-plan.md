@@ -33,10 +33,11 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Account bare-cache disk usage and add resident Cell eviction. The current
-   SQL worker admits four active Cells total: the directory plus three
-   repositories. A fourth
-   repository currently returns 503; this is not a service capacity target.
+2. Account bare-cache disk usage and qualify residency under faults and larger
+   hot sets. The current SQL worker admits four active Cells total: the
+   directory plus three repositories. Inactive repositories now release their
+   Cell and reload on demand; admission returns 503 when no repository is safe
+   to evict. The resident limit is not a production capacity target.
    Requests now spool under shared disk admission, CGI reads stream through a
    bounded queue, and ingest uses incremental enumeration plus a persistent Git
    batch reader. Bounded object batches now share a Cell publication receipt,
@@ -125,8 +126,9 @@ unresolved Cell mutations. Moving test data to the mounted workspace allowed
 the many-object test to pass. A separate large-transfer attempt observed Cell
 fencing under concurrent host load; lease/storage fault qualification remains
 open. Canopy must continue to fail closed when a mutation lacks durable proof.
-Run `--many-objects 256` and `--large-clone` separately until resident Cell
-admission/eviction supports both extra fixture repositories in one process.
+That build required separate `--many-objects 256` and `--large-clone` runs.
+The residency build below supports combining both extra fixture repositories
+in one process.
 
 ## Atomic object batch qualification
 
@@ -161,3 +163,51 @@ HTTP and owner-restart integration tests, formatting, Clippy and the binary
 build pass. No dependency or schema migration was introduced. The old
 single-object publication APIs were removed; `PutObjects` owns validation and
 publication for the canonical path.
+
+## Repository residency qualification
+
+The node now retains the Directory Cell and at most three Repository Cells.
+Requests pin their repository, including streamed replies. On a cold admission,
+the least recently used unpinned, settled repository releases its exact Cell
+generation through Cellule. Canopy waits for worker closure and authoritative
+owner release before dropping cached handles and deleting local SQLite files.
+Acquisition and release are tracked through client cancellation and graceful
+shutdown. This removes the previous three-repository lifetime ceiling without
+increasing the resident worker limit.
+
+The focused multi-server tests publish six distinct repositories, check each
+released Cell's `Idle` state and absent owner, verify its local SQLite directory
+was removed, and clone all six through repeated same-node restoration. Stock
+Git and `git-lfs` reproduce each commit OID, ordinary file and LFS body; each
+clone passes `git fsck`. Three paused LFS uploads prevent a fourth admission
+(503); disconnecting one permits admission while the other uploads complete
+and their bytes remain readable. Body tests verify pin lifetime through data,
+trailers and disconnect. The existing account, ACL, rename and restart test
+also passes, as do Clippy, formatting and the binary build.
+
+The RustFS process qualification now combines `--large-clone --many-objects 256`.
+Four repositories successfully cross the three-slot resident limit. Stock
+clients restore Git/LFS on the same owner, then repeat recovery after clean
+restart, owner death, lease expiry and local database loss. ACL revocation,
+mixed/atomic ref outcomes and exact replay of a dropped push reply pass.
+
+| Action | Observed debug-build time |
+| --- | --- |
+| One push containing two 40 MiB random blobs | 20.88 seconds |
+| Initial 256-file push | 1.64 seconds |
+| One-file update and annotated tag | 2.43 seconds |
+| v0 clone and verification, cold after takeover | 32.59 seconds |
+| v2 clone and verification, warm | 5.70 seconds |
+| 256-file clone and verification after takeover | 1.37 seconds |
+
+Each large clone restored an 83,912,145-byte pack with matching hashes and a
+clean `git fsck`. Environment: Darwin arm64, Apple Git 2.50.1, RustFS
+`1.0.0-beta.8-glibc`, fresh provider data and logs on the mounted workspace.
+These are workload observations, not production throughput evidence. Cache
+byte accounting, a larger concurrent hot set, release/acquisition fault
+injection and multi-node routing remain open. Admission still serializes
+repository transitions; no production concurrency target is claimed.
+
+The only dependency change exposes the already locked `http-body` package as
+a direct dependency so the response wrapper can preserve data frames, trailers
+and size hints. No package version or checksum changed.
