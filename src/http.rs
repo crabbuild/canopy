@@ -405,6 +405,34 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         .get("Git-Protocol")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "version=2");
+    let push_id = if method == "POST" && suffix == "/git-receive-pack" {
+        let mut values = request.headers().get_all("Idempotency-Key").iter();
+        match (values.next(), values.next()) {
+            (None, None) => None,
+            (Some(value), None) => {
+                let parsed = value.to_str().ok().and_then(|text| {
+                    uuid::Uuid::parse_str(text)
+                        .ok()
+                        .filter(|id| id.to_string() == text)
+                });
+                let Some(id) = parsed else {
+                    return plain(
+                        StatusCode::BAD_REQUEST,
+                        "Idempotency-Key must be a canonical UUID",
+                    );
+                };
+                Some(id.into_bytes())
+            }
+            _ => {
+                return plain(
+                    StatusCode::BAD_REQUEST,
+                    "Only one Idempotency-Key is allowed",
+                );
+            }
+        }
+    } else {
+        None
+    };
     let Ok(body) = to_bytes(request.into_body(), MAX_HTTP_BODY_BYTES).await else {
         return plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large");
     };
@@ -421,6 +449,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
                 authenticated: true,
             },
             &principal.account,
+            push_id,
         )
         .await
     {
@@ -445,6 +474,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         Err(GatewayError::RefConflict) => {
             plain(StatusCode::CONFLICT, "Repository changed during push")
         }
+        Err(GatewayError::Push(crate::PushError::Conflict)) => plain(
+            StatusCode::CONFLICT,
+            "Push ID is bound to another request or account",
+        ),
         Err(GatewayError::ObjectTooLarge) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git object is too large")
         }

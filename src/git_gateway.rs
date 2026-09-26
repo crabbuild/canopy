@@ -24,6 +24,7 @@ use crate::{
     large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore, MAX_EXTERNAL_BLOB_BYTES},
     lfs::LfsService,
     object_id,
+    push::{PushCompletion, PushError},
 };
 
 type CellError = Box<dyn StdError + Send + Sync>;
@@ -48,6 +49,8 @@ pub enum GatewayError {
     RefConflict,
     #[error("authentication is required")]
     Unauthorized,
+    #[error("durable push response failed")]
+    Push(#[from] PushError),
     #[error("cache task failed")]
     Task(#[from] tokio::task::JoinError),
 }
@@ -104,6 +107,7 @@ impl GitGateway {
         &self,
         request: GitHttpRequest,
         actor: &str,
+        push_id: Option<[u8; 16]>,
     ) -> Result<GitHttpResponse, GatewayError> {
         if !request.authenticated {
             return Err(GatewayError::Unauthorized);
@@ -111,8 +115,16 @@ impl GitGateway {
         let is_push = request.method == "POST" && request.path_info == "/repo.git/git-receive-pack";
         if is_push {
             let _push = self.push.lock().await;
+            let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
+            let digest = request_digest(&request);
+            if let Some(response) = self.repository.begin_push(id, actor, digest).await? {
+                return Ok(with_push_id(
+                    self.repository.push_response(response).await?,
+                    id,
+                ));
+            }
             let cache = self.build_cache(self.cell_refs().await?).await?;
-            return self.handle_push(&cache, request, actor).await;
+            return self.handle_push(&cache, request, actor, id, digest).await;
         }
         let live_refs = self.cell_refs().await?;
         let cached = {
@@ -130,23 +142,35 @@ impl GitGateway {
         cached: &CachedRepository,
         request: GitHttpRequest,
         actor: &str,
+        id: [u8; 16],
+        digest: [u8; 32],
     ) -> Result<GitHttpResponse, GatewayError> {
         let before = cached.refs.clone();
         let response = cached.backend.run(request).await?;
-        if response.status != 200 {
-            return Ok(response);
-        }
         // Git may accept some refs and reject others unless atomic was requested.
         // Publish its actual changes before forwarding the unmodified per-ref report.
-        let after = git_refs(&cached.backend.git_dir()).await?;
-        let plan = diff_refs(&before, &after, actor);
-        if plan.updates.is_empty() {
-            return Ok(response);
-        }
-        self.persist_objects(&cached.backend).await?;
+        let plan = if response.status == 200 {
+            let after = git_refs(&cached.backend.git_dir()).await?;
+            let plan = diff_refs(&before, &after, actor);
+            if plan.updates.is_empty() {
+                None
+            } else {
+                self.persist_objects(&cached.backend).await?;
+                Some(plan)
+            }
+        } else {
+            None
+        };
+        let response_id = self.repository.stage_push_response(id, &response).await?;
         let result = self
             .repository
-            .finalize_push(new_identity()?, plan)
+            .complete_push(PushCompletion {
+                id,
+                actor: actor.into(),
+                digest,
+                response_id,
+                plan,
+            })
             .await
             .map_err(|error| match error {
                 cellule_runtime::InvocationError::Rejected(_) => GatewayError::RefConflict,
@@ -155,7 +179,10 @@ impl GitGateway {
         if !result.output {
             return Err(GatewayError::RefConflict);
         }
-        Ok(response)
+        Ok(with_push_id(
+            self.repository.completed_response(id).await?,
+            id,
+        ))
     }
 
     async fn build_cache(
@@ -320,6 +347,38 @@ impl GitGateway {
         }
         Ok(())
     }
+}
+
+fn request_digest(request: &GitHttpRequest) -> [u8; 32] {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"canopy-git-push-v1");
+    hash.update(&[
+        u8::from(request.protocol_v2),
+        u8::from(request.content_type.is_some()),
+    ]);
+    for field in [
+        request.method.as_bytes(),
+        request.path_info.as_bytes(),
+        request.query.as_bytes(),
+        request
+            .content_type
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+        &request.body,
+    ] {
+        hash.update(&(field.len() as u64).to_le_bytes());
+        hash.update(field);
+    }
+    *hash.finalize().as_bytes()
+}
+
+fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse {
+    response.headers.push((
+        "X-Canopy-Push-Id".into(),
+        uuid::Uuid::from_bytes(id).to_string(),
+    ));
+    response
 }
 
 fn write_loose_object(

@@ -166,23 +166,60 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             unsupported.status(),
             reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
-        let command = format!(
-            "{} {} refs/heads/bad-pack\0report-status side-band-64k\n",
-            "0".repeat(40),
-            "1".repeat(40)
-        );
-        let mut request = format!("{:04x}{command}0000", command.len() + 4).into_bytes();
+        let mut request = Vec::new();
+        for index in 0..8000 {
+            let capabilities = if index == 0 {
+                "\0report-status side-band-64k"
+            } else {
+                ""
+            };
+            let command = format!(
+                "{} {} refs/heads/bad-pack-{index:04}-{}{capabilities}\n",
+                "0".repeat(40),
+                "1".repeat(40),
+                "x".repeat(48)
+            );
+            request.extend_from_slice(format!("{:04x}{command}", command.len() + 4).as_bytes());
+        }
+        request.extend_from_slice(b"0000");
         request.extend_from_slice(b"not a pack!!");
+        let push_id = uuid::Uuid::new_v4().to_string();
         let response = client
             .post(format!("{url}/git-receive-pack"))
             .bearer_auth("local-test-token")
             .header("Content-Type", "application/x-git-receive-pack-request")
+            .header("Idempotency-Key", &push_id)
             .timeout(std::time::Duration::from_secs(5))
-            .body(request)
+            .body(request.clone())
             .send()
             .await?;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let report = response.bytes().await?;
+        assert!(report.len() > 512 * 1024);
+        let replay = client
+            .post(format!("{url}/git-receive-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "application/x-git-receive-pack-request")
+            .header("Idempotency-Key", &push_id)
+            .body(request)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        assert_eq!(replay, report);
+        assert_eq!(
+            client
+                .post(format!("{url}/git-receive-pack"))
+                .bearer_auth("local-test-token")
+                .header("Content-Type", "application/x-git-receive-pack-request")
+                .header("Idempotency-Key", &push_id)
+                .body(b"0000".to_vec())
+                .send()
+                .await?
+                .status(),
+            reqwest::StatusCode::CONFLICT
+        );
         assert!(
             report
                 .windows(b"ng refs/heads/bad-pack".len())
@@ -190,7 +227,10 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         );
         assert!(
             repository
-                .ref_state("refs/heads/bad-pack", None)
+                .ref_state(
+                    &format!("refs/heads/bad-pack-0000-{}", "x".repeat(48)),
+                    None
+                )
                 .await?
                 .output
                 .is_none()

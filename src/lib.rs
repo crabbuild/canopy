@@ -18,10 +18,12 @@ pub mod git_http;
 pub mod http;
 pub mod large_blob;
 pub mod lfs;
+mod push;
 mod refs;
 mod repository_http;
 pub mod server;
 
+pub use push::PushError;
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
@@ -29,7 +31,7 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation_with_codec(3, 3)];
+const COMMANDS: [OperationDescriptor; 3] = [operation(1), operation_with_codec(3, 3), operation(4)];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
 const fn operation(id: u32) -> OperationDescriptor {
@@ -133,6 +135,7 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("refs.rs"));
+                source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("lfs.rs"));
                 source.update(SCHEMA.as_bytes());
@@ -165,7 +168,8 @@ impl CellModule for RepositoryModule {
 
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
-        registry.bind_command::<FinalizePush>()
+        registry.bind_command::<FinalizePush>()?;
+        registry.bind_command::<push::CompletePush>()
     }
 }
 

@@ -198,88 +198,97 @@ impl Command for FinalizePush {
         context: &mut CommandContext<'_, '_>,
         plan: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
-        if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
-            return Ok(CommandResult::Rejected(false));
-        }
-        if validate_component(&plan.actor).is_err()
-            || !decode_access(&context.sql(&SqlBatch {
-                statements: vec![access_statement(&plan.actor)],
-            })?)?
-            .is_some_and(|level| level >= TokenScope::Write)
-        {
-            return Ok(CommandResult::Rejected(false));
-        }
-        for (index, update) in plan.updates.iter().enumerate() {
-            if !valid_ref_name(&update.name)
-                || update
-                    .expected
-                    .as_ref()
-                    .is_some_and(|old| old.version <= 0 || old.version == i64::MAX)
-                || plan.updates[..index]
-                    .iter()
-                    .any(|previous| previous.name == update.name)
-            {
-                return Ok(CommandResult::Rejected(false));
-            }
-            if update.new_oid.is_none()
-                && update.expected.as_ref().and_then(|old| old.oid).is_none()
-            {
-                return Ok(CommandResult::Rejected(false));
-            }
-            if let Some(new_oid) = update.new_oid
-                && !object_exists(context, new_oid)?
-            {
-                return Ok(CommandResult::Rejected(false));
-            }
-            if current_ref(context, &update.name)? != update.expected {
-                return Ok(CommandResult::Rejected(false));
-            }
-        }
-        for update in plan
-            .updates
-            .iter()
-            .filter(|update| update.new_oid.is_some())
-        {
-            if plan.updates.iter().any(|other| {
-                other.new_oid.is_some()
-                    && other.name != update.name
-                    && namespace_conflict(&other.name, &update.name)
-            }) || existing_namespace_conflict(context, &plan, &update.name)?
-            {
-                return Ok(CommandResult::Rejected(false));
-            }
-        }
-        for update in &plan.updates {
-            let result = match (&update.expected, update.new_oid) {
-                (None, Some(new_oid)) => context.sql(&SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "INSERT INTO refs (name, oid, version) VALUES (?1, ?2, 1)".into(),
-                        parameters: vec![
-                            SqlValue::Text(update.name.clone()),
-                            SqlValue::Blob(new_oid.to_vec()),
-                        ],
-                    }],
-                })?,
-                (Some(old), new_oid) => context.sql(&SqlBatch {
-                    statements: vec![SqlStatement {
-                        // Retain deleted names so recreation cannot reset a stale push's version.
-                        // The complete expected state was checked in this same transaction above.
-                        sql: "UPDATE refs SET oid = ?1, version = version + 1 WHERE name = ?2 AND version = ?3".into(),
-                        parameters: vec![
-                            new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
-                            SqlValue::Text(update.name.clone()),
-                            SqlValue::Integer(old.version),
-                        ],
-                    }],
-                })?,
-                (None, None) => return Err(Error::Command("empty ref mutation")),
-            };
-            if result.first().is_none_or(|set| set.rows_affected != 1) {
-                return Err(Error::Command("ref CAS changed no rows"));
-            }
-        }
-        Ok(CommandResult::Success(true))
+        Ok(if apply_push(context, &plan)? {
+            CommandResult::Success(true)
+        } else {
+            CommandResult::Rejected(false)
+        })
     }
+}
+
+pub(crate) fn apply_push(
+    context: &mut CommandContext<'_, '_>,
+    plan: &PushPlan,
+) -> cellule_runtime::Result<bool> {
+    if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
+        return Ok(false);
+    }
+    if validate_component(&plan.actor).is_err()
+        || !decode_access(&context.sql(&SqlBatch {
+            statements: vec![access_statement(&plan.actor)],
+        })?)?
+        .is_some_and(|level| level >= TokenScope::Write)
+    {
+        return Ok(false);
+    }
+    for (index, update) in plan.updates.iter().enumerate() {
+        if !valid_ref_name(&update.name)
+            || update
+                .expected
+                .as_ref()
+                .is_some_and(|old| old.version <= 0 || old.version == i64::MAX)
+            || plan.updates[..index]
+                .iter()
+                .any(|previous| previous.name == update.name)
+        {
+            return Ok(false);
+        }
+        if update.new_oid.is_none() && update.expected.as_ref().and_then(|old| old.oid).is_none() {
+            return Ok(false);
+        }
+        if let Some(new_oid) = update.new_oid
+            && !object_exists(context, new_oid)?
+        {
+            return Ok(false);
+        }
+        if current_ref(context, &update.name)? != update.expected {
+            return Ok(false);
+        }
+    }
+    for update in plan
+        .updates
+        .iter()
+        .filter(|update| update.new_oid.is_some())
+    {
+        if plan.updates.iter().any(|other| {
+            other.new_oid.is_some()
+                && other.name != update.name
+                && namespace_conflict(&other.name, &update.name)
+        }) || existing_namespace_conflict(context, plan, &update.name)?
+        {
+            return Ok(false);
+        }
+    }
+    for update in &plan.updates {
+        let result = match (&update.expected, update.new_oid) {
+            (None, Some(new_oid)) => context.sql(&SqlBatch {
+                statements: vec![SqlStatement {
+                    sql: "INSERT INTO refs (name, oid, version) VALUES (?1, ?2, 1)".into(),
+                    parameters: vec![
+                        SqlValue::Text(update.name.clone()),
+                        SqlValue::Blob(new_oid.to_vec()),
+                    ],
+                }],
+            })?,
+            (Some(old), new_oid) => context.sql(&SqlBatch {
+                statements: vec![SqlStatement {
+                    // Retain deleted names so recreation cannot reset a stale push's version.
+                    // The complete expected state was checked in this same transaction above.
+                    sql: "UPDATE refs SET oid = ?1, version = version + 1 WHERE name = ?2 AND version = ?3".into(),
+                    parameters: vec![
+                        new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
+                        SqlValue::Text(update.name.clone()),
+                        SqlValue::Integer(old.version),
+                    ],
+                }],
+            })?,
+            (None, None) => return Err(Error::Command("empty ref mutation")),
+        };
+        if result.first().is_none_or(|set| set.rows_affected != 1) {
+            return Err(Error::Command("ref CAS changed no rows"));
+        }
+    }
+    Ok(true)
 }
 
 fn object_exists(context: &CommandContext<'_, '_>, oid: [u8; 20]) -> cellule_runtime::Result<bool> {

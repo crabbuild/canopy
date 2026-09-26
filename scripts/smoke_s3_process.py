@@ -6,6 +6,7 @@ environment. This script writes only below a unique prefix in that bucket.
 """
 
 import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -148,6 +150,61 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
         assert (directory / "asset.lfs").read_bytes() == expected_lfs
 
 
+def push_with_lost_reply(base_url, local):
+    captured = {}
+    push_id = str(uuid.uuid4())
+
+    class Proxy(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def forward(self):
+            assert not self.headers.get("Transfer-Encoding"), "smoke proxy requires Content-Length"
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            headers = {key: value for key, value in self.headers.items()
+                       if key.lower() not in ("host", "content-length", "connection")}
+            request = urllib.request.Request(
+                f"{base_url}{self.path}", data=body if self.command == "POST" else None,
+                headers=headers, method=self.command,
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                reply = response.read()
+                if self.command == "POST" and self.path.endswith("/git-receive-pack"):
+                    captured.update(body=body, reply=reply, headers=headers)
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                self.send_response(response.status)
+                for name, value in response.headers.items():
+                    if name.lower() not in ("transfer-encoding", "content-length", "connection"):
+                        self.send_header(name, value)
+                self.send_header("Content-Length", str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+        do_GET = forward
+        do_POST = forward
+
+    with HTTPServer(("127.0.0.1", 0), Proxy) as proxy:
+        worker = threading.Thread(target=proxy.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result = subprocess.run([
+                "git", "-c", "credential.helper=", "-c",
+                "http.extraHeader=Authorization: Bearer local-test-token", "-c",
+                f"http.extraHeader=Idempotency-Key: {push_id}", "push",
+                f"http://127.0.0.1:{proxy.server_port}/canopy/other.git",
+                "HEAD:refs/heads/replayed",
+            ], cwd=local, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                capture_output=True, timeout=30, check=False)
+            assert result.returncode != 0
+            assert b"ok refs/heads/replayed" in captured["reply"]
+        finally:
+            proxy.shutdown()
+            worker.join()
+    return push_id, captured
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -247,6 +304,7 @@ def main():
                     "ls-remote", other_url, f"refs/heads/{accepted}",
                 )
                 assert published == (b"" if atomic else partial_oid + b"\trefs/heads/partial")
+            replay_id, lost_reply = push_with_lost_reply(base_url, other)
             reader_token = f"cnp_{secrets.token_hex(32)}"
             assert api_status(
                 base_url,
@@ -290,6 +348,18 @@ def main():
                 "ls-remote", f"{base_url}/canopy/other.git",
                 "refs/heads/rejected", "refs/heads/atomic-accepted", "refs/heads/atomic-rejected",
             )
+            other_restored_url = f"{base_url}/canopy/other.git"
+            git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                "push", other_restored_url, ":refs/heads/replayed", cwd=other)
+            replay = urllib.request.Request(
+                f"{other_restored_url}/git-receive-pack", data=lost_reply["body"],
+                headers=lost_reply["headers"], method="POST",
+            )
+            with urllib.request.urlopen(replay, timeout=30) as response:
+                assert response.headers["X-Canopy-Push-Id"] == replay_id
+                assert response.read() == lost_reply["reply"]
+            assert not git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
+                           "ls-remote", other_restored_url, "refs/heads/replayed")
             assert not git(
                 "-c", "http.extraHeader=Authorization: Bearer local-test-token",
                 "ls-remote", url, "refs/heads/reused",
@@ -317,7 +387,7 @@ def main():
             third.wait(timeout=30)
             if third.returncode:
                 raise RuntimeError("takeover owner did not shut down cleanly")
-            print("PASS: repositories, ACL, ref recreation, and mixed push outcomes survived restart, disk loss, and lease takeover")
+            print("PASS: Git/LFS, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")
         finally:
             for process in processes:
                 if process.poll() is None:

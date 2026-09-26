@@ -22,6 +22,8 @@ before admitting persistent customer repositories.
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | External byte ceiling | 64 MiB per Git blob or LFS object | current buffered ingress |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
+| HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
+| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
@@ -35,8 +37,10 @@ in SQLite and are excluded from Git advertisements and namespace conflicts.
 They must not be collected without a replacement mechanism for fencing stale
 ref plans. `FinalizePush` uses codec version 3 for this expectation shape.
 Before reporting accepted refs, a push persists all new objects and publishes
-the accepted ref changes through `FinalizePush`. Rejected or interrupted
-pushes may leave unreferenced objects; collection is not implemented yet.
+the accepted ref changes and replayable response through `CompletePush`. Both
+`CompletePush` and the direct `FinalizePush` command share the same ref checks.
+Rejected or interrupted pushes may leave unreferenced objects; collection is not
+implemented yet.
 
 Git owns the [per-ref report and atomic capability](https://git-scm.com/docs/protocol-capabilities#_report_status).
 An ordinary push may accept some refs and reject others. The gateway publishes
@@ -44,6 +48,31 @@ the actual accepted changes in one Cell transaction before forwarding Git's
 report unchanged. A rejected atomic push changes no refs. Malformed packs
 retain Git's unpack failure report and publish no refs. The gateway does not
 infer transaction success by searching diagnostic text for status fragments.
+
+For receive-pack POSTs, `Idempotency-Key` must be one canonical lowercase,
+hyphenated UUID. Missing IDs are generated, and recorded responses include
+`X-Canopy-Push-Id`. The request digest covers a versioned domain, protocol flag,
+content-type presence, and length-prefixed method, internal repository path,
+query, content type and body. Account identity is bound separately. The
+repository UUID scopes the record, so a name change preserves its identity.
+Authorization secrets and host addresses are not part of the digest.
+
+A reservation binds the ID before running Git. Response metadata and 512 KiB
+body chunks are durable before finalization. `CompletePush` checks the binding,
+chunk completeness and current write role, then applies the ref plan and
+publishes the response pointer in one Cell transaction. A completed ID returns
+its existing outcome. Only a published pointer can expose a staged response;
+replay verifies the stored body length and BLAKE3 digest. The HTTP boundary
+checks current token scope and repository access even for completed requests.
+
+No-op, rejected and non-200 Git backend responses are also terminal outcomes.
+Infrastructure or ref-CAS failures before publication leave the ID pending;
+an exact retry can rerun against current refs. A lost reply after publication
+returns the original report without changing refs, even when later operations
+have changed them. Retrying a new Git invocation is not necessarily an exact
+HTTP replay: its body can differ and then the reused ID conflicts. A distinct
+ID permits identical bytes to represent a new operation. There is no expiry or
+GC for reservations, completed outcomes or abandoned response attempts yet.
 
 All branches currently permit deletion by an authorized writer. The gateway
 sets `receive.denyDeleteCurrent=ignore` because its synthetic HEAD must not
@@ -76,9 +105,11 @@ artifacts. Neither is authoritative. The gateway can reconstruct cache objects
 from the Cell and external store. Integration tests prove exact-root restore
 after clean node shutdown and local SQLite loss. The process smoke also proves
 Git and LFS fetch after an unclean owner exit, lease expiry and a third process
-claiming the Cell from an S3-compatible object store. Ambiguous push result
-resolution, simultaneous multi-node routing and backup restore still need proof
-before service readiness.
+claiming the Cell from an S3-compatible object store. A proxy also drops a
+successful push reply; exact replay after takeover returns its recorded report
+and preserves a later ref deletion. Crashes during
+individual staging/publication boundaries, simultaneous multi-node routing and
+backup restore still need proof before service readiness.
 
 Schema version 1 is still changing in this unreleased repository. The module
 descriptor and object paths will become compatibility boundaries at the first

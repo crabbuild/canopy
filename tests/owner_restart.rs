@@ -178,17 +178,37 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         .ref_state("refs/heads/reused", None)
         .await?
         .output;
-    run_git(
-        Some(&local),
-        &[
-            "-c",
-            "http.extraHeader=Authorization: Bearer local-test-token",
-            "push",
-            &first_url,
-            ":refs/heads/reused",
-        ],
-    )
-    .await?;
+    let command = format!(
+        "{} {} refs/heads/reused\0report-status side-band-64k\n",
+        std::str::from_utf8(&original)?.trim(),
+        "0".repeat(40)
+    );
+    let delete_request = format!("{:04x}{command}0000", command.len() + 4).into_bytes();
+    let client = reqwest::Client::new();
+    let push_id = uuid::Uuid::new_v4().to_string();
+    let retry = |url: &str| {
+        client
+            .post(format!("{url}/git-receive-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "application/x-git-receive-pack-request")
+            .header("Idempotency-Key", &push_id)
+            .body(delete_request.clone())
+    };
+    let discarded = retry(&first_url).send().await?.error_for_status()?;
+    assert_eq!(
+        discarded
+            .headers()
+            .get("X-Canopy-Push-Id")
+            .and_then(|id| id.to_str().ok()),
+        Some(push_id.as_str())
+    );
+    drop(discarded);
+    let original_reply = retry(&first_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     let deleted_ref = repository
         .ref_state("refs/heads/reused", None)
         .await?
@@ -343,6 +363,22 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
             .as_ref()
             .is_some_and(|state| state.oid.is_some() && state.version == 3)
     );
+    assert_eq!(
+        retry(&second_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?,
+        original_reply
+    );
+    assert_eq!(
+        repository
+            .ref_state("refs/heads/reused", None)
+            .await?
+            .output,
+        recreated
+    );
     assert!(matches!(
         repository
             .finalize_push(
@@ -365,6 +401,22 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
             .await?
             .output,
         recreated
+    );
+    client
+        .post(format!("{second_url}/git-receive-pack"))
+        .bearer_auth("local-test-token")
+        .header("Content-Type", "application/x-git-receive-pack-request")
+        .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
+        .body(delete_request.clone())
+        .send()
+        .await?
+        .error_for_status()?;
+    assert!(
+        repository
+            .ref_state("refs/heads/reused", None)
+            .await?
+            .output
+            .is_some_and(|state| state.oid.is_none() && state.version == 4)
     );
     let _ = stop.send(());
     server.await??;

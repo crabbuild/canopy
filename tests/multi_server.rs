@@ -271,6 +271,64 @@ async fn leased_server_recovers_two_repositories_with_git_and_lfs()
         run_git(Some(&reader_clone), &["rev-parse", "HEAD"]).await?,
         original
     );
+    let writer_token = format!("cnp_{}", "cd".repeat(32));
+    client
+        .post(&account_url)
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({"name":"writer", "token":writer_token, "scope":"write"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let writer_url = format!("{listing_url}/example/collaborators/writer");
+    client
+        .put(&writer_url)
+        .bearer_auth("local-test-token")
+        .json(&serde_json::json!({"role":"write"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    let writer_id = uuid::Uuid::new_v4().to_string();
+    let request = |token: &str, id: &str| {
+        client
+            .post(format!("{first_url}/git-receive-pack"))
+            .bearer_auth(token)
+            .header("Idempotency-Key", id)
+            .header("Content-Type", "text/plain")
+            .body(Vec::new())
+    };
+    assert_eq!(
+        request("local-test-token", &owner_id)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        request(&writer_token, &owner_id).send().await?.status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(&writer_token, &writer_id).send().await?.status(),
+        reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        request("local-test-token", "invalid")
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    client
+        .delete(&writer_url)
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        request(&writer_token, &writer_id).send().await?.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
     let rename_url = format!("{listing_url}/example");
     assert_eq!(
         client

@@ -11,7 +11,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart and clean drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts and per-repository Git/LFS roles survive recovery; account lifecycle, collaborator listing and get remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: small and 64 MiB buffered paths work |
-| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results and atomic rejection survive recovery; branch rules, closure proof and retry record remain |
+| 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; branch rules, closure proof and publication fault matrix remain |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: stock clone after gateway restart and clean Cell owner move works |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
@@ -36,13 +36,13 @@ separate product decisions.
 2. Replace the buffered CGI and per-object subprocess path with bounded
    streaming pack ingest/fetch. Add SQLite chunks for large trees, commits
    and tags, plus a real corpus benchmark. Keep the bare repo disposable.
-3. Add durable push outcome records and reachable-closure verification to the
-   Cell finalization contract. Make a lost response and retry deterministic.
-   Define a stable HTTP operation ID before implementing replay: identical
-   request bytes can represent separate pushes after refs change. Bind that
-   ID to the authenticated actor and request digest, and retain the complete
-   per-ref response alongside its published outcome. Cellule command
-   deduplication alone does not identify a retried HTTP operation.
+3. Qualify durable push replay at every staging/publication boundary. Exact
+   HTTP replay now binds a UUID to account and request digest and atomically
+   publishes the complete response with ref changes. Add reachable-closure
+   verification and branch rules to finalization; define retention and quotas
+   for completed outcomes and abandoned staging chunks before persistent use.
+   Keep testing distinct IDs for identical bytes after refs change: Cellule
+   command deduplication alone does not identify an HTTP operation.
 4. Complete account lifecycle, token rotation/revocation, collaborator-visible
    listing, and audit records. Test revocation during in-flight Git and LFS
    operations, including a node takeover.
