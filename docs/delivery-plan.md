@@ -12,7 +12,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: durable accounts, per-repository Git/LFS roles, default branches and authorized repository list/get survive recovery; account lifecycle and collaborator roster remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB object ceilings remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; branch rules and publication fault matrix remain |
-| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: consistent paginated refs, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB pass after takeover; native scratch limits and corpus capacity proof remain |
+| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: stock push/pull after gateway restart works; shared node transfer admission and LFS reception deadlines implemented; quotas remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Open |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: process lease takeover and cold clone pass for two repository Cells; multi-node routing/backup/GC/telemetry remain |
@@ -46,8 +46,9 @@ separate product decisions.
    batch reader. Bounded object batches now share a Cell publication receipt,
    and existence queries group up to 128 IDs. Large trees, commits and tags now
    use verified SQLite chunks. Graph certification now uses commands capped at
-   128 objects and 64 MiB of SQLite bytes. Add a real corpus benchmark, qualify
-   traversal memory and native resource limits. Keep the bare repo disposable.
+   128 objects and 64 MiB of SQLite bytes. Cold hydration reads bounded object
+   pages. Expand real corpus qualification, measure traversal memory and native
+   resource limits, and keep the bare repo disposable.
 3. Qualify durable push replay at every staging/publication boundary. Exact
    HTTP replay now binds a UUID to account and request digest and atomically
    publishes the complete response with ref changes. Typed graph connectivity
@@ -609,3 +610,56 @@ Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, debug build. These are functional
 and recovery checks, not a production capacity measurement. The Directory schema
 changes require a fresh development prefix; persistent upgrade support remains
 a release gate.
+
+## Bounded cold object reads
+
+Cold hydration now reads up to 128 records and 768 KiB of inline bodies per
+page. One metadata query selects the prefix and one body query reads its exact
+IDs at or after that receipt. Immutable records and the absence of GC protect
+the two observations; future collection must fence active readers. Inline
+verification runs on a blocking worker and moves owned SQL bodies into the
+result. Chunked and external descriptors still require body verification on
+read. Short pages continue until an empty page; corrupt records fail closed.
+The old single-record API and its payload clone are removed.
+
+The Repository Cell test covers empty and exact 128-record boundaries, multiple
+pages without missing or duplicate OIDs, exact 768 KiB payloads, short pages,
+zero-length bodies, chunked/external descriptors, and corrupt size/digest/OID
+rejection. Stock smart HTTP and owner-restart tests pass with the new reader.
+All-target check, clippy with warnings denied, format and binary build pass.
+No dependency, lockfile, schema or command codec changes are required.
+
+The new `--corpus-repository` process-smoke option bundles an existing checkout's
+HEAD history without updating its source. Generated fixtures live under the
+specified workspace parent. After owner death and fresh-disk takeover, protocol
+v0/v2 bare clones must match the source's HEAD and a SHA-256 inventory covering
+every reachable object's OID, type, size and raw bytes, then pass strict/full
+`git fsck`. Other source refs are outside this fixture's scope.
+
+The combined RustFS run with SQLite chunks, 4,096 files and the existing ripgrep
+checkout passes. The source HEAD was
+`3fce3b5bb0236da2df6d99672afb8a719642eca7`: 2,287 commits, 13,591 reachable
+objects and 121,466,167 raw object bytes. Source and both recovered clone
+inventories have SHA-256
+`50eb7182122b3524f290a5f5ac2a4620a092b0627916946c40b0d5a72899a29e`.
+
+| Observed operation | Seconds |
+| --- | ---: |
+| 4,096-file initial push | 8.08 |
+| One-file update plus annotated tag | 2.70 |
+| 4,096-file recovery clone and verification, including 300 extra refs | 2.41 |
+| ripgrep initial push | 207.17 |
+| ripgrep cold protocol v0 clone | 75.75 |
+| ripgrep subsequent warm protocol v2 clone | 1.91 |
+| ripgrep v0 / v2 byte inventory and strict fsck | 0.68 / 0.71 |
+
+Environment: Darwin arm64, Apple Git 2.50.1, RustFS
+`1.0.0-beta.8-glibc`, debug Canopy build, storage on the mounted workspace.
+The pre-change 4,096-file run observed 8.77 / 3.55 / 3.25 seconds for initial
+push / incremental push / recovery verification. These individual runs are
+functional evidence, not a controlled speedup measurement. The corpus protocol
+times have different cache states and do not compare protocol performance.
+The same final run passes Git/LFS, discovery, ACL revocation, default branch,
+mixed/atomic outcomes and lost-reply replay across restart, disk loss and lease
+takeover. Full hydration, debug corpus latency, native scratch, traversal memory,
+release-build load measurements and broader production capacity remain open.

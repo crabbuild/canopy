@@ -43,7 +43,7 @@ pub async fn reject_corruption_and_expansion(
                 .output
                 .is_none()
         );
-        assert!(repository.next_object(None).await?.output.is_none());
+        assert!(repository.object_page(None).await?.output.is_empty());
     }
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     for _ in 0..1024 {

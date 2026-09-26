@@ -25,6 +25,7 @@ pub mod large_blob;
 pub mod lfs;
 mod object_batch;
 mod object_chunks;
+mod object_reads;
 mod push;
 mod refs;
 mod repository_http;
@@ -162,6 +163,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("graph/preparation.rs"));
                 source.update(include_bytes!("object_batch.rs"));
                 source.update(include_bytes!("object_chunks.rs"));
+                source.update(include_bytes!("object_reads.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("lfs.rs"));
@@ -340,121 +342,6 @@ impl RepositoryCell {
         }
         Ok(Observed {
             output: Some((kind, body)),
-            receipt: result.receipt,
-        })
-    }
-
-    /// Reads the next verified object in OID order for cold cache hydration.
-    pub async fn next_object(
-        &self,
-        after: Option<[u8; 20]>,
-    ) -> std::result::Result<
-        Observed<Option<StoredObject>>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::SqlResultSet>>,
-    > {
-        let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT oid, kind, size, digest, storage, body, external_sha256, chunk_id FROM objects WHERE oid > ?1 ORDER BY oid LIMIT 1".into(),
-                        parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec()))],
-                    }],
-                },
-            )
-            .await?;
-        let Some(row) = result.output.first().and_then(|set| set.rows.first()) else {
-            return Ok(Observed {
-                output: None,
-                receipt: result.receipt,
-            });
-        };
-        let [
-            SqlValue::Blob(oid),
-            SqlValue::Text(kind),
-            SqlValue::Integer(size),
-            SqlValue::Blob(digest),
-            SqlValue::Text(storage),
-            body,
-            external_sha256,
-            chunk_id,
-        ] = row.as_slice()
-        else {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("invalid stored object row"),
-            ));
-        };
-        let oid: [u8; 20] = oid.as_slice().try_into().map_err(|_| {
-            cellule_runtime::InvocationError::NotStarted(Error::Command("invalid stored object ID"))
-        })?;
-        let kind = match kind.as_str() {
-            "blob" => ObjectKind::Blob,
-            "tree" => ObjectKind::Tree,
-            "commit" => ObjectKind::Commit,
-            "tag" => ObjectKind::Tag,
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid stored object kind"),
-                ));
-            }
-        };
-        let storage = match (storage.as_str(), body, external_sha256, chunk_id) {
-            ("inline", SqlValue::Blob(body), SqlValue::Null, SqlValue::Null)
-                if *size >= 0
-                    && usize::try_from(*size).ok() == Some(body.len())
-                    && object_id(kind, body) == oid
-                    && blake3::hash(body).as_bytes() == digest.as_slice() =>
-            {
-                ObjectStorage::Inline(body.clone())
-            }
-            ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
-                if kind == ObjectKind::Blob && *size >= 0 =>
-            {
-                let blake3 = digest.as_slice().try_into().map_err(|_| {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "invalid blob digest",
-                    ))
-                })?;
-                let sha256 = sha256.as_slice().try_into().map_err(|_| {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "invalid SHA-256 digest",
-                    ))
-                })?;
-                ObjectStorage::External {
-                    size: u64::try_from(*size).map_err(|_| {
-                        cellule_runtime::InvocationError::NotStarted(Error::Command(
-                            "invalid blob size",
-                        ))
-                    })?,
-                    blake3,
-                    sha256,
-                }
-            }
-            ("chunked", SqlValue::Null, SqlValue::Null, SqlValue::Blob(upload))
-                if kind != ObjectKind::Blob
-                    && *size > INLINE_OBJECT_LIMIT as i64
-                    && *size <= MAX_SQLITE_OBJECT_BYTES as i64 =>
-            {
-                let invalid = || {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "invalid object chunk reference",
-                    ))
-                };
-                ObjectStorage::Chunked {
-                    upload: upload.as_slice().try_into().map_err(|_| invalid())?,
-                    size: *size as u64,
-                    blake3: digest.as_slice().try_into().map_err(|_| invalid())?,
-                }
-            }
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("corrupt stored object"),
-                ));
-            }
-        };
-        Ok(Observed {
-            output: Some(StoredObject { oid, kind, storage }),
             receipt: result.receipt,
         })
     }

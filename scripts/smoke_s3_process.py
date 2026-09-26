@@ -23,6 +23,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import smoke_s3_corpus
+
 
 def port():
     with socket.socket() as listener:
@@ -426,6 +428,7 @@ def main():
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
     parser.add_argument("--sqlite-chunks", action="store_true", help="Qualify large tree, commit and tag objects stored in SQLite and restored after takeover")
+    parser.add_argument("--corpus-repository", type=Path, help="Read HEAD history from an existing repository without changing it; qualify exact object bytes after takeover")
     args = parser.parse_args()
     if args.many_objects < 0:
         parser.error("--many-objects must be nonnegative")
@@ -550,6 +553,10 @@ def main():
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
+            corpus = None
+            if args.corpus_repository:
+                corpus_url, _ = create_repository(base_url, "corpus")
+                corpus = smoke_s3_corpus.seed(args.corpus_repository, directory, corpus_url)
             if large is not None and many is not None:
                 clone_and_verify(f"{base_url}/canopy/other.git", directory / "evicted-other", other_oid, other_readme)
                 clone_and_verify(url, directory / "evicted-renamed", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
@@ -626,6 +633,8 @@ def main():
                 verify_sqlite_chunks(base_url, directory, chunks)
             if many is not None:
                 verify_many_objects(base_url, directory, args.many_objects, many)
+            if corpus is not None:
+                smoke_s3_corpus.verify(directory, f"{base_url}/canopy/corpus.git", corpus)
             third.send_signal(signal.SIGTERM)
             third.wait(timeout=30)
             if third.returncode:

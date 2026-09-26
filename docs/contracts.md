@@ -296,6 +296,24 @@ and preserves a later ref deletion. Crashes during
 individual staging/publication boundaries, simultaneous multi-node routing and
 backup restore still need proof before service readiness.
 
+Cold hydration uses `RepositoryCell::object_page(after)` in ascending OID order.
+Each page contains at most 128 records and 768 KiB of aggregate inline bodies.
+A metadata query chooses the bounded prefix; a second query reads those exact
+records with the first query's receipt as its minimum observation. Metadata
+overhead fits beneath Cellule's 1 MiB query result ceiling. Callers continue from
+the last OID until an empty page; a short page is not end-of-stream.
+
+Records are immutable through product APIs, and no collector removes them.
+This makes the two observations safe; a future collector must fence active
+reads before deleting records or bodies. The reader rejects changed/missing IDs,
+invalid descriptors, and inline size, Git OID or BLAKE3 mismatches. Inline bodies
+move into one bounded blocking verification task without a payload clone.
+Chunked and external records carry descriptors; their body readers verify the
+actual bytes before the gateway writes them to the disposable cache. Refs become
+visible there only after complete successful hydration. This bounds each query,
+not total repository hydration time or native Git scratch usage. The previous
+single-record `next_object` API was removed from this unreleased crate.
+
 Push object ingestion runs two Git processes regardless of object count:
 [`rev-list --objects --no-object-names --stdin`](https://git-scm.com/docs/git-rev-list)
 enumerates objects reachable from accepted new ref tips, excluding the previous

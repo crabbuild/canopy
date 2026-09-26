@@ -1,0 +1,168 @@
+//! Bounded immutable object pages for cold cache hydration.
+
+use cellule_runtime::{
+    Error, InvocationError, Observed, SqlBatch, SqlResultSet, SqlStatement, SqlValue,
+};
+
+use crate::{
+    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, ObjectStorage, RepositoryCell,
+    StoredObject, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_batch::MAX_OBJECTS, object_id,
+};
+
+impl RepositoryCell {
+    /// Reads at most 128 objects and 768 KiB of inline bodies, in OID order.
+    ///
+    /// Continue after the last OID until an empty page, including after short
+    /// pages. Objects are immutable; a future collector must fence this read.
+    pub async fn object_page(
+        &self,
+        after: Option<[u8; 20]>,
+    ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
+        let headers = self.sql.query(None, SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "SELECT oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
+                parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec())), SqlValue::Integer(MAX_OBJECTS as i64)],
+            }],
+        }).await?;
+        let rows = headers
+            .output
+            .first()
+            .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing object headers")))?;
+        let mut ids = Vec::new();
+        let mut bytes = 0;
+        for row in &rows.rows {
+            let [SqlValue::Blob(oid), SqlValue::Integer(size)] = row.as_slice() else {
+                return Err(InvocationError::NotStarted(Error::Command(
+                    "invalid object header",
+                )));
+            };
+            let oid: [u8; 20] = oid.as_slice().try_into().map_err(|_| {
+                InvocationError::NotStarted(Error::Command("invalid stored object ID"))
+            })?;
+            let size = usize::try_from(*size)
+                .ok()
+                .filter(|size| *size <= INLINE_OBJECT_LIMIT)
+                .ok_or_else(|| {
+                    InvocationError::NotStarted(Error::Command("invalid inline object size"))
+                })?;
+            if size > INLINE_OBJECT_LIMIT - bytes {
+                break;
+            }
+            bytes += size;
+            ids.push(oid);
+        }
+        if ids.is_empty() {
+            return Ok(Observed {
+                output: Vec::new(),
+                receipt: headers.receipt,
+            });
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        // Immutable records bind this second read to the selected headers. The
+        // payload bound leaves room for record metadata under Cellule's 1 MiB cap.
+        let result = self.sql.query(Some(headers.receipt), SqlBatch {
+            statements: vec![SqlStatement {
+                sql: format!("SELECT oid, kind, size, digest, storage, body, external_sha256, chunk_id FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
+                parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect(),
+            }],
+        }).await?;
+        let rows = result
+            .output
+            .into_iter()
+            .next()
+            .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing object page")))?
+            .rows;
+        // Hash a whole bounded page off the async executor. Move SQL bodies into
+        // the result so page verification does not duplicate their payloads.
+        let output = tokio::task::spawn_blocking(move || {
+            let objects = rows
+                .into_iter()
+                .map(decode_object)
+                .collect::<cellule_runtime::Result<Vec<_>>>()?;
+            if objects.iter().map(|object| object.oid).ne(ids) {
+                return Err(Error::Command("objects changed during page read"));
+            }
+            Ok(objects)
+        })
+        .await
+        .map_err(|error| {
+            InvocationError::NotStarted(Error::Facility {
+                name: "object page verification",
+                source: Box::new(error),
+            })
+        })?
+        .map_err(InvocationError::NotStarted)?;
+        Ok(Observed {
+            output,
+            receipt: result.receipt,
+        })
+    }
+}
+
+fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
+    let row: [SqlValue; 8] = row
+        .try_into()
+        .map_err(|_| Error::Command("invalid stored object row"))?;
+    let [
+        SqlValue::Blob(oid),
+        SqlValue::Text(kind),
+        SqlValue::Integer(size),
+        SqlValue::Blob(digest),
+        SqlValue::Text(storage),
+        body,
+        external_sha256,
+        chunk_id,
+    ] = row
+    else {
+        return Err(Error::Command("invalid stored object row"));
+    };
+    let oid: [u8; 20] = oid
+        .try_into()
+        .map_err(|_| Error::Command("invalid stored object ID"))?;
+    let digest: [u8; 32] = digest
+        .try_into()
+        .map_err(|_| Error::Command("invalid object digest"))?;
+    let kind = match kind.as_str() {
+        "blob" => ObjectKind::Blob,
+        "tree" => ObjectKind::Tree,
+        "commit" => ObjectKind::Commit,
+        "tag" => ObjectKind::Tag,
+        _ => return Err(Error::Command("invalid stored object kind")),
+    };
+    let storage = match (storage.as_str(), body, external_sha256, chunk_id) {
+        ("inline", SqlValue::Blob(body), SqlValue::Null, SqlValue::Null)
+            if usize::try_from(size).ok() == Some(body.len())
+                && body.len() <= INLINE_OBJECT_LIMIT
+                && object_id(kind, &body) == oid
+                && blake3::hash(&body).as_bytes() == &digest =>
+        {
+            ObjectStorage::Inline(body)
+        }
+        ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
+            if kind == ObjectKind::Blob && (0..=MAX_EXTERNAL_BLOB_BYTES as i64).contains(&size) =>
+        {
+            ObjectStorage::External {
+                size: size as u64,
+                blake3: digest,
+                sha256: sha256
+                    .try_into()
+                    .map_err(|_| Error::Command("invalid SHA-256 digest"))?,
+            }
+        }
+        ("chunked", SqlValue::Null, SqlValue::Null, SqlValue::Blob(upload))
+            if kind != ObjectKind::Blob
+                && size > INLINE_OBJECT_LIMIT as i64
+                && size <= MAX_SQLITE_OBJECT_BYTES as i64 =>
+        {
+            ObjectStorage::Chunked {
+                upload: upload
+                    .try_into()
+                    .map_err(|_| Error::Command("invalid object chunk reference"))?,
+                size: size as u64,
+                blake3: digest,
+            }
+        }
+        _ => return Err(Error::Command("corrupt stored object")),
+    };
+    Ok(StoredObject { oid, kind, storage })
+}

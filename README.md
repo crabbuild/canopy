@@ -111,6 +111,11 @@ object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.
 
+Cold cache hydration reads OID-ordered pages of at most 128 records and 768 KiB
+of inline bodies. It verifies inline identities on a blocking worker; chunked
+and external bodies retain their own verification before cache writes. Pages
+reduce SQLite query overhead, but recovery still rebuilds the complete cache.
+
 ## Recover a lost push reply
 
 For a receive-pack POST, a client or proxy can supply `Idempotency-Key` as one
@@ -208,5 +213,10 @@ turn storage publications into unresolved mutations even with free byte space.
 Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above
 1 MiB, then verify exact raw bytes and OIDs after takeover with a strict fsck.
 This exercises SQLite chunk storage independently of external large blobs.
+Add `--corpus-repository /path/to/existing/repository` to qualify that checkout's
+HEAD history. The script only reads the source, creates a bundle and temporary
+fixtures under `--work-parent`, then verifies every reachable object's type,
+size and bytes in protocol v0/v2 clones after takeover, plus strict `git fsck`.
+Other source branches and tags are outside this qualification.
 The chunk, default-branch and repository-discovery layouts change the unreleased
 schema; use a fresh development storage prefix when moving from older builds.

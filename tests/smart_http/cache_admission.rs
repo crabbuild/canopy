@@ -69,7 +69,7 @@ pub async fn verify(
             .output
             .is_none()
     );
-    assert!(repository.next_object(None).await?.output.is_none());
+    assert!(repository.object_page(None).await?.output.is_empty());
     assert_eq!(budget.used(), occupied.bytes());
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,

@@ -8,6 +8,8 @@ mod default_branch;
 mod graph;
 #[path = "support/objects.rs"]
 mod objects;
+#[path = "repository_cell/pages.rs"]
+mod pages;
 
 use std::{
     sync::Arc,
@@ -143,6 +145,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         let empty = repository.refs_page("", None).await?.output;
         assert_eq!(empty.generation, 0);
         assert!(empty.refs.is_empty());
+        pages::exercise(&repository, &graph_sql).await?;
         batches::exercise(&repository, &graph_sql).await?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;

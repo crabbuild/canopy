@@ -328,9 +328,15 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         );
         let mut cursor = None;
         let mut external_seen = false;
-        while let Some(object) = repository.next_object(cursor).await?.output {
-            cursor = Some(object.oid);
-            external_seen |= matches!(object.storage, ObjectStorage::External { .. });
+        loop {
+            let page = repository.object_page(cursor).await?.output;
+            if page.is_empty() {
+                break;
+            }
+            for object in page {
+                cursor = Some(object.oid);
+                external_seen |= matches!(object.storage, ObjectStorage::External { .. });
+            }
         }
         assert!(external_seen);
         let lfs_oid: [u8; 32] = Sha256::digest(&lfs_body).into();

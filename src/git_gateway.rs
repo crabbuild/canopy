@@ -297,46 +297,48 @@ impl GitGateway {
     ) -> Result<(), GatewayError> {
         let mut after = None;
         loop {
-            let next = self
+            let page = self
                 .repository
-                .next_object(after)
+                .object_page(after)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
-            let Some(object) = next else {
+            if page.is_empty() {
                 break;
-            };
-            after = Some(object.oid);
-            let body = match object.storage {
-                ObjectStorage::Inline(body) => body,
-                ObjectStorage::Chunked {
-                    upload,
-                    size,
-                    blake3,
-                } => self
-                    .repository
-                    .chunked_body(object.oid, object.kind, upload, size, blake3)
-                    .await
-                    .map_err(|error| GatewayError::Cell(Box::new(error)))?,
-                ObjectStorage::External {
-                    size,
-                    blake3,
-                    sha256,
-                } => {
-                    self.large_blobs
-                        .get(&LargeBlobReference {
-                            oid: object.oid,
-                            size,
-                            blake3,
-                            sha256,
-                        })
-                        .await?
-                }
-            };
-            backend
-                .cache
-                .store_object(object.oid, object.kind, body)
-                .await?;
+            }
+            for object in page {
+                after = Some(object.oid);
+                let body = match object.storage {
+                    ObjectStorage::Inline(body) => body,
+                    ObjectStorage::Chunked {
+                        upload,
+                        size,
+                        blake3,
+                    } => self
+                        .repository
+                        .chunked_body(object.oid, object.kind, upload, size, blake3)
+                        .await
+                        .map_err(|error| GatewayError::Cell(Box::new(error)))?,
+                    ObjectStorage::External {
+                        size,
+                        blake3,
+                        sha256,
+                    } => {
+                        self.large_blobs
+                            .get(&LargeBlobReference {
+                                oid: object.oid,
+                                size,
+                                blake3,
+                                sha256,
+                            })
+                            .await?
+                    }
+                };
+                backend
+                    .cache
+                    .store_object(object.oid, object.kind, body)
+                    .await?;
+            }
         }
         backend.cache.store_refs(refs).await?;
         Ok(())
