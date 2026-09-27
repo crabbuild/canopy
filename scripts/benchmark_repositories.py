@@ -37,7 +37,7 @@ class Client:
         self.connections = []
         self.lock = threading.Lock()
 
-    def request(self, path, payload=None, *, git=False):
+    def request(self, path, payload=None, *, git=False, request_id=None):
         connection = getattr(self.local, "connection", None)
         if connection is None:
             connection = self.connection_type(self.host, self.port, timeout=self.timeout)
@@ -45,6 +45,8 @@ class Client:
             with self.lock:
                 self.connections.append(connection)
         headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
         if git:
             headers["Git-Protocol"] = "version=2"
         try:
@@ -211,22 +213,23 @@ def measure(args, client, token):
                 samples.write(json.dumps(sample) + "\n")
 
         def execute(sequence, entry, scheduled):
+            request_id = str(uuid.uuid4())
             dispatched = time.monotonic()
             result = "transport_error"
             try:
                 if args.operation == "metadata":
-                    status, body = client.request(f"/api/repositories/{entry['name']}")
+                    status, body = client.request(f"/api/repositories/{entry['name']}", request_id=request_id)
                     decoded = json.loads(body) if status == 200 else None
                     valid = isinstance(decoded, dict) and decoded.get("repository_id") == entry["repository_id"]
                 else:
-                    status, body = client.request(f"/{entry['owner']}/{entry['name']}.git/info/refs?service=git-upload-pack", git=True)
+                    status, body = client.request(f"/{entry['owner']}/{entry['name']}.git/info/refs?service=git-upload-pack", git=True, request_id=request_id)
                     valid = status == 200 and body.startswith(b"000eversion 2\n")
                 result = "ok" if valid else (f"http_{status}" if status != 200 else "invalid_response")
             except (OSError, ValueError, KeyError, http.client.HTTPException):
                 pass
             finally:
                 finished = time.monotonic()
-                record({"sequence": sequence, "repository_id": entry["repository_id"], "result": result,
+                record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "result": result,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
                         "dispatch_delay_ms": (dispatched - scheduled) * 1000})

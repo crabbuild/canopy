@@ -46,6 +46,7 @@ use crate::{
 mod discovery;
 mod lifecycle;
 pub(crate) mod peer;
+mod request_trace;
 mod residency;
 mod tokens;
 pub(crate) mod workspace;
@@ -571,7 +572,11 @@ impl RunningServer {
             let peer_routes = axum::Router::new()
                 .route(peer::PATH, axum::routing::post(peer::serve))
                 .with_state(peer);
-            axum::serve(listener, api.router().merge(peer_routes))
+            let routes = api
+                .router()
+                .merge(peer_routes)
+                .layer(axum::middleware::from_fn(request_trace::trace));
+            axum::serve(listener, routes)
                 .with_graceful_shutdown(serving_stop.cancelled_owned())
                 .await
         });

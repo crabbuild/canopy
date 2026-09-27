@@ -417,6 +417,21 @@ route acquisition plus role/default-branch/visibility reads; it is not solely SQ
 execution. Authentication success here means the operation completed, not that a
 credential was authorized. No token or token digest is included.
 
+The node HTTP boundary now emits a debug `http_request` span containing a
+canonical UUID and the matched route pattern. The benchmark sends `X-Request-ID`
+and records the same `request_id` with each attempted arrival. Invalid or absent
+correlation values receive a generated UUID; they never affect authorization.
+Raw headers, URLs and query strings are not recorded. No trace UUID is allocated
+when debug tracing for this boundary is disabled.
+
+`HTTP handler started` and `HTTP handler completed` bracket routing middleware
+through response creation; completion records status and elapsed seconds. This
+includes awaited authentication and repository operations but excludes response
+body streaming and time before the middleware is polled. Compare per-request
+handler duration, nested stage duration and client service duration to distinguish
+those gaps. Synchronous logging can itself add delay; instrumentation is diagnostic
+and its overhead must not be treated as application execution time.
+
 Join the benchmark's UTC start and scheduled sample offsets with those events
 and the runtime's publication/compaction timing events. If a latency spike is
 confined to client dispatch, it is a driver issue; if authentication stalls across

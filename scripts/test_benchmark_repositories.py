@@ -22,6 +22,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         with self.server.guard:
             self.server.requests += 1
+            self.server.request_ids.append(self.headers.get("X-Request-ID"))
             self.server.active += 1
             self.server.peak = max(self.server.peak, self.server.active)
         try:
@@ -41,6 +42,7 @@ class ScheduledLoad(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.guard = threading.Lock()
         server.requests = server.active = server.peak = 0
+        server.request_ids = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         client = benchmark.Client(f"http://127.0.0.1:{server.server_port}", "fixture-token", 2)
@@ -64,6 +66,11 @@ class ScheduledLoad(unittest.TestCase):
                 for sample in samples:
                     if sample["elapsed_ms"] is not None:
                         self.assertGreaterEqual(sample["elapsed_ms"], sample["service_ms"])
+                ids = [sample["request_id"] for sample in samples if sample["elapsed_ms"] is not None]
+                self.assertCountEqual(ids, server.request_ids)
+                self.assertEqual(len(set(ids)), len(ids))
+                for request_id in ids:
+                    uuid.UUID(request_id)
                 self.assertNotIn("fixture-token", args.output.read_text())
         finally:
             client.close()
