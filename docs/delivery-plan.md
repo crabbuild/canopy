@@ -2942,3 +2942,13 @@ All eight lifecycle, eleven residency and two peer integration tests pass.
 All-target Clippy with warnings denied, optimized CLI build and Rust formatting
 pass. The thousand-Cell process rerun remains required; these focused tests do
 not establish its outcome or resolve the separate uniform-read latency spikes.
+
+The first traced rerun (`canopy-active1000-fixed-1a6092e5a8ba`, `fccf1de`)
+failed its initial warm-read gate: 253 successful arrivals and 47 driver drops,
+with p99 2638.993 ms. All 1,000 identities had seeded. Directory lookups stalled
+for approximately 1.9 seconds, ending immediately after a 2.085-second quiet
+compaction; repository metadata stages remained below 9 ms. The timing supports
+a Directory/runtime investigation but does not explain all HTTP wait time.
+The fixture stopped before recovery and graceful drain; it supplies no process
+proof for the lease fix. See `performance-plan.md` for limitations and the
+independent recovery gate in the next fixture.

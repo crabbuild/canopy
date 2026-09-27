@@ -441,3 +441,39 @@ Source inspection found that Canopy put lease renewal in Cellule's task group,
 which is cancelled before runtime drain. With a ten-second node lease, a long
 drain can lose the authority it still needs. The next run must verify the corrected
 renewal lifetime as well as request-stage latency.
+
+
+## Traced Directory stall with 1,000 active Cells
+
+The optimized `fccf1de` rerun, artifact `canopy-active1000-fixed-1a6092e5a8ba`,
+seeded all 1,000 identities in 156.768 seconds. Its first read gate failed:
+253 of 300 warm metadata arrivals completed successfully; 47 were dropped by
+the bounded eight-slot driver. No request was retried. Scheduled completed-attempt
+p95/p99 was 32.541/2638.993 ms. The test stopped before Git discovery, uniform
+reads, recovery or graceful shutdown, so this run does not verify the drain fix.
+Its process and provider fixture were cleaned up; failure provenance and logs
+were retained.
+
+The trace narrows the stall to Directory lookup. Eight lookups took
+1,901–1,903 ms and completed at 03:41:54.990–54.992 UTC on 2026-09-27, immediately
+after a quiet compaction reported completion at 03:41:54.989849 UTC with a
+2,085 ms duration. Directory authentication stayed below 8 ms and recorded
+repository metadata stages below 9 ms. These are stage timings, not whole-request
+latency: the slow HTTP attempts took 2,388–2,728 ms, so the traced lookup does not
+account for the entire wait. Logging, scheduling and other uninstrumented time
+remain possible contributors.
+
+The pinned runtime marks a Cell busy while quiet compaction owns the publisher,
+and its scheduler blocks queries as well as commands while busy. The existing
+upstream actor test explicitly proves commands wait during compaction. This
+contract plus the trace supports investigating read admission during compaction;
+the event lacks a Cell identifier, so timing alone does not prove which Cell
+compacted or fully explain the stall. A dependency fix needs a controlled paused-
+compaction query test, fencing/snapshot/publication proof and approval before
+changing the pin. Caching authorization or weakening publication deadlines is
+not justified by this evidence.
+
+Recovery and lifecycle checks should run independently of latency pass/fail.
+The next fixture retains every read failure in its overall result while still
+executing SIGKILL recovery and the final graceful drain. This separates verification
+of the lease-lifetime fix from the unresolved read-latency gate.
