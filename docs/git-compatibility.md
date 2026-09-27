@@ -33,7 +33,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Surface | Current behavior | Acceptance gate |
 | --- | --- | --- |
 | Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete and atomic generation qualified | Full-capacity and real-provider scale qualification remain |
-| Rejection reporting | Branch policy, unsupported names, command limits and late Cell refusals produce Git reports; clients declining reports receive HTTP 409, and infrastructure failures can still return HTTP 500 | Finish pre-publication resource/infrastructure reporting without mislabeling uncertain outcomes |
+| Rejection reporting | Branch policy, unsupported names, command limits, late Cell refusals and durably recorded ingestion failures produce Git reports; clients declining reports receive HTTP 409. Pre-report and response-publication failures can still return HTTP errors | Finish pre-report resource/infrastructure reporting and qualify response-publication failures without mislabeling uncertain outcomes |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
 | Cold fetch | HTTP and SSH hydrate non-blob history and ref/tag targets; exact `blob:none` adds explicit wants only, while other fetches load missing blobs reachable from requested tips | Narrow non-blob preparation and filter-specific blob selection; measure cold/warm bytes and latency at scale |
@@ -71,7 +71,11 @@ reachability short-circuiting with 10,000 stored objects.
 `tests/smart_http/publication.rs` pauses large-blob ingestion after native Git
 acceptance, then changes refs, policy or write permission. It verifies Git
 rejection, no sibling/generation publication and exact replay from a new gateway
-after restoring policy/permission. The fragmented-report unit test covers 4,096
+after restoring policy/permission. Injected ingestion failures cover stock Git,
+plain/sideband/no-report clients, exact rejection replay and a new successful
+operation after recovery. A concurrent same-ID success wins over a losing
+attempt's ingestion failure. SSH exercises the same durable refusal path and
+fresh-disk recovery. The fragmented-report unit test covers 4,096
 Unicode refs and preserves existing native rejections.
 Hosted CI has not been run for these changes.
 

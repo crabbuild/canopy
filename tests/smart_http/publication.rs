@@ -13,7 +13,7 @@ fn packet(line: &str) -> Vec<u8> {
 pub async fn verify(
     root: &Path,
     repository: &Arc<RepositoryCell>,
-    store: &PausedBlobs,
+    store: &Arc<PausedBlobs>,
     url: &str,
 ) -> Result {
     let local = root.join("publication-race");
@@ -34,10 +34,33 @@ pub async fn verify(
             TokenScope::Write,
         )
         .await?;
-    for kind in ["refs", "policy", "access", "no-report"] {
+    for kind in [
+        "refs",
+        "policy",
+        "access",
+        "no-report",
+        "storage",
+        "storage-sideband",
+        "storage-no-report",
+        "storage-stock",
+        "storage-race",
+    ] {
+        let storage = kind.starts_with("storage");
+        let no_report = kind.ends_with("no-report");
+        let raced = kind == "storage-race";
+        let reason = if storage {
+            "Canopy object ingestion failed"
+        } else {
+            "Canopy publication rejected"
+        };
         tokio::fs::write(
             local.join("large"),
-            vec![kind.as_bytes()[0]; 2 * 1024 * 1024],
+            kind.as_bytes()
+                .iter()
+                .copied()
+                .cycle()
+                .take(2 * 1024 * 1024)
+                .collect::<Vec<_>>(),
         )
         .await?;
         run_git(Some(&local), &["add", "."]).await?;
@@ -64,8 +87,8 @@ pub async fn verify(
         let sibling = format!("refs/heads/early-{kind}");
         let id = uuid::Uuid::new_v4().to_string();
         let capabilities = match kind {
-            "policy" => "report-status-v2 side-band-64k",
-            "access" => "report-status",
+            "policy" | "storage-sideband" => "report-status-v2 side-band-64k",
+            "access" | "storage" | "storage-race" => "report-status",
             _ => "",
         };
         let mut body = packet(&format!(
@@ -84,7 +107,7 @@ pub async fn verify(
                 .body(body.clone())
         };
         store.armed.store(true, Ordering::SeqCst);
-        let mut child = if kind == "refs" {
+        let mut child = if kind == "refs" || kind == "storage-stock" {
             Some(
                 Command::new("git")
                     .current_dir(&local)
@@ -144,20 +167,27 @@ pub async fn verify(
                     },
                 )
                 .await?;
-        } else {
+        } else if kind == "access" {
             repository
                 .revoke_member(support::identity()?, "canopy", "late-writer")
                 .await?;
         }
         let generation = repository.default_branch(None).await?.output.generation;
+        store.fail.store(storage, Ordering::SeqCst);
+        // A different gateway can commit the same ID while this attempt is paused.
+        // The losing ingestion failure must return that success, never a local ng.
+        let winner = if raced {
+            Some(gateway_request(root, repository, store.clone(), &body, &id).await?)
+        } else {
+            None
+        };
         store.proceed.notify_one();
         if let Some(child) = child.take() {
             let output = child.wait_with_output().await?;
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "{stderr}");
             assert!(
-                stderr.contains("[remote rejected]")
-                    && stderr.contains("Canopy publication rejected"),
+                stderr.contains("[remote rejected]") && stderr.contains(reason),
                 "{stderr}"
             );
             assert!(
@@ -169,12 +199,18 @@ pub async fn verify(
             let response = request.await??;
             assert_eq!(
                 response.status().as_u16(),
-                if kind == "no-report" { 409 } else { 200 }
+                if no_report { 409 } else { 200 }
             );
             let report = response.bytes().await?;
             let text = String::from_utf8_lossy(&report);
-            assert!(text.contains("Canopy publication rejected"), "{text}");
-            if kind != "no-report" {
+            if let Some((status, saved)) = winner {
+                assert_eq!(status, 200);
+                assert_eq!(report.as_ref(), saved);
+                assert!(text.contains(&format!("ok {reference}")), "{text}");
+            } else {
+                assert!(text.contains(reason), "{text}");
+            }
+            if !no_report && !raced {
                 assert!(
                     text.contains(&format!("ng {reference} "))
                         && text.contains(&format!("ng {sibling} ")),
@@ -209,39 +245,84 @@ pub async fn verify(
                     .await?;
             }
             // Recreate the gateway with no native/object cache; the saved Cell
-            // decision must still reject even after permission/policy is restored.
-            tokio::fs::create_dir_all(root.join("replay")).await?;
-            let gateway = GitGateway::new(
-                Arc::clone(repository),
-                root.join("replay"),
-                Arc::new(InMemory::new()),
-                DiskBudget::new(1 << 30),
-            );
-            let replay = gateway
-                .handle(
-                    canopy_server::git_http::GitHttpRequest {
-                        method: "POST".into(),
-                        path_info: "/repo.git/git-receive-pack".into(),
-                        query: String::new(),
-                        content_type: Some("application/x-git-receive-pack-request".into()),
-                        gzip: false,
-                        protocol_v2: false,
-                        authenticated: true,
-                        body: Body::from(body.clone()),
-                    },
-                    "late-writer",
-                    Some(uuid::Uuid::parse_str(&id)?.into_bytes()),
-                    None,
-                )
-                .await?;
-            assert_eq!(replay.status, if kind == "no-report" { 409 } else { 200 });
-            assert_eq!(axum::body::to_bytes(replay.body, 1 << 20).await?, report);
+            // decision must survive permission/policy or storage recovery.
+            let (status, saved) =
+                gateway_request(root, repository, Arc::new(InMemory::new()), &body, &id).await?;
+            assert_eq!(status, if no_report { 409 } else { 200 });
+            assert_eq!(saved, report);
         }
         assert_eq!(
             repository.default_branch(None).await?.output.generation,
-            generation
+            generation + i64::from(raced)
         );
-        assert!(repository.ref_state(&sibling, None).await?.output.is_none());
+        if !raced {
+            assert!(repository.ref_state(&sibling, None).await?.output.is_none());
+        }
+        if storage && !raced {
+            let response = post(&uuid::Uuid::new_v4().to_string()).send().await?;
+            assert_eq!(response.status().as_u16(), 200);
+            let report = response.bytes().await?;
+            if !no_report && kind != "storage-stock" {
+                assert!(String::from_utf8_lossy(&report).contains(&format!("ok {reference}")));
+            }
+            assert_eq!(
+                repository.default_branch(None).await?.output.generation,
+                generation + 1
+            );
+        }
+        if storage {
+            for name in [&reference, &sibling] {
+                assert_eq!(
+                    hex::encode(
+                        repository
+                            .ref_state(name, None)
+                            .await?
+                            .output
+                            .ok_or("missing ref")?
+                            .oid
+                            .ok_or("missing oid")?
+                    ),
+                    oid
+                );
+            }
+        }
     }
     Ok(())
+}
+
+async fn gateway_request(
+    root: &Path,
+    repository: &Arc<RepositoryCell>,
+    store: Arc<dyn ObjectStore>,
+    body: &[u8],
+    id: &str,
+) -> Result<(u16, Vec<u8>)> {
+    let scratch = tempfile::tempdir_in(root)?;
+    let gateway = GitGateway::new(
+        Arc::clone(repository),
+        scratch.path().into(),
+        store,
+        DiskBudget::new(1 << 30),
+    );
+    let response = gateway
+        .handle(
+            canopy_server::git_http::GitHttpRequest {
+                method: "POST".into(),
+                path_info: "/repo.git/git-receive-pack".into(),
+                query: String::new(),
+                content_type: Some("application/x-git-receive-pack-request".into()),
+                gzip: false,
+                protocol_v2: false,
+                authenticated: true,
+                body: Body::from(body.to_vec()),
+            },
+            "late-writer",
+            Some(uuid::Uuid::parse_str(id)?.into_bytes()),
+            None,
+        )
+        .await?;
+    Ok((
+        response.status,
+        axum::body::to_bytes(response.body, 1 << 20).await?.to_vec(),
+    ))
 }

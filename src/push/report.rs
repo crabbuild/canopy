@@ -1,10 +1,13 @@
 use super::*;
 
-const REJECTED: &str =
+pub(crate) const REJECTED: &str =
     "Canopy publication rejected: refs, permissions or policy changed; fetch and retry";
 const PACKET_BYTES: usize = 65520;
 
-pub(crate) fn rejected_report(response: &GitHttpResponse) -> Result<GitHttpResponse, PushError> {
+pub(crate) fn rejected_report(
+    response: &GitHttpResponse,
+    reason: &str,
+) -> Result<GitHttpResponse, PushError> {
     let mut bytes = response.body.as_slice();
     let mut data = Vec::new();
     let mut progress = Vec::new();
@@ -36,7 +39,7 @@ pub(crate) fn rejected_report(response: &GitHttpResponse) -> Result<GitHttpRespo
         return Ok(GitHttpResponse {
             status: 409,
             headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
-            body: format!("{REJECTED}\n").into_bytes(),
+            body: format!("{reason}\n").into_bytes(),
         });
     }
     let mut bytes = data.as_slice();
@@ -53,7 +56,7 @@ pub(crate) fn rejected_report(response: &GitHttpResponse) -> Result<GitHttpRespo
         {
             let mut rejected = b"ng ".to_vec();
             rejected.extend_from_slice(name);
-            rejected.extend_from_slice(format!(" {REJECTED}\n").as_bytes());
+            rejected.extend_from_slice(format!(" {reason}\n").as_bytes());
             write_packet(&mut report, &rejected)?;
         } else if payload.starts_with(b"ng ") {
             write_packet(&mut report, payload)?;
@@ -146,7 +149,7 @@ mod tests {
         }
         write_packet(&mut report, b"ng refs/heads/protected hook declined\n")?;
         report.extend_from_slice(b"0000");
-        let plain = rejected_report(&response(report.clone()))?;
+        let plain = rejected_report(&response(report.clone()), REJECTED)?;
         for chunk_size in [37, PACKET_BYTES - 5] {
             let mut wire = Vec::new();
             write_packet(&mut wire, b"\x02native progress\n")?;
@@ -156,7 +159,7 @@ mod tests {
                 write_packet(&mut wire, &payload)?;
             }
             wire.extend_from_slice(b"0000");
-            let rejected = rejected_report(&response(wire))?;
+            let rejected = rejected_report(&response(wire), REJECTED)?;
             let mut bytes = rejected.body.as_slice();
             assert_eq!(
                 packet(&mut bytes)?,
@@ -186,13 +189,15 @@ mod tests {
             b"0006\x03x0000",
         ] {
             assert!(
-                rejected_report(&response(body.to_vec())).is_err(),
+                rejected_report(&response(body.to_vec()), REJECTED).is_err(),
                 "{body:?}"
             );
         }
         for body in [b"".as_slice(), b"0000", b"0007\x02hi0000"] {
             assert_eq!(
-                rejected_report(&response(body.to_vec())).unwrap().status,
+                rejected_report(&response(body.to_vec()), REJECTED)
+                    .unwrap()
+                    .status,
                 409
             );
         }

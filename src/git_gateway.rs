@@ -313,18 +313,33 @@ impl GitGateway {
     ) -> Result<GitHttpResponse, GatewayError> {
         self.install_branch_policy(cached, &request).await?;
         let before = cached.snapshot.refs.clone();
-        let response = cached.backend.run(request).await?;
+        let mut response = cached.backend.run(request).await?;
         // Git may accept some refs and reject others unless atomic was requested.
-        // Publish its actual changes before forwarding the unmodified per-ref report.
+        // Publish its actual changes before returning any successful per-ref report.
         let plan = if response.status == 200 {
             let after = git_refs(&cached.backend.git_dir()).await?;
             let plan = diff_refs(&before, &after, actor);
             if plan.updates.is_empty() {
                 None
             } else {
-                self.persist_objects(&cached.backend, &before, &plan)
-                    .await?;
-                Some(plan)
+                match self.persist_objects(&cached.backend, &before, &plan).await {
+                    Ok(()) => Some(plan),
+                    Err(error) => {
+                        tracing::warn!(push_id = %hex::encode(id), error = ?error, "Git object ingestion failed");
+                        let reason = match error {
+                            GatewayError::Objects(ObjectReadError::TooLarge)
+                            | GatewayError::Blob(LargeBlobError::TooLarge) => {
+                                "Canopy object ingestion failed: object exceeds server size limit"
+                            }
+                            _ => "Canopy object ingestion failed; retry push after server recovery",
+                        };
+                        response = crate::push::report::rejected_report(&response, reason)?;
+                        // Ingestion cannot publish refs. Persist this refusal through
+                        // completion so a concurrent attempt with the same ID can
+                        // win; only the canonical durable response reaches the client.
+                        None
+                    }
+                }
             }
         } else {
             None

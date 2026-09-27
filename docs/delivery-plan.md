@@ -3519,3 +3519,29 @@ reachable blobs omitted from the client pack, and warm full fetches repeat the
 native walk. These remaining costs need optimization and provider/scale latency
 measurements. New tracing reports reachable blob counts, bytes and preparation
 time. Local tests use the in-memory provider; hosted CI has not run this slice.
+
+
+## Durable object ingestion refusals
+
+Once native Git has produced its acceptance report, ingestion errors now rewrite
+successful refs to explicit Git rejections. The rewritten response completes
+through the existing no-ref-plan transaction. Clients receive only the canonical
+saved outcome; a concurrent gateway that already completed the same push ID can
+win with success. Failed/uncertain response completion still propagates an error.
+Size-limit failures have a specific reason; other ingestion failures advise retry
+after server recovery. Original native refusals and sideband progress survive.
+
+Permanent HTTP gates inject a multipart-store failure, require plain/sideband
+Git rejections or HTTP 409 for clients declining reports, compare exact replay
+from a new gateway after recovery, and publish with a new ID. A concurrent same-ID
+attempt proves that local failure cannot overwrite committed success. The SSH
+publication gate injects the same failure and verifies unchanged refs/generation
+and a strict-fsck clone after fresh-disk recovery. The HTTP regression returned
+500 before the fix. Pre-report resource failures and uncertain publication remain
+separate reporting/qualification work.
+
+Local verification passes: smart HTTP publication/replay, both SSH publication
+and drain tests, owner restart/lost-reply replay, both report-parser unit tests,
+all-target Clippy with warnings denied, formatting and diff checks. These gates
+run in the existing Verify workflow. Hosted CI and real-provider fault
+qualification have not run for this change. No schema or dependency changes.

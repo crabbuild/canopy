@@ -209,8 +209,17 @@ that body and the durable decision, without querying current refs or policy.
 Only the completion reader can expose a stored response. No-op/native-rejected
 requests mutate no refs and may record their outcome after write revocation.
 
-Infrastructure failures before publication leave the ID pending; an exact retry
-can rerun against current refs. An uncertain Cell outcome is not relabeled as a
+Object ingestion failures after native acceptance become per-ref Git rejections
+when completion can durably record the rewritten report without a ref plan.
+The same ID then replays that rejection after storage recovers; use a new ID
+for a new attempt. Stock Git creates a new operation on each push invocation.
+Concurrent attempts return whichever response completed first, including a
+success committed by another gateway. Ingestion can leave unreferenced objects,
+but cannot publish refs. Existing native rejection reasons remain intact.
+
+Failures before a usable native report, or while staging/committing the response,
+remain transport errors. If completion has not committed, an exact retry can
+rerun against current refs. An uncertain Cell outcome is not relabeled as a
 ref rejection: the mutation may already have committed. A lost reply after
 publication returns the original report without changing refs, even when later operations
 have changed them. Retrying a new Git invocation is not necessarily an exact

@@ -17,6 +17,7 @@ type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send 
 pub(crate) struct PausedBlobs {
     inner: InMemory,
     pub(crate) armed: AtomicBool,
+    pub(crate) fail: AtomicBool,
     pub(crate) entered: Notify,
     pub(crate) proceed: Notify,
 }
@@ -47,6 +48,12 @@ impl ObjectStore for PausedBlobs {
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
             self.proceed.notified().await;
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(object_store::Error::Generic {
+                    store: "publication-race-store",
+                    source: Box::new(std::io::Error::other("injected blob ingestion failure")),
+                });
+            }
         }
         self.inner.put_multipart_opts(path, options).await
     }

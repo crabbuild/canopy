@@ -96,7 +96,7 @@ async fn generation(client: &reqwest::Client, address: std::net::SocketAddr) -> 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn late_ssh_push_refusals_report_both_refs_and_survive_restore() -> Result {
-    for change in ["policy", "access"] {
+    for change in ["policy", "access", "storage"] {
         let Fixture {
             workspace,
             store,
@@ -157,7 +157,7 @@ async fn late_ssh_push_refusals_report_both_refs_and_survive_restore() -> Result
                 .send()
                 .await?
                 .error_for_status()?;
-        } else {
+        } else if change == "access" {
             client
                 .put(format!("{api}/collaborators/writer"))
                 .bearer_auth(AUTH)
@@ -166,16 +166,22 @@ async fn late_ssh_push_refusals_report_both_refs_and_survive_restore() -> Result
                 .await?
                 .error_for_status()?;
         }
+        store.fail.store(change == "storage", Ordering::SeqCst);
         store.proceed.notify_one();
         let output =
             tokio::time::timeout(Duration::from_secs(20), push.wait_with_output()).await??;
         let error = String::from_utf8(output.stderr)?;
         assert!(!output.status.success(), "{change}: {error}");
+        let reason = if change == "storage" {
+            "Canopy object ingestion failed"
+        } else {
+            "Canopy publication rejected"
+        };
         for reference in ["main", "early-sibling"] {
             assert!(
                 error.lines().any(|line| line.contains("[remote rejected]")
                     && line.contains(&format!(" -> {reference} "))
-                    && line.contains("Canopy publication rejected")),
+                    && line.contains(reason)),
                 "{change}: {error}"
             );
         }

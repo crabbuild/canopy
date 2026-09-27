@@ -17,7 +17,7 @@ use crate::{
 };
 
 mod plan;
-mod report;
+pub(crate) mod report;
 use plan::StagedPlan;
 
 const CHUNK_BYTES: usize = 512 * 1024;
@@ -78,7 +78,7 @@ impl RepositoryCell {
             .await?;
         match rejected {
             0 => Ok(response),
-            1 => report::rejected_report(&response),
+            1 => report::rejected_report(&response, report::REJECTED),
             _ => Err(PushError::InvalidResponse),
         }
     }
