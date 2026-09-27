@@ -861,10 +861,13 @@ Advertisements and fetches ignore this header.
 
 The Repository Cell stages the reply in SQLite chunks, then publishes its
 pointer and accepted ref updates in one transaction. Git rejection and no-op
-reports are recorded too. Failures before publication remain pending and can be
-retried. Response bodies are limited to 64 MiB and serialized response headers
-to 64 KiB. Completed records and abandoned staging chunks currently have no
-expiry or collector and consume the repository database allowance.
+reports are recorded too. Once a complete command list is decoded, cache
+preparation and native execution failures produce durable per-ref rejections.
+Retry with a new ID after recovery; the original ID replays its refusal.
+Incomplete uploads, decode failures and unavailable or uncertain response
+publication can still return transport errors. Response bodies are limited to
+64 MiB and serialized response headers to 64 KiB. Completed records and abandoned
+staging chunks currently have no expiry or collector and consume repository storage.
 
 ## Run the current service
 

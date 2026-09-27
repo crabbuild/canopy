@@ -326,3 +326,87 @@ async fn disconnected_ssh_push_finishes_publication_before_shutdown_releases_cel
     restored.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cold_ssh_push_preparation_failure_reports_rejection_before_any_refs_change() -> Result {
+    let Fixture {
+        workspace,
+        store,
+        server,
+        host,
+        source,
+        ssh,
+        url,
+        ..
+    } = fixture().await?;
+    git(Some(&source), &ssh, &["push", &url, "main"]).await?;
+    server.shutdown().await?;
+    let address = available_address().await?;
+    let restored = CanopyServer::start(
+        server_config(address, workspace.path().join("cold"), &host)?,
+        store.clone(),
+    )
+    .await?;
+    let ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
+    known_host(&workspace.path().join("known_hosts"), ssh_address, &host).await?;
+    let url = format!("ssh://git@{ssh_address}/canopy/publication.git");
+    let client = reqwest::Client::new();
+    let before = generation(&client, address).await?;
+    let original = git(None, &ssh, &["ls-remote", "--refs", &url]).await?;
+    store.read_armed.store(true, Ordering::SeqCst);
+    let child = git_command(
+        Some(&source),
+        &ssh,
+        &[
+            "push",
+            "--atomic",
+            &url,
+            "HEAD:refs/heads/preparation",
+            "HEAD:refs/heads/準備",
+        ],
+    )
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
+    tokio::time::timeout(Duration::from_secs(15), store.entered.notified()).await?;
+    store.fail.store(true, Ordering::SeqCst);
+    store.proceed.notify_one();
+    let output = child.wait_with_output().await?;
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{error}");
+    for name in ["preparation", "準備"] {
+        assert!(
+            error.lines().any(|line| line.contains("[remote rejected]")
+                && line.contains(&format!(" -> {name} "))
+                && line.contains("Canopy push failed before publication")),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        git(None, &ssh, &["ls-remote", "--refs", &url]).await?,
+        original
+    );
+    assert_eq!(generation(&client, address).await?, before);
+    git(
+        Some(&source),
+        &ssh,
+        &[
+            "push",
+            "--atomic",
+            &url,
+            "HEAD:refs/heads/preparation",
+            "HEAD:refs/heads/準備",
+        ],
+    )
+    .await?;
+    assert_eq!(generation(&client, address).await?, before + 1);
+    let clone = workspace.path().join("recovered");
+    git(None, &ssh, &["clone", &url, path_str(&clone)?]).await?;
+    assert_eq!(
+        tokio::fs::read(clone.join("large")).await?,
+        vec![0x6b; 2 * 1024 * 1024]
+    );
+    git(Some(&clone), &ssh, &["fsck", "--strict", "--full"]).await?;
+    restored.shutdown().await?;
+    Ok(())
+}

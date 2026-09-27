@@ -17,6 +17,7 @@ type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send 
 pub(crate) struct PausedBlobs {
     inner: InMemory,
     pub(crate) armed: AtomicBool,
+    pub(crate) read_armed: AtomicBool,
     pub(crate) fail: AtomicBool,
     pub(crate) entered: Notify,
     pub(crate) proceed: Notify,
@@ -62,6 +63,16 @@ impl ObjectStore for PausedBlobs {
         path: &StorePath,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        if path.as_ref().contains("/git-blobs/") && self.read_armed.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.proceed.notified().await;
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(object_store::Error::Generic {
+                    store: "publication-race-store",
+                    source: Box::new(std::io::Error::other("injected blob preparation failure")),
+                });
+            }
+        }
         self.inner.get_opts(path, options).await
     }
     fn delete_stream(&self, paths: StoreStream<StorePath>) -> StoreStream<StorePath> {

@@ -4,6 +4,40 @@ pub(crate) const REJECTED: &str =
     "Canopy publication rejected: refs, permissions or policy changed; fetch and retry";
 const PACKET_BYTES: usize = 65520;
 
+pub(crate) fn rejected_commands<'a>(
+    names: impl Iterator<Item = &'a str>,
+    report_status: bool,
+    sideband: bool,
+    reason: &str,
+) -> Result<GitHttpResponse, PushError> {
+    if !report_status {
+        return Ok(GitHttpResponse {
+            status: 409,
+            headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            body: format!("{reason}\n").into_bytes(),
+        });
+    }
+    let mut report = Vec::new();
+    write_packet(&mut report, format!("unpack {reason}\n").as_bytes())?;
+    for name in names {
+        write_packet(&mut report, format!("ng {name} {reason}\n").as_bytes())?;
+    }
+    report.extend_from_slice(b"0000");
+    let body = if sideband {
+        sideband_report(&report, Vec::new())?
+    } else {
+        report
+    };
+    Ok(GitHttpResponse {
+        status: 200,
+        headers: vec![(
+            "Content-Type".into(),
+            "application/x-git-receive-pack-result".into(),
+        )],
+        body,
+    })
+}
+
 pub(crate) fn rejected_report(
     response: &GitHttpResponse,
     reason: &str,
@@ -71,13 +105,7 @@ pub(crate) fn rejected_report(
     }
     report.extend_from_slice(b"0000");
     let body = if sideband {
-        for part in report.chunks(PACKET_BYTES - 5) {
-            let mut payload = vec![1];
-            payload.extend_from_slice(part);
-            write_packet(&mut progress, &payload)?;
-        }
-        progress.extend_from_slice(b"0000");
-        progress
+        sideband_report(&report, progress)?
     } else {
         report
     };
@@ -91,6 +119,16 @@ pub(crate) fn rejected_report(
             .collect(),
         body,
     })
+}
+
+fn sideband_report(report: &[u8], mut progress: Vec<u8>) -> Result<Vec<u8>, PushError> {
+    for part in report.chunks(PACKET_BYTES - 5) {
+        let mut payload = vec![1];
+        payload.extend_from_slice(part);
+        write_packet(&mut progress, &payload)?;
+    }
+    progress.extend_from_slice(b"0000");
+    Ok(progress)
 }
 
 fn packet<'a>(bytes: &mut &'a [u8]) -> Result<Option<&'a [u8]>, PushError> {

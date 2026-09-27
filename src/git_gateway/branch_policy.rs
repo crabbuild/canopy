@@ -7,21 +7,63 @@ use crate::{
 const PREFIX_LIMIT: usize = 40 * 1024 * 1024;
 const ZERO: &str = "0000000000000000000000000000000000000000";
 
+pub(super) enum PushCommands {
+    OtherMedia,
+    Limited,
+    Parsed {
+        updates: Vec<RefUpdate>,
+        report_status: bool,
+        sideband: bool,
+    },
+}
+
+impl PushCommands {
+    pub(super) async fn read(request: &GitHttpRequest) -> Result<Self, InputError> {
+        // Native Git owns media-type errors and command-limit hook reports.
+        if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
+            return Ok(Self::OtherMedia);
+        }
+        match request
+            .body
+            .packet_prefix(PREFIX_LIMIT)
+            .await
+            .and_then(|bytes| commands(&bytes))
+        {
+            Ok(commands) => Ok(commands),
+            Err(InputError::TooLarge) => Ok(Self::Limited),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn rejection(&self, reason: &str) -> Result<Option<GitHttpResponse>, PushError> {
+        let Self::Parsed {
+            updates,
+            report_status,
+            sideband,
+        } = self
+        else {
+            return Ok(None);
+        };
+        crate::push::report::rejected_commands(
+            updates.iter().map(|update| update.name.as_str()),
+            *report_status,
+            *sideband,
+            reason,
+        )
+        .map(Some)
+    }
+}
+
 impl GitGateway {
     pub(super) async fn install_branch_policy(
         &self,
         cached: &CachedRepository,
-        request: &GitHttpRequest,
+        commands: &PushCommands,
     ) -> Result<(), GatewayError> {
-        // Let the backend report invalid media types before interpreting a Git
-        // command stream; these responses are recorded for exact push replay.
-        if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
-            return Ok(());
-        }
-        let prefix = request.body.packet_prefix(PREFIX_LIMIT).await;
-        let updates = match prefix.and_then(|bytes| commands(&bytes)) {
-            Ok(updates) => updates,
-            Err(InputError::TooLarge) => {
+        let updates = match commands {
+            PushCommands::OtherMedia => return Ok(()),
+            PushCommands::Parsed { updates, .. } => updates,
+            PushCommands::Limited => {
                 let message = format!(
                     "Canopy push command limit exceeded ({MAX_UPDATES} updates or {PREFIX_LIMIT} command bytes)"
                 );
@@ -35,7 +77,6 @@ impl GitGateway {
                     .await?;
                 return Ok(());
             }
-            Err(error) => return Err(error.into()),
         };
         let has_rules = self
             .repository
@@ -116,7 +157,9 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
+fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
+    let mut report_status = false;
+    let mut sideband = false;
     let mut updates = Vec::new();
     let mut names = BTreeSet::new();
     loop {
@@ -129,7 +172,11 @@ fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
             .and_then(|s| usize::from_str_radix(s, 16).ok())
             .ok_or(InputError::Commands)?;
         if length == 0 {
-            return Ok(updates);
+            return Ok(PushCommands::Parsed {
+                updates,
+                report_status,
+                sideband,
+            });
         }
         if !(5..=65520).contains(&length) {
             return Err(InputError::Commands);
@@ -147,6 +194,13 @@ fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
             if !updates.is_empty() {
                 return Err(InputError::Commands);
             }
+            for capability in payload[nul + 1..].split(|byte| *byte == b' ') {
+                match capability {
+                    b"report-status" | b"report-status-v2" => report_status = true,
+                    b"side-band-64k" => sideband = true,
+                    _ => {}
+                }
+            }
             &payload[..nul]
         } else {
             payload
@@ -160,7 +214,7 @@ fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
         let old = parse_oid(&payload[..40]).ok_or(InputError::Commands)?;
         let new = parse_oid(&payload[41..81]).ok_or(InputError::Commands)?;
         let name = std::str::from_utf8(&payload[82..]).map_err(|_| InputError::Commands)?;
-        if !names.insert(name) {
+        if name.contains(['\0', '\n', '\r']) || !names.insert(name) {
             return Err(InputError::Commands);
         }
         updates.push(RefUpdate {
@@ -203,7 +257,15 @@ mod tests {
             .as_bytes(),
         );
         input.extend_from_slice(b"0000PACKignored");
-        let plan = commands(&input).expect("valid commands");
+        let PushCommands::Parsed {
+            updates: plan,
+            report_status,
+            sideband,
+        } = commands(&input).expect("valid commands")
+        else {
+            panic!("parsed commands");
+        };
+        assert!(report_status && sideband);
         assert_eq!(plan[0].name, "refs/heads/a'b");
         assert_eq!(quote(&plan[0].name), "'refs/heads/a'\\''b'");
         assert_eq!(plan[0].new_oid, Some([0x12; 20]));

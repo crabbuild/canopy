@@ -3609,3 +3609,46 @@ Non-blob history preparation remains repository-wide. Native size filters still
 include missing blobs whose sizes are unknown, as confirmed by upstream source
 and the cold size-filter cases. Provider/scale latency qualification and the
 other compatibility requirements remain open.
+
+
+## Durable push preparation refusals
+
+The gateway now parses the bounded command list before preparing a disposable
+repository. Cache admission, hydration, hook preparation and native execution
+failures can produce an unpack error plus per-ref `ng` statuses without a
+native success report. The shared encoder follows Git's
+[report-status contract](https://git-scm.com/docs/pack-protocol#_report_status),
+including report-status-v2 and channel-one sideband framing. Clients declining
+reports receive HTTP 409. Command parsing is shared with branch-policy setup.
+
+Ref publication remains outside this failure handler. The refusal completes
+without a ref plan; an already completed same-ID attempt retains its original
+response, including a concurrent success. Response-staging errors, unavailable
+Cell completion and uncertain publication remain transport failures. Incomplete
+spooling/decompression and unparsed command lists retain their existing errors.
+A new operation ID is required after a durable refusal, even if resources recover.
+
+Evidence: the new HTTP fixture reproduced HTTP 500 on the previous code. It now
+passes plain/sideband/no-report requests, stock Git, Unicode sibling refs, exact
+replay through a fresh gateway, unchanged ref generations, successful retry and
+a concurrent same-ID success. The cache-admission fixture proves durable refusal
+after disk exhaustion, including replay after capacity returns. Three SSH
+publication tests pass: cold preparation failure and retry, late ACL/policy/blob
+storage refusal after native acceptance, and disconnect/shutdown publication
+drain. Recovered clones pass strict/full fsck. The adjacent 4,096-ref mirror gate
+also passes, including command-limit rejection and restart. The owner-restart
+fixture previously passed dependency-default storage limits to an application
+host, failing the runtime's declaration equality check after quota removal.
+Its bootstrap and recovery now read the application declaration, matching
+production acquisition. Bare-runtime unit fixtures do not install that host
+contract; the other hosted integrations construct the production server.
+The owner-restart gate now passes, including lost-reply replay after local disk
+loss. Four parser/report unit tests, all-target Clippy with warnings denied,
+formatting and diff checks also pass. These tests run in the existing non-ignored
+Cargo CI suite; hosted CI has not run for this change.
+
+Production growth adds one shared preparation-error boundary and negotiated
+report construction; the push method moved into its own module to keep the
+gateway readable. No dependency, schema or compatibility shim was added.
+Provider outage/owner-loss combinations and uncertain-response fault injection
+remain open, together with the advanced push/LFS, SHA-256 and capacity gates.

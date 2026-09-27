@@ -217,9 +217,19 @@ Concurrent attempts return whichever response completed first, including a
 success committed by another gateway. Ingestion can leave unreferenced objects,
 but cannot publish refs. Existing native rejection reasons remain intact.
 
-Failures before a usable native report, or while staging/committing the response,
-remain transport errors. If completion has not committed, an exact retry can
-rerun against current refs. An uncertain Cell outcome is not relabeled as a
+After decoding a complete, bounded command list, failures reading Cell refs,
+building the disposable cache, installing hooks or executing native Git produce
+a report from those commands: an unpack error and an `ng` for each requested
+ref. Negotiated report-status-v2 and side-band-64k use Git's normal failure
+format; clients declining reports receive HTTP 409. Cache disk admission has a
+specific reason; other failures advise retry after recovery. The response is
+staged and completed without a ref plan, preserving exact replay and the first
+completed outcome across concurrent gateways. Neither preparation nor native
+Git can publish authoritative Cell refs.
+
+Incomplete upload/decompression, malformed or unparsed command lists, and
+failures staging/committing the response remain transport errors. If completion
+has not committed, an exact retry can rerun against current refs. An uncertain Cell outcome is not relabeled as a
 ref rejection: the mutation may already have committed. A lost reply after
 publication returns the original report without changing refs, even when later operations
 have changed them. Retrying a new Git invocation is not necessarily an exact

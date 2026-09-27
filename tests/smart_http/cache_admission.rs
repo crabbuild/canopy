@@ -67,20 +67,29 @@ pub async fn verify(
     body.extend_from_slice(&pack);
     encoded_input::reject_corruption_and_expansion(repository, budget, client, url, &body).await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let request = || {
+    let request = |id: &str| {
         client
             .post(format!("{url}/git-receive-pack"))
             .bearer_auth("local-test-token")
             .header("Content-Type", "application/x-git-receive-pack-request")
-            .header("Idempotency-Key", &id)
+            .header("Idempotency-Key", id)
             .body(body.clone())
     };
     let before = repository.refs_page("", None).await?.output.generation;
     let retained = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - retained - body.len() as u64 - 4096)?;
-    let response = request().send().await?;
-    assert_eq!(response.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
-    assert_eq!(response.text().await?, "Git cache disk budget exhausted");
+    let response = request(&id).send().await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let refused = response.bytes().await?;
+    let report = String::from_utf8_lossy(&refused);
+    for (name, _) in &advertised {
+        assert!(
+            report.contains(&format!(
+                "ng {name} Canopy push failed before publication: cache disk budget exhausted"
+            )),
+            "{report}"
+        );
+    }
     assert!(
         repository
             .ref_state("refs/heads/quota", None)
@@ -96,7 +105,21 @@ pub async fn verify(
     );
     drop(occupied);
 
-    let response = request().send().await?.error_for_status()?.bytes().await?;
+    // Resource recovery cannot change the recorded outcome of the same push ID.
+    let replay = request(&id)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    assert_eq!(replay, refused);
+    let id = uuid::Uuid::new_v4().to_string();
+    let response = request(&id)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
     assert!(
         response
             .windows(b"ok refs/heads/quota".len())
@@ -115,7 +138,7 @@ pub async fn verify(
         repository.refs_page("", None).await?.output.generation,
         before + 1
     );
-    let replay = request()
+    let replay = request(&id)
         .header("Content-Encoding", "identity")
         .send()
         .await?
@@ -128,7 +151,7 @@ pub async fn verify(
         before + 1
     );
     assert_eq!(
-        request()
+        request(&id)
             .header("Content-Encoding", "gzip")
             .send()
             .await?

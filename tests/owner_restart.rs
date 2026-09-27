@@ -73,7 +73,12 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         .runtime()
         .bootstrap(
             proof,
-            replica(&layout, &target, *observed.value().incarnation.as_bytes())?,
+            replica(
+                &application,
+                &layout,
+                &target,
+                *observed.value().incarnation.as_bytes(),
+            )?,
             authority.clone(),
             observed,
             first_disk.path().join("repository.sqlite"),
@@ -268,7 +273,12 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         .runtime()
         .acquire_idle_restored(
             proof,
-            replica(&layout, &target, *control.value().incarnation.as_bytes())?,
+            replica(
+                &application,
+                &layout,
+                &target,
+                *control.value().incarnation.as_bytes(),
+            )?,
             authority,
             control,
             second_disk.path().join("repository.sqlite"),
@@ -509,15 +519,25 @@ fn unix_now_ms() -> Result<i64, Box<dyn std::error::Error>> {
 }
 
 fn replica(
+    application: &CompiledApplication,
     layout: &CellStorageLayout,
     target: &crab_cell_runtime::CellTarget,
     incarnation: [u8; 16],
 ) -> Result<CellReplica, Box<dyn std::error::Error>> {
+    let cell_type = application
+        .cell_types()
+        .iter()
+        .find(|cell_type| cell_type.namespace() == target.namespace())
+        .ok_or("repository Cell declaration missing")?;
     Ok(CellReplica::new(
         layout.clone(),
         *target.cell_id().as_bytes(),
         incarnation,
-        Limits::default(),
+        Limits {
+            max_database_bytes: cell_type.database_limit_bytes(),
+            max_capture_bytes: cell_type.capture_limit_bytes(),
+            ..Limits::default()
+        },
     )?)
 }
 
