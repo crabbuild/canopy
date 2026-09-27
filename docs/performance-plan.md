@@ -335,3 +335,34 @@ transitions. Prioritize measured active admission, bounded concurrent activation
 and retained validated local state. Larger realistic corpora, sustained load,
 independent clients, resource accounting and all-primitive workloads remain
 required. These read results alone make no owner-recovery claim.
+
+
+## Configured 100-Cell process qualification
+
+A development build of `d03f3cb` ran with `max_active_repositories: 100` against
+RustFS `1.0.0-beta.8-glibc`; artifact ID `canopy-active100-4a68afc585f3`.
+The corpus contained 100 identities, with three one-commit Git samples. The
+client/provider/server were colocated on the same shared 12-logical-CPU macOS
+arm64 development host. This run verifies configuration and recovery, rather
+than qualifying the reference Linux performance target.
+
+| Read workload | Rate / duration | Outcomes | Scheduled p95 / p99 |
+| --- | --- | --- | --- |
+| Three prewarmed repositories, metadata | 20 requests/s / 15 s | 300 successful | 14.074 / 14.479 ms |
+| Same resident set, Git v2 discovery | 10 requests/s / 10 s | 100 successful | 108.097 / 147.904 ms |
+| Uniform choices over all 100 resident repositories, metadata | 10 requests/s / 15 s | 150 successful | 14.149 / 14.314 ms |
+
+No measured request failed or was retried. Git caches were not prewarmed before
+the discovery row. Seeding took 29.330 seconds. After owner SIGKILL and lease
+expiry, a fresh local workspace verified all 100 identities and cloned all three
+populated samples using Git v0/v2, exact hashes and strict fsck. Shutdown and
+fixture cleanup succeeded. Sampled parent-server RSS peaked at 108,544,000 bytes;
+child Git processes, provider/client memory and kernel cache charges are excluded.
+
+An earlier attempt of the same development build stopped after 30 creations
+with HTTP 503 and pending Directory command evidence at approximately five
+seconds. Its underlying delay remains unresolved. The successful repeat's
+recorded LTX publication lag peaked at 547 ms during seeding/reads. Those timings
+do not explain the earlier failure, whose runtime publication tracing was off.
+The small corpus, short schedules, different build profile and active-set sizes
+prevent a controlled performance comparison with the initial 1,000-identity run.

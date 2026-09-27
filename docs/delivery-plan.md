@@ -2883,3 +2883,15 @@ evidence and fences admission. The fixture failed, preserved its logs and remove
 its processes/container/volume. This is not a successful 100-repository process
 qualification. A repeat with runtime publication timings is being investigated;
 no larger-set process or latency claim follows from the integration test.
+
+The traced repeat (`canopy-active100-4a68afc585f3`, production source `d03f3cb`,
+development build) passed: 100 identities seeded, 300 warm metadata requests,
+100 Git v2 discovery requests and 150 uniformly selected metadata requests all
+succeeded. After SIGKILL and lease expiry, a fresh workspace recovered every
+identity; all three populated samples cloned under stock Git v0/v2 with exact
+commit/file hashes and strict fsck. Graceful shutdown and fixture cleanup passed.
+Sampled parent-server RSS peaked at 108,544,000 bytes; this excludes child Git,
+provider/client and kernel cache memory. The corpus was 97 empty repositories
+and three one-commit samples on a shared colocated macOS host. The preceding
+failed attempt remains an unresolved tail-latency/fencing finding; this repeat
+does not establish stable production performance.
