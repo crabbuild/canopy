@@ -1,7 +1,6 @@
 //! Bounded repository residency with request pins and confirmed Cell release.
 
 use std::{
-    collections::HashMap,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -41,6 +40,7 @@ pub(super) struct LoadedRepository {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResidencyState {
     Serving,
+    Releasing,
     RefreshHandle,
     Released,
 }
@@ -106,38 +106,65 @@ impl RepositoryManager {
         self: &Arc<Self>,
         entry: RepositoryEntry,
     ) -> Result<RepositoryRoute, ServerError> {
+        if let Some(route) = self.local_route(&entry).await? {
+            return Ok(route);
+        }
         let manager = Arc::clone(self);
         // Client cancellation must not abandon a release or acquisition halfway
         // through. Shutdown waits for these tracked tasks before draining.
         self.tasks
             .spawn(async move {
-                let mut loaded = manager.loaded.lock().await;
-                manager.load_locked(&entry, &mut loaded).await
+                let _change = manager.residency_change.lock().await;
+                manager.load_repository(&entry).await
             })
             .await?
     }
 
-    async fn load_locked(
+    async fn local_route(
         &self,
         entry: &RepositoryEntry,
-        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
+    ) -> Result<Option<RepositoryRoute>, ServerError> {
+        let mut loaded = self.loaded.lock().await;
+        let Some(repository) = loaded.get_mut(&entry.repository_id).filter(|repository| {
+            repository.local
+                && repository.initialized
+                && repository.state == ResidencyState::Serving
+        }) else {
+            return Ok(None);
+        };
+        self.route(entry, repository).map(Some)
+    }
+
+    // The transition guard serializes slot admission and ownership changes.
+    // The registry lock only protects memory and request pins, never storage I/O.
+    async fn load_repository(
+        &self,
+        entry: &RepositoryEntry,
     ) -> Result<RepositoryRoute, ServerError> {
+        if let Some(route) = self.local_route(entry).await? {
+            return Ok(route);
+        }
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
-        if loaded
+        let remote_route = self
+            .loaded
+            .lock()
+            .await
             .get(&entry.repository_id)
-            .is_some_and(|repository| !repository.local)
-            && !self.peer.remote_owner(&target).await?
-        {
+            .is_some_and(|repository| !repository.local);
+        if remote_route && !self.peer.remote_owner(&target).await? {
             // Remote cache ownership is disposable. Reacquire idle/expired Cell
             // authority locally before binding a new route after owner loss.
-            loaded.remove(&entry.repository_id);
+            self.loaded.lock().await.remove(&entry.repository_id);
         }
-        match loaded
+        let state = self
+            .loaded
+            .lock()
+            .await
             .get(&entry.repository_id)
-            .map(|repository| repository.state)
-        {
+            .map(|repository| repository.state);
+        match state {
             Some(ResidencyState::Released) => {
-                self.cleanup_released(entry.repository_id, loaded).await?;
+                self.cleanup_released(entry.repository_id).await?;
             }
             Some(ResidencyState::RefreshHandle) => {
                 let target = repository_target(self.tenant, self.application, entry.repository_id)?;
@@ -151,7 +178,7 @@ impl RepositoryManager {
                     .ok_or(ServerError::Repository(
                         "Cell release failed; restart the node to recover",
                     ))?;
-                loaded.insert(
+                self.loaded.lock().await.insert(
                     entry.repository_id,
                     self.bind_repository(
                         entry,
@@ -163,9 +190,16 @@ impl RepositoryManager {
             }
             _ => {}
         }
-        if !loaded.contains_key(&entry.repository_id) {
-            if loaded.len() >= RESIDENT_REPOSITORIES {
-                self.evict_repository(loaded).await?;
+        let (present, full) = {
+            let loaded = self.loaded.lock().await;
+            (
+                loaded.contains_key(&entry.repository_id),
+                loaded.len() >= RESIDENT_REPOSITORIES,
+            )
+        };
+        if !present {
+            if full {
+                self.evict_repository().await?;
             }
             let remote = self.peer.remote_owner(&target).await?;
             let client = if remote {
@@ -192,23 +226,38 @@ impl RepositoryManager {
                 tracing::debug!(repository = %hex::encode(entry.repository_id), elapsed_seconds = started.elapsed().as_secs_f64(), "acquired repository Cell");
                 CellClient::local(self.node.application().registry(), handle)
             };
-            loaded.insert(
+            self.loaded.lock().await.insert(
                 entry.repository_id,
                 self.bind_repository(entry, target, client, !remote)?,
             );
         }
+        let initialize = self
+            .loaded
+            .lock()
+            .await
+            .get(&entry.repository_id)
+            .filter(|repository| !repository.initialized)
+            .map(|repository| Arc::clone(&repository.repository));
+        if let Some(repository) = initialize {
+            // Keep the acquired Cell through an uncertain initialization result.
+            // A later request retries setup before any fast-path route is exposed.
+            repository
+                .ensure_owner(mutation_identity()?, &entry.owner)
+                .await?;
+        }
+        let mut loaded = self.loaded.lock().await;
         let existing = loaded
             .get_mut(&entry.repository_id)
             .ok_or(ServerError::Repository("loaded repository is absent"))?;
-        if !existing.initialized {
-            // Retain the acquired Cell on an uncertain owner-initialization result.
-            // A later request retries the idempotent initialization on this owner.
-            existing
-                .repository
-                .ensure_owner(mutation_identity()?, &entry.owner)
-                .await?;
-            existing.initialized = true;
-        }
+        existing.initialized = true;
+        self.route(entry, existing)
+    }
+
+    fn route(
+        &self,
+        entry: &RepositoryEntry,
+        existing: &mut LoadedRepository,
+    ) -> Result<RepositoryRoute, ServerError> {
         if existing.name != entry.name {
             existing.router = self.router_for(entry, Arc::clone(&existing.gateway))?;
             existing.name.clone_from(&entry.name);
@@ -222,40 +271,56 @@ impl RepositoryManager {
         })
     }
 
-    async fn evict_repository(
-        &self,
-        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
-    ) -> Result<(), ServerError> {
-        if let Some(id) = loaded.iter().find_map(|(id, repository)| {
-            (repository.state == ResidencyState::Released).then_some(*id)
-        }) {
-            return self.cleanup_released(id, loaded).await;
+    async fn evict_repository(&self) -> Result<(), ServerError> {
+        let released = self
+            .loaded
+            .lock()
+            .await
+            .iter()
+            .find_map(|(id, repository)| {
+                (repository.state == ResidencyState::Released).then_some(*id)
+            });
+        if let Some(id) = released {
+            return self.cleanup_released(id).await;
         }
-        if let Some(id) = loaded.iter().find_map(|(id, repository)| {
-            (!repository.local && Arc::strong_count(&repository.pin) == 1).then_some(*id)
-        }) {
-            loaded.remove(&id);
-            return Ok(());
+        {
+            let mut loaded = self.loaded.lock().await;
+            if let Some(id) = loaded.iter().find_map(|(id, repository)| {
+                (!repository.local && Arc::strong_count(&repository.pin) == 1).then_some(*id)
+            }) {
+                loaded.remove(&id);
+                return Ok(());
+            }
         }
         let candidates = self.node.idle_transfer_candidates().await?;
-        let mut eligible = Vec::new();
-        for (id, repository) in loaded.iter() {
-            if Arc::strong_count(&repository.pin) != 1 {
-                continue;
+        let (id, cell, generation) = {
+            let mut loaded = self.loaded.lock().await;
+            let mut eligible = Vec::new();
+            for (id, repository) in loaded.iter() {
+                if Arc::strong_count(&repository.pin) != 1 {
+                    continue;
+                }
+                let target = repository_target(self.tenant, self.application, *id)?;
+                if let Some((cell, generation, _, _)) = candidates
+                    .iter()
+                    .find(|(cell, ..)| *cell == target.cell_id())
+                {
+                    eligible.push((repository.last_used, *id, *cell, *generation));
+                }
             }
-            let target = repository_target(self.tenant, self.application, *id)?;
-            if let Some((cell, generation, _, _)) = candidates
-                .iter()
-                .find(|(cell, ..)| *cell == target.cell_id())
-            {
-                eligible.push((repository.last_used, *id, *cell, *generation));
-            }
-        }
-        eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1));
-        let Some((_, id, cell, generation)) = eligible.first().copied() else {
-            return Err(ServerError::Runtime(Error::Capacity(
-                "repository residency",
-            )));
+            eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1));
+            let Some((_, id, cell, generation)) = eligible.first().copied() else {
+                return Err(ServerError::Runtime(Error::Capacity(
+                    "repository residency",
+                )));
+            };
+            // Claim the candidate under the same lock used to pin warm requests.
+            // No new request may acquire this handle once release can start.
+            loaded
+                .get_mut(&id)
+                .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                .state = ResidencyState::Releasing;
+            (id, cell, generation)
         };
         let mut result = self
             .node
@@ -271,27 +336,26 @@ impl RepositoryManager {
                 .release_idle_cell(cell, self.session, generation)
                 .await;
         }
-        let repository = loaded
-            .get_mut(&id)
-            .ok_or(ServerError::Repository("eviction candidate is absent"))?;
-        repository.state = if result.is_ok() {
-            ResidencyState::Released
-        } else {
-            ResidencyState::RefreshHandle
-        };
+        {
+            let mut loaded = self.loaded.lock().await;
+            let repository = loaded
+                .get_mut(&id)
+                .ok_or(ServerError::Repository("eviction candidate is absent"))?;
+            repository.state = if result.is_ok() {
+                ResidencyState::Released
+            } else {
+                ResidencyState::RefreshHandle
+            };
+        }
         result?;
         // Only a confirmed release permits dropping handles and deleting local
         // SQLite artifacts. Failed or ambiguous releases retain the local state.
-        self.cleanup_released(id, loaded).await?;
+        self.cleanup_released(id).await?;
         tracing::debug!(repository = %hex::encode(id), "released idle repository Cell");
         Ok(())
     }
 
-    async fn cleanup_released(
-        &self,
-        id: [u8; 16],
-        loaded: &mut HashMap<[u8; 16], LoadedRepository>,
-    ) -> Result<(), ServerError> {
+    async fn cleanup_released(&self, id: [u8; 16]) -> Result<(), ServerError> {
         // Keep the released entry until deletion completes. A failed cleanup must
         // be retried before restore, whose destination must not already exist.
         match tokio::fs::remove_dir_all(self.local.path().join(hex::encode(id))).await {
@@ -299,7 +363,7 @@ impl RepositoryManager {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        loaded.remove(&id);
+        self.loaded.lock().await.remove(&id);
         Ok(())
     }
 

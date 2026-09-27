@@ -21,6 +21,7 @@ enum ReleaseFault {
 struct ReleaseStore {
     inner: InMemory,
     fault: Mutex<Option<(StorePath, ReleaseFault)>>,
+    paused_read: Mutex<Option<StorePath>>,
     entered: Notify,
     proceed: Notify,
 }
@@ -108,6 +109,19 @@ impl ObjectStore for ReleaseStore {
         path: &StorePath,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        let pause = {
+            let mut armed = self.paused_read.lock().unwrap();
+            if armed.as_ref() == Some(path) {
+                armed.take();
+                true
+            } else {
+                false
+            }
+        };
+        if pause {
+            self.entered.notify_one();
+            self.proceed.notified().await;
+        }
         self.inner.get_opts(path, options).await
     }
 
@@ -367,4 +381,105 @@ async fn denied_release_retains_local_state_and_recovers_after_node_restart() ->
     run_git(Some(&clone), &["fsck", "--full"]).await?;
     server.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_release_keeps_other_warm_repositories_available() -> Result {
+    let fixture = Fixture::new().await?;
+    let pending = fixture.interrupt_release(ReleaseFault::Pause).await?;
+    let request = fixture
+        .client
+        .get(format!(
+            "http://{}/api/repositories/original",
+            fixture.address
+        ))
+        .bearer_auth("local-test-token");
+    let mut returning = tokio::spawn(async move { request.send().await });
+    let held = timeout(Duration::from_millis(100), &mut returning).await;
+    let warm = fixture.read_warm_repository().await;
+    fixture.store.proceed.notify_one();
+    pending.await??.error_for_status()?;
+    assert!(
+        held.is_err(),
+        "a releasing repository must wait for a fresh serving route"
+    );
+    returning.await??.error_for_status()?;
+    warm?;
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_cold_activation_keeps_other_warm_repositories_available() -> Result {
+    let fixture = Fixture::new().await?;
+    create(&fixture.client, fixture.address, "fourth").await?;
+    assert!(!fixture.repository_dir.exists());
+    *fixture.store.paused_read.lock().unwrap() = Some(
+        fixture
+            .layout
+            .control_path(fixture.target.cell_id().as_bytes()),
+    );
+    let mut requests = tokio::task::JoinSet::new();
+    for _ in 0..12 {
+        let request = fixture
+            .client
+            .get(format!(
+                "http://{}/api/repositories/original",
+                fixture.address
+            ))
+            .bearer_auth("local-test-token");
+        requests.spawn(async move {
+            request
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<serde_json::Value>()
+                .await
+        });
+    }
+    fixture.store.wait().await?;
+    let warm = fixture.read_warm_repository().await;
+    fixture.store.proceed.notify_one();
+    while let Some(result) = requests.join_next().await {
+        assert_eq!(result??["name"], "original");
+    }
+    warm?;
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+impl Fixture {
+    async fn read_warm_repository(&self) -> Result {
+        timeout(Duration::from_secs(2), async {
+            let response = self
+                .client
+                .get(format!("http://{}/api/repositories/third", self.address))
+                .bearer_auth("local-test-token")
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<serde_json::Value>()
+                .await?;
+            assert_eq!(response["name"], "third");
+            let response = self
+                .client
+                .get(format!(
+                    "http://{}/canopy/third.git/info/refs?service=git-upload-pack",
+                    self.address
+                ))
+                .bearer_auth("local-test-token")
+                .header("Git-Protocol", "version=2")
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            assert!(response.starts_with(b"000eversion 2\n"));
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
 }

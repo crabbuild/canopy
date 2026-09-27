@@ -166,6 +166,7 @@ pub(crate) struct RepositoryManager {
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
+    residency_change: Mutex<()>,
     tasks: TaskTracker,
 }
 
@@ -514,6 +515,7 @@ impl RunningServer {
                 public_url: config.public_url,
                 ready,
                 loaded: Mutex::new(HashMap::new()),
+                residency_change: Mutex::new(()),
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));

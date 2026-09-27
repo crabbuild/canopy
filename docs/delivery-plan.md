@@ -33,7 +33,8 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Qualify the bounded Linux deployment and residency under faults and larger
+2. Execute the [repository-density performance plan](performance-plan.md),
+   then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
    three repository gateway entries, backed by local or remote Cells. Inactive
    local repositories release their Cell and reload on demand; unpinned remote
@@ -2714,3 +2715,49 @@ storage prefix; no migration or compatibility reader is added. Cargo dependencie
 and lockfile are unchanged. Repository-policy/grant audit, denied-request logging,
 retention/export and account deletion remain open, along with the other hosting
 and production-capacity gates.
+
+
+## Warm repository routing during cold transitions
+
+On 2026-09-26, repository routing separates short registry access from awaited
+ownership transitions. A ready local entry can be pinned and routed while
+another repository waits on cold admission, owner release or local cleanup.
+The transition guard still serializes slot admission and ownership changes.
+A selected eviction candidate becomes releasing under the registry lock before
+runtime release begins, so no new local request can pin the closing handle.
+Initialization and failed-release recovery must finish before fast routing.
+
+Evidence:
+
+- Both new HTTP regression tests fail with a warm-request timeout against the
+  previous residency implementation from `91d5b40`. They pass with the new path.
+  One pauses cold ownership lookup; twelve concurrent requests for the same
+  repository recover, while a different warm repository serves metadata and
+  Git v2 discovery before the pause is lifted. The other pauses authoritative
+  release, proves warm metadata/discovery continue, and holds a returning
+  request for the releasing repository until a fresh serving route is available.
+  Both clone the original repository and verify its exact commit and bytes with
+  full fsck after the transition. These use real HTTP, Cellule and native Git
+  with an instrumented in-memory object store; they are not provider latency
+  or large-density benchmarks.
+- All eight residency tests pass, including fully pinned admission, disconnected
+  requests, lost release replies, denied release, failed cleanup and repeated
+  six-repository Git/LFS restoration. Two response-pin unit tests also pass.
+- Both peer tests pass: distinct owners and Directory recovery, plus moving
+  repository history and serialized cross-gateway pushes. Seven lifecycle tests
+  pass, covering startup/shutdown cancellation, failed drain, maintenance and
+  backup boundaries. The stock two-repository Git/LFS test also passes, including
+  rename, ACL and restored clone behavior. Total scoped tests: twenty.
+- All-target Clippy with warnings denied, the optimized binary build, Rust
+  formatting and diff-whitespace checks pass.
+
+The two production files grow by 66 lines: the separate transition guard,
+explicit releasing state and short lock scopes move storage/runtime waits out
+of request pinning without weakening lifecycle ownership. No dependency, schema,
+wire format or durable storage layout changes occur in this slice.
+
+The three-entry limit, one SQL worker, serialized cold transitions and verified
+owner checks for remote routes remain. The next steps are the capacity driver,
+resource-derived admission and incremental Git caches in
+[the performance plan](performance-plan.md). Thousand-repository density and
+warm latency targets remain unproven; all broader delivery gates remain open.
