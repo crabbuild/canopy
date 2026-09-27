@@ -753,21 +753,19 @@ blob with `allowReachableSHA1InWant`. Native validation alone cannot authorize
 arbitrary tree/blob wants. The index is populated with graph certificates and
 requires a fresh schema/release; there is no backfill or old-reader fallback.
 
-An exact `blob:none` request uses a separate insertion cursor and the partial
-`objects_structure_sequence` index to hydrate non-blob objects. It also hydrates
-ref tips, peeled tag targets and explicit wants. Other ordinary blob bodies stay
-absent until needed. Cursor advancement follows verified page completion; a
-blob-only tail advances to the captured high-water mark. The full-object cursor
-stays independent for push/merge preparation. Fetch snapshots prepare missing
-blobs for each request's validated wants; reusing a snapshot never skips a new
-requested closure. Shared immutable bytes and snapshot ownership use the same
-disk accounting and worker fences.
+Fetch caches first hydrate ref tips and peeled tag targets for native discovery.
+After validating each request's wants, they page certified edges and hydrate only
+reachable non-blob structure. An exact `blob:none` request also hydrates explicit
+blob wants; ordinary blob bodies stay absent until needed. Full-object sequence
+hydration remains for push/merge preparation. Reusing a fetch snapshot never
+skips a new requested closure. Shared immutable bytes and snapshot ownership use
+the same disk accounting and worker fences.
 
 Full fetches and other filters use native `rev-list --objects --missing=print`
 with requested OIDs on stdin, without `--all`, to enumerate missing reachable
 blobs. Filtered requests pass the same `--filter` specification to this walk;
 tree/type/combined filters can omit blobs without fetching their bodies. Explicit
-wants and tag chains are loaded first; all non-blob structure is already present. Missing IDs stream in batches of at most 128 into the existing
+wants and tag chains are loaded first, followed by requested non-blob structure. Missing IDs stream in batches of at most 128 into the existing
 bounded Cell reads and verified cache writes. The shared object lock serializes
 hydration until the request can safely reach upload-pack. Enumeration process
 failures abort preparation. The shared native object walker also continues to
@@ -777,10 +775,10 @@ See [Git rev-list's missing-object contract](https://git-scm.com/docs/git-rev-li
 Size filters still load missing reachable blobs even when the client pack omits
 some: Git's [`filter_blobs_limit`](https://github.com/git/git/blob/v2.50.1/list-objects-filter.c)
 includes missing blobs when their sizes are unknown. Tree/type constraints in a
-combined filter still apply. Fetch preparation scans all stored non-blob history,
-including retained orphans. Reverse traversal can visit the whole ancestor graph
-for an unreachable want. These costs require scale qualification; this is not a bounded-latency or
-requested-closure-only implementation. Local integration tests cover actual
+combined filter still apply. Structural preparation pages only the requested
+graph but retains its visited OIDs in memory. Reverse traversal can visit the
+whole ancestor graph for an unreachable want. These costs require scale
+qualification; this is not a bounded-latency implementation. Local integration tests cover actual
 omissions, lazy fetch, fresh-disk restore and rejection of unreachable object
 kinds before and after caching and deleting their refs. They use the in-memory
 object provider.
@@ -1192,8 +1190,9 @@ group on Unix. Accepted push tasks drain before the node closes Cells.
 
 SSH fetch retains one ref snapshot and validates every initial v0 want or v2
 request group against certified Cell reachability before forwarding to native
-upload-pack. Initial hydration includes non-blob history and ref/tag targets.
-Exact `blob:none` requests hydrate explicit wants only; other requests apply the
+upload-pack. Initial hydration includes ref/tag targets. Each request hydrates
+its reachable non-blob structure. Exact `blob:none` requests add explicit blob
+wants; other requests apply the
 native filter while preparing missing reachable blobs before any wants reach Git.
 No-want discovery skips blob enumeration. Native Git can traverse objects immediately while parsing wants,
 so request preparation must precede writing its packet group to stdin. This uses

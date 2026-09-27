@@ -125,26 +125,3 @@ fn small_increment_uses_bounded_sql_work_after_large_history() -> Result {
     assert_eq!(page(&db, after, high_water(&db)?)?.0, expected);
     Ok(())
 }
-
-#[test]
-fn structure_page_skips_large_blob_history_with_indexed_work() -> Result {
-    let db = database()?;
-    db.execute_batch("BEGIN")?;
-    for n in 0..10_000 {
-        insert(&db, format!("blob-{n}").as_bytes())?;
-    }
-    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Tree, b"");
-    db.execute("INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'tree', 0, ?2, 'inline', X'')", params![oid.as_ref(), blake3::hash(b"").as_bytes().as_slice()])?;
-    db.execute_batch("COMMIT")?;
-    let mut query = db.prepare(STRUCTURE_HEADERS)?;
-    let found: Vec<Vec<u8>> = query
-        .query_map(params![0, high_water(&db)?, MAX_OBJECTS as i64], |row| {
-            row.get(1)
-        })?
-        .collect::<std::result::Result<_, _>>()?;
-    assert_eq!(found, vec![oid.to_vec()]);
-    assert!(query.get_status(StatementStatus::VmStep) < 100);
-    assert_eq!(query.get_status(StatementStatus::FullscanStep), 0);
-    assert_eq!(query.get_status(StatementStatus::Sort), 0);
-    Ok(())
-}

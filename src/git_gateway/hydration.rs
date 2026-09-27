@@ -11,18 +11,10 @@ pub(super) struct Hydration {
 }
 
 impl GitGateway {
-    pub(super) async fn hydrate(
-        &self,
-        shared: &mut CachedObjects,
-        include_blobs: bool,
-    ) -> Result<(), GatewayError> {
+    pub(super) async fn hydrate(&self, shared: &mut CachedObjects) -> Result<(), GatewayError> {
         let started = Instant::now();
         let cache = &shared.cache;
-        let cursor = if include_blobs {
-            &mut shared.through
-        } else {
-            &mut shared.structure_through
-        };
+        let cursor = &mut shared.through;
         let from_sequence = *cursor;
         // Bound this refresh even when other writers keep appending objects.
         // The read follows the chosen ref snapshot, whose objects are durable.
@@ -38,15 +30,11 @@ impl GitGateway {
             let queried = Instant::now();
             let mut headers = self
                 .repository
-                .object_headers(*cursor, &high_water, include_blobs)
+                .object_headers(*cursor, &high_water)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?;
             if headers.objects.output.is_empty() {
-                if include_blobs {
-                    return Err(GatewayError::MalformedCache);
-                }
-                *cursor = high_water.output;
-                break;
+                return Err(GatewayError::MalformedCache);
             }
             scanned += headers.objects.output.len() as u64;
             headers.objects.output = cache.missing_objects(headers.objects.output).await?;
@@ -70,7 +58,6 @@ impl GitGateway {
             scanned,
             from_sequence,
             through_sequence = *cursor,
-            include_blobs,
             reused = scanned - stats.objects,
             bytes = stats.bytes,
             cache_bytes = cache.bytes()?,

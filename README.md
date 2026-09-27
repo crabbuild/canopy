@@ -708,8 +708,9 @@ account status. Shell, SFTP, forwarding and arbitrary environment requests are
 denied. HTTP and SSH share the same node/account transfer limits and durable
 push publication path.
 
-SSH prepares non-blob history and advertised ref/tag targets before negotiation.
-Exact `blob:none` requests hydrate only explicit missing wants. Other requests
+SSH prepares advertised ref/tag targets before negotiation and hydrates non-blob
+history reachable from each request's wants before forwarding them to Git.
+Exact `blob:none` requests hydrate only explicit missing blobs. Other requests
 apply the native filter while selecting missing reachable blobs, before
 forwarding wants to native Git. Tree and object-type constraints skip omitted
 bodies; size filters still load missing bodies because native Git needs their sizes.
@@ -796,8 +797,8 @@ The [density benchmark and remaining scaling plan](docs/performance-plan.md)
 separate repository count, active Cells and simultaneous transfers.
 Git v2 capability discovery needs no object cache. Native v0 advertisements and
 v2 `ls-refs` prepare only ref targets and annotated-tag chains in a temporary
-cache. Blobless fetch omits ordinary blobs; full fetch prepares non-blob history
-and blobs reachable from requested tips. Push still prepares full history.
+cache. Blobless fetch omits ordinary blobs; fetch prepares non-blob history and
+selected blobs reachable from requested tips. Push still prepares full history.
 Direct blob/tree refs require their
 own bodies, and very large ref sets still need separate capacity qualification.
 A terminal ownership-release failure leaves

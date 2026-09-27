@@ -69,6 +69,92 @@ async fn unreachable(url: &str, oid: &str) -> Result {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cold_single_branch_fetch_skips_unrelated_commit_and_tree_history() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        config(address, workspace.path().join("first")),
+        Arc::clone(&store),
+    )
+    .await?;
+    let url = create_repository(address, "structural").await?;
+    let source = workspace.path().join("source");
+    run_git(None, &["init", "-b", "main", path_str(&source)?]).await?;
+    run_git(Some(&source), &["config", "user.name", "Canopy Test"]).await?;
+    run_git(
+        Some(&source),
+        &["config", "user.email", "test@example.invalid"],
+    )
+    .await?;
+    tokio::fs::write(source.join("main"), b"main\n").await?;
+    for index in 0..130 {
+        let directory = source.join(format!("dir-{index:03}"));
+        tokio::fs::create_dir(&directory).await?;
+        tokio::fs::write(directory.join("entry"), b"entry\n").await?;
+    }
+    run_git(Some(&source), &["add", "."]).await?;
+    run_git(Some(&source), &["commit", "-m", "Main"]).await?;
+    let last_tree = oid(&source, "HEAD:dir-129").await?;
+    run_git(Some(&source), &["checkout", "-b", "other"]).await?;
+    tokio::fs::write(source.join("other"), b"other\n").await?;
+    run_git(Some(&source), &["add", "."]).await?;
+    run_git(Some(&source), &["commit", "-m", "Other"]).await?;
+    let other_commit = oid(&source, "HEAD").await?;
+    let other_tree = oid(&source, "HEAD^{tree}").await?;
+    tokio::fs::write(source.join("later"), b"later\n").await?;
+    run_git(Some(&source), &["add", "."]).await?;
+    run_git(Some(&source), &["commit", "-m", "Later"]).await?;
+    run_git(Some(&source), &["-c", AUTH, "push", "--mirror", &url]).await?;
+    server.shutdown().await?;
+
+    for protocol in ["0", "2"] {
+        let disk = workspace.path().join(format!("restored-{protocol}"));
+        let address = available_address().await?;
+        let restored =
+            CanopyServer::start(config(address, disk.clone()), Arc::clone(&store)).await?;
+        let url = format!("http://{address}/canopy/structural.git");
+        let clone = workspace.path().join(format!("clone-{protocol}"));
+        run_git(
+            None,
+            &[
+                "-c",
+                AUTH,
+                "-c",
+                &format!("protocol.version={protocol}"),
+                "clone",
+                "--single-branch",
+                "--branch",
+                "main",
+                "--filter=blob:none",
+                "--no-checkout",
+                &url,
+                path_str(&clone)?,
+            ],
+        )
+        .await?;
+        assert!(stored_objects(&clone).await?.contains(&last_tree));
+        assert!(!cache_contains(&disk, &other_commit)?);
+        assert!(!cache_contains(&disk, &other_tree)?);
+        run_git(
+            Some(&clone),
+            &[
+                "-c",
+                AUTH,
+                "fetch",
+                &url,
+                "refs/heads/other:refs/remotes/origin/other",
+            ],
+        )
+        .await?;
+        assert!(cache_contains(&disk, &other_commit)?);
+        assert!(cache_contains(&disk, &other_tree)?);
+        restored.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;

@@ -27,11 +27,12 @@ results; a small active set cannot establish uniform-access performance.
 
 ## Blobless fetch preparation
 
-`--filter=blob:none` now prepares non-blob history through a partial sequence
-index, plus ref/tag targets and explicit wants. Separate full and structural
-cursors preserve later full-fetch completeness. A fresh-disk integration test
-proves that two large blobs start absent, lazy reading one hydrates only that
-blob, and deleted-ref objects remain unavailable even after full hydration.
+`--filter=blob:none` now prepares ref/tag targets and non-blob history reachable
+from the requested wants through certified object edges. Full push preparation
+retains its sequence cursor. A fresh-disk integration test proves that two large
+blobs start absent, lazy reading one hydrates only that blob, and deleted-ref
+objects remain unavailable even after full hydration. A separate cold-branch
+test checks that unrelated live commit/tree history stays absent until fetched.
 SQL work-bound tests exercise 10,000 stored objects. These are local correctness
 and query-work gates, not latency or real-provider throughput measurements.
 Full fetches and other filters now enumerate missing blobs reachable from the
@@ -45,10 +46,11 @@ over both transports, and establishes reduced preparation, not a latency target.
 
 Preparation logs report newly hydrated blob counts/bytes and elapsed time.
 The native walk still traverses requested history on warm requests; native Git's
-own traversal memory is not bounded by the Rust batch size. Non-blob history
-remains repository-wide, and filters other than exact `blob:none` still hydrate
-all blobs reachable from wants even when the resulting pack omits some of them.
-Narrowing these costs and measuring cold/warm latency remain open.
+own traversal memory is not bounded by the Rust batch size. Structural hydration
+pages certified edges and retains a visited set proportional to the requested
+graph. Filters other than exact `blob:none` can still hydrate blobs that the
+resulting pack omits. Narrowing those costs and measuring cold/warm latency
+remain open.
 
 ## Node design and resource model
 

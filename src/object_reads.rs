@@ -17,8 +17,6 @@ pub(crate) struct ObjectHeaders {
 
 const CHANGED_HEADERS: &str = "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence LIMIT ?3";
 
-const STRUCTURE_HEADERS: &str = "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE sequence > ?1 AND sequence <= ?2 AND kind != 'blob' ORDER BY sequence LIMIT ?3";
-
 impl RepositoryCell {
     /// Reads at most 128 objects and 768 KiB of inline bodies, in OID order.
     ///
@@ -83,17 +81,11 @@ impl RepositoryCell {
         &self,
         after: i64,
         high_water: &Observed<i64>,
-        include_blobs: bool,
     ) -> Result<ObjectHeaders, InvocationError<Vec<SqlResultSet>>> {
         self.read_object_headers(
             Some(high_water.receipt),
             SqlStatement {
-                sql: if include_blobs {
-                    CHANGED_HEADERS
-                } else {
-                    STRUCTURE_HEADERS
-                }
-                .into(),
+                sql: CHANGED_HEADERS.into(),
                 parameters: vec![
                     SqlValue::Integer(after),
                     SqlValue::Integer(high_water.output),

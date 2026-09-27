@@ -115,8 +115,9 @@ impl GitGateway {
         let started = std::time::Instant::now();
         let objects = self.objects.lock().await;
         let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
-        let roots = request.wants.iter().copied().collect();
+        let roots: Vec<_> = request.wants.iter().copied().collect();
         self.hydrate_selected(&shared.cache, request.wants).await?;
+        self.hydrate_structure(&shared.cache, &roots).await?;
         if request.filter.as_deref() == Some("blob:none") {
             return Ok(());
         }
@@ -263,6 +264,72 @@ impl GitGateway {
             objects = stats.objects,
             bytes = stats.bytes,
             "hydrated explicit Git objects"
+        );
+        Ok(())
+    }
+
+    async fn hydrate_structure(
+        &self,
+        cache: &Arc<GitCache>,
+        roots: &[crate::ObjectId],
+    ) -> Result<(), GatewayError> {
+        let mut pending: BTreeSet<_> = roots.iter().copied().collect();
+        let mut visited = BTreeSet::new();
+        let mut stats = Hydration::default();
+        while !pending.is_empty() {
+            let ids: Vec<_> = pending.iter().take(MAX_OBJECTS).copied().collect();
+            for oid in &ids {
+                pending.remove(oid);
+                visited.insert(*oid);
+            }
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let mut after_parent = Vec::new();
+            let mut after_child = Vec::new();
+            loop {
+                // Certified edges supply only reachable structure. Page both
+                // parents and children so a large tree stays within SQL wire bounds.
+                let mut parameters: Vec<_> =
+                    ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect();
+                parameters.extend([
+                    SqlValue::Blob(after_parent.clone()),
+                    SqlValue::Blob(after_parent.clone()),
+                    SqlValue::Blob(after_child.clone()),
+                    SqlValue::Integer(MAX_OBJECTS as i64),
+                ]);
+                let result = self.repository.sql.query(None, SqlBatch { statements: vec![SqlStatement {
+                    sql: format!("SELECT e.parent, e.child FROM object_edges e JOIN objects o ON o.oid = e.child WHERE e.parent IN ({placeholders}) AND o.kind != 'blob' AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
+                    parameters,
+                }] }).await.map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                let rows = &result
+                    .output
+                    .first()
+                    .ok_or(GatewayError::MalformedCache)?
+                    .rows;
+                for row in rows {
+                    let [SqlValue::Blob(parent), SqlValue::Blob(child)] = row.as_slice() else {
+                        return Err(GatewayError::MalformedCache);
+                    };
+                    after_parent.clone_from(parent);
+                    after_child.clone_from(child);
+                    let oid = child
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| GatewayError::MalformedCache)?;
+                    if !visited.contains(&oid) {
+                        pending.insert(oid);
+                    }
+                }
+                if rows.len() < MAX_OBJECTS {
+                    break;
+                }
+            }
+            self.hydrate_objects(cache, ids, &mut stats).await?;
+        }
+        tracing::debug!(
+            repository = %hex::encode(self.repository.repository_id()),
+            objects = stats.objects,
+            bytes = stats.bytes,
+            "prepared reachable Git structure"
         );
         Ok(())
     }

@@ -28,8 +28,6 @@ CREATE TABLE objects (
     )
 );
 
-CREATE INDEX objects_structure_sequence ON objects(sequence) WHERE kind != 'blob';
-
 CREATE TABLE object_edges (
     parent BLOB NOT NULL REFERENCES objects(oid),
     child BLOB NOT NULL REFERENCES objects(oid),

@@ -81,7 +81,6 @@ pub enum GatewayError {
 struct CachedObjects {
     cache: Arc<GitCache>,
     through: i64,
-    structure_through: i64,
 }
 
 struct CachedRepository {
@@ -322,12 +321,14 @@ impl GitGateway {
                 )
                 .await?,
                 through: 0,
-                structure_through: 0,
             });
         }
         let shared = objects.as_mut().ok_or(GatewayError::MalformedCache)?;
-        self.hydrate(shared, include_blobs).await?;
-        if !include_blobs {
+        if include_blobs {
+            self.hydrate(shared).await?;
+        } else {
+            // Native ref advertisement only needs tips and peeled tags. Fetch
+            // hydrates the requested structural graph after validating wants.
             self.hydrate_selected(
                 &shared.cache,
                 snapshot
