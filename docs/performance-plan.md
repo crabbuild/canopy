@@ -228,6 +228,11 @@ and progress committed only after a complete page verifies. Derived pack/bitmap
 reuse and representative large-history throughput measurements remain open.
 
 Metadata and ref discovery must not require hydrating every stored object.
+Git v2's initial capability GET now uses native Git with a temporary empty
+repository after authorization and a bounded default-branch read. It avoids
+both ref enumeration and object hydration. The subsequent `ls-refs` and fetch
+POSTs still prepare the repository snapshot; this change alone does not remove
+hydration from the complete clone or `ls-remote` operation.
 Fetch/push preparation must preserve connectivity, object availability and
 request-consistent refs. Hidden or unauthorized repository data cannot be exposed
 through a cache hit. Preserve branch rules, CAS updates, atomic/mixed outcomes
@@ -1026,3 +1031,72 @@ The shared conversion adds ten net production lines to prevent three enrollment
 paths from drifting on the time/expiry contract. No temporary production probes
 or dependency changes were introduced. Full repository primitives, bounded
 mixed-workload density and the remaining cold-restore investigation stay open.
+
+
+## Git v2 capability discovery without object hydration
+
+The gateway now treats the initial `GET info/refs?service=git-upload-pack`
+with `Git-Protocol: version=2` as native capability discovery. It reads the
+published default branch and creates a temporary empty bare cache using the
+same native Git configuration as other transport requests. The native worker
+pins that cache through completion. No additional retained per-repository
+cache, synthetic capability list, schema change or dependency change is added.
+Decoded service parameters use the same URL semantics as route admission.
+
+The source contract is Git's capability-only v2 initial exchange, followed by
+separate command requests:
+[protocol v2](https://git-scm.com/docs/gitprotocol-v2) and
+[Git 2.50.1 capability advertisement](https://github.com/git/git/blob/v2.50.1/serve.c).
+Authorization and existing request/native-worker admission still precede work.
+Protocol v0 discovery, receive-pack discovery and all POSTs keep the full
+snapshot path. In particular, `ls-refs` still hydrates the repository; complete
+clone latency and pack throughput are not qualified by this optimization.
+
+The regression pushes a populated repository, leaves only 512 bytes of cache
+capacity, and requests both ordinary and URL-encoded v2 discovery. The old
+implementation at `de9e2cb` fails with HTTP 507; the new path returns the same
+native capabilities for both requests and restores the original disk accounting
+after response EOF. The adjacent v0 request still fails admission, then recovers
+when pressure is removed. Existing stock Git push/clone, coherent ref snapshots,
+LFS and native pack checks remain in the same integration test.
+
+An early uninstrumented run passed capability discovery but failed the existing
+immediate post-Axum-shutdown assertion with 344,446 bytes still charged. An
+unchanged rerun passed. One diagnostic run and five bounded repeats passed with
+no native-fence or cache-removal errors; the final uninstrumented run also passed.
+Axum 0.8.9 signals connection completion before dropping its connection/service
+locals, so that signal alone is not a destructor-completion contract. This is a
+possible cause, not a reproduced causal proof. The initial failure remains an
+unresolved teardown timing observation; no assertion was weakened, no cleanup
+policy changed, and all temporary diagnostic code was removed.
+
+
+Final focused validation passed: stock Git/LFS smart HTTP, native CGI,
+default-branch discovery/clone after fresh-owner restore, and public/private
+revocation after recovery. All-target Clippy with warnings denied, formatting,
+Python syntax and changed-document links/fences passed. The optimized build
+passed. The production change adds 22 net lines; its separate branch avoids
+history preparation only for the protocol exchange that does not need history.
+
+Real-provider qualification `canopy-capability-discovery-67e4f51ecec2` ran
+`scripts/smoke_s3_cache.py` against isolated RustFS `1.0.0-beta.8-glibc` with two
+CPUs and 4 GiB; Canopy ran on the shared macOS arm64 host with Git 2.50.1
+(Apple Git-155). Base revision is `de9e2cb` plus the archived source patch.
+The optimized binary SHA-256 is
+`c6d9e05c26945547e2a2df01bc9bccdedeb426ad3ba55b7dd96fdccdf35866ba`.
+
+After SIGKILL and lease expiry, a fresh local workspace served capability
+discovery with zero cached Git objects and no hydration event. Subsequent
+protocol v0/v2 clones restored all 263 objects, reproduced the exact commit and
+file bytes, and passed strict fsck. Capability bytes matched after hydration.
+The discovery request took 0.691 seconds including cold repository activation;
+this single colocated-provider observation is not a latency SLO or a benchmark
+comparison. Repeated metadata and pack throughput still require qualification.
+
+Before the crash, incremental refresh scanned and hydrated only three new
+objects (11,384 raw bytes), preserving all 260 existing object files and their
+2,112,999 compressed bytes. Both server logs contain no warnings/errors.
+Graceful shutdown and provider cleanup passed. Source/script hashes, command
+logs and the original failed teardown observation are retained in the dedicated
+qualification target. Full primitive composition and mixed-workload repository
+density remain open.

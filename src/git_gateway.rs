@@ -177,19 +177,41 @@ impl GitGateway {
             .receive(request, MAX_FETCH_REQUEST_BYTES, admission)
             .await?;
         let request = self.decode(request, MAX_FETCH_REQUEST_BYTES).await?;
-        let live_refs = self.cell_refs().await?;
-        let cached = {
-            let mut cache = self.cache.lock().await;
-            if cache
-                .as_ref()
-                .is_none_or(|cached| cached.snapshot != live_refs)
-            {
-                *cache = None;
-                *cache = Some(Arc::new(self.build_cache(live_refs).await?));
-            }
-            Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
+        let capabilities = request.protocol_v2
+            && request.method == "GET"
+            && request.path_info == "/repo.git/info/refs"
+            && url::form_urlencoded::parse(request.query.as_bytes())
+                .eq([("service".into(), "git-upload-pack".into())]);
+        let response = if capabilities {
+            // Git v2 discovery advertises capabilities, not refs or objects.
+            // Native Git still owns the wire response and capability policy.
+            let head = self
+                .repository
+                .default_branch(None)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            let backend = GitHttpBackend::initialize(
+                self.scratch_root.clone(),
+                self.disk_budget.clone(),
+                &head.output.reference,
+            )
+            .await?;
+            backend.stream(request, ()).await?
+        } else {
+            let live_refs = self.cell_refs().await?;
+            let cached = {
+                let mut cache = self.cache.lock().await;
+                if cache
+                    .as_ref()
+                    .is_none_or(|cached| cached.snapshot != live_refs)
+                {
+                    *cache = None;
+                    *cache = Some(Arc::new(self.build_cache(live_refs).await?));
+                }
+                Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
+            };
+            cached.backend.stream(request, Arc::clone(&cached)).await?
         };
-        let response = cached.backend.stream(request, Arc::clone(&cached)).await?;
         Ok(GitHttpResponse {
             status: response.status,
             headers: response.headers,

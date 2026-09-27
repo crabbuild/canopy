@@ -128,6 +128,25 @@ pub async fn verify(
             .get(format!("{url}/info/refs?service=git-upload-pack"))
             .bearer_auth("local-test-token")
     };
+    // Protocol v2 initially advertises capabilities only. Published history
+    // exceeds the available cache budget, but this exchange needs no objects.
+    let mut capabilities = None;
+    for query in ["service=git-upload-pack", "service=git%2Dupload%2Dpack"] {
+        let response = client
+            .get(format!("{url}/info/refs?{query}"))
+            .bearer_auth("local-test-token")
+            .header("Git-Protocol", "version=2")
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body = response.bytes().await?;
+        assert!(body.starts_with(b"000eversion 2\n"));
+        if let Some(expected) = &capabilities {
+            assert_eq!(&body, expected);
+        }
+        capabilities = Some(body);
+        assert_eq!(budget.used(), occupied.bytes() + retained);
+    }
     let response = advertisement().send().await?;
     assert_eq!(response.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
     assert_eq!(response.text().await?, "Git cache disk budget exhausted");

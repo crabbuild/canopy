@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import signal
 import time
+import urllib.request
 import uuid
 
 from smoke_s3_process import create_repository, git, start
@@ -36,7 +37,8 @@ def qualify(args):
                 "local_disk_limit_bytes": 512 * 1024**2, "max_active_repositories": 3}
     report = {"binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "storage_url": settings["storage_url"], "cache_reuse_passed": False,
-              "recovery_passed": False, "shutdown_passed": False}
+              "recovery_passed": False, "shutdown_passed": False,
+              "capability_discovery_passed": False}
     processes = []
     try:
         process, base = start(args.binary, args.work_dir, settings, "first")
@@ -100,8 +102,34 @@ def qualify(args):
         time.sleep(11)
         process, restored = start(args.binary, args.work_dir, settings, "restored")
         processes.append(process)
+        restored_url = url.replace(base, restored, 1)
+        restored_data = args.work_dir / "restored"
+        restored_log = args.work_dir / "restored.log"
+
+        def capabilities():
+            request = urllib.request.Request(
+                restored_url + "/info/refs?service=git-upload-pack",
+                headers={"Authorization": "Bearer local-test-token", "Git-Protocol": "version=2"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                assert response.headers["Content-Type"] == "application/x-git-upload-pack-advertisement"
+                result = response.read()
+            assert result.startswith(b"000eversion 2\n")
+            return result
+
+        assert not cached_objects(restored_data)
+        log_offset = len(restored_log.read_text())
+        started = time.monotonic()
+        cold_capabilities = capabilities()
+        report["cold_capability_discovery_seconds"] = time.monotonic() - started
+        report["cold_capability_cached_objects"] = len(cached_objects(restored_data))
+        assert report["cold_capability_cached_objects"] == 0
+        assert "hydrated Git cache" not in restored_log.read_text()[log_offset:]
         for protocol in (0, 2):
-            clone(url.replace(base, restored, 1), f"restored-v{protocol}", protocol)
+            clone(restored_url, f"restored-v{protocol}", protocol)
+        assert len(cached_objects(restored_data)) == 263
+        assert capabilities() == cold_capabilities
+        report["capability_discovery_passed"] = True
+        print("PASS: cold Git v2 capabilities hydrate no objects and match warm discovery", flush=True)
         report["recovery_passed"] = True
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=60)

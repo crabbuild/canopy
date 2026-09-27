@@ -3133,3 +3133,22 @@ pass, as do Clippy, formatting and the optimized build. The real-provider run
 corruption rejection, verification without the original storage, isolated restore,
 exact file and issue recovery, and cleanup. This closes renewal reply accounting;
 it does not qualify full primitive workloads or production capacity.
+
+
+## Native Git v2 discovery avoids history hydration
+
+The initial upload-pack capability GET now uses a temporary empty native Git
+cache after normal authorization and a published default-branch read. All POST
+commands and v0/receive-pack discovery retain repository snapshot preparation.
+The pressure regression fails with HTTP 507 before the change and passes with
+512 bytes available afterward; its existing v0 admission/retry proof still passes.
+
+Focused Git/LFS, native CGI, default-branch recovery and visibility tests,
+Clippy, formatting and the optimized build pass. Real-store qualification
+`canopy-capability-discovery-67e4f51ecec2` proves zero object hydration for cold
+capability discovery, incremental reuse, SIGKILL recovery, strict v0/v2 clone
+verification and clean shutdown. An earlier intermittent immediate teardown
+assertion is recorded, not declared fixed. See the
+[performance evidence](performance-plan.md#git-v2-capability-discovery-without-object-hydration).
+This closes the initial capability-exchange optimization; full primitive
+composition, complete ref-query optimization and production capacity remain open.

@@ -615,6 +615,17 @@ worker. Unix subprocesses use a dedicated process group so cancellation also
 kills upload-pack/pack-objects descendants; other platforms currently use
 Tokio's direct-child kill-on-drop behavior and still need lifecycle qualification.
 
+Git protocol v2's initial upload-pack capability advertisement uses a temporary
+empty bare cache with the repository's published default branch. Authorization,
+request admission and native Git configuration remain the same. This GET does
+not enumerate refs or hydrate objects; native Git generates its capabilities.
+The cache remains owned through subprocess completion; cleanup runs before
+successful response EOF and retains its disk charge if removal fails. URL-encoded service parameters follow the normal HTTP
+parser. Protocol v0, receive-pack discovery and all POST commands retain their
+repository snapshot and object preparation. The distinction follows the
+[Git v2 capability exchange](https://git-scm.com/docs/gitprotocol-v2), not a
+synthetic response or a second capability list maintained by Canopy.
+
 Incoming Git bodies stream into anonymous temporary files before CGI execution.
 Each write reserves bytes from the same `DiskBudget` used by the node's SQLite
 host. All repositories share that budget. Blocking writes retain the file and
