@@ -317,9 +317,13 @@ signals the process group before releasing those owners.
 A real HTTP test sends a delta pack that fits upload admission but expands
 beyond available cache capacity. It receives 507, observes no stored Git object
 or ref, then retries the identical request UUID and bytes successfully after
-freeing capacity. Cold hydration separately fails with 507, releases partial
-cache admission and rebuilds successfully after capacity is restored. The test
-also verifies warm-cache accounting and release when a push replaces it.
+freeing capacity. Hydration separately fails with 507 and resumes after capacity
+is restored. The current shared-object design retains verified bodies and
+conservative failed-write charges while discarding the unpublished ref generation.
+Tests verify unchanged warm-cache accounting across a ref-only push and complete
+reservation release at gateway teardown. The
+[incremental body-reuse process proof](performance-plan.md#incremental-object-body-reuse)
+covers reused files, newly hydrated bytes and recovery from a fresh workspace.
 Focused tests cover compressed-file accounting, last-reader cleanup, native
 write reconciliation and Unix deletion failure. Existing subprocess cancellation,
 Git/LFS, residency and release-fault tests pass; Clippy, formatting and the

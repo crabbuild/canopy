@@ -99,8 +99,10 @@ permits it.
   includes the Directory Cell; it is an API limit, not a capacity result.
 - The managed SQLite connection requests a 64-KiB page cache. That is not the
   total Cell footprint or a hard process-memory limit.
-- Eviction deletes local SQLite state. Git cache rebuilds enumerate all stored
-  objects after ref snapshot changes; push also rebuilds its disposable cache.
+- Eviction deletes local SQLite state. Git snapshot refresh scans bounded object
+  metadata pages but reuses verified immutable bodies from a repository-scoped
+  cache. Each native push/merge has a private writable generation; successful
+  publication precedes hydration of its new objects into the shared cache.
 - Eight shared Git/LFS transfer slots and the bounded Linux profile establish
   containment. They do not establish latency, throughput or thousands of active
   repositories. The profile's tmpfs charges cache bytes to memory; density
@@ -214,6 +216,12 @@ Keep snapshot/cache generations pinned through native worker completion and
 stream consumption. Retain verified objects across derived pack generations;
 use native Git pack/index and bitmap reuse where benchmark evidence supports it.
 All derived data remains disposable and resource-accounted.
+
+Immutable body reuse is now wired through shared Git alternates and private
+snapshot directories. Old fetches retain their snapshot and object owner; native
+write failures cannot contaminate the reusable objects. Refresh still scans all
+object metadata. An indexed change cursor and derived pack/bitmap reuse remain
+open, as do representative large-history throughput measurements.
 
 Metadata and ref discovery must not require hydrating every stored object.
 Fetch/push preparation must preserve connectivity, object availability and
@@ -717,3 +725,53 @@ declared small SQL-only workload. It is not full primitive, realistic-history,
 large-transfer, 5,000/10,000-Cell or production-provider qualification. Descriptor
 capacity was a concrete deployment failure, fixed independently of the remaining
 latency work. Retain the failed seed and the passing repeat together.
+
+## Incremental object-body reuse
+
+The optimized process run `canopy-incremental-cache-f9c6c39fb933` exercises the
+shared object cache against colocated RustFS `1.0.0-beta.8-glibc` on the macOS
+development host. The report records base revision `60261b0`, the archived source
+patch and binary SHA-256
+`cc9c4fdcbc681470a59581e97a3b10bffdcae7c286f43cce2568fa8d555977a5`.
+
+The initial stock Git push contains a 2 MiB incompressible external blob, a small
+README, tree and commit. A clone warms those four verified object files. A second
+push adds one file and changes the tree/commit. Stock Git v0/v2 clones then verify
+the exact commit and both files with strict fsck. The original four compressed
+files keep their paths, lengths and modification times; only three files are
+added. Retained compressed bytes total 2,097,772. Hydration diagnostics independently
+report `scanned=4, reused=4, objects=0, bytes=0` before receive, followed by
+`scanned=7, reused=4, objects=3, bytes=376` for the new published snapshot.
+
+The owner is then killed, its lease expires, and a fresh local workspace restores
+the repository. Both Git protocol versions reproduce the same objects and pass
+strict fsck. Cold restoration hydrates all seven objects. Graceful shutdown and
+fixture cleanup pass; neither server log contains warnings/errors.
+
+This proves body reuse and exact recovery for the small corpus, not a throughput
+or large-history latency target. The metadata scan remains proportional to total
+object count, and reusable pack/bitmap acceleration remains open. Existing stock
+Git tests also cover coherent ref generations under concurrent changes, pressure
+and retry, LFS, and native pack semantics; merge-candidate/rebase callers use the
+same private-generation path.
+
+The final focused checks passed: eight cache tests (including corrupt final-range
+rejection, retry and fenced dependency retention), the Repository Cell suite,
+the stock Git suite with teardown accounting and 32 consistent concurrent
+advertisements, three native-candidate tests and the rebase test. All-target
+Clippy with warnings denied, formatting and the optimized binary build passed.
+
+Repeat with fixture credentials, a caller-owned disposable S3 prefix and a new
+directory on the qualification volume:
+
+```sh
+python3 -B scripts/smoke_s3_cache.py \
+  --binary "$CARGO_TARGET_DIR/release/canopy" \
+  --storage-url s3://qualification-bucket/cache-proof \
+  --work-dir "$CARGO_TARGET_DIR/cache-proof-run1"
+```
+
+The script retains reports/configuration/logs, cleans its Canopy processes, and
+leaves object-store-prefix cleanup to the caller. Enable gateway debug logging to
+collect scanned/reused/body counts. The immutable object cache remains disposable;
+SQLite and verified external bodies are the recovery source.

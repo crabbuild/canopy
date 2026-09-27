@@ -733,6 +733,11 @@ Cold cache hydration reads OID-ordered pages of at most 128 records and 768 KiB
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
 reduce SQLite query overhead, but recovery still rebuilds the complete cache.
+While a gateway remains resident, verified object files are shared across private
+ref snapshots, pushes and merge candidates. Ref changes scan bounded metadata
+pages and hydrate only missing bodies. Native output stays private until it is
+published to the Cell and subsequently verified into the reusable cache. See the
+[process proof and remaining limits](docs/performance-plan.md#incremental-object-body-reuse).
 
 ## Recover a lost push reply
 

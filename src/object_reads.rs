@@ -18,6 +18,13 @@ impl RepositoryCell {
         &self,
         after: Option<[u8; 20]>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
+        self.object_records(self.object_headers(after).await?).await
+    }
+
+    pub(crate) async fn object_headers(
+        &self,
+        after: Option<[u8; 20]>,
+    ) -> Result<Observed<Vec<[u8; 20]>>, InvocationError<Vec<SqlResultSet>>> {
         let headers = self.sql.query(None, SqlBatch {
             statements: vec![SqlStatement {
                 sql: "SELECT oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
@@ -51,6 +58,19 @@ impl RepositoryCell {
             bytes += size;
             ids.push(oid);
         }
+        Ok(Observed {
+            output: ids,
+            receipt: headers.receipt,
+        })
+    }
+
+    pub(crate) async fn object_records(
+        &self,
+        headers: Observed<Vec<[u8; 20]>>,
+    ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
+        // Callers may remove already cached IDs, but never add IDs: the header
+        // query's size bound and receipt protect this body read's wire ceiling.
+        let ids = headers.output;
         if ids.is_empty() {
             return Ok(Observed {
                 output: Vec::new(),

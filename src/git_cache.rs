@@ -44,6 +44,7 @@ impl CacheError {
 pub(crate) struct GitCache {
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
+    objects: Option<Arc<GitCache>>,
 }
 
 impl GitCache {
@@ -51,6 +52,15 @@ impl GitCache {
         root: PathBuf,
         budget: DiskBudget,
         head: &str,
+    ) -> Result<Arc<Self>, CacheError> {
+        Self::create_with_objects(root, budget, head, None).await
+    }
+
+    pub(crate) async fn create_with_objects(
+        root: PathBuf,
+        budget: DiskBudget,
+        head: &str,
+        objects: Option<Arc<GitCache>>,
     ) -> Result<Arc<Self>, CacheError> {
         if !crate::default_branch::valid_default_branch(head) {
             return Err(CacheError::InvalidHead);
@@ -62,6 +72,7 @@ impl GitCache {
                 // absolute even when the node's data directory is relative.
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
+                objects,
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
                 fs::create_dir_all(cache.git_dir().join(directory))?;
@@ -70,6 +81,16 @@ impl GitCache {
             // unaccounted init subprocess writes. Git remains the wire implementation.
             cache.write_file("HEAD", head.as_bytes())?;
             cache.write_file("config", b"[core]\nrepositoryformatversion = 0\nbare = true\nlogallrefupdates = false\n[receive]\nautogc = false\n[gc]\nauto = 0\n")?;
+            if let Some(objects) = &cache.objects {
+                if objects.objects.is_some() || objects.root().parent() != cache.root().parent() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "object cache must be a direct sibling").into());
+                }
+                let name = objects.root().file_name().and_then(|name| name.to_str())
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid object cache path"))?;
+                // Relative to objects/, and generated entirely from TempDir's
+                // ASCII name, so host path quoting cannot redirect Git reads.
+                cache.write_file("objects/info/alternates", format!("../../../{name}/repo.git/objects\n").as_bytes())?;
+            }
             Ok(cache)
         }).await?
     }
@@ -107,6 +128,61 @@ impl GitCache {
         self.writer(Path::new(relative))?.write_all(bytes)
     }
 
+    pub(crate) async fn missing_objects(
+        self: &Arc<Self>,
+        ids: Vec<[u8; 20]>,
+    ) -> Result<Vec<[u8; 20]>, CacheError> {
+        let cache = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let mut missing = Vec::new();
+            for oid in ids {
+                match fs::symlink_metadata(cache.object_path(oid)) {
+                    Ok(metadata) if metadata.is_file() => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(oid),
+                    Err(error) => return Err(CacheError::Io(error)),
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "invalid cached object",
+                        )
+                        .into());
+                    }
+                }
+            }
+            Ok(missing)
+        })
+        .await?
+    }
+
+    fn object_path(&self, oid: [u8; 20]) -> PathBuf {
+        let hex = hex::encode(oid);
+        self.git_dir()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..])
+    }
+
+    fn object_writer(
+        self: &Arc<Self>,
+        oid: [u8; 20],
+    ) -> io::Result<(ZlibEncoder<CacheWriter>, tempfile::TempPath, PathBuf)> {
+        let destination = self.object_path(oid);
+        let parent = destination
+            .parent()
+            .ok_or_else(|| io::Error::other("missing object directory"))?;
+        fs::create_dir_all(parent)?;
+        let (file, temporary) = tempfile::NamedTempFile::new_in(parent)?.into_parts();
+        let writer = CacheWriter {
+            file,
+            cache: Arc::clone(self),
+        };
+        Ok((
+            ZlibEncoder::new(writer, Compression::default()),
+            temporary,
+            destination,
+        ))
+    }
+
     pub(crate) async fn store_update_hook(
         self: &Arc<Self>,
         bytes: Vec<u8>,
@@ -138,12 +214,13 @@ impl GitCache {
             if object_id(kind, &body) != oid {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Git OID mismatch").into());
             }
-            let hex = hex::encode(oid);
-            let path = Path::new("objects").join(&hex[..2]).join(&hex[2..]);
-            let mut encoder = ZlibEncoder::new(cache.writer(&path)?, Compression::default());
+            let (mut encoder, temporary, destination) = cache.object_writer(oid)?;
             encoder.write_all(format!("{} {}\0", kind.git_name(), body.len()).as_bytes())?;
             encoder.write_all(&body)?;
-            encoder.finish()?;
+            drop(encoder.finish()?);
+            temporary
+                .persist_noclobber(destination)
+                .map_err(|error| error.error)?;
             Ok(())
         })
         .await?
@@ -155,12 +232,10 @@ impl GitCache {
     ) -> Result<(), CacheError> {
         let reference = reader.reference();
         let cache = Arc::clone(self);
-        let mut encoder = tokio::task::spawn_blocking(move || {
-            let hex = hex::encode(reference.oid);
-            let path = Path::new("objects").join(&hex[..2]).join(&hex[2..]);
-            let mut encoder = ZlibEncoder::new(cache.writer(&path)?, Compression::default());
+        let (mut encoder, temporary, destination) = tokio::task::spawn_blocking(move || {
+            let (mut encoder, temporary, destination) = cache.object_writer(reference.oid)?;
             encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
-            Ok::<_, CacheError>(encoder)
+            Ok::<_, CacheError>((encoder, temporary, destination))
         })
         .await??;
         while let Some(bytes) = reader.next().await? {
@@ -173,7 +248,10 @@ impl GitCache {
             .await??;
         }
         tokio::task::spawn_blocking(move || {
-            encoder.finish()?;
+            drop(encoder.finish()?);
+            temporary
+                .persist_noclobber(destination)
+                .map_err(|error| error.error)?;
             Ok::<_, CacheError>(())
         })
         .await?
@@ -230,6 +308,11 @@ impl Drop for GitCache {
             if let Some(reservation) = self.reservation.take() {
                 std::mem::forget(reservation);
             }
+            // An orphan keeps this generation's native fence. Its alternate
+            // must survive too, until startup fences every generation together.
+            if let Some(objects) = self.objects.take() {
+                std::mem::forget(objects);
+            }
             // TempDir must not retry deletion after a worker fence rejected it.
             // Startup reclaims this directory once all descendants have exited.
             self.directory.disable_cleanup(true);
@@ -248,16 +331,10 @@ impl Write for CacheWriter {
             .reservation()?
             .try_grow(bytes.len() as u64)
             .map_err(io::Error::other)?;
-        // Retain the full attempted charge on an I/O error; cache destruction is
-        // the cleanup boundary. Successful short writes release unused admission.
-        let count = self.file.write(bytes)?;
-        if count < bytes.len() {
-            self.cache
-                .reservation()?
-                .resize(self.cache.reservation()?.bytes() - (bytes.len() - count) as u64)
-                .map_err(io::Error::other)?;
-        }
-        Ok(count)
+        // A cancelled hydrator's blocking write can overlap the next hydrator.
+        // Keep the full attempt charged, including short/error writes: a racy
+        // read-then-resize refund could erase the other writer's reservation.
+        self.file.write(bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {

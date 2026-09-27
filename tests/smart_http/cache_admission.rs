@@ -58,7 +58,8 @@ pub async fn verify(
             .body(body.clone())
     };
     let before = repository.refs_page("", None).await?.output.generation;
-    let occupied = budget.try_reserve(budget.capacity() - body.len() as u64 - 4096)?;
+    let retained = budget.used();
+    let occupied = budget.try_reserve(budget.capacity() - retained - body.len() as u64 - 4096)?;
     let response = request().send().await?;
     assert_eq!(response.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
     assert_eq!(response.text().await?, "Git cache disk budget exhausted");
@@ -70,7 +71,7 @@ pub async fn verify(
             .is_none()
     );
     assert!(repository.object_page(None).await?.output.is_empty());
-    assert_eq!(budget.used(), occupied.bytes());
+    assert_eq!(budget.used(), occupied.bytes() + retained);
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,
         before
@@ -117,9 +118,11 @@ pub async fn verify(
         reqwest::StatusCode::CONFLICT
     );
 
-    // This request has no uploaded pack. Its cache must hydrate from SQLite,
-    // fail admission, clean up, then rebuild successfully once capacity is freed.
-    let occupied = budget.try_reserve(budget.capacity() - 512)?;
+    // Failed hydration may retain completed immutable objects and conservative
+    // write charges. It must not publish a partial ref generation; retry resumes
+    // from the verified cache after external pressure is removed.
+    let retained = budget.used();
+    let occupied = budget.try_reserve(budget.capacity() - retained - 512)?;
     let advertisement = || {
         client
             .get(format!("{url}/info/refs?service=git-upload-pack"))
@@ -128,7 +131,8 @@ pub async fn verify(
     let response = advertisement().send().await?;
     assert_eq!(response.status(), reqwest::StatusCode::INSUFFICIENT_STORAGE);
     assert_eq!(response.text().await?, "Git cache disk budget exhausted");
-    assert_eq!(budget.used(), occupied.bytes());
+    assert!(budget.used() >= occupied.bytes());
+    assert!(budget.used() <= budget.capacity());
     drop(occupied);
     advertisement()
         .send()
@@ -137,7 +141,8 @@ pub async fn verify(
         .bytes()
         .await?;
     assert!(budget.used() > common.len() as u64 * 40);
+    let retained = budget.used();
     encoded_input::delete_with_admission_retry(repository, budget, client, url, commit).await?;
-    assert_eq!(budget.used(), 0);
+    assert_eq!(budget.used(), retained);
     Ok(())
 }

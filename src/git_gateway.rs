@@ -20,7 +20,7 @@ use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
     RefUpdate, RepositoryCell, StoredObject,
     directory::TokenScope,
-    git_cache::CacheError,
+    git_cache::{CacheError, GitCache},
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
     git_objects::GitObjects,
@@ -90,6 +90,7 @@ pub struct GitGateway {
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
     cache: Mutex<Option<Arc<CachedRepository>>>,
+    objects: Mutex<Option<Arc<GitCache>>>,
     push: Mutex<()>,
 }
 
@@ -109,6 +110,7 @@ impl GitGateway {
             scratch_root,
             disk_budget,
             cache: Mutex::new(None),
+            objects: Mutex::new(None),
             push: Mutex::new(()),
         }
     }
@@ -160,7 +162,6 @@ impl GitGateway {
                 )));
             }
             let request = self.decode(request, MAX_PUSH_BYTES).await?;
-            self.cache.lock().await.take();
             let cache = self.build_cache(self.cell_refs().await?).await?;
             return self
                 .handle_push(&cache, request, actor, id, digest)
@@ -293,42 +294,65 @@ impl GitGateway {
     }
 
     async fn build_cache(&self, snapshot: RefSnapshot) -> Result<CachedRepository, GatewayError> {
-        let backend = GitHttpBackend::initialize(
-            self.scratch_root.clone(),
-            self.disk_budget.clone(),
-            &snapshot.head,
-        )
-        .await?;
-        self.hydrate(&backend, &snapshot.refs).await?;
+        // Only hydration writes the shared cache, and only from durable Cell
+        // records. Native pushes/merges write into their private generation.
+        let mut objects = self.objects.lock().await;
+        let shared = match objects.as_ref() {
+            Some(shared) => Arc::clone(shared),
+            None => {
+                GitCache::create(
+                    self.scratch_root.clone(),
+                    self.disk_budget.clone(),
+                    &snapshot.head,
+                )
+                .await?
+            }
+        };
+        self.hydrate(&shared).await?;
+        let backend = GitHttpBackend {
+            cache: GitCache::create_with_objects(
+                self.scratch_root.clone(),
+                self.disk_budget.clone(),
+                &snapshot.head,
+                Some(Arc::clone(&shared)),
+            )
+            .await?,
+        };
+        backend.cache.store_refs(&snapshot.refs).await?;
+        *objects = Some(shared);
         Ok(CachedRepository { backend, snapshot })
     }
 
-    async fn hydrate(
-        &self,
-        backend: &GitHttpBackend,
-        refs: &BTreeMap<String, RefExpectation>,
-    ) -> Result<(), GatewayError> {
+    async fn hydrate(&self, cache: &Arc<GitCache>) -> Result<(), GatewayError> {
         let started = Instant::now();
         let mut page_time = Duration::ZERO;
         let mut body_time = Duration::ZERO;
         let mut cache_time = Duration::ZERO;
         let mut objects = 0_u64;
+        let mut scanned = 0_u64;
         let mut bytes = 0_u64;
         let mut after = None;
         loop {
             let queried = Instant::now();
+            let mut headers = self
+                .repository
+                .object_headers(after)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            if headers.output.is_empty() {
+                break;
+            }
+            after = headers.output.last().copied();
+            scanned += headers.output.len() as u64;
+            headers.output = cache.missing_objects(headers.output).await?;
             let page = self
                 .repository
-                .object_page(after)
+                .object_records(headers)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
             page_time += queried.elapsed();
-            if page.is_empty() {
-                break;
-            }
             for object in page {
-                after = Some(object.oid);
                 let read = Instant::now();
                 let body = match object.storage {
                     ObjectStorage::Inline(body) => body,
@@ -355,7 +379,7 @@ impl GitGateway {
                         let reader = self.large_blobs.read(&reference).await?;
                         body_time += read.elapsed();
                         let written = Instant::now();
-                        backend.cache.store_blob(reader).await?;
+                        cache.store_blob(reader).await?;
                         cache_time += written.elapsed();
                         objects += 1;
                         bytes += reference.size;
@@ -366,19 +390,17 @@ impl GitGateway {
                 objects += 1;
                 bytes += body.len() as u64;
                 let written = Instant::now();
-                backend
-                    .cache
-                    .store_object(object.oid, object.kind, body)
-                    .await?;
+                cache.store_object(object.oid, object.kind, body).await?;
                 cache_time += written.elapsed();
             }
         }
-        backend.cache.store_refs(refs).await?;
         tracing::debug!(
             repository = %hex::encode(self.repository.repository_id()),
             objects,
+            scanned,
+            reused = scanned - objects,
             bytes,
-            cache_bytes = backend.cache.bytes()?,
+            cache_bytes = cache.bytes()?,
             elapsed_seconds = started.elapsed().as_secs_f64(),
             page_seconds = page_time.as_secs_f64(),
             body_seconds = body_time.as_secs_f64(),

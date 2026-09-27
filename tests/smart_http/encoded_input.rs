@@ -14,6 +14,7 @@ pub async fn reject_corruption_and_expansion(
     url: &str,
     push: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let retained = budget.used();
     let valid = gzip(push)?;
     let mut checksum = valid.clone();
     let crc = checksum.len() - 8;
@@ -34,7 +35,7 @@ pub async fn reject_corruption_and_expansion(
                 .await?;
             assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
             assert_eq!(response.text().await?, "Invalid Git gzip stream");
-            assert_eq!(budget.used(), 0);
+            assert_eq!(budget.used(), retained);
         }
         assert!(
             repository
@@ -59,7 +60,7 @@ pub async fn reject_corruption_and_expansion(
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(budget.used(), 0);
+    assert_eq!(budget.used(), retained);
 
     // A valid decoded request above Git CGI's default 10 MiB buffer remains
     // below Canopy's 64 MiB limit. No ref matches these long prefixes.
@@ -140,6 +141,6 @@ pub async fn delete_with_admission_retry(
         repository.refs_page("", None).await?.output.generation,
         generation + 1
     );
-    assert_eq!(budget.used(), 0);
+    assert_eq!(budget.used(), warm);
     Ok(())
 }

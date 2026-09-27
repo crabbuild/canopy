@@ -425,12 +425,39 @@ and preserves a later ref deletion. Crashes during
 individual staging/publication boundaries, the full multi-node fault matrix and
 backup restore still need proof before service readiness.
 
-Cold hydration uses `RepositoryCell::object_page(after)` in ascending OID order.
+Cold hydration uses bounded object headers in ascending OID order.
 Each page contains at most 128 records and 768 KiB of aggregate inline bodies.
 A metadata query chooses the bounded prefix; a second query reads those exact
-records with the first query's receipt as its minimum observation. Metadata
+missing records with the first query's receipt as its minimum observation. Metadata
 overhead fits beneath Cellule's 1 MiB query result ceiling. Callers continue from
-the last OID until an empty page; a short page is not end-of-stream.
+the last scanned OID until an empty header page; a short page or an entirely
+cached page is not end-of-stream. `RepositoryCell::object_page(after)` composes
+the same header/body reader for callers that need every record.
+
+Each gateway retains one disk-accounted cache of verified immutable objects.
+Ref snapshots, pushes and native merge candidates get separate bare directories
+that borrow those objects through Git's
+[alternates contract](https://git-scm.com/docs/gitrepository-layout).
+The shared cache receives only verified durable Cell records and external bodies.
+Native writes stay in the private generation; failed or unpublished pushes never
+populate the shared cache. A successful push's new objects enter it through the
+next durable hydration read. Snapshot HEAD/refs remain private and unchanged for
+the lifetime of a fetch, even while new snapshots reuse the same object bytes.
+
+An object is compressed into an accounted temporary file, then installed at its
+OID only after verification and compression finish. Incomplete files never count
+as cache hits. Existing OIDs skip body queries, external downloads and compression;
+refresh still scans metadata and checks local paths in bounded batches. This is
+incremental body hydration, not an incremental metadata index. No cache serves as
+durable authority, and authorization still precedes cache access.
+
+Snapshot owners retain the shared cache through native work and streaming. If a
+worker fence prevents generation cleanup, both its disk reservation and its
+borrowed-object owner remain retained until process restart. Startup acquires all
+generation fences before deleting any cache. This preserves borrowed objects even
+when an orphan worker outlives the gateway. Failed/short writes retain conservative
+charges until cache destruction; concurrent cancelled writers cannot refund another
+writer's reservation through a read-then-resize race.
 
 Records are immutable through product APIs, and no collector removes them.
 This makes the two observations safe; a future collector must fence active
@@ -445,7 +472,7 @@ single-record `next_object` API was removed from this unreleased crate.
 
 Debug events separate Repository Cell acquisition from successful cache
 hydration. Hydration reports object count, raw bytes, admitted cache bytes, total
-time, page-read/verification time, external/chunk body-read time and cache-write
+time, scanned/reused object counts, page-read/verification time, external/chunk body-read time and cache-write
 time. Cache writes include worker scheduling, OID verification and compression; for
 external Git blobs this interval also includes streamed object-store reads.
 These elapsed wall times include waiting; they are not CPU profiles or a claim
@@ -490,7 +517,7 @@ initial object version/ETag. The final range is withheld until Git SHA-1,
 SHA-256 and BLAKE3 all match the SQLite reference. A failed or canceled range
 invalidates its reader. Hydration compresses into disk-accounted cache files on
 blocking workers; each writer retains the cache reservation until it exits.
-The cache is not published for Git service until hydration finishes.
+The ref generation is not published for Git service until hydration finishes.
 
 The 5 GiB ceiling follows the adapter's one-part conditional copy and the
 [S3 part limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
@@ -639,19 +666,23 @@ Cache construction reserves logical file bytes before writing its bare config,
 HEAD, compressed loose objects and loose refs. The layout follows Git's
 [repository format](https://git-scm.com/docs/gitrepository-layout). Construction
 does not invoke `git init` or copy template hooks. Each cache generation owns
-its directory and reservation; warm caches remain charged between requests.
+its directory and reservation; the shared verified-object cache has its own
+reservation and remains charged between requests.
 Replacing a generation releases an unused old cache before building the next;
 active readers retain their old generation. Blocking hydration workers also
 retain ownership when their caller is cancelled. Process guards signal Git
-before dropping cache and input owners on cancellation. Git hooks and receive
-auto-GC are disabled for these disposable repositories.
+before dropping cache and input owners on cancellation. Repository-supplied
+hooks and receive auto-GC are disabled; only Canopy's generated receive-policy
+hook is installed.
 
 After receive-pack finishes, Canopy measures its actual cache file lengths and
 resizes the reservation before staging Git objects, push replies or ref changes.
 Admission failure returns HTTP 507 and publishes no ref change or completed
 push outcome. Retrying the same request identity can succeed after capacity is
-freed. Hydration admission failure also returns 507 and discards the incomplete
-cache. Cache deletion precedes releasing its reservation; if deletion fails,
+freed. Hydration admission failure also returns 507 without installing a ref
+generation. Existing shared caches retain completed verified objects and
+conservative failed-write charges; a retry reuses those completed objects.
+Cache deletion precedes releasing its reservation; if deletion fails,
 the charge is retained for the remainder of the process lifetime.
 
 This accounts retained caches and bounds Canopy's hydration writes. It does

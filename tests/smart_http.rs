@@ -21,6 +21,8 @@ mod support;
 
 #[path = "smart_http/cache_admission.rs"]
 mod cache_admission;
+#[path = "smart_http/cache_reuse.rs"]
+mod cache_reuse;
 #[path = "smart_http/encoded_input.rs"]
 mod encoded_input;
 #[path = "smart_http/native_resources.rs"]
@@ -201,7 +203,8 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             unsupported.status(),
             reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
-        let occupied = disk_budget.try_reserve(disk_budget.capacity() - 1)?;
+        let retained = disk_budget.used();
+        let occupied = disk_budget.try_reserve(disk_budget.capacity() - retained - 1)?;
         let admission_id = uuid::Uuid::new_v4().to_string();
         let admission_request = || {
             client
@@ -216,7 +219,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             reqwest::StatusCode::INSUFFICIENT_STORAGE
         );
         drop(occupied);
-        assert_eq!(disk_budget.used(), 0);
+        assert_eq!(disk_budget.used(), retained);
         assert_eq!(
             admission_request().send().await?.status(),
             reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
@@ -419,6 +422,11 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         ref_snapshots::verify(&repository, &client, &url).await?;
         let _ = stop_tx.send(());
         server.await??;
+        assert_eq!(
+            disk_budget.used(),
+            0,
+            "gateway teardown releases retained object and snapshot charges"
+        );
 
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
@@ -477,6 +485,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         .await?;
         assert!(tokio::fs::read(clone.join("tracked.lfs")).await? == lfs_body);
         native_resources::verify(scratch.path(), &url).await?;
+        cache_reuse::verify(scratch.path(), &local, &url).await?;
         let _ = stop_tx.send(());
         server.await??;
         Ok(())
