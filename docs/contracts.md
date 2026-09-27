@@ -1169,9 +1169,10 @@ callback does not establish identity; russh verifies the signature before the
 authenticated-key callback. See the dependency's
 [Handler contract](https://docs.rs/russh/0.63.3/russh/server/trait.Handler.html#method.auth_publickey).
 
-Exec accepts only `git-upload-pack` and `git-receive-pack` with one validated
-owner/repository path, optionally single-quoted, with optional leading slash and
-`.git` suffix. No shell executes the command. Only `GIT_PROTOCOL=version=0|1|2`
+Exec accepts `git-upload-pack` and `git-receive-pack` with one validated
+owner/repository path, and `git-lfs-authenticate` with that path plus `upload` or
+`download`. Paths may be single-quoted, with optional leading slash and `.git`
+suffix. No shell executes the command. Only `GIT_PROTOCOL=version=0|1|2`
 is accepted before exec; v1 requests use v0. Shells, PTYs, subsystems and forwarding
 are denied. Each command checks current key/account status, key scope and
 repository access. Revocation blocks subsequent commands on existing connections;
@@ -1206,8 +1207,31 @@ closes its input after writing a pack; deletion-only pushes dispatch after the
 command flush without waiting for EOF. Git status is sent after durable completion,
 then SSH exit status, EOF and close. SSH provides no explicit push retry ID.
 
-The transport does not yet implement `git-lfs-authenticate`. Configure HTTPS LFS
-separately for SSH repository URLs. Local tests cover stock Git transfer/recovery,
+`git-lfs-authenticate` follows the Git LFS
+[SSH discovery contract](https://github.com/git-lfs/git-lfs/blob/v3.7.1/docs/api/server-discovery.md#ssh).
+Its JSON action contains `href`, an `Authorization: CanopyLfs ...` header and
+`expires_in: 300`. The endpoint uses the configured public HTTP origin. Transfers
+continue through the existing basic HTTP API and immutable object-store parts;
+`git-lfs-transfer` (pure SSH transfer) is not implemented.
+
+The Directory Cell stores only the random grant's SHA-256 digest, grant UUID,
+SSH key ID, repository UUID, operation and owner-time expiry. Issuance rechecks
+key/account enablement and key scope in its transaction. HTTP authentication
+rechecks these facts and expiry, then repository routing and handlers check the
+current ACL. The resolved repository UUID must still match the grant after
+name lookup, preventing a rename/recreate race from retargeting credentials.
+Grants are accepted only by LFS routes, never Git or management endpoints. Batch
+operations must match; upload grants permit object PUT and lock mutations,
+download grants permit object GET, and either can list locks. Already admitted
+transfers may finish after expiry or revocation; the next request is rechecked.
+
+Grant rows survive Directory recovery and work on any node using that Directory.
+Each issuance removes at most 256 expired rows through an expiry index; idle
+expired rows remain until later issuance and cannot authenticate. Grants do not
+create general access tokens or consume their issuance quota. This new Directory
+table requires a fresh development storage prefix; no legacy reader is provided.
+
+Local tests cover stock Git transfer/recovery,
 reused-connection revocation, ACL/scope enforcement, unreachable wants and command
 restrictions. Held-fetch tests prove shared HTTP admission and cancellation on
 channel close and node shutdown. Publication tests pause blob ingestion after
@@ -2644,5 +2668,5 @@ Use a fresh prefix. No dependency or lockfile change is required.
 
 The standard lock verification API supports stock Git LFS pre-push enforcement.
 It does not prevent clients from bypassing that hook, and is not an additional
-server-side ref publication policy. SSH LFS authentication, resumable/custom
+server-side ref publication policy. Pure SSH LFS transfers, resumable/custom
 transfers and external-server federation remain outside the implemented slice.

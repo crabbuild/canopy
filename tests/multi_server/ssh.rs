@@ -2,6 +2,8 @@
 mod fetch;
 #[path = "filtered_preparation.rs"]
 mod filtered_preparation;
+#[path = "ssh_lfs.rs"]
+mod lfs;
 #[path = "ssh_publication.rs"]
 mod publication;
 
@@ -506,6 +508,10 @@ async fn ssh_rejects_shell_injection_environment_and_forwarding() -> Result {
     for command in [
         "sh",
         "git-upload-archive 'canopy/repo.git'",
+        "git-lfs-transfer canopy/repo.git download",
+        "git-lfs-authenticate canopy/repo.git delete",
+        "git-lfs-authenticate '../canopy/repo.git' download",
+        "git-lfs-authenticate 'canopy/repo.git' download; id",
         "git-upload-pack '../canopy/repo.git'",
         "git-upload-pack 'canopy/repo.git'; id",
         "git-upload-pack 'canopy/$(id).git'",

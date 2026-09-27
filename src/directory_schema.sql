@@ -35,6 +35,17 @@ CREATE TABLE ssh_keys (
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
 ) WITHOUT ROWID;
 
+CREATE TABLE lfs_grants (
+    digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    key_id BLOB NOT NULL REFERENCES ssh_keys(id),
+    repository_id BLOB NOT NULL REFERENCES repositories(repository_id),
+    operation TEXT NOT NULL CHECK(operation IN ('download', 'upload')),
+    expires_ms INTEGER NOT NULL CHECK(expires_ms >= 0)
+) WITHOUT ROWID;
+
+CREATE INDEX lfs_grants_expiry ON lfs_grants(expires_ms);
+
 CREATE INDEX ssh_keys_account ON ssh_keys(account, id);
 CREATE INDEX ssh_keys_active ON ssh_keys(account) WHERE enabled = 1;
 CREATE INDEX ssh_keys_issued ON ssh_keys(account, created_ms);

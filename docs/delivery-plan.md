@@ -3652,3 +3652,51 @@ report construction; the push method moved into its own module to keep the
 gateway readable. No dependency, schema or compatibility shim was added.
 Provider outage/owner-loss combinations and uncertain-response fault injection
 remain open, together with the advanced push/LFS, SHA-256 and capacity gates.
+
+
+## SSH authentication for HTTP Git LFS
+
+SSH exec now accepts `git-lfs-authenticate <repository> upload|download` in
+addition to the Git transport commands. It follows Git LFS 3.7.1's
+[discovery contract](https://github.com/git-lfs/git-lfs/blob/v3.7.1/docs/api/server-discovery.md#ssh)
+and [command construction](https://github.com/git-lfs/git-lfs/blob/v3.7.1/ssh/ssh.go).
+The response advertises the configured HTTP LFS origin and a credential valid
+for 300 seconds. The existing basic transfer and locking handlers perform the
+requested work; large bodies retain the shared immutable object-store layout.
+
+A separate Directory table holds grant digests, parent SSH key IDs, repository
+UUIDs, operations and expiry. Grant issuance and validation use the existing
+owner-time credential commands. These commands return affected-row counts; the
+pinned Cell SQL contract rejects mutating `RETURNING` statements. The initial
+end-to-end attempt exposed that restriction, and issuance now uses the canonical
+mutation result. HTTP routing verifies the repository binding again after name
+resolution to fence rename/recreate races. Batch bodies must match the grant's
+operation. Ordinary HTTP account tokens and SSH Git commands retain their own
+authorization paths. No grant reaches management or Git endpoints.
+
+The stock-client gate pushes a 9 MiB LFS object and uses locks through an SSH
+remote without `lfs.url` or HTTP credentials. After fresh-disk recovery, the
+original grant still authenticates, a new SSH-authenticated pull restores exact
+bytes, lock listing/unlock work and strict/full Git fsck passes. A second gate
+checks read-only keys, repository ACLs, operation separation, key revocation on
+an existing session, account disablement and name reuse. It waits through the
+production lifetime to check expired credentials fail and a fresh grant works.
+Both gates passed; the expiry/security fixture took 301 seconds using the real
+owner clock. Six adjacent tests also passed: stock SSH transfer/recovery,
+reused-channel authorization, command injection/forwarding rejection, SSH key
+management/recovery, HTTP lock API and stock HTTP LFS locking. The final
+stock-client rerun, all-target Clippy with warnings denied, formatting and diff
+checks passed. Both new gates are non-ignored tests in the existing CI command;
+hosted CI and real-provider qualification have not run for this change.
+
+LFS authentication replies are cancellation-aware and have a 120-second output
+deadline so a peer withholding window credit cannot retain transfer admission
+indefinitely. Git push retains its separate publication-drain contract.
+
+This changes the unreleased Directory schema/source identity: use a fresh
+storage prefix. No dependency or lockfile changes. The transport dispatcher
+moved into its own module to keep the authorization boundary readable; the
+other new module owns durable LFS grants. These additions implement scoped
+credentials without exposing new public Rust APIs or general access tokens.
+Pure SSH LFS transfers, resumable/custom transfers, federation, advanced Git
+push features and SHA-256 Git remain open.

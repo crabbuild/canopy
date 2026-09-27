@@ -41,7 +41,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Rejected; object IDs and graph formats are SHA-1 throughout | Repository-level format identity, 32-byte graph/ref storage, negotiation, restore and mixed-format rejection |
-| Advanced LFS | HTTP basic transfers and advisory lock API; no SSH LFS authentication/transfer, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |
+| Advanced LFS | HTTP basic transfers, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
 Signed commits and signed tags are ordinary stored Git objects; **signed push

@@ -2,6 +2,45 @@ use super::*;
 use crate::directory::{SshKey, SshKeyChange, SshKeyInfo, TokenAuthority, TokenChange, TokenInfo};
 
 impl RepositoryManager {
+    pub(crate) async fn issue_lfs_grant(
+        &self,
+        key_id: [u8; 16],
+        repository: [u8; 16],
+        operation: directory::LfsOperation,
+    ) -> Result<Option<String>, ServerError> {
+        let token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let digest = Sha256::digest(token.as_bytes()).into();
+        let issued = self
+            .directory
+            .issue_lfs_grant(
+                mutation_identity()?,
+                key_id,
+                repository,
+                uuid::Uuid::new_v4().into_bytes(),
+                digest,
+                operation,
+            )
+            .await?;
+        Ok(issued.then_some(token))
+    }
+
+    pub(crate) async fn authenticate_lfs_grant(
+        &self,
+        token: &str,
+        owner: &str,
+        repository: &str,
+    ) -> Result<Option<directory::LfsGrant>, ServerError> {
+        let digest = Sha256::digest(token.as_bytes()).into();
+        Ok(self
+            .directory
+            .authenticate_lfs_grant(digest, owner, repository)
+            .await?)
+    }
+
     pub(crate) async fn account_events(
         &self,
         actor_digest: [u8; 32],

@@ -2,7 +2,7 @@
 
 use crate::{
     ReadIdentity,
-    directory::{SshKey, TokenScope, validate_component},
+    directory::{LFS_AUTH_SECONDS, LfsOperation, SshKey, TokenScope, validate_component},
     server::{RepositoryManager, ServerError},
 };
 use russh::{
@@ -12,6 +12,7 @@ use russh::{
 use ssh_key::{PrivateKey, PublicKey};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
+    io::AsyncWriteExt,
     net::TcpListener,
     sync::{OwnedSemaphorePermit, Semaphore},
 };
@@ -27,6 +28,8 @@ pub struct SshConfig {
 enum SshError {
     #[error("SSH transport failed")]
     Transport(#[from] russh::Error),
+    #[error("SSH output failed")]
+    Io(#[from] std::io::Error),
     #[error("SSH public key is invalid")]
     Key(#[from] ssh_key::Error),
     #[error("SSH repository operation failed")]
@@ -294,14 +297,31 @@ impl server::Handler for Connection {
                 }
                 let principal = manager.ssh_identity(&key).await?
                     .ok_or(SshError::Rejected("SSH key is revoked or unavailable"))?;
-                if command.push && principal.scope < TokenScope::Write {
+                if command.service.scope() > principal.scope {
                     return Err(SshError::Rejected("SSH key is read-only"));
                 }
                 let actor = ReadIdentity::Account(&principal.account);
                 let admission = manager.transfer_permit(actor).await?;
                 let route = manager.resolve(actor, &command.owner, &command.repository).await?
                     .ok_or(SshError::Rejected("Repository is unavailable"))?;
-                if command.push {
+                if let GitService::Lfs(operation) = command.service {
+                    if route.gateway.access_level(actor).await?.is_none_or(|scope| scope < operation.scope()) {
+                        return Err(SshError::Rejected("Repository access denied"));
+                    }
+                    let token = manager.issue_lfs_grant(principal.key_id, route.repository.repository_id(), operation).await?
+                        .ok_or(SshError::Rejected("SSH key is revoked or unavailable"))?;
+                    let href = format!("{}/{}/{}.git/info/lfs", manager.public_url.trim_end_matches('/'), command.owner, command.repository);
+                    let response = serde_json::json!({"href":href, "header":{"Authorization":format!("CanopyLfs {token}")}, "expires_in":LFS_AUTH_SECONDS});
+                    // An auth reply carries no ref publication to drain. A peer
+                    // withholding SSH window credit must not retain transfer admission.
+                    tokio::select! {
+                        () = stop.cancelled() => return Err(SshError::Rejected("SSH LFS authentication cancelled")),
+                        result = tokio::time::timeout(Duration::from_secs(120), async {
+                            writer.write_all(response.to_string().as_bytes()).await?;
+                            writer.flush().await
+                        }) => { result.map_err(|_| SshError::Rejected("LFS response timed out"))??; }
+                    }
+                } else if matches!(command.service, GitService::Push) {
                     // Once a push is admitted, disconnection cannot abandon its
                     // durable outcome. TaskTracker drains it before Cell shutdown.
                     route.gateway.ssh_push(reader, &mut writer, &principal.account, admission).await?;
@@ -377,8 +397,24 @@ impl server::Handler for Connection {
     }
 }
 
+#[derive(Clone, Copy)]
+enum GitService {
+    Fetch,
+    Push,
+    Lfs(LfsOperation),
+}
+impl GitService {
+    fn scope(self) -> TokenScope {
+        match self {
+            Self::Fetch => TokenScope::Read,
+            Self::Push => TokenScope::Write,
+            Self::Lfs(operation) => operation.scope(),
+        }
+    }
+}
+
 struct GitCommand {
-    push: bool,
+    service: GitService,
     owner: String,
     repository: String,
 }
@@ -388,9 +424,13 @@ impl GitCommand {
             return None;
         }
         let (service, path) = std::str::from_utf8(bytes).ok()?.split_once(' ')?;
-        let push = match service {
-            "git-upload-pack" => false,
-            "git-receive-pack" => true,
+        let (service, path) = match service {
+            "git-upload-pack" => (GitService::Fetch, path),
+            "git-receive-pack" => (GitService::Push, path),
+            "git-lfs-authenticate" => {
+                let (path, operation) = path.rsplit_once(' ')?;
+                (GitService::Lfs(LfsOperation::parse(operation)?), path)
+            }
             _ => return None,
         };
         let path = if let Some(path) = path.strip_prefix('\'') {
@@ -404,7 +444,7 @@ impl GitCommand {
         validate_component(owner).ok()?;
         validate_component(repository).ok()?;
         Some(Self {
-            push,
+            service,
             owner: owner.into(),
             repository: repository.into(),
         })

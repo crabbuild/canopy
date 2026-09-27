@@ -18,7 +18,7 @@ mod lfs_locks;
 
 use crate::{
     ReadIdentity,
-    directory::{Principal, TokenScope, validate_component},
+    directory::{LfsOperation, Principal, TokenScope, validate_component},
     git_gateway::{GatewayError, GitGateway},
     git_http::GitHttpRequest,
     lfs::LfsError,
@@ -126,6 +126,33 @@ impl GitHttpApi {
     }
 }
 
+pub(crate) fn lfs_grant_allows(
+    operation: LfsOperation,
+    method: &axum::http::Method,
+    path: &str,
+) -> bool {
+    use axum::http::Method;
+    match (method, path) {
+        (&Method::POST, "info/lfs/objects/batch") => true,
+        (&Method::GET, "info/lfs/locks") => true,
+        (&Method::POST, "info/lfs/locks" | "info/lfs/locks/verify") => {
+            operation == LfsOperation::Upload
+        }
+        (&Method::POST, path)
+            if path.starts_with("info/lfs/locks/") && path.ends_with("/unlock") =>
+        {
+            operation == LfsOperation::Upload
+        }
+        (&Method::GET, path) if path.starts_with("info/lfs/objects/") => {
+            operation == LfsOperation::Download
+        }
+        (&Method::PUT, path) if path.starts_with("info/lfs/objects/") => {
+            operation == LfsOperation::Upload
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn validate_public_url(public_url: &str) -> Result<Url, &'static str> {
     let public_url = Url::parse(public_url).map_err(|_| "invalid public URL")?;
     let loopback = public_url.host_str().is_some_and(|host| {
@@ -196,6 +223,7 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    let operation = request.extensions().get::<LfsOperation>().copied();
     let body = match lfs_body(request.into_body(), MAX_LFS_BATCH_BYTES).await {
         Ok(body) => body,
         Err(StatusCode::REQUEST_TIMEOUT) => {
@@ -226,6 +254,12 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
         return lfs_json(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"message": "Unsupported LFS batch request"}),
+        );
+    }
+    if operation.is_some_and(|operation| operation.as_str() != batch.operation) {
+        return lfs_json(
+            StatusCode::FORBIDDEN,
+            json!({"message":"LFS credential operation mismatch"}),
         );
     }
     let required = if batch.operation == "upload" {

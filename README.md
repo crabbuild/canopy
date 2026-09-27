@@ -144,8 +144,8 @@ unlocking require write access. A writer can explicitly use `--force` to remove
 another account's lock. Locks survive node restart and fresh-disk recovery.
 
 Locking is advisory: a client can bypass Git LFS verification. It is not a
-server-side branch protection rule. Use HTTP LFS credentials; SSH LFS
-authentication and transfer commands remain unimplemented. Lock pages contain
+server-side branch protection rule. HTTP credentials and SSH-issued LFS
+grants both support these lock operations. Lock pages contain
 at most 100 entries, with continuation cursors; paths are canonical relative
 UTF-8 strings up to 4096 bytes. This adds an unreleased SQLite table and requires
 a fresh development storage prefix when switching from older builds.
@@ -713,8 +713,13 @@ Exact `blob:none` requests hydrate only explicit missing wants. Other requests
 apply the native filter while selecting missing reachable blobs, before
 forwarding wants to native Git. Tree and object-type constraints skip omitted
 bodies; size filters still load missing bodies because native Git needs their sizes.
-SSH LFS authentication is not implemented; repositories cloned
-over SSH must configure an HTTPS LFS endpoint and HTTP credentials for LFS.
+Git LFS can use the same SSH key: `git-lfs-authenticate` returns the configured
+HTTP LFS endpoint and a five-minute credential for that repository and operation.
+No separate HTTP credential helper or `lfs.url` is required. File bytes still use
+HTTP basic transfers to Canopy's object-store-backed LFS service. Each request
+checks grant expiry, parent SSH key/account status and current repository access.
+Grants cannot authorize Git or management API requests. Pure SSH LFS transfers
+remain unsupported.
 The local compatibility suite covers stock Git transfers and fresh-disk recovery;
 late policy/access refusal and disconnected-push drain are also covered locally.
 Provider failure, owner-loss and capacity qualification remain open.
