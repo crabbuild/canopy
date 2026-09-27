@@ -266,17 +266,19 @@ fn edges(kind: ObjectKind, mut body: &[u8]) -> Option<Vec<Edge>> {
             }
             Some(edges)
         }
-        ObjectKind::Tag => {
-            let target = hex_oid(line(&mut body)?.strip_prefix(b"object ")?)?;
-            let kind = parse_kind(line(&mut body)?.strip_prefix(b"type ")?)?;
-            line(&mut body)?.strip_prefix(b"tag ")?;
-            Some(vec![(target, Some(kind))])
-        }
+        ObjectKind::Tag => Some(vec![tag_edge(body)?]),
     }?;
     // Repeated files can share one Git object. A typed dependency needs one proof.
     edges.sort_unstable();
     edges.dedup();
     Some(edges)
+}
+
+pub(crate) fn tag_edge(mut body: &[u8]) -> Option<Edge> {
+    let target = hex_oid(line(&mut body)?.strip_prefix(b"object ")?)?;
+    let kind = parse_kind(line(&mut body)?.strip_prefix(b"type ")?)?;
+    line(&mut body)?.strip_prefix(b"tag ")?;
+    Some((target, Some(kind)))
 }
 
 fn line<'a>(body: &mut &'a [u8]) -> Option<&'a [u8]> {

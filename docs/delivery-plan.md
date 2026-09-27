@@ -3169,3 +3169,22 @@ v0/v2 recovery samples, strict fsck and cleanup. See the
 [account admission evidence](performance-plan.md#account-admission-for-cold-repository-transitions).
 This bounds an individual account's activation share. Transfer fairness, lower
 cold latency, full primitive composition and production density remain open.
+
+## Native ref listing prepares only ref targets
+
+Git v0 fetch/push advertisements and recognized v2 `ls-refs` now reuse a current
+full snapshot or build a temporary cache containing only ref targets and tag
+chains. Native Git still owns protocol output. The shared materializer preserves
+verified inline, chunked and external body handling; full fetch/push and merge
+preparation keep their history cache and indexed refresh cursor.
+
+The pressure regression rejects `8262942` with HTTP 507, then proves discovery
+with 64 KiB free, full-fetch rejection/retry, nested tag peeling, direct tree/blob
+refs and warm-cache reuse with 512 bytes free. Focused transport, graph, recovery
+and page-bound tests, Clippy, formatting and the optimized build pass. Final
+real-store run `canopy-ref-discovery-b9048686d60e` proves one-tip cold discovery,
+exact v0/v2 clone/fsck recovery, incremental reuse and clean shutdown. The
+intermittent immediate teardown assertion remains documented and unresolved.
+See [ref discovery evidence](performance-plan.md#ref-discovery-without-full-history-hydration).
+Large ref sets, concurrent cache preparation, full primitive composition and
+thousand-repository mixed workloads remain open.

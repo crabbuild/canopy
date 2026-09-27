@@ -32,6 +32,22 @@ pub async fn verify(
     run_git(Some(&source), &["commit", "-m", "Cache admission fixture"]).await?;
     let commit = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
     let commit = std::str::from_utf8(&commit)?.trim();
+    run_git(Some(&source), &["tag", "-a", "inner", "-m", "Inner tag"]).await?;
+    run_git(
+        Some(&source),
+        &["tag", "-a", "outer", "inner", "-m", "Nested tag"],
+    )
+    .await?;
+    let mut advertised = vec![("refs/heads/quota", commit.to_owned())];
+    for (name, revision) in [
+        ("refs/tags/inner", "inner"),
+        ("refs/tags/outer", "outer"),
+        ("refs/tags/tree", "HEAD^{tree}"),
+        ("refs/tags/blob", "HEAD:file-00"),
+    ] {
+        let oid = run_git(Some(&source), &["rev-parse", revision]).await?;
+        advertised.push((name, std::str::from_utf8(&oid)?.trim().to_owned()));
+    }
     let pack = run_git(
         Some(&source),
         &["pack-objects", "--stdout", "--all", "--window=50"],
@@ -41,11 +57,13 @@ pub async fn verify(
         pack.len() < common.len() * 4,
         "fixture requires delta compression"
     );
-    let command = format!(
-        "{} {commit} refs/heads/quota\0report-status\n",
-        "0".repeat(40)
-    );
-    let mut body = format!("{:04x}{command}0000", command.len() + 4).into_bytes();
+    let mut body = Vec::new();
+    for (index, (name, oid)) in advertised.iter().enumerate() {
+        let capabilities = if index == 0 { "\0report-status" } else { "" };
+        let command = format!("{} {oid} {name}{capabilities}\n", "0".repeat(40));
+        body.extend_from_slice(format!("{:04x}{command}", command.len() + 4).as_bytes());
+    }
+    body.extend_from_slice(b"0000");
     body.extend_from_slice(&pack);
     encoded_input::reject_corruption_and_expansion(repository, budget, client, url, &body).await?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -153,15 +171,97 @@ pub async fn verify(
     assert!(budget.used() >= occupied.bytes());
     assert!(budget.used() <= budget.capacity());
     drop(occupied);
+    // Ref discovery fits even when expanding the repository history cannot.
+    // Nested tags and direct tree/blob refs must preserve native peeling rules.
+    let retained = budget.used();
+    let occupied = budget.try_reserve(budget.capacity() - retained - 64 * 1024)?;
+    for service in ["git-upload-pack", "git-receive-pack"] {
+        let bytes = client
+            .get(format!("{url}/info/refs?service={service}"))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        for (name, oid) in &advertised {
+            let entry = format!("{oid} {name}");
+            assert!(
+                bytes
+                    .windows(entry.len())
+                    .any(|part| part == entry.as_bytes())
+            );
+        }
+        if service == "git-upload-pack" {
+            let peeled = format!("{commit} refs/tags/outer^{{}}");
+            assert!(
+                bytes
+                    .windows(peeled.len())
+                    .any(|part| part == peeled.as_bytes())
+            );
+        }
+        assert_eq!(budget.used(), occupied.bytes() + retained);
+    }
+    let bytes = client
+        .post(format!("{url}/git-upload-pack"))
+        .bearer_auth("local-test-token")
+        .header("Content-Type", "application/x-git-upload-pack-request")
+        .header("Git-Protocol", "version=2")
+        .body("0014command=ls-refs\n00010009peel\n000csymrefs\n0000")
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let outer = &advertised[2].1;
+    let peeled = format!("{outer} refs/tags/outer peeled:{commit}");
+    assert!(
+        bytes
+            .windows(peeled.len())
+            .any(|part| part == peeled.as_bytes())
+    );
+    assert_eq!(budget.used(), occupied.bytes() + retained);
+    let want = format!("want {commit}\n");
+    let fetch = || {
+        client
+            .post(format!("{url}/git-upload-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "application/x-git-upload-pack-request")
+            .body(format!("{:04x}{want}00000009done\n", want.len() + 4))
+    };
+    assert_eq!(
+        fetch().send().await?.status(),
+        reqwest::StatusCode::INSUFFICIENT_STORAGE
+    );
+    drop(occupied);
+    fetch().send().await?.error_for_status()?.bytes().await?;
+    assert!(budget.used() > common.len() as u64 * 40);
+    let retained = budget.used();
+    // A current full cache can serve discovery without recopying its targets.
+    let occupied = budget.try_reserve(budget.capacity() - retained - 512)?;
     advertisement()
         .send()
         .await?
         .error_for_status()?
         .bytes()
         .await?;
-    assert!(budget.used() > common.len() as u64 * 40);
-    let retained = budget.used();
+    assert_eq!(budget.used(), occupied.bytes() + retained);
+    drop(occupied);
     encoded_input::delete_with_admission_retry(repository, budget, client, url, commit).await?;
     assert_eq!(budget.used(), retained);
+    run_git(
+        Some(&source),
+        &[
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-test-token",
+            "push",
+            url,
+            ":refs/tags/inner",
+            ":refs/tags/outer",
+            ":refs/tags/tree",
+            ":refs/tags/blob",
+        ],
+    )
+    .await?;
     Ok(())
 }

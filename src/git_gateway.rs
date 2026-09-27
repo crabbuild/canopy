@@ -7,7 +7,7 @@ use std::{
     error::Error as StdError,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::body::Body;
@@ -24,7 +24,7 @@ use crate::{
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
     git_objects::GitObjects,
-    large_blob::{LargeBlobError, LargeBlobReference, LargeBlobStore},
+    large_blob::{LargeBlobError, LargeBlobStore},
     lfs::LfsService,
     object_batch::MAX_OBJECTS,
     push::{PushCompletion, PushError},
@@ -33,6 +33,10 @@ use crate::{
 
 mod branch_policy;
 mod candidates;
+mod discovery;
+mod hydration;
+
+use hydration::Hydration;
 
 pub use crate::git_objects::ObjectReadError;
 
@@ -197,6 +201,21 @@ impl GitGateway {
             )
             .await?;
             backend.stream(request, ()).await?
+        } else if discovery::is_ref_discovery(&request).await? {
+            let snapshot = self.cell_refs().await?;
+            let cached = self
+                .cache
+                .lock()
+                .await
+                .as_ref()
+                .filter(|cached| cached.snapshot == snapshot)
+                .cloned();
+            if let Some(cached) = cached {
+                cached.backend.stream(request, Arc::clone(&cached)).await?
+            } else {
+                let backend = self.discovery_cache(snapshot).await?;
+                backend.stream(request, ()).await?
+            }
         } else {
             let live_refs = self.cell_refs().await?;
             let cached = {
@@ -348,105 +367,6 @@ impl GitGateway {
         };
         backend.cache.store_refs(&snapshot.refs).await?;
         Ok(CachedRepository { backend, snapshot })
-    }
-
-    async fn hydrate(&self, shared: &mut CachedObjects) -> Result<(), GatewayError> {
-        let started = Instant::now();
-        let cache = &shared.cache;
-        let from_sequence = shared.through;
-        // Bound this refresh even when other writers keep appending objects.
-        // The read follows the chosen ref snapshot, whose objects are durable.
-        let high_water = self
-            .repository
-            .object_high_water()
-            .await
-            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-        let mut page_time = Duration::ZERO;
-        let mut body_time = Duration::ZERO;
-        let mut cache_time = Duration::ZERO;
-        let mut objects = 0_u64;
-        let mut scanned = 0_u64;
-        let mut bytes = 0_u64;
-        while shared.through < high_water.output {
-            let queried = Instant::now();
-            let mut headers = self
-                .repository
-                .object_headers(shared.through, &high_water)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            if headers.objects.output.is_empty() {
-                return Err(GatewayError::MalformedCache);
-            }
-            scanned += headers.objects.output.len() as u64;
-            headers.objects.output = cache.missing_objects(headers.objects.output).await?;
-            let page = self
-                .repository
-                .object_records(headers.objects)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                .output;
-            page_time += queried.elapsed();
-            for object in page {
-                let read = Instant::now();
-                let body = match object.storage {
-                    ObjectStorage::Inline(body) => body,
-                    ObjectStorage::Chunked {
-                        upload,
-                        size,
-                        blake3,
-                    } => self
-                        .repository
-                        .chunked_body(object.oid, object.kind, upload, size, blake3)
-                        .await
-                        .map_err(|error| GatewayError::Cell(Box::new(error)))?,
-                    ObjectStorage::External {
-                        size,
-                        blake3,
-                        sha256,
-                    } => {
-                        let reference = LargeBlobReference {
-                            oid: object.oid,
-                            size,
-                            blake3,
-                            sha256,
-                        };
-                        let reader = self.large_blobs.read(&reference).await?;
-                        body_time += read.elapsed();
-                        let written = Instant::now();
-                        cache.store_blob(reader).await?;
-                        cache_time += written.elapsed();
-                        objects += 1;
-                        bytes += reference.size;
-                        continue;
-                    }
-                };
-                body_time += read.elapsed();
-                objects += 1;
-                bytes += body.len() as u64;
-                let written = Instant::now();
-                cache.store_object(object.oid, object.kind, body).await?;
-                cache_time += written.elapsed();
-            }
-            // Failed or cancelled pages retain their previous cursor. Verified
-            // files can be reused on retry, but no missing body is skipped.
-            shared.through = headers.through;
-        }
-        tracing::debug!(
-            repository = %hex::encode(self.repository.repository_id()),
-            objects,
-            scanned,
-            from_sequence,
-            through_sequence = shared.through,
-            reused = scanned - objects,
-            bytes,
-            cache_bytes = cache.bytes()?,
-            elapsed_seconds = started.elapsed().as_secs_f64(),
-            page_seconds = page_time.as_secs_f64(),
-            body_seconds = body_time.as_secs_f64(),
-            cache_seconds = cache_time.as_secs_f64(),
-            "hydrated Git cache"
-        );
-        Ok(())
     }
 
     async fn cell_refs(&self) -> Result<RefSnapshot, GatewayError> {

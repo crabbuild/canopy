@@ -38,7 +38,7 @@ def qualify(args):
     report = {"binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "storage_url": settings["storage_url"], "cache_reuse_passed": False,
               "recovery_passed": False, "shutdown_passed": False,
-              "capability_discovery_passed": False}
+              "capability_discovery_passed": False, "ref_discovery_passed": False}
     processes = []
     try:
         process, base = start(args.binary, args.work_dir, settings, "first")
@@ -124,6 +124,26 @@ def qualify(args):
         report["cold_capability_cached_objects"] = len(cached_objects(restored_data))
         assert report["cold_capability_cached_objects"] == 0
         assert "hydrated Git cache" not in restored_log.read_text()[log_offset:]
+        listings = {}
+        discovery_times = {}
+        for protocol in (0, 2):
+            started = time.monotonic()
+            listings[protocol] = git("-c", AUTH, "-c", f"protocol.version={protocol}",
+                                     "ls-remote", "--symref", restored_url)
+            discovery_times[protocol] = time.monotonic() - started
+            assert expected + b"\trefs/heads/main" in listings[protocol]
+            assert not cached_objects(restored_data)
+        assert listings[0] == listings[2]
+        events = []
+        for line in restored_log.read_text()[log_offset:].splitlines():
+            if "prepared Git ref discovery" in line:
+                events.append({key: int(value) for key, value in re.findall(
+                    r"\b(objects|bytes)=([0-9]+)", line)})
+        assert len(events) == 2 and all(event["objects"] == 1 for event in events), events
+        assert "hydrated Git cache" not in restored_log.read_text()[log_offset:]
+        report.update(ref_discovery_passed=True, cold_ref_discovery_seconds=discovery_times,
+                      ref_discovery_events=events, cold_ref_discovery_retained_objects=0)
+        print("PASS: cold v0/v2 ls-remote reads one tip each, with no retained history cache", flush=True)
         for protocol in (0, 2):
             clone(restored_url, f"restored-v{protocol}", protocol)
         assert len(cached_objects(restored_data)) == 263

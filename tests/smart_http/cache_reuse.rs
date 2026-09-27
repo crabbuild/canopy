@@ -51,13 +51,7 @@ pub async fn verify(
     )
     .await?;
     run_git(None, &["-c", AUTH, "ls-remote", url]).await?;
-    let after = cached_objects(root)?;
-    // A new blob, tree and commit are hydrated. Existing bodies keep their
-    // actual files across receive-pack and the next published ref generation.
-    assert_eq!(after.len(), before.len() + 3);
-    for (path, metadata) in before {
-        assert_eq!(after.get(&path), Some(&metadata));
-    }
+    assert_eq!(cached_objects(root)?, before);
     let clone = root.join("cache-reuse-clone");
     run_git(
         None,
@@ -74,6 +68,13 @@ pub async fn verify(
         ],
     )
     .await?;
+    let after = cached_objects(root)?;
+    // A new blob, tree and commit are hydrated. Existing bodies keep their
+    // actual files across receive-pack and the next fetch of the published ref generation.
+    assert_eq!(after.len(), before.len() + 3);
+    for (path, metadata) in before {
+        assert_eq!(after.get(&path), Some(&metadata));
+    }
     assert_eq!(run_git(Some(&clone), &["rev-parse", "HEAD"]).await?, commit);
     assert_eq!(
         run_git(Some(&clone), &["show", "HEAD:cache-reuse.txt"]).await?,

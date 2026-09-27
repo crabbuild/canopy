@@ -32,6 +32,23 @@ impl RepositoryCell {
         self.object_records(headers.objects).await
     }
 
+    pub(crate) async fn selected_objects(
+        &self,
+        ids: &[[u8; 20]],
+    ) -> Result<Vec<StoredObject>, InvocationError<Vec<SqlResultSet>>> {
+        if ids.is_empty() || ids.len() > MAX_OBJECTS {
+            return Err(InvocationError::NotStarted(Error::Command(
+                "invalid object selection",
+            )));
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let headers = self.read_object_headers(None, SqlStatement {
+            sql: format!("SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
+            parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect(),
+        }).await?;
+        Ok(self.object_records(headers.objects).await?.output)
+    }
+
     pub(crate) async fn object_high_water(
         &self,
     ) -> Result<Observed<i64>, InvocationError<Vec<SqlResultSet>>> {

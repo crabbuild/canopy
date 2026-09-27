@@ -629,11 +629,29 @@ empty bare cache with the repository's published default branch. Authorization,
 request admission and native Git configuration remain the same. This GET does
 not enumerate refs or hydrate objects; native Git generates its capabilities.
 The cache remains owned through subprocess completion; cleanup runs before
-successful response EOF and retains its disk charge if removal fails. URL-encoded service parameters follow the normal HTTP
-parser. Protocol v0, receive-pack discovery and all POST commands retain their
-repository snapshot and object preparation. The distinction follows the
-[Git v2 capability exchange](https://git-scm.com/docs/gitprotocol-v2), not a
-synthetic response or a second capability list maintained by Canopy.
+successful response EOF and retains its disk charge if removal fails. URL-encoded
+service parameters follow the normal HTTP parser. The distinction follows the
+[Git v2 capability exchange](https://git-scm.com/docs/gitprotocol-v2).
+
+Protocol v0 upload-pack and receive-pack advertisements, plus recognized v2
+`ls-refs` requests, use a coherent ref snapshot with only its target objects and
+annotated-tag chains. Native Git checks target existence, peels tags and emits
+all protocol bytes. Commit ancestors and tree children are not traversed for
+this exchange. Direct blob/tree refs still require their own verified bodies;
+a large blob tag can therefore consume substantial discovery cache space.
+Selected SQLite object reads reuse the 128-record/768-KiB inline page limit;
+chunked and external objects use the same verified hydration path as transfers.
+Missing or corrupt targets fail preparation instead of disappearing from refs.
+
+An already-current full cache is reused for discovery. Otherwise the discovery
+cache is temporary and pinned by its native worker. It does not advance the full-history cache's indexed cursor or add a retained cache per
+repository. The v2 classifier examines at most 256 KiB of decoded packet headers,
+ending at the first delimiter or flush. Requests without a single recognized
+`ls-refs` command use full preparation; native Git remains the parser for all
+commands and errors. Gzip is validated and decoded before classification. Fetch,
+receive-pack POST and merge preparation retain full history. Prefix filtering
+is performed by Git after preparation, so discovery work still scales with all
+ref targets and tag chains in the selected snapshot.
 
 Incoming Git bodies stream into anonymous temporary files before CGI execution.
 Each write reserves bytes from the same `DiskBudget` used by the node's SQLite

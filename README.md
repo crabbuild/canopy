@@ -711,6 +711,10 @@ repositories keep routing independently. SQL execution uses the
 runtime's CPU-sized worker pool, capped at sixteen, with per-Cell ownership.
 The [density benchmark and remaining scaling plan](docs/performance-plan.md)
 separate repository count, active Cells and simultaneous transfers.
+Git v2 capability discovery needs no object cache. Native v0 advertisements and
+v2 `ls-refs` prepare only ref targets and annotated-tag chains in a temporary
+cache; fetch and push prepare full history. Direct blob/tree refs require their
+own bodies, and very large ref sets still need separate capacity qualification.
 A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no

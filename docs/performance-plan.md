@@ -1152,3 +1152,87 @@ HTTP test, not this provider run. These shared-host observations do not establis
 a latency improvement or SLO. Two accounts can still saturate all 32 slots;
 transfer admission, Directory admission, resource-derived restore concurrency,
 full primitive composition and thousand-repository mixed workloads remain open.
+
+## Ref discovery without full history hydration
+
+Native v0 upload-pack and receive-pack advertisements, and recognized v2
+`ls-refs`, now prepare a coherent snapshot's ref targets and annotated-tag
+chains. They do not traverse commit ancestry or tree children. A current full
+cache is reused when available; otherwise the temporary discovery cache is
+owned through native worker completion. The full history cursor is unchanged.
+This extends the earlier capability-only optimization to actual ref listing.
+
+The boundary follows Git 2.50.1's [ls-refs implementation](https://github.com/git/git/blob/v2.50.1/ls-refs.c),
+[ref target validation](https://github.com/git/git/blob/v2.50.1/refs/files-backend.c)
+and [upload-pack advertisements](https://github.com/git/git/blob/v2.50.1/upload-pack.c).
+Git still generates every wire response, including peeled tags, symbolic HEAD,
+unborn branches, capabilities and errors. The bounded v2 classifier reads decoded
+packet headers only; native Git validates the full command. Unclassified
+commands retain full preparation. No capability list or response encoder is added.
+
+Object selection uses indexed OID reads with the existing 128-record/768-KiB
+inline bound and receipt-bound body verification. The same materializer handles
+inline, SQLite-chunked and streamed external objects for discovery and transfers.
+Tag-edge decoding is shared with graph certification. The extra implementation
+owns command classification and ref-target selection; it avoids duplicating
+object verification, storage writes or native process lifecycle logic. Shared
+hydration moved into its own module to keep the gateway below 700 lines.
+
+The expanded smart-HTTP regression pushes nested tags and direct tree/blob refs.
+With 64 KiB of free cache budget, v0 fetch/push advertisements and v2 peeled ref
+listing succeed, while a full fetch fails admission and then succeeds when
+pressure is removed. The old implementation at `8262942` fails the discovery
+request with HTTP 507. Once the full cache is current, discovery succeeds with
+only 512 bytes free. Existing incremental cache checks now verify that listing
+does not hydrate new history and that the next clone materializes only the three
+new objects while preserving all earlier files.
+
+Limits remain: every ref target is prepared before Git applies `ref-prefix`;
+large direct blob/tree refs require their own bodies; very large ref sets and
+long tag chains need capacity qualification. SQLite Cell restore and actual pack
+transfer still require their existing work. Full primitive composition and
+thousand-repository mixed-workload latency remain open.
+
+
+Focused smart-HTTP, native CGI, default-branch recovery, visibility recovery,
+repository graph/certification and object-page checks passed. The smart-HTTP
+suite includes gzip requests, concurrent ref snapshots, stock Git/LFS transfers,
+admission/retry and incremental cache reuse. The classifier unit test covers
+header ordering, no-argument requests, duplicate commands, truncated input,
+wrong commands and argument/header separation.
+
+One warm-cache validation run passed the protocol checks but failed the existing
+immediate post-Axum-shutdown disk assertion with 332,526 bytes still charged.
+This resembles the earlier teardown observation. One instrumented run, one run
+with a temporary 10-ms cache-destructor delay and five delayed repeats all passed
+with no worker-fence or cache-removal errors. The final uninstrumented run passed.
+Axum 0.8.9 signals connection completion before dropping connection/service
+locals, but these probes did not establish the cause of this failure. It remains
+unresolved; the assertion and cleanup policy are unchanged, and all temporary
+probes/delays were removed. No dependency changes were made.
+
+
+Final optimized qualification `canopy-ref-discovery-b9048686d60e` ran the extended
+`scripts/smoke_s3_cache.py` against isolated RustFS `1.0.0-beta.8-glibc` limited
+to two CPUs and 4 GiB. Canopy ran on the shared macOS arm64 host with Git 2.50.1
+(Apple Git-155). Base revision is `8262942` plus the archived source patch.
+Binary SHA-256 is
+`429305ef6e75550cf1be023cd56c09f53fbf99aba2c8753e703ac953c959b8c7`.
+All-target Clippy with warnings denied, formatting and the release build passed.
+The source patch, script and driver hashes are retained with the report.
+
+After SIGKILL, lease expiry and fresh local state, capability discovery activated
+the Cell in 0.301 seconds without caching objects. Subsequent native v0/v2
+`ls-remote --symref` returned identical listings in 0.051/0.072 seconds with the
+Cell already active and the Git history cache empty. Each request prepared one
+243-byte commit; neither retained any object files or hydrated full history.
+These single colocated-provider observations are not latency SLOs or a controlled
+benchmark comparison. Concurrent full-cache preparation can still delay the
+warm-snapshot lookup; mixed-workload contention needs separate qualification.
+
+Both subsequent clones restored all 263 objects, reproduced exact commits and
+file bytes, and passed strict fsck. Before the crash, incremental refresh read
+only three new headers/bodies (11,384 raw bytes), preserving all 260 earlier
+files and their 2,113,001 compressed bytes. Both logs contain no warnings/errors.
+Graceful shutdown and provider cleanup passed. The full primitive and production
+density gates remain open.
