@@ -27,7 +27,10 @@ use tokio::{
     sync::{Mutex, Semaphore, oneshot},
     task::JoinHandle,
 };
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::{
+    sync::CancellationToken,
+    task::{AbortOnDropHandle, TaskTracker},
+};
 
 use crate::{
     CanopyApplication, build_descriptor,
@@ -143,6 +146,7 @@ struct RunningServer {
     directory: NodeDirectory,
     advertisement: Arc<Mutex<VersionedNodeAdvertisement>>,
     stop: CancellationToken,
+    renewal: AbortOnDropHandle<Result<(), ServerError>>,
     ingress_stop: CancellationToken,
     release_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
@@ -441,33 +445,36 @@ impl RunningServer {
                 .build()?,
         );
         let stop = CancellationToken::new();
-        let node_tasks = node.install_task_group(stop.clone(), stop.clone())?;
+        node.install_task_group(CancellationToken::new(), release_stop.clone())?;
         node.require_storage_capabilities(&probe)?;
+        let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
+        node.install_node_lease_for_startup(guard.clone())?;
         let observed = directory.create(identity.sign(1, now_ms)?, now_ms).await?;
         let advertisement = Arc::new(Mutex::new(observed));
         let tasks = TaskTracker::new();
+        let renewal_directory = directory.clone();
+        let renewal_observed = Arc::clone(&advertisement);
+        let renewal_stop = stop.clone();
+        let renewal_guard = guard.clone();
+        let renewal_deployment = deployment.clone();
+        let renewal_release_stop = release_stop.clone();
+        // CellNode cancels its task group before SQL drain. The process supervisor
+        // owns renewal so a long drain cannot expire the authority it is releasing.
+        let renewal = AbortOnDropHandle::new(tokio::spawn(async move {
+            let _stop_node = renewal_release_stop.clone().drop_guard();
+            renew_lease(
+                renewal_directory,
+                renewal_observed,
+                identity,
+                renewal_guard,
+                renewal_stop,
+                renewal_deployment,
+                renewal_release_stop,
+            )
+            .await
+        }));
         let startup = async {
             deployment.require_ready().await?;
-            let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
-            node.install_node_lease_for_startup(guard.clone())?;
-            let renewal_directory = directory.clone();
-            let renewal_observed = Arc::clone(&advertisement);
-            let renewal_stop = stop.clone();
-            let renewal_guard = guard.clone();
-            let renewal_deployment = deployment.clone();
-            let renewal_release_stop = release_stop.clone();
-            node_tasks.spawn(async move {
-                renew_lease(
-                    renewal_directory,
-                    renewal_observed,
-                    identity,
-                    renewal_guard,
-                    renewal_stop,
-                    renewal_deployment,
-                    renewal_release_stop,
-                )
-                .await
-            })?;
             let directory_target = directory::directory_target(config.tenant, config.application)?;
             local.require_drain();
             let peer = peer::NodePeer::new(
@@ -545,6 +552,14 @@ impl RunningServer {
                     Ok(()) => local.confirm_drained(),
                     Err(cleanup) => tracing::error!(error = %cleanup, "startup drain failed"),
                 }
+                stop.cancel();
+                if let Err(cleanup) = renewal
+                    .await
+                    .map_err(ServerError::from)
+                    .and_then(|result| result)
+                {
+                    tracing::error!(error = %cleanup, "startup lease renewal failed");
+                }
                 let observed = advertisement.lock().await;
                 let _ = directory.withdraw(&observed, unix_now_ms()?).await;
                 return Err(error);
@@ -566,6 +581,7 @@ impl RunningServer {
             directory,
             advertisement,
             stop,
+            renewal,
             ingress_stop,
             release_stop,
             serving,

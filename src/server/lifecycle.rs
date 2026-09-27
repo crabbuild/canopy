@@ -92,6 +92,7 @@ impl RunningServer {
             self.local.confirm_drained();
         }
         self.stop.cancel();
+        let renewal = self.renewal.await;
         let observed = self.advertisement.lock().await;
         let withdrawn = match unix_now_ms() {
             Ok(now_ms) => self.directory.withdraw(&observed, now_ms).await,
@@ -99,6 +100,7 @@ impl RunningServer {
         };
         serving??;
         drained?;
+        renewal??;
         withdrawn?;
         Ok(())
     }

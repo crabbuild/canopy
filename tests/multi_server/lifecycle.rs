@@ -524,3 +524,57 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
     ));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Result {
+    use canopy_server::{CanopyApplication, build_descriptor};
+    use cellule_app::CellApplication;
+    use cellule_runtime::{CellStorageLayout, NodeDirectory};
+
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let address = available_address().await?;
+    let data = files.path().join("node");
+    let settings = config(address, data.clone());
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let directory = NodeDirectory::new(
+        CellStorageLayout::new(
+            cellule_store::Store::new(store.clone()),
+            settings.store_prefix.clone(),
+            *settings.application.as_bytes(),
+        ),
+        settings.fleet,
+        settings.image,
+        application.registry().release_digest(),
+    );
+    let now = || -> Result<i64> {
+        Ok(i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?)
+    };
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    create_repository(address, "held").await?;
+    let advertised = directory.live(now()?, 2).await?;
+    let session = advertised
+        .first()
+        .ok_or("node advertisement missing")?
+        .session();
+    store.arm(ControlState::Idle);
+    let shutdown = tokio::spawn(server.shutdown());
+    store.wait().await?;
+    // Runtime drain must retain heartbeat ownership beyond the ten-second lease.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let live = directory.is_live(session, now()?).await;
+    store.proceed.notify_one();
+    let drained = timeout(Duration::from_secs(10), shutdown).await??;
+    assert!(live?, "node lease expired before Cell release completed");
+    drained?;
+    assert!(!directory.is_live(session, now()?).await?);
+    wait_for_cleanup(&data).await?;
+    Ok(())
+}

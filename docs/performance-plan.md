@@ -431,5 +431,13 @@ therefore add query queue time. The current log events do not identify the Cell,
 and timing correlation has not proved this caused the measured spike. Worker
 queue/page-I/O contention is another candidate. The new Canopy request-stage
 traces and UTC benchmark anchor must be exercised before choosing a fix. This
-run predates those traces. Owner recovery is qualified separately after the
-running verification completes.
+run predates those traces.
+
+All 1,000 identities and three Git samples subsequently passed recovery checks,
+but graceful shutdown returned `Runtime(Fenced)`. The process run therefore failed
+its full acceptance gate. Logs report unconfirmed Cell drain and retained workspace
+exclusion; the isolated fixture then cleaned up its processes/container/volume.
+Source inspection found that Canopy put lease renewal in Cellule's task group,
+which is cancelled before runtime drain. With a ten-second node lease, a long
+drain can lose the authority it still needs. The next run must verify the corrected
+renewal lifetime as well as request-stage latency.

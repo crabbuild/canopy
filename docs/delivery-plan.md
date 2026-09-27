@@ -2910,3 +2910,35 @@ The earlier read results remain unchanged: warm metadata passed, while uniform
 access with only three resident slots produced 146 failures out of 150 arrivals.
 Recovery success does not convert that pressure result into a capacity pass.
 This baseline is SQL-only, mostly empty and colocated on the development host.
+
+
+## Thousand-active-Cell shutdown failure and renewal ownership
+
+The optimized `58eb0b5` run (`canopy-active1000-119a2ac48d4f`) admitted 1,000
+repository Cells and completed all 550 scheduled reads. Uniform metadata p95/p99
+was 782.653/1382.356 ms, missing the proposed target. After SIGKILL and lease expiry,
+a fresh workspace recovered every identity and all three Git samples with stock
+v0/v2 clones, exact hashes and strict fsck. Final graceful shutdown returned
+`Runtime(Fenced)`; the overall run failed. The safety path retained workspace
+exclusion because Cell drain was unconfirmed. Fixture cleanup completed.
+
+Canopy registered its lease renewal task inside Cellule's task group. In the pinned
+`cellule-host` source, `CellNode::drain_until_locked` cancels and joins that group
+before `drain_runtime_until`. This stopped Canopy's heartbeat at the start of runtime
+drain, despite product code cancelling its stop token later. A drain exceeding
+the ten-second lease can therefore fence remaining releases. This ordering was
+not exposed by the shorter three/100-Cell runs.
+
+The product supervisor must own renewal separately, retain it through both normal
+and failed-startup runtime drain, then cancel and join it before withdrawing the
+advertisement. Unexpected renewal completion must close service admission.
+Cellule's task group retains its existing contract for tasks that must stop before
+SQL shutdown. No dependency patch or relaxed fencing is required for this fix.
+
+The supervisor now owns renewal independently of CellNode's pre-drain task group.
+A regression test pauses authoritative release for twelve seconds and proves the
+node remains live beyond its ten-second lease, then drains and withdraws cleanly.
+All eight lifecycle, eleven residency and two peer integration tests pass.
+All-target Clippy with warnings denied, optimized CLI build and Rust formatting
+pass. The thousand-Cell process rerun remains required; these focused tests do
+not establish its outcome or resolve the separate uniform-read latency spikes.

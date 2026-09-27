@@ -388,7 +388,11 @@ directory already satisfies cleanup. Local cleanup never authorizes release or
 deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
-the Cell node. Pending directory entries durably initialize the immutable
+the Cell node. Lease renewal is owned by Canopy's process supervisor, outside
+Cellule's task group (which is cancelled before runtime drain). Normal shutdown
+and failed-startup cleanup retain renewal until runtime drain returns, then cancel
+and join it before withdrawing the advertisement. Unexpected renewal completion
+closes admission. Pending directory entries durably initialize the immutable
 repository owner before becoming ready. Ready entries verify the expected owner
 through the read-only access query: only that owner can have Admin, and the
 collaborator schema permits only read/write. Local restore and remote binding
