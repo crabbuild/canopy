@@ -9,6 +9,7 @@ own qualification. Seed and verify use stock Git for a declared corpus sample.
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import hashlib
 import http.client
 import json
@@ -195,6 +196,7 @@ def measure(args, client, token):
     slots = threading.BoundedSemaphore(args.concurrency)
     lock = threading.Lock()
     started = time.monotonic()
+    started_at = datetime.now(timezone.utc).isoformat()
     samples_path = args.output.with_suffix(".samples.jsonl")
     if args.output.exists() or samples_path.exists():
         raise ValueError("run requires new output paths")
@@ -244,7 +246,8 @@ def measure(args, client, token):
                     record({"sequence": sequence, "repository_id": entry["repository_id"],
                             "result": "driver_busy", "elapsed_ms": None})
     elapsed = time.monotonic() - started
-    result = {"version": 1, "corpus_repositories": len(manifest["repositories"]),
+    result = {"version": 1, "started_at_utc": started_at,
+              "corpus_repositories": len(manifest["repositories"]),
               "active_repositories": len(active), "distribution": args.distribution,
               "operation": args.operation, "seed": args.seed,
               "offered_rps": args.rate, "schedule_seconds": args.duration,

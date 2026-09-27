@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cellule_app::CellApplication;
@@ -185,11 +185,15 @@ impl RepositoryManager {
         &self,
         token_digest: [u8; 32],
     ) -> Result<Option<Principal>, ServerError> {
-        Ok(self
-            .directory
-            .authenticate(token_digest, None)
-            .await?
-            .output)
+        let started = Instant::now();
+        let result = self.directory.authenticate(token_digest, None).await;
+        tracing::debug!(
+            stage = "directory_authentication",
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            succeeded = result.is_ok(),
+            "repository request stage completed"
+        );
+        Ok(result?.output)
     }
 
     pub(crate) async fn create_account(

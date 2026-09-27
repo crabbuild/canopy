@@ -296,6 +296,11 @@ or establish throughput. Count admission does not bound total RSS or cache bytes
 operator resource budgets and deployment containment remain necessary. Debug residency logs report
 `queue_seconds`, `transition_seconds` and success separately for each supervised
 transition, in addition to existing acquisition and Git hydration timings.
+Debug request-stage events time Directory authentication, repository candidate
+lookup, and the repository metadata stage (route acquisition and role/head/visibility
+reads). They record operation success without credentials; repository UUID appears
+only on the repository stage. Benchmark UTC start times correlate these events
+with scheduled arrivals, whose elapsed times still use the monotonic clock.
 
 ### Peer routing
 

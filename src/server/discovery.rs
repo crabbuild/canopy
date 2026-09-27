@@ -42,26 +42,45 @@ impl RepositoryManager {
         actor: ReadIdentity<'_>,
         name: &str,
     ) -> Result<Option<RepositoryDetails>, ServerError> {
-        let Some(entry) = self
+        let started = Instant::now();
+        let lookup = self
             .directory
             .lookup_candidate(actor, &self.owner, name)
-            .await?
-            .output
-        else {
+            .await;
+        tracing::debug!(
+            stage = "directory_lookup",
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            succeeded = lookup.is_ok(),
+            "repository request stage completed"
+        );
+        let Some(entry) = lookup?.output else {
             return Ok(None);
         };
-        let route = self.load(entry.clone()).await?;
-        let Some(role) = route.repository.access_level(actor, None).await?.output else {
-            return Ok(None);
-        };
-        let head = route.repository.default_branch(None).await?.output;
-        let visibility = route.repository.visibility().await?.output;
-        Ok(Some(RepositoryDetails {
-            entry,
-            role,
-            head,
-            visibility,
-        }))
+        let repository = entry.repository_id;
+        let started = Instant::now();
+        let result: Result<Option<RepositoryDetails>, ServerError> = async {
+            let route = self.load(entry.clone()).await?;
+            let Some(role) = route.repository.access_level(actor, None).await?.output else {
+                return Ok(None);
+            };
+            let head = route.repository.default_branch(None).await?.output;
+            let visibility = route.repository.visibility().await?.output;
+            Ok(Some(RepositoryDetails {
+                entry,
+                role,
+                head,
+                visibility,
+            }))
+        }
+        .await;
+        tracing::debug!(
+            stage = "repository_metadata",
+            repository = %hex::encode(repository),
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            succeeded = result.is_ok(),
+            "repository request stage completed"
+        );
+        result
     }
 
     pub(crate) async fn list(

@@ -287,7 +287,9 @@ client queue. HTTP errors and transport failures are recorded without retries.
 `--timeout` bounds individual socket operations; it is not a whole-request
 deadline. All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
 error totals, scheduled/service/dispatch latency percentiles and the manifest
-SHA-256. Dropped arrivals have no fabricated zero latency. Any failure yields
+SHA-256. `started_at_utc` anchors the run to server logs; each sample's
+scheduled offset is `sequence / offered_rps`, while latency continues to use the
+monotonic clock. Dropped arrivals have no fabricated zero latency. Any failure yields
 exit status 1 after reports are written. Latency percentiles include completed
 errors; always read them alongside error/drop counts.
 
@@ -375,3 +377,22 @@ recorded LTX publication lag peaked at 547 ms during seeding/reads. Those timing
 do not explain the earlier failure, whose runtime publication tracing was off.
 The small corpus, short schedules, different build profile and active-set sizes
 prevent a controlled performance comparison with the initial 1,000-identity run.
+
+
+## Diagnosing metadata latency
+
+Enable `RUST_LOG=warn,canopy_server::server=debug,cellule_runtime::actor=debug`
+for an isolated qualification run. Canopy emits `repository request stage completed`
+with `stage`, `elapsed_seconds` and `succeeded` for Directory authentication,
+Directory repository lookup and repository metadata. The metadata stage includes
+route acquisition plus role/default-branch/visibility reads; it is not solely SQL
+execution. Authentication success here means the operation completed, not that a
+credential was authorized. No token or token digest is included.
+
+Join the benchmark's UTC start and scheduled sample offsets with those events
+and the runtime's publication/compaction timing events. If a latency spike is
+confined to client dispatch, it is a driver issue; if authentication stalls across
+otherwise unrelated repositories, investigate the shared Directory path and its
+worker/storage waits. Timing correlation alone does not establish the cause of
+a runtime fence. Preserve errors and publication evidence before changing
+scheduling, deadlines or cache policy.
