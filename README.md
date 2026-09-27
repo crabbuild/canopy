@@ -223,6 +223,17 @@ page observes current state independently. Account listing rechecks the exact
 credential and its expiry in the Directory query at owner execution time.
 Both endpoints use `Cache-Control: no-store`.
 
+Site-owner admins can open **Account history** for committed account creation,
+disablement, token issuance and revocation. Entries identify the actor and public
+credential IDs, target account, scope, expiry and execution time. History is
+newest first with **Older changes** pagination; retries that change nothing add
+no entries. The initial trusted bootstrap is labeled **System bootstrap**.
+`GET /api/audit/accounts?before=<event-id>` exposes the same 32-entry pages and
+returns `{events, next_before}`. IDs/cursors are decimal strings. Secrets and
+credential digests are excluded. History and the change commit atomically in the
+Directory Cell and restore together. Repository-policy changes, denied attempts,
+retention/export and account deletion remain separate work.
+
 ### Repository API
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the

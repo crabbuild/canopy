@@ -105,6 +105,7 @@ impl DirectoryCell {
                 sql: format!("UPDATE accounts SET enabled = 0 WHERE name = ?4 AND enabled = 1 AND ({decision}) = 'disabled'"),
                 parameters,
             },
+            audit::record_change(Some(authority.actor_digest), "account.disabled", authority.account, None),
         ] }).await?;
         let output = match result
             .output

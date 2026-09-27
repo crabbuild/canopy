@@ -116,18 +116,45 @@ const accountsView = (() => {
     if (!data.tokens.length) panel.append(element("p", "No credentials on this page.", "muted"));
     panel.append(pager(current, data.next_after)); return panel;
   }
+  async function audit(current, signal) {
+    const data = await api(`/api/audit/accounts${current.after ? `?before=${encodeURIComponent(current.after)}` : ""}`, { signal }); signal.throwIfAborted();
+    const panel = element("section", undefined, "account-view"), heading = element("div", undefined, "account-heading"), title = element("div");
+    title.append(element("p", "Site administration", "eyebrow"), element("h1", "Account history"));
+    heading.append(title, button("Refresh", render)); panel.append(heading, element("p", "Committed account and credential changes, newest first. Unchanged retries and rejected requests do not add entries. Token secrets are never recorded here.", "hint"));
+    const actions = { "account.created": "Account created", "account.disabled": "Account disabled", "token.issued": "Token issued", "token.revoked": "Token revoked" };
+    const list = element("ol", undefined, "credential-list surface"); list.setAttribute("aria-label", "Account history");
+    for (const event of data.events) {
+      const row = element("li"), details = element("div"), labels = element("div", undefined, "credential-labels");
+      labels.append(element("strong", actions[event.action]), element("span", event.account, "badge"));
+      details.append(labels, element("p", `${date(event.occurred_at_ms)} · ${event.actor === null ? "System bootstrap" : `By ${event.actor}`} · Event ${event.id}`, "credential-date"));
+      if (event.actor_token_id) details.append(element("p", `Actor credential: ${event.actor_token_id}`, "credential-id"));
+      if (event.token_id) details.append(element("code", `Target credential: ${event.token_id}`, "credential-id"), element("p", `${event.scope} scope · Expires ${date(event.expires_at_ms)}`, "credential-date"));
+      row.append(details); list.append(row);
+    }
+    panel.append(list);
+    if (!data.events.length) panel.append(element("p", "No account changes on this page.", "muted"));
+    const navigation = element("nav", undefined, "pager"); navigation.setAttribute("aria-label", "History pagination");
+    if (current.after) navigation.append(link("Newest changes", { view: "accounts", section: "audit" }));
+    if (data.next_before) navigation.append(link("Older changes →", { view: "accounts", section: "audit", after: data.next_before }));
+    panel.append(navigation); return panel;
+  }
   return async (current, signal) => {
     const identity = await api("/api/session", { signal }); signal.throwIfAborted();
     const panel = element("div"), navigation = element("nav", undefined, "tabs"); navigation.setAttribute("aria-label", "Account views");
     if (identity.site_admin) {
       const all = link("All accounts", { view: "accounts" }, "tab");
-      if (!current.account) all.setAttribute("aria-current", "page"); navigation.append(all);
+      if (!current.account && current.section !== "audit") all.setAttribute("aria-current", "page"); navigation.append(all);
+      const history = link("Account history", { view: "accounts", section: "audit" }, "tab");
+      if (current.section === "audit") history.setAttribute("aria-current", "page"); navigation.append(history);
     }
     const mine = link("My tokens", { view: "accounts", account: identity.account }, "tab");
     if (current.account === identity.account || !identity.site_admin) mine.setAttribute("aria-current", "page");
     navigation.append(mine); panel.append(navigation);
     if (identity.token_scope !== "admin") {
       panel.append(empty(identity.account, `You are connected with a ${identity.token_scope} token. Connect with an admin token to manage credentials, or ask your site administrator.`)); return panel;
+    }
+    if (current.section === "audit") {
+      panel.append(identity.site_admin ? await audit(current, signal) : empty("Account history", "Only the site administrator can read account history.")); return panel;
     }
     if (current.account || !identity.site_admin) { panel.append(await tokens(identity, current, signal)); return panel; }
     const data = await api(`/api/accounts${current.after ? `?after=${encodeURIComponent(current.after)}` : ""}`, { signal }); signal.throwIfAborted();

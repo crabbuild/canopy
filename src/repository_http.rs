@@ -74,6 +74,7 @@ impl RepositoryHttp {
             .route("/healthz", get(health))
             .route("/readyz", get(readiness))
             .route("/api/session", get(accounts::session))
+            .route("/api/audit/accounts", get(accounts::audit))
             .route("/api/accounts", get(accounts::list).post(create_account))
             .route(
                 "/api/accounts/{account}/disable",

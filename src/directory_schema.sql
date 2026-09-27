@@ -36,3 +36,17 @@ CREATE TABLE repository_discovery (
 CREATE TABLE public_repository_candidates (
     repository_id BLOB PRIMARY KEY REFERENCES repositories(repository_id)
 ) WITHOUT ROWID;
+
+CREATE TABLE account_events (
+    id INTEGER PRIMARY KEY CHECK(id > 0),
+    occurred_ms INTEGER NOT NULL CHECK(occurred_ms >= 0),
+    actor TEXT,
+    actor_token_id BLOB CHECK(actor_token_id IS NULL OR length(actor_token_id) = 16),
+    action TEXT NOT NULL CHECK(action IN ('account.created', 'account.disabled', 'token.issued', 'token.revoked')),
+    account TEXT NOT NULL,
+    token_id BLOB CHECK(token_id IS NULL OR length(token_id) = 16),
+    scope TEXT CHECK(scope IS NULL OR scope IN ('read', 'write', 'admin')),
+    expires_ms INTEGER,
+    CHECK((actor IS NULL) = (actor_token_id IS NULL)),
+    CHECK((token_id IS NULL) = (scope IS NULL))
+);

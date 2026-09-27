@@ -137,6 +137,7 @@ impl DirectoryCell {
                 sql: format!("INSERT INTO access_tokens (id, digest, account, scope, enabled, created_ms, expires_ms) SELECT ?5, ?6, ?4, ?7, 1, ?1, ?8 WHERE ({decision}) = 'applied' ON CONFLICT DO NOTHING"),
                 parameters,
             },
+            audit::record_change(Some(authority.actor_digest), "token.issued", authority.account, Some(id)),
         ] }).await?;
         changed(result)
     }
@@ -163,6 +164,7 @@ impl DirectoryCell {
                 sql: format!("UPDATE access_tokens SET enabled = 0 WHERE id = ?5 AND account = ?4 AND enabled = 1 AND ({decision}) = 'applied'"),
                 parameters,
             },
+            audit::record_change(Some(authority.actor_digest), "token.revoked", authority.account, Some(id)),
         ] }).await?;
         changed(result)
     }

@@ -133,3 +133,64 @@ pub(super) async fn list(
         }
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AuditQuery {
+    before: Option<String>,
+}
+
+pub(super) async fn audit(
+    State(state): State<Arc<RepositoryHttp>>,
+    Query(query): Query<AuditQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    if !(state.manager.ready)() {
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
+    }
+    let principal = match state.require(&headers, TokenScope::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if principal.account != state.manager.owner {
+        return plain(StatusCode::FORBIDDEN, "Account history is restricted");
+    }
+    let before = match query.before {
+        None => None,
+        Some(value) => match value.parse::<i64>() {
+            Ok(value) if value > 0 => Some(value),
+            _ => return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid history cursor"),
+        },
+    };
+    let Some(credential) = http::credential(headers.get(header::AUTHORIZATION)) else {
+        return unauthorized();
+    };
+    let digest = Sha256::digest(credential.token.as_bytes()).into();
+    match state.manager.account_events(digest, before).await {
+        Ok(Some(events)) if (state.manager.ready)() => {
+            let next = (events.len() == directory::AUDIT_PAGE_SIZE)
+                .then(|| events.last().map(|event| event.id.to_string()))
+                .flatten();
+            let entries: Vec<_> = events.iter().map(|event| serde_json::json!({
+                "id": event.id.to_string(), "occurred_at_ms": event.occurred_at_ms,
+                "actor": event.actor, "actor_token_id": event.actor_token_id.map(|id| uuid::Uuid::from_bytes(id).to_string()),
+                "action": event.action, "account": event.account,
+                "token_id": event.token_id.map(|id| uuid::Uuid::from_bytes(id).to_string()),
+                "scope": event.scope.map(TokenScope::as_str), "expires_at_ms": event.expires_at_ms,
+            })).collect();
+            json_response(
+                StatusCode::OK,
+                &serde_json::json!({"events": entries, "next_before": next}),
+            )
+        }
+        Ok(None) => plain(StatusCode::FORBIDDEN, "Account history is restricted"),
+        Ok(Some(_)) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Err(error) => {
+            tracing::error!(error = %error, "account history failed");
+            plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Account history unavailable",
+            )
+        }
+    }
+}

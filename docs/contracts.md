@@ -792,8 +792,51 @@ The account name, token identities, repository grants and authored records remai
 reserved. Existing repository data stays available to other authorized accounts;
 the collaborator roster continues to show stored grants. New grants to a disabled
 account are rejected. Neither account creation nor token issuance re-enables it.
-Re-enablement, account deletion, account listing and an administrative UI remain
-undelivered. An HTTP retry rechecks current administrator authorization.
+Re-enablement and account deletion remain undelivered; account listing, credential
+management and history are available in the administrative UI. An HTTP retry rechecks current administrator authorization.
+
+### Account administration history
+
+`GET /api/audit/accounts?before=<id>` requires an active admin-scoped credential
+of the configured site owner. Authentication failures return 401; other accounts
+and insufficient scopes return 403. The Directory query repeats authorization,
+including expiry at owner execution time, in the snapshot used to read the page.
+No account name or authority policy comes from the query string. Invalid positive
+i64 cursors return 422; an empty authorized page returns 200.
+
+The response is `{events, next_before}` with at most 32 entries ordered by
+monotonic event ID descending. IDs and cursors are decimal strings to preserve
+integer precision in browser clients. `before` is exclusive. Concurrent appends
+cannot shift older pages; refresh the newest page to see new changes. A full
+final page may require one empty query. JSON responses use `Cache-Control:
+no-store`. Reads use the table's integer primary key and an indexed credential
+lookup; they do not load the entire history.
+
+Each event contains `id`, `occurred_at_ms`, nullable `actor` and `actor_token_id`,
+`action`, `account`, nullable `token_id`, `scope` and `expires_at_ms`. Actions are
+`account.created`, `account.disabled`, `token.issued` and `token.revoked`.
+Creation includes the initial token's public ID and scope. Disablement has no
+target credential. Trusted startup bootstrap has null actor fields. HTTP-created
+accounts identify the actual site-admin credential. Self-revocation retains the
+actor's account and public token ID even though that credential is now disabled.
+No token secret or digest is stored in this table or returned by the endpoint.
+
+The audit insert immediately follows its authoritative mutation in the same
+Directory SQL batch and runtime transaction. SQLite's
+[`changes()` contract](https://www.sqlite.org/c3ref/changes.html) gates the append
+on one changed row. Authorization decisions occur before mutation; audit actor
+lookup uses retained credential rows afterward. Exact command replay, repeated
+startup, rejected operations, repeated disable/revoke and exact active-token
+issuance retries append no extra events. An audit insertion failure rolls back
+the preceding credential change. Owner execution time supplies the event time;
+ordering uses the sequence rather than relying on wall-clock monotonicity.
+
+The table is append-only through Canopy's product API. It shares Directory Cell
+publication, recovery and backup. No pruning or separately signed export exists;
+this is committed state-change history, not a log of attempted actions or every
+repository operation. Retention and durable quotas remain delivery gates.
+The Directory schema/source digest changes; use a fresh preview prefix. Older
+preview roots are not silently upgraded or read through a compatibility path.
 
 ### Token lifecycle
 

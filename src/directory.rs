@@ -1,9 +1,11 @@
 //! Durable owner/name to Repository Cell identity mapping.
 
 mod accounts;
+mod audit;
 mod timed_sql;
 mod tokens;
 pub use accounts::{ACCOUNT_PAGE_SIZE, AccountInfo, DisableAccountOutcome};
+pub use audit::{AUDIT_PAGE_SIZE, AccountEvent};
 pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
 
 use std::sync::OnceLock;
@@ -56,6 +58,7 @@ impl CellModule for DirectoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("directory.rs"));
                 source.update(include_bytes!("directory/accounts.rs"));
+                source.update(include_bytes!("directory/audit.rs"));
                 source.update(include_bytes!("directory/tokens.rs"));
                 source.update(include_bytes!("directory/timed_sql.rs"));
                 source.update(SCHEMA.as_bytes());
@@ -247,13 +250,14 @@ impl DirectoryCell {
             statements: vec![
                 SqlStatement { sql: format!("SELECT {authorized}"), parameters: parameters.clone() },
                 SqlStatement {
-                    sql: format!("INSERT INTO accounts (name, enabled) SELECT ?2, 1 WHERE ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?3) ON CONFLICT(name) DO NOTHING"),
+                    sql: format!("INSERT INTO accounts (name, enabled) SELECT ?2, 1 WHERE ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE digest = ?3 OR id = ?5) ON CONFLICT(name) DO NOTHING"),
                     parameters: parameters.clone(),
                 },
                 SqlStatement {
                     sql: format!("INSERT INTO access_tokens (digest, account, scope, enabled, id, created_ms) SELECT ?3, ?2, ?4, 1, ?5, ?6 FROM accounts WHERE name = ?2 AND enabled = 1 AND ({authorized}) AND NOT EXISTS (SELECT 1 FROM access_tokens WHERE account = ?2) ON CONFLICT DO NOTHING"),
                     parameters,
                 },
+                audit::record_change(authority.map(|(digest, _)| digest), "account.created", name, Some(*identity.request_id.as_bytes())),
             ],
         }).await?;
         if !matches!(

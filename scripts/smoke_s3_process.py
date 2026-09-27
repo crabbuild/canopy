@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import smoke_s3_account_audit
 import smoke_s3_backup
 import smoke_s3_branch_rules
 import smoke_s3_checks
@@ -698,6 +699,7 @@ def main():
             quota_state = smoke_s3_token_quotas.seed(base_url)
             expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
+            audit_state = smoke_s3_account_audit.seed(base_url)
             chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
@@ -719,6 +721,7 @@ def main():
             smoke_s3_token_quotas.verify(base_url, quota_state)
             verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
+            smoke_s3_account_audit.verify(base_url, audit_state)
             url = f"{base_url}/canopy/renamed.git"
             assert default_branch(base_url, "renamed") == selected_head
             verify_collaborators(base_url, repository_id, [{"account": "reader", "role": "read"}])
@@ -753,6 +756,7 @@ def main():
             smoke_s3_token_quotas.verify(base_url, quota_state)
             verify_expiring_token(base_url, expiring_token)
             verify_disabled_account(base_url, disabled_tokens)
+            smoke_s3_account_audit.verify(base_url, audit_state)
             assert len(tokens) == 2
             assert [token["id"] for token in tokens if token["enabled"]] == [replacement_id]
             print("PASS: rotated token survives takeover; revoked token remains denied for API, Git and LFS", flush=True)

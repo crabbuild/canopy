@@ -43,7 +43,7 @@ async function api(path, { method = "GET", body, signal } = {}) {
 function route() {
   try {
     const value = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-    if (value?.view === "accounts") return { view: "accounts", account: typeof value.account === "string" ? value.account : undefined, after: typeof value.after === "string" ? value.after : undefined };
+    if (value?.view === "accounts") return { view: "accounts", section: value.section === "audit" ? "audit" : undefined, account: typeof value.account === "string" ? value.account : undefined, after: typeof value.after === "string" ? value.after : undefined };
     if (!value || typeof value.repo !== "string") return {};
     return { repo: value.repo, view: ["history", "file", "issues", "issue", "new-issue", "pulls", "pull", "new-pull"].includes(value.view) ? value.view : "tree",
       thread: Number.isSafeInteger(value.thread) && value.thread > 0 ? value.thread : undefined,

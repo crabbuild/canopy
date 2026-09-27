@@ -85,6 +85,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
     let stale_identity = random_identity()?;
     let authentication = cell.authenticate([3; 32], None);
     let account_page = cell.accounts([3; 32], "owner", None);
+    let audit_page = cell.account_events([3; 32], "owner", None);
     let issuance = cell.issue_token(
         stale_identity,
         authority("owner", [3; 32]),
@@ -93,8 +94,9 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
         TokenScope::Admin,
         None,
     );
-    tokio::pin!(authentication, issuance, account_page);
+    tokio::pin!(authentication, issuance, account_page, audit_page);
     tokio::select! {
+        result = &mut audit_page => panic!("audit page escaped blocked worker: {result:?}"),
         result = &mut account_page => panic!("account page escaped blocked worker: {result:?}"),
         result = &mut authentication => panic!("query escaped blocked worker: {result:?}"),
         result = &mut issuance => panic!("command escaped blocked worker: {result:?}"),
@@ -107,6 +109,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
     blocker.await??;
     assert_eq!(authentication.await?.output, None);
     assert_eq!(account_page.await?.output, None);
+    assert_eq!(audit_page.await?.output, None);
     assert_eq!(issuance.await?.output, TokenChange::NotFound);
     assert_eq!(cell.authenticate([4; 32], None).await?.output, None);
     assert_eq!(

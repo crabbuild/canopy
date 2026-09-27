@@ -9,7 +9,7 @@ Do not infer completion from compilation or a disposable cache test.
 | --- | --- | --- | --- |
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
-| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration implemented; account deletion and audit records remain |
+| 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration and atomic account audit history implemented; account deletion and broader audit coverage remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; a Linux cgroup/tmpfs deployment adds native resource ceilings; quotas, non-blob buffers/64 MiB ceilings and the complete resource fault matrix remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; a Linux tmpfs profile bounds aggregate native scratch; other platforms and production capacity proof remain |
@@ -68,9 +68,12 @@ separate product decisions.
    for completed outcomes and abandoned staging chunks before persistent use.
    Keep testing distinct IDs for identical bytes after refs change: Cellule
    command deduplication alone does not identify an HTTP operation.
-4. Complete account deletion and audit records.
+4. Complete account deletion and repository/security audit coverage.
    Browser administration supports account creation/disablement and token
-   issuance, expiry selection, listing and revocation.
+   issuance, expiry selection, listing, revocation and private account history.
+   Account/token changes append actor-attributed history in their Directory
+   transaction; denial logging, repository policy/grant history and retention
+   remain separate work.
    Active-credential and rolling issuance limits are enforced in the Directory.
    Qualify admitted Git/LFS operations during revocation and owner takeover.
 5. Continue collaboration as vertical slices: browser conflict resolution; discussion editing/moderation;
@@ -2668,3 +2671,46 @@ and all publication fault boundaries still need dedicated qualification.
 Direct binary use and other operating systems need their own OS boundaries.
 Per-account durable quotas, safe collection and the remaining delivery gates
 remain open; this profile establishes aggregate ceilings for one Linux node.
+
+## Account administration history qualification
+
+The 2026-09-26 implementation records account creation/disablement and token
+issuance/revocation in the Directory Cell. Each event appends in the same
+transaction as the change. It retains execution time, actor account and public
+credential ID, target account and optional credential scope/expiry. Unchanged
+retries and rejected changes add no events; secrets and digests are excluded.
+A site-owner admin can read 32-entry descending pages through
+`GET /api/audit/accounts` or the browser's **Account history** tab. See
+[the contract](contracts.md#account-administration-history).
+
+Evidence:
+
+- All five Directory integration tests pass (2.21 s). They cover authorization
+  rechecks, queued credential expiry for history reads, exact command replay,
+  no-op issuance/disablement and rejected operations. A fault trigger rejects
+  an audit insert and proves the preceding credential insert rolls back. A
+  reserved first-token ID cannot strand an unaudited account identity.
+- The HTTP audit test passes (1.20 s): unauthorized/other-account denial,
+  actor identity after self-revocation, immutable scope/expiry metadata, secret
+  and digest exclusion, malformed cursors, a full page with an exclusive older
+  cursor, concurrent appends and byte-equivalent JSON after fresh local-state
+  restoration. Existing account administration, disablement and token-quota
+  tests also pass with the new schema/write path.
+- The optimized process runs against RustFS `1.0.0-beta.8-glibc` on a dedicated
+  Docker volume. Public HTTP creates 34 audited changes, exercises logical
+  retries and member denial, then recovers exact prior pages after graceful
+  shutdown and after SIGKILL into a new local directory. Git push/clone and
+  strict fsck also pass after recovery. The checked-in account-audit probe is
+  wired into both restoration passes of the broader S3 process harness.
+- Chrome displays recovered actor/target IDs and expiry, navigates older and
+  newest pages, distinguishes system bootstrap and clears private history on
+  disconnect. No new browser storage or token persistence is introduced.
+- All-target Clippy with warnings denied, optimized build, Rust formatting,
+  JavaScript/Python syntax and diff-whitespace checks pass. The qualification
+  fixture removes its own processes, provider container/volume and scratch data.
+
+The Directory schema and module source digest change. Use a fresh preview
+storage prefix; no migration or compatibility reader is added. Cargo dependencies
+and lockfile are unchanged. Repository-policy/grant audit, denied-request logging,
+retention/export and account deletion remain open, along with the other hosting
+and production-capacity gates.

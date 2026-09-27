@@ -2,6 +2,18 @@ use super::*;
 use crate::directory::{TokenAuthority, TokenChange, TokenInfo};
 
 impl RepositoryManager {
+    pub(crate) async fn account_events(
+        &self,
+        actor_digest: [u8; 32],
+        before: Option<i64>,
+    ) -> Result<Option<Vec<directory::AccountEvent>>, ServerError> {
+        Ok(self
+            .directory
+            .account_events(actor_digest, &self.owner, before)
+            .await?
+            .output)
+    }
+
     pub(crate) async fn accounts(
         &self,
         actor_digest: [u8; 32],
