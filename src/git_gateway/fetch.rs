@@ -7,7 +7,7 @@ const REACHABLE_WANT: &str = "WITH RECURSIVE ancestors(oid) AS (VALUES (?1) UNIO
 
 pub(super) struct FetchRequest {
     pub(super) wants: BTreeSet<[u8; 20]>,
-    pub(super) includes_blobs: bool,
+    pub(super) filter: Option<String>,
 }
 
 impl FetchRequest {
@@ -18,7 +18,7 @@ impl FetchRequest {
         {
             return Ok(Self {
                 wants: BTreeSet::new(),
-                includes_blobs: true,
+                filter: None,
             });
         }
         Self::parse(
@@ -69,11 +69,42 @@ impl FetchRequest {
             }
             bytes = &bytes[length..];
         }
-        Ok(Self {
-            wants,
-            includes_blobs: filter != Some(b"blob:none".as_slice()),
-        })
+        let filter = filter
+            .map(|value| {
+                let value = std::str::from_utf8(value).map_err(|_| InputError::Fetch)?;
+                check_filter_policy(value)?;
+                Ok::<_, InputError>(value.to_owned())
+            })
+            .transpose()?;
+        Ok(Self { wants, filter })
     }
+}
+
+fn check_filter_policy(value: &str) -> Result<(), InputError> {
+    // rev-list does not enforce uploadpackfilter.*. Match the transport policy
+    // before traversal, including escaped subfilters, so sparse filters cannot
+    // inspect pattern blobs outside the validated wants.
+    let mut pending = vec![std::borrow::Cow::Borrowed(value)];
+    while let Some(value) = pending.pop() {
+        if value.contains('\0') {
+            return Err(InputError::Fetch);
+        }
+        if let Some(combined) = value.strip_prefix("combine:") {
+            for part in combined.split('+') {
+                let decoded = percent_encoding::percent_decode_str(part)
+                    .decode_utf8()
+                    .map_err(|_| InputError::Fetch)?;
+                pending.push(std::borrow::Cow::Owned(decoded.into_owned()));
+            }
+        } else if value != "blob:none"
+            && !value.starts_with("blob:limit=")
+            && !value.starts_with("tree:")
+            && !value.starts_with("object:type=")
+        {
+            return Err(InputError::Fetch);
+        }
+    }
+    Ok(())
 }
 
 impl GitGateway {
@@ -88,18 +119,19 @@ impl GitGateway {
         let started = std::time::Instant::now();
         let objects = self.objects.lock().await;
         let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
-        let roots = request
-            .includes_blobs
-            .then(|| request.wants.iter().copied().collect());
+        let roots = request.wants.iter().copied().collect();
         self.hydrate_selected(&shared.cache, request.wants).await?;
-        let Some(roots) = roots else {
+        if request.filter.as_deref() == Some("blob:none") {
             return Ok(());
-        };
-        // All structure is present; only blobs can be missing below validated wants.
-        // Walking --all would include unrelated and deleted history. Serialize
-        // hydration until these wants can safely reach native upload-pack.
-        let mut walk =
-            crate::git_objects::GitObjectWalk::missing(&cached.backend.git_dir(), roots)?;
+        }
+        // Use the same native filter as upload-pack. Structure is present, so
+        // tree/type filters can omit missing blobs without reading their bodies.
+        // Git conservatively includes missing blobs under size filters.
+        let mut walk = crate::git_objects::GitObjectWalk::missing(
+            &cached.backend.git_dir(),
+            roots,
+            request.filter.as_deref(),
+        )?;
         let mut stats = Hydration::default();
         loop {
             let mut ids = Vec::with_capacity(MAX_OBJECTS);
@@ -327,6 +359,20 @@ mod tests {
     }
 
     #[test]
+    fn fetch_filters_cannot_read_unvalidated_sparse_patterns() {
+        for filter in [
+            "sparse:oid=HEAD:private-pattern",
+            "combine:tree:0+sparse%3Aoid%3DHEAD%3Aprivate-pattern",
+            "combine:combine%3Atree%253A0%2Bsparse%253Aoid%253DHEAD",
+            "combine:blob:none+%00sparse:oid=HEAD",
+            "combine:blob:none+%ff",
+        ] {
+            let request = packet(&format!("filter {filter}\n"));
+            assert!(FetchRequest::parse(&request).is_err(), "{filter}");
+        }
+    }
+
+    #[test]
     fn fetch_selection_covers_v0_and_v2_without_ignoring_late_wants() {
         for prefix in [b"".as_slice(), b"0012command=fetch\n0001"] {
             let mut request = prefix.to_vec();
@@ -337,7 +383,7 @@ mod tests {
             request.extend(packet("done\n"));
             let parsed = FetchRequest::parse(&request).unwrap();
             assert_eq!(parsed.wants, BTreeSet::from([[0x12; 20], [0x34; 20]]));
-            assert!(!parsed.includes_blobs);
+            assert_eq!(parsed.filter.as_deref(), Some("blob:none"));
         }
         for input in [
             b"0003".as_slice(),

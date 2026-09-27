@@ -3578,3 +3578,34 @@ and diff checks. The driver separately passed startup, S3 write/read and cleanup
 as the host UID. Hosted CI has not run; the large gate requires the documented
 test-volume capacity. Net production growth is the shared segmented-body
 implementation replacing duplicated flat-body transfer paths.
+
+
+## Native filters during cold blob preparation
+
+HTTP and SSH now pass supported filter specifications to the native missing-object
+walk before hydrating bodies. Tree depths, object types and combinations can omit
+blobs from Canopy's cache as well as from the client pack. Explicit wants still
+hydrate first, and exact blobless requests retain their no-walk path. Push
+ingestion continues to use strict, unfiltered enumeration.
+
+The gateway checks enabled filter kinds before preparation, decoding nested
+combined specifications iteratively. This prevents rev-list from inspecting
+sparse-pattern objects when upload-pack policy disables that capability. Git
+retains syntax/traversal ownership. The direct percent-encoding dependency reuses
+the existing locked 2.3.2 package; no dependency version or storage format changes.
+
+The new regression failed on the previous code: a cold HTTP v0 tree:0 clone
+left omitted blobs in the server cache. The permanent multi-server gate now
+passes 52 cases: 13 filters across HTTP/SSH v0/v2, with separate client inventory
+and server-cache assertions, lazy-fetch byte checks, and strict/full fsck.
+The existing Verify workflow includes it through the multi_server target.
+
+Local proof also passes for ten focused unit tests, three adjacent partial/full
+fetch integration tests, all-target Clippy, formatting and diff checks. Tests
+use Apple Git 2.50.1 and the in-memory provider; hosted CI has not run.
+Production growth is limited to forwarding the filter and guarding its kinds.
+
+Non-blob history preparation remains repository-wide. Native size filters still
+include missing blobs whose sizes are unknown, as confirmed by upstream source
+and the cold size-filter cases. Provider/scale latency qualification and the
+other compatibility requirements remain open.

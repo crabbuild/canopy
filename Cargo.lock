@@ -373,6 +373,7 @@ dependencies = [
  "http-body",
  "libc",
  "object_store",
+ "percent-encoding",
  "rcgen",
  "reqwest 0.12.28",
  "russh",

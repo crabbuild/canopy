@@ -99,8 +99,9 @@ impl GitObjectWalk {
     pub(crate) fn missing(
         git_dir: &Path,
         included: Vec<[u8; 20]>,
+        filter: Option<&str>,
     ) -> Result<Self, ObjectReadError> {
-        Self::start(git_dir, included, Vec::new(), true)
+        Self::start(git_dir, included, Vec::new(), true, filter)
     }
 
     fn start(
@@ -108,10 +109,15 @@ impl GitObjectWalk {
         included: Vec<[u8; 20]>,
         excluded: Vec<[u8; 20]>,
         missing_only: bool,
+        filter: Option<&str>,
     ) -> Result<Self, ObjectReadError> {
+        let filter = filter.map(|value| format!("--filter={value}"));
         let mut args = vec!["rev-list", "--objects", "--no-object-names", "--stdin"];
         if missing_only {
             args.push("--missing=print");
+        }
+        if let Some(filter) = &filter {
+            args.push(filter);
         }
         let (process, mut input) = Process::start(git_dir, &args)?;
         // Ref lists can exceed argv limits; feed stdin concurrently with stdout consumption.
@@ -172,7 +178,7 @@ impl GitObjects {
         included: Vec<[u8; 20]>,
         excluded: Vec<[u8; 20]>,
     ) -> Result<Self, ObjectReadError> {
-        let walk = GitObjectWalk::start(git_dir, included, excluded, false)?;
+        let walk = GitObjectWalk::start(git_dir, included, excluded, false, None)?;
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
         Ok(Self {
             walk,

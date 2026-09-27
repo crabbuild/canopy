@@ -1,5 +1,7 @@
 #[path = "ssh_fetch.rs"]
 mod fetch;
+#[path = "filtered_preparation.rs"]
+mod filtered_preparation;
 #[path = "ssh_publication.rs"]
 mod publication;
 

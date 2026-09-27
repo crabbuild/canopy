@@ -709,9 +709,10 @@ denied. HTTP and SSH share the same node/account transfer limits and durable
 push publication path.
 
 SSH prepares non-blob history and advertised ref/tag targets before negotiation.
-Exact `blob:none` requests hydrate only explicit missing wants; full fetches and
-other filters hydrate missing blobs reachable from requested tips before
-forwarding wants to native Git.
+Exact `blob:none` requests hydrate only explicit missing wants. Other requests
+apply the native filter while selecting missing reachable blobs, before
+forwarding wants to native Git. Tree and object-type constraints skip omitted
+bodies; size filters still load missing bodies because native Git needs their sizes.
 SSH LFS authentication is not implemented; repositories cloned
 over SSH must configure an HTTPS LFS endpoint and HTTP credentials for LFS.
 The local compatibility suite covers stock Git transfers and fresh-disk recovery;
@@ -827,8 +828,10 @@ Cold cache hydration reads insertion-ordered pages of at most 128 records and 76
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
 reduce SQLite query overhead. Blobless fetch (`--filter=blob:none`) skips ordinary
-blob bodies until explicitly requested; other filters and full fetch hydrate
-only missing blobs reachable from requested tips, plus advertised ref/tag targets.
+blob bodies until explicitly requested. Other fetches enumerate missing blobs
+reachable from requested tips, applying the native filter before hydration.
+Tree and object-type constraints, including those in combined filters, skip
+omitted bodies; size filters still need missing blob bodies. Advertised ref/tag targets are always prepared.
 Non-blob history is still prepared across the repository. Supported filters and remaining gaps are listed in
 [Git compatibility](docs/git-compatibility.md).
 While a gateway remains resident, verified object files are shared across private

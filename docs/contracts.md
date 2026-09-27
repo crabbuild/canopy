@@ -723,7 +723,10 @@ including `sparse:oid`, is disabled. See Git's
 and [partial-clone protocol](https://git-scm.com/docs/partial-clone).
 Canopy parses all decoded upload-pack request packets, including after flushes
 and v2 delimiters, within the existing 64 MiB request ceiling. Malformed framing,
-OID wants or duplicate filters return HTTP 400 before native Git runs.
+OID wants or duplicate filters return HTTP 400 before native Git runs. The gateway
+also rejects unsupported filter kinds, including percent-escaped nested sparse
+filters, before preparation: rev-list does not enforce upload-pack's filter policy.
+Native Git retains ownership of filter syntax and traversal semantics.
 
 Every explicit want must reach a currently published ref through the reverse
 certified object-edge index. Each query also checks the snapshot generation;
@@ -752,18 +755,21 @@ disk accounting and worker fences.
 
 Full fetches and other filters use native `rev-list --objects --missing=print`
 with requested OIDs on stdin, without `--all`, to enumerate missing reachable
-blobs. Explicit wants and tag chains are loaded first; all non-blob structure is
-already present. Missing IDs stream in batches of at most 128 into the existing
+blobs. Filtered requests pass the same `--filter` specification to this walk;
+tree/type/combined filters can omit blobs without fetching their bodies. Explicit
+wants and tag chains are loaded first; all non-blob structure is already present. Missing IDs stream in batches of at most 128 into the existing
 bounded Cell reads and verified cache writes. The shared object lock serializes
 hydration until the request can safely reach upload-pack. Enumeration process
 failures abort preparation. The shared native object walker also continues to
 serve push ingestion with ordinary strict missing-object behavior.
 See [Git rev-list's missing-object contract](https://git-scm.com/docs/git-rev-list#Documentation/git-rev-list.txt---missingmissing-action).
 
-Other filters still load all reachable blobs even when the client pack omits
-some. Fetch preparation still scans all stored non-blob history, including retained
-orphans. Reverse traversal can visit the whole ancestor graph for an unreachable
-want. These costs require scale qualification; this is not a bounded-latency or
+Size filters still load missing reachable blobs even when the client pack omits
+some: Git's [`filter_blobs_limit`](https://github.com/git/git/blob/v2.50.1/list-objects-filter.c)
+includes missing blobs when their sizes are unknown. Tree/type constraints in a
+combined filter still apply. Fetch preparation scans all stored non-blob history,
+including retained orphans. Reverse traversal can visit the whole ancestor graph
+for an unreachable want. These costs require scale qualification; this is not a bounded-latency or
 requested-closure-only implementation. Local integration tests cover actual
 omissions, lazy fetch, fresh-disk restore and rejection of unreachable object
 kinds before and after caching and deleting their refs. They use the in-memory
@@ -1176,9 +1182,9 @@ group on Unix. Accepted push tasks drain before the node closes Cells.
 SSH fetch retains one ref snapshot and validates every initial v0 want or v2
 request group against certified Cell reachability before forwarding to native
 upload-pack. Initial hydration includes non-blob history and ref/tag targets.
-Exact `blob:none` requests hydrate explicit wants only; other requests prepare
-missing reachable blobs before any wants reach Git. No-want discovery skips
-blob enumeration. Native Git can traverse objects immediately while parsing wants,
+Exact `blob:none` requests hydrate explicit wants only; other requests apply the
+native filter while preparing missing reachable blobs before any wants reach Git.
+No-want discovery skips blob enumeration. Native Git can traverse objects immediately while parsing wants,
 so request preparation must precede writing its packet group to stdin. This uses
 the same serialized object-cache hydration as HTTP; immutable files publish only
 after complete byte/hash verification. See Git's

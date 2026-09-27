@@ -230,7 +230,7 @@ async fn missing_walk_streams_requested_history_without_unrelated_blobs() -> Tes
         let hex = hex::encode(oid);
         tokio::fs::remove_file(path.join(".git/objects").join(&hex[..2]).join(&hex[2..])).await?;
     }
-    let mut walk = GitObjectWalk::missing(&path.join(".git"), vec![root])?;
+    let mut walk = GitObjectWalk::missing(&path.join(".git"), vec![root], None)?;
     let mut found = std::collections::BTreeSet::new();
     while let Some(oid) = walk.next().await? {
         assert!(found.insert(oid), "duplicate missing object");
