@@ -899,3 +899,72 @@ Set `CANOPY_GIT_TOKEN=local-test-token`, the node signing key and provider
 credentials through the environment, as for the other S3 process fixtures.
 Enable `canopy_server::server::residency=debug` to capture transition timings.
 The script cleans its Canopy processes; the caller owns provider-prefix cleanup.
+
+
+## Startup lease freshness during recovery investigation
+
+Two profiling repeats of the 64-repository recovery probe did not reach the
+cold-read phase. Both used the `b14cc3b` implementation and binary SHA-256
+`9db2d202c85134554307a007bfd7eaf47e30c3fb39ab81c8173bd616f8421ee5`.
+`canopy-profile-activation-ae393de01f45` seeded in 146.747 seconds but exceeded
+the existing 30-second recovery-readiness deadline. The one-client attempt,
+`canopy-profile-single-957f289c39e6`, seeded in 189.983 seconds and exited during
+recovery startup with `advertisement is not currently valid`. Neither supplies
+a one-versus-eight-client cold-latency comparison. Both failed reports and
+provider cleanup results are retained.
+
+The workspace volume was a USB-connected APFS SSD. A ten-second seed-phase stack
+sample showed SQLite synchronization and LTX compaction/spool synchronization;
+this is evidence of local I/O cost during creation, not proof of the cold-restore
+bottleneck. The startup sample did not capture successful repository restoration.
+These noisy-host observations do not justify changing the SQL worker count,
+durability, lease duration or readiness deadline.
+
+Source inspection found an independent lifecycle defect: `RunningServer::start`
+reused the timestamp taken before storage probing and deployment initialization
+when constructing the initial signed node advertisement and monotonic guard.
+Long preflight could therefore publish an already-expired advertisement. Server
+startup now takes a fresh timestamp after preflight and runtime setup, immediately
+before enrollment. Backup and maintenance enrollment already take their initial
+timestamps after preflight. Publication itself still consumes the lease lifetime.
+
+The regression pauses the deployment release read for eleven seconds, then
+checks the initial advertisement's issue time against completed preflight. It
+also creates a repository through HTTP and drains the server. Checking startup
+success alone was insufficient: a fresh deployment can bootstrap without reading
+its own advertisement, and later renewal can mask stale initial issuance. The
+persisted-advertisement assertion fails on the old source and passes with the
+fresh timestamp.
+
+`scripts/smoke_s3_activation.py` accepts `--concurrency 1..32` (default eight),
+retains its last phase even on failure, and reports successful initial/recovery
+startup durations separately from cold-read latency. No retry or timeout was
+added. A matched cold-recovery performance comparison remains required.
+
+
+All nine lifecycle tests passed after the fix, including cancellation, failed
+cleanup, backup/control changes and renewal through a drain longer than one
+lease. All-target Clippy with warnings denied, formatting and the optimized
+build passed. The production change adds two net lines; no runtime dependency,
+schema, lease duration or acknowledgement boundary changed.
+
+The optimized process proof `canopy-startup-lease-c091cc69d024` (base `b14cc3b`
+plus archived source) passed all 64 cold identity reads without retries and all
+three stock Git v0/v2 clone/hash/strict-fsck samples. Initial startup took
+0.322 seconds; recovery startup took 0.786 seconds. Eight-client cold reads took
+5.678 seconds overall, with p50/p95/p99 of 685.150/1,041.294/1,084.918 ms.
+Executable SHA-256:
+`2780232a151911cea978a48d82a4e40a3125c43cfca48421cfee68af7dc88343`.
+Graceful shutdown and provider cleanup passed; both server logs contain zero
+warnings/errors. The seeded corpus and colocated RustFS provider match the prior
+functional workload; Canopy remains uncontained on the shared macOS host.
+
+The much shorter 9.271-second seed confirms materially different host conditions
+from the failed profiling attempts. Do not attribute the latency difference to
+this timestamp fix: the deterministic advertisement regression is its causal
+proof. The original cold-acquisition bottleneck and production mixed-workload
+SLO remain unqualified. A further lease audit must cover delayed refresh replies:
+server, backup and maintenance renewal currently pass the issuance timestamp to
+`NodeLeaseGuard::renew` after awaiting storage, while that API converts remaining
+wall-clock lifetime into a deadline at call time. Fault tests must prove response
+latency cannot extend local authority beyond the signed expiry.

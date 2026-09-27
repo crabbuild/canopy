@@ -379,11 +379,10 @@ impl RunningServer {
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
         );
         let store = Store::new(Arc::clone(&raw_store));
-        let now_ms = unix_now_ms()?;
         let probe = probe_storage(
             &store,
             &config.store_prefix.clone().join("canopy-probe"),
-            now_ms,
+            unix_now_ms()?,
         )
         .await?;
         if !probe.passed() {
@@ -448,6 +447,9 @@ impl RunningServer {
         let stop = CancellationToken::new();
         node.install_task_group(CancellationToken::new(), release_stop.clone())?;
         node.require_storage_capabilities(&probe)?;
+        // Preflight may outlast a lease. Start its lifetime only when enrollment
+        // begins, so slow probing cannot publish an already-expired advertisement.
+        let now_ms = unix_now_ms()?;
         let guard = NodeLeaseGuard::new(now_ms, now_ms + LEASE_MS)?;
         node.install_node_lease_for_startup(guard.clone())?;
         let observed = directory.create(identity.sign(1, now_ms)?, now_ms).await?;

@@ -399,7 +399,11 @@ deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
 the Cell node. Lease renewal is owned by Canopy's process supervisor, outside
-Cellule's task group (which is cancelled before runtime drain). Normal shutdown
+Cellule's task group (which is cancelled before runtime drain). Initial lease
+issuance follows storage probing, deployment validation and local runtime setup;
+preflight delay must not consume the node's advertised serving lifetime. The
+monotonic guard starts immediately before advertisement creation, so publication
+latency still consumes that lease. Normal shutdown
 and failed-startup cleanup retain renewal until runtime drain returns, then cancel
 and join it before withdrawing the advertisement. Unexpected renewal completion
 closes admission. Pending directory entries durably initialize the immutable

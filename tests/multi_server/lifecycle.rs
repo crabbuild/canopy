@@ -24,6 +24,7 @@ type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send 
 struct PausedStore {
     inner: InMemory,
     phase: Mutex<Option<ControlState>>,
+    initial_advertisement: Mutex<Option<serde_json::Value>>,
     read: Mutex<Option<(StorePath, usize)>>,
     entered: Notify,
     proceed: Notify,
@@ -55,16 +56,18 @@ impl ObjectStore for PausedStore {
         payload: PutPayload,
         options: PutOptions,
     ) -> object_store::Result<PutResult> {
+        let bytes: Vec<_> = payload
+            .iter()
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect();
+        if let Ok(advertisement) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && advertisement["lease"]["progress"] == "1"
+        {
+            *self.initial_advertisement.lock().unwrap() = Some(advertisement);
+        }
         let pause = {
             let mut phase = self.phase.lock().unwrap();
-            let state = Control::decode(
-                &payload
-                    .iter()
-                    .flat_map(|bytes| bytes.iter().copied())
-                    .collect::<Vec<_>>(),
-            )
-            .ok()
-            .map(|control| control.state);
+            let state = Control::decode(&bytes).ok().map(|control| control.state);
             if phase.is_some() && *phase == state {
                 phase.take();
                 true
@@ -576,5 +579,48 @@ async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Resu
     drained?;
     assert!(!directory.is_live(session, now()?).await?);
     wait_for_cleanup(&data).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let address = available_address().await?;
+    let settings = config(address, files.path().join("node"));
+    let layout = cellule_runtime::CellStorageLayout::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        *settings.application.as_bytes(),
+    );
+    *store.read.lock().unwrap() = Some((layout.release_path(), 1));
+    let startup = tokio::spawn(CanopyServer::start(settings, store.clone()));
+    store.wait().await?;
+    // Deployment validation happens before this node owns any Cell. Its I/O
+    // must not spend the ten-second authority lease used by subsequent startup.
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    let preflight_finished = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+    )?;
+    store.proceed.notify_one();
+    let server = timeout(Duration::from_secs(10), startup).await???;
+    let initial = store
+        .initial_advertisement
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("initial advertisement missing")?;
+    let issued = initial["lease"]["issued_at_ms"]
+        .as_str()
+        .ok_or("advertisement issue time missing")?
+        .parse::<i64>()?;
+    create_repository(address, "after-slow-preflight").await?;
+    server.shutdown().await?;
+    assert!(
+        issued >= preflight_finished,
+        "preflight consumed the initial node lease"
+    );
     Ok(())
 }

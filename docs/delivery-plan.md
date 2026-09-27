@@ -3092,3 +3092,24 @@ build. Cold request p50/p99 was 5.135/10.589 seconds; low cold latency remains
 unmet. Server timings place most transition time inside Cell acquisition.
 See [the concurrent activation evidence](performance-plan.md#concurrent-repository-activation)
 for the workload, binary identity, limits and repeat command.
+
+
+## Fresh startup authority after slow preflight
+
+Server startup now timestamps the initial node lease immediately before
+enrollment, after storage probing, deployment initialization and runtime setup.
+Previously a slow preflight could publish an already-expired advertisement.
+A regression pauses deployment validation beyond the ten-second lease, verifies
+the initial signed issue time, creates a repository through HTTP and drains.
+The persisted-advertisement assertion rejects the old implementation.
+
+All nine lifecycle tests, Clippy, formatting and the optimized build pass.
+The real-store proof `canopy-startup-lease-c091cc69d024` passes 64/64 cold reads,
+three Git v0/v2 recovery samples, strict fsck and shutdown. The activation probe
+now records its failure phase and startup durations and accepts client concurrency
+from one through 32. Failed profiling runs remain documented alongside the pass.
+See [startup lease evidence](performance-plan.md#startup-lease-freshness-during-recovery-investigation).
+The cold-latency investigation remains open; faster timings on the quieter host
+are not evidence of a performance gain from this correctness fix. Delayed renewal
+response accounting across server, backup and maintenance is the next lifecycle
+audit; full primitive integration and production density remain open.
