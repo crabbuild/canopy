@@ -2504,7 +2504,9 @@ survives original-prefix deletion, not loss of the shared bucket/provider.
 The LFS batch/basic API and repository-scoped immutable body keys are unchanged.
 LFS has no fixed product file-size quota. Immutable 8 MiB parts avoid the
 configured S3 adapter's single-copy-part restriction. Direct object storage URLs,
-transfer resume and account quotas remain separate work.
+resumable uploads and account quotas remain separate work. Basic downloads accept
+one tail range (`bytes=<start>-<last>` or `bytes=<start>-`) with `206` and
+`Content-Range`; unsupported range shapes receive the full `200` response.
 
 An upload is supervised through reception, cleanup and SQLite publication. It
 holds shared node transfer admission even if the awaiting client disconnects.
@@ -2531,6 +2533,10 @@ BLAKE3 match SQLite. Thus a same-length corruption cannot satisfy HTTP's declare
 Content-Length before verification. Earlier ranges may already have been sent;
 a late error terminates the transfer, and stock LFS additionally verifies its OID.
 Empty objects verify at stream opening. Read requests have 120-second deadlines.
+For resumed downloads, the server reads and hashes the skipped prefix before
+emitting the tail. This preserves full-object verification but makes server-side
+read work proportional to the full object size; part-level verification is needed
+before large-offset resumes can avoid rereading the prefix.
 
 The same reader verifies backup source/destination LFS bodies, so increasing
 transfer size does not introduce an unbounded backup allocation. There is no

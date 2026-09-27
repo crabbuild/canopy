@@ -369,13 +369,35 @@ async fn lfs_get(
         .extensions()
         .get::<Arc<crate::AdmissionPermit>>()
         .cloned();
+    let range = request.headers().get(header::RANGE).cloned();
+    let if_range = request.headers().contains_key(header::IF_RANGE);
     match api.gateway.lfs().get(oid, admission).await {
         Ok(body) if (api.ready)() => {
             let size = body.size();
-            let mut response = Response::new(Body::from_stream(body));
+            let offset = match lfs_tail_range(range.as_ref(), if_range, size) {
+                Ok(offset) => offset,
+                Err(()) => {
+                    let mut response = plain(StatusCode::RANGE_NOT_SATISFIABLE, "");
+                    let Ok(value) = HeaderValue::try_from(format!("bytes */{size}")) else {
+                        return plain(StatusCode::INTERNAL_SERVER_ERROR, "LFS range header failed");
+                    };
+                    response.headers_mut().insert(header::CONTENT_RANGE, value);
+                    return response;
+                }
+            };
+            let start = offset.unwrap_or(0);
+            let mut response = Response::new(Body::from_stream(body.resume_from(start)));
+            if offset.is_some() {
+                *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                let Ok(value) = HeaderValue::try_from(format!("bytes {start}-{}/{size}", size - 1))
+                else {
+                    return plain(StatusCode::INTERNAL_SERVER_ERROR, "LFS range header failed");
+                };
+                response.headers_mut().insert(header::CONTENT_RANGE, value);
+            }
             response
                 .headers_mut()
-                .insert(header::CONTENT_LENGTH, HeaderValue::from(size));
+                .insert(header::CONTENT_LENGTH, HeaderValue::from(size - start));
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
@@ -389,6 +411,33 @@ async fn lfs_get(
             plain(StatusCode::INTERNAL_SERVER_ERROR, "LFS download failed")
         }
     }
+}
+
+fn lfs_tail_range(
+    range: Option<&HeaderValue>,
+    if_range: bool,
+    size: u64,
+) -> Result<Option<u64>, ()> {
+    if if_range {
+        return Ok(None);
+    }
+    let Some((start, end)) = range
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes="))
+        .and_then(|value| value.split_once('-'))
+    else {
+        return Ok(None);
+    };
+    let Ok(start) = start.parse::<u64>() else {
+        return Ok(None);
+    };
+    if !end.is_empty() && end.parse::<u64>().ok() != size.checked_sub(1) {
+        return Ok(None);
+    }
+    if start >= size {
+        return Err(());
+    }
+    Ok(Some(start))
 }
 
 async fn lfs_put(

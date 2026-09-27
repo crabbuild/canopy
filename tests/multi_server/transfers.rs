@@ -7,6 +7,100 @@ use tokio::{
 };
 
 #[tokio::test(flavor = "multi_thread")]
+async fn lfs_tail_range_resumes_after_restore_and_keeps_hash_verification()
+-> Result<(), Box<dyn std::error::Error>> {
+    use object_store::ObjectStoreExt;
+    let files = tempfile::TempDir::new()?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let address = available_address().await?;
+    let settings = config(address, files.path().join("first"));
+    let prefix = settings.store_prefix.clone();
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    let url = create_repository(address, "resume").await?;
+    let client = reqwest::Client::new();
+    let repository: serde_json::Value = client
+        .get(format!("http://{address}/api/repositories/resume"))
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let id = uuid::Uuid::parse_str(repository["repository_id"].as_str().ok_or("missing id")?)?;
+    let bytes: Vec<u8> = (0..9 * 1024 * 1024 + 17)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let oid = hex::encode(Sha256::digest(&bytes));
+    let endpoint = format!("{url}/info/lfs/objects/{oid}");
+    client
+        .put(&endpoint)
+        .bearer_auth("local-test-token")
+        .body(bytes.clone())
+        .send()
+        .await?
+        .error_for_status()?;
+    server.shutdown().await?;
+
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        config(address, files.path().join("restored")),
+        store.clone(),
+    )
+    .await?;
+    let endpoint = format!("http://{address}/canopy/resume.git/info/lfs/objects/{oid}");
+    let start = 8 * 1024 * 1024 - 7;
+    let range = format!("bytes={start}-{}", bytes.len() - 1);
+    let response = client
+        .get(&endpoint)
+        .bearer_auth("local-test-token")
+        .header(reqwest::header::RANGE, &range)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers()[reqwest::header::CONTENT_RANGE],
+        format!("bytes {start}-{}/{}", bytes.len() - 1, bytes.len())
+    );
+    assert_eq!(
+        response.content_length(),
+        Some((bytes.len() - start) as u64)
+    );
+    assert_eq!(response.bytes().await?, bytes[start..]);
+    let response = client
+        .get(&endpoint)
+        .bearer_auth("local-test-token")
+        .header(reqwest::header::RANGE, format!("bytes={}-", bytes.len()))
+        .send()
+        .await?;
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+    );
+    assert_eq!(
+        response.headers()[reqwest::header::CONTENT_RANGE],
+        format!("bytes */{}", bytes.len())
+    );
+
+    let key = StorePath::from(format!(
+        "{prefix}/repos/{}/lfs/{oid}.parts/0000000000000001",
+        id.simple()
+    ));
+    let mut corrupt = bytes[8 * 1024 * 1024..].to_vec();
+    corrupt[0] ^= 1;
+    store.put(&key, corrupt.into()).await?;
+    let response = client
+        .get(&endpoint)
+        .bearer_auth("local-test-token")
+        .header(reqwest::header::RANGE, range)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+    assert!(response.bytes().await.is_err());
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn corrupt_lfs_download_cannot_complete_its_http_content_length()
 -> Result<(), Box<dyn std::error::Error>> {
     use object_store::ObjectStoreExt;

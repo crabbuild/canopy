@@ -14,6 +14,7 @@ type NextRead = Pin<Box<dyn Future<Output = Result<(ReadState, Bytes), LfsError>
 /// Backpressured LFS reader; a corrupt object cannot yield its final range.
 pub struct LfsRead {
     size: u64,
+    emit_from: u64,
     next: Option<NextRead>,
 }
 
@@ -56,6 +57,7 @@ impl LfsRead {
         };
         Ok(Self {
             size: expected.size,
+            emit_from: 0,
             next,
         })
     }
@@ -64,26 +66,39 @@ impl LfsRead {
     pub fn size(&self) -> u64 {
         self.size
     }
+
+    /// Skips bytes already held by a resuming client while hashing every part.
+    pub(crate) fn resume_from(mut self, offset: u64) -> Self {
+        self.emit_from = offset;
+        self
+    }
 }
 
 impl Stream for LfsRead {
     type Item = Result<Bytes, LfsError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let Some(next) = self.next.as_mut() else {
-            return Poll::Ready(None);
-        };
-        let result = std::task::ready!(next.as_mut().poll(cx));
-        self.next = None;
-        Poll::Ready(Some(match result {
-            Ok((state, bytes)) => {
-                if state.offset < state.expected.size {
-                    self.next = Some(Box::pin(state.read()));
+        loop {
+            let Some(next) = self.next.as_mut() else {
+                return Poll::Ready(None);
+            };
+            let result = std::task::ready!(next.as_mut().poll(cx));
+            self.next = None;
+            match result {
+                Ok((state, bytes)) => {
+                    let begin = state.offset - bytes.len() as u64;
+                    let skip =
+                        self.emit_from.saturating_sub(begin).min(bytes.len() as u64) as usize;
+                    if state.offset < state.expected.size {
+                        self.next = Some(Box::pin(state.read()));
+                    }
+                    if skip < bytes.len() {
+                        return Poll::Ready(Some(Ok(bytes.slice(skip..))));
+                    }
                 }
-                Ok(bytes)
+                Err(error) => return Poll::Ready(Some(Err(error))),
             }
-            Err(error) => Err(error),
-        }))
+        }
     }
 }
 

@@ -731,6 +731,8 @@ remain bounded at 64 MiB. Push reports are buffered up to 64 MiB, while clone/fe
 packs stream with backpressure. Git blobs and LFS objects use immutable 8 MiB
 parts without a fixed logical file-size quota. Trees, commits and tags above
 768 KiB use SQLite chunks without a fixed individual object-size quota.
+Git LFS basic downloads resume with a tail `Range` request and a verified
+`206` response. The server rehashes the skipped prefix before sending the tail.
 Publication and graph parsing still materialize non-blob bodies, so very large
 structural objects depend on available worker memory.
 Partial uploads stay invisible to Git.

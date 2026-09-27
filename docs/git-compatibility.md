@@ -43,7 +43,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
-| Advanced LFS | HTTP basic transfers, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |
+| Advanced LFS | HTTP basic transfers, verified tail-range download resume, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, optimize large-offset resume reads and qualify real providers |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
 Signed commits and signed tags are ordinary stored Git objects; **signed push

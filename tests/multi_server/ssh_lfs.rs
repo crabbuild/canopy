@@ -1,6 +1,7 @@
 use super::*;
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
 async fn grant(
     session: &russh::client::Handle<PinnedHost>,
@@ -108,6 +109,29 @@ async fn stock_lfs_uses_ssh_identity_for_push_pull_and_locks_after_restore() -> 
     git(Some(&clone), &ssh, &["lfs", "install", "--local"]).await?;
     git(Some(&clone), &ssh, &["lfs", "pull"]).await?;
     assert_eq!(tokio::fs::read(clone.join("asset.lfs")).await?, bytes);
+    let oid = hex::encode(Sha256::digest(&bytes));
+    let object = clone
+        .join(".git/lfs/objects")
+        .join(&oid[..2])
+        .join(&oid[2..4])
+        .join(&oid);
+    tokio::fs::remove_file(&object).await?;
+    let partial = clone
+        .join(".git/lfs/incomplete")
+        .join(format!("{oid}.part"));
+    tokio::fs::create_dir_all(partial.parent().ok_or("missing LFS directory")?).await?;
+    tokio::fs::write(&partial, &bytes[..8 * 1024 * 1024 + 11]).await?;
+    let resumed = git_command(Some(&clone), &ssh, &["lfs", "fetch", "origin", "main"])
+        .env("GIT_TRACE", "1")
+        .output()
+        .await?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&resumed.stderr).contains("HTTP: 206"));
+    assert_eq!(tokio::fs::read(&object).await?, bytes);
     let locks = git(Some(&clone), &ssh, &["lfs", "locks", "--json"]).await?;
     assert!(String::from_utf8(locks)?.contains("asset.lfs"));
     git(Some(&clone), &ssh, &["lfs", "unlock", "asset.lfs"]).await?;
