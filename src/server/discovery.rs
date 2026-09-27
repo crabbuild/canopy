@@ -59,7 +59,7 @@ impl RepositoryManager {
         let repository = entry.repository_id;
         let started = Instant::now();
         let result: Result<Option<RepositoryDetails>, ServerError> = async {
-            let route = self.load(entry.clone()).await?;
+            let route = self.load(actor, entry.clone()).await?;
             let Some(role) = route.repository.access_level(actor, None).await?.output else {
                 return Ok(None);
             };
@@ -100,7 +100,7 @@ impl RepositoryManager {
                 entries.push(entry);
                 continue;
             }
-            let route = match self.load(entry.clone()).await {
+            let route = match self.load(actor, entry.clone()).await {
                 Ok(route) => route,
                 // Movement admission can run out partway through a cold page.
                 // Resume after the last checked candidate instead of rescanning it.

@@ -50,7 +50,11 @@ async fn scoped_route(
             plain(StatusCode::NOT_FOUND, "Repository does not exist")
         }
     };
-    let route = match state.manager.resolve(&state.manager.owner, name).await {
+    let route = match state
+        .manager
+        .resolve(actor, &state.manager.owner, name)
+        .await
+    {
         Ok(Some(route)) => route,
         Ok(None) => return Err(missing()),
         Err(error) => {

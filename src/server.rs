@@ -33,7 +33,7 @@ use tokio_util::{
 };
 
 use crate::{
-    CanopyApplication, build_descriptor,
+    CanopyApplication, ReadIdentity, build_descriptor,
     deployment::Deployment,
     directory::{
         self, CreateAccountOutcome, DirectoryCell, DirectoryModule, Principal, RenameOutcome,
@@ -51,8 +51,8 @@ mod residency;
 mod tokens;
 pub(crate) mod workspace;
 
-use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
+use residency::{ActivationAdmission, LoadedRepository};
 
 const MAX_PENDING_REPOSITORIES: usize = 32;
 pub(crate) const LEASE_MS: i64 = 10_000;
@@ -174,7 +174,7 @@ pub(crate) struct RepositoryManager {
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
     residency_transitions: Mutex<HashMap<[u8; 16], Weak<Mutex<()>>>>,
     residency_slots: Arc<Semaphore>,
-    residency_admission: Arc<Semaphore>,
+    residency_admission: ActivationAdmission,
     tasks: TaskTracker,
 }
 
@@ -257,7 +257,7 @@ impl RepositoryManager {
             )
             .await?
             .output;
-        let _route = self.load(reserved.clone()).await?;
+        let _route = self.load((&self.owner).into(), reserved.clone()).await?;
         if reserved.state == RepositoryState::Ready {
             return Ok(reserved);
         }
@@ -270,6 +270,7 @@ impl RepositoryManager {
 
     pub(crate) async fn resolve(
         self: &Arc<Self>,
+        actor: ReadIdentity<'_>,
         owner: &str,
         name: &str,
     ) -> Result<Option<RepositoryRoute>, ServerError> {
@@ -282,7 +283,7 @@ impl RepositoryManager {
         if entry.state != RepositoryState::Ready {
             return Ok(None);
         }
-        Ok(Some(self.load(entry).await?))
+        Ok(Some(self.load(actor, entry).await?))
     }
 
     pub(crate) async fn update_member(
@@ -295,7 +296,7 @@ impl RepositoryManager {
         if role.is_some() && !self.directory.account_exists(account).await?.output {
             return Ok(MembershipOutcome::AccountMissing);
         }
-        let Some(route) = self.resolve(&self.owner, name).await? else {
+        let Some(route) = self.resolve(actor.into(), &self.owner, name).await? else {
             return Ok(MembershipOutcome::RepositoryMissing);
         };
         // Publish the candidate before granting access. Retaining it on revoke
@@ -540,7 +541,7 @@ impl RunningServer {
                 loaded: Mutex::new(HashMap::new()),
                 residency_transitions: Mutex::new(HashMap::new()),
                 residency_slots: Arc::new(Semaphore::new(config.max_active_repositories)),
-                residency_admission: Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES)),
+                residency_admission: ActivationAdmission::new(),
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));

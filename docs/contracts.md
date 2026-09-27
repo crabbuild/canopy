@@ -278,11 +278,20 @@ serving state. Initialization must succeed before the ready route is exposed.
 Remote routes retain authoritative owner checks on the transition path.
 
 At most 32 transition operations may be executing or waiting on that path.
+One authenticated account may hold at most 16 of those slots, across all its
+tokens and repository endpoints. Anonymous readers share a separate 16-slot
+bucket. Repository creation charges the site owner. Metadata discovery, list
+candidate checks, collaboration authorization, membership changes and Git/LFS
+routing carry the requesting account into the same admission boundary.
 Transition locks are held only by admitted work; weak map entries are pruned on
 lookup, so repository history does not accumulate permanent mutexes.
 Admission uses a nonwaiting semaphore before spawning supervised work; a full
-queue returns a capacity error (HTTP 503). The task owns its permit through
-completion or failure, including after the HTTP client disconnects. Ready local
+queue returns a capacity error (HTTP 503). The task owns both global and account
+permits through completion or failure, including after the HTTP client disconnects. Its account
+semaphore is retained by the owned permit; the lookup map holds weak references
+and prunes expired entries on admission. Global admission precedes map lookup,
+and account ownership is released before the global permit, bounding retained
+account state independently of historical account count. Ready local
 routes bypass this queue. Remote routes need authoritative ownership checks and
 consume the same admission. Directory query admission and the eight Git/LFS
 transfer permits remain independent bounds; a burst can be rejected there first.

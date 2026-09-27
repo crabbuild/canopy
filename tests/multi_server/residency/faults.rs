@@ -10,6 +10,8 @@ use tokio::sync::Notify;
 
 use super::*;
 
+mod admission;
+
 #[derive(Clone, Copy, Debug)]
 enum ReleaseFault {
     Pause,
@@ -482,53 +484,6 @@ impl Fixture {
         .await??;
         Ok(())
     }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn cold_admission_stays_bounded_after_clients_disconnect() -> Result {
-    let fixture = Fixture::new().await?;
-    let pending = fixture.interrupt_release(ReleaseFault::Pause).await?;
-    let request = || {
-        fixture
-            .client
-            .get(format!(
-                "http://{}/api/repositories/original",
-                fixture.address
-            ))
-            .bearer_auth("local-test-token")
-    };
-    let mut waiting = Vec::new();
-    let overload = async {
-        // Fill activation admission gradually so Directory query admission does
-        // not reject the burst first. One of the 32 permits belongs to release.
-        for _ in 0..31 {
-            let request = request();
-            let mut waiter = tokio::spawn(async move { request.send().await });
-            assert!(
-                timeout(Duration::from_millis(50), &mut waiter)
-                    .await
-                    .is_err()
-            );
-            waiting.push(waiter);
-        }
-        let response = timeout(Duration::from_secs(2), request().send()).await??;
-        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        for waiter in waiting.drain(..) {
-            waiter.abort();
-            let _ = waiter.await;
-        }
-        let response = timeout(Duration::from_secs(2), request().send()).await??;
-        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        fixture.read_warm_repository().await
-    }
-    .await;
-    fixture.store.proceed.notify_one();
-    pending.await??.error_for_status()?;
-    overload?;
-    create(&fixture.client, fixture.address, "fourth").await?;
-    fixture.clone_original(fixture.address).await?;
-    fixture.server.shutdown().await?;
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]

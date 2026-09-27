@@ -2,6 +2,48 @@ use std::{collections::VecDeque, convert::Infallible, future::poll_fn};
 
 use super::*;
 
+#[tokio::test]
+async fn account_quotas_preserve_global_capacity_and_recover_after_release() {
+    let admission = ActivationAdmission::new();
+    let mut permits = Vec::new();
+    for actor in [ReadIdentity::Anonymous, ReadIdentity::Account("anonymous")] {
+        for _ in 0..16 {
+            permits.push(admission.acquire(actor).await.unwrap());
+        }
+        assert!(admission.acquire(actor).await.is_err());
+    }
+    assert!(
+        admission
+            .acquire(ReadIdentity::Account("another"))
+            .await
+            .is_err()
+    );
+    drop(permits.pop());
+    let another = admission
+        .acquire(ReadIdentity::Account("another"))
+        .await
+        .unwrap();
+    assert_eq!(admission.total.available_permits(), 0);
+    drop(another);
+    drop(permits);
+    assert_eq!(admission.total.available_permits(), 32);
+}
+
+#[tokio::test]
+async fn finished_accounts_do_not_accumulate_activation_state() {
+    let admission = ActivationAdmission::new();
+    for index in 0..1024 {
+        let account = format!("account-{index}");
+        drop(
+            admission
+                .acquire(ReadIdentity::Account(&account))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(admission.accounts.lock().await.len(), 1);
+}
+
 struct Frames(VecDeque<Frame<Bytes>>);
 
 impl HttpBody for Frames {

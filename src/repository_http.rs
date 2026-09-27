@@ -721,7 +721,7 @@ async fn dispatch_repository(
     // workers finish. Shutdown tracks this task before draining the Cell node.
     let task = state.tasks.spawn(async move {
         tracing::debug!(owner, name, path = %request.uri().path(), "routing repository request");
-        let response = match manager.resolve(&owner, &name).await {
+        let response = match manager.resolve(principal.identity(), &owner, &name).await {
             Ok(Some(route)) => {
                 let (mut parts, body) = request.into_parts();
                 // The inner router must extract only its own captures, especially the LFS OID.

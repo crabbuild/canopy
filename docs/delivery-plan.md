@@ -3152,3 +3152,20 @@ assertion is recorded, not declared fixed. See the
 [performance evidence](performance-plan.md#git-v2-capability-discovery-without-object-hydration).
 This closes the initial capability-exchange optimization; full primitive
 composition, complete ref-query optimization and production capacity remain open.
+
+## Bound each account's cold repository admission
+
+The shared residency boundary now limits one account to sixteen of thirty-two
+pending transitions, across its tokens and repository routes. Anonymous readers
+share a separate bucket. Both charges survive client cancellation until supervised
+work finishes; ready local routes bypass the transition queue.
+
+The fault regression rejects the previous implementation, proves a second account
+can restore a cold Cell during owner saturation, and checks metadata, issue and
+Git routing plus cancellation. Residency, peer and visibility tests, Clippy,
+formatting and the optimized build pass. Real-store recovery run
+`canopy-account-activation-f58216cd9bb4` passes 64 identities, three native Git
+v0/v2 recovery samples, strict fsck and cleanup. See the
+[account admission evidence](performance-plan.md#account-admission-for-cold-repository-transitions).
+This bounds an individual account's activation share. Transfer fairness, lower
+cold latency, full primitive composition and production density remain open.

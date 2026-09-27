@@ -60,8 +60,9 @@ reservations and the deployment needs aggregate memory/process/disk ceilings.
 Use representative high-water measurements with all primitive schemas installed;
 SQL page-cache settings alone do not measure a Cell. Reserve separate capacity
 for Directory requests, lease renewal, durable publication and shutdown.
-Bound disk cache and restore scratch independently. Define per-account admission
-so one repository scan cannot monopolize the entire cold activation budget.
+Bound disk cache and restore scratch independently. Per-account admission limits
+one account to at most half the global cold transition capacity. Further
+scheduling fairness needs mixed-account load evidence.
 
 Warm request latency should consist of authentication, routing, a short SQL
 operation and response delivery. Measure each term before introducing caches.
@@ -78,9 +79,10 @@ permits it.
   entries plus one reserved Directory SQL slot. The example uses 100; the initial
   density run and fault fixtures use three. The runtime uses its CPU-sized SQL
   worker pool, capped at sixteen.
-  Thirty-two supervised cold/remote transitions may execute or wait; excess
-  admission receives 503. Ready local routes bypass that queue. These are
-  qualification limits, not measured production capacity.
+  Thirty-two supervised cold/remote transitions may execute or wait, with a
+  sixteen-transition ceiling per authenticated account and a shared anonymous
+  bucket of sixteen; excess admission receives 503. Ready local routes bypass
+  that queue. These are qualification limits, not measured production capacity.
 - Ready local routes pin under a short registry lock. Ownership transitions
   serialize per repository; unrelated cold admissions may execute concurrently.
   Slots cover in-flight activation as well as loaded entries, and eviction
@@ -187,8 +189,12 @@ Successful same-repository activation is reused by waiting callers; failures
 remain retryable through the existing lifecycle states. The node admits at most
 32 supervised transitions, including queued waiters. Canceled clients cannot
 abandon acquired ownership. Eviction claims a candidate guard without waiting
-and makes it unavailable under the request-pin lock. Per-account fairness and
-resource-derived restore concurrency still require implementation/qualification.
+and makes it unavailable under the request-pin lock. An account can hold at most
+sixteen of the thirty-two transition slots;
+anonymous traffic shares its own sixteen-slot bucket. The task retains both
+charges through client cancellation. Ready local routes bypass this admission.
+This bounds one account's share; combined-account saturation, transfer-slot
+fairness and resource-derived restore concurrency still need qualification.
 
 Acceptance: runs with 100, 500 and 1,000 active repositories within the same
 10,000-repository corpus publish their measured limits. A cold storm and a hot
@@ -1100,3 +1106,49 @@ Graceful shutdown and provider cleanup passed. Source/script hashes, command
 logs and the original failed teardown observation are retained in the dedicated
 qualification target. Full primitive composition and mixed-workload repository
 density remain open.
+
+## Account admission for cold repository transitions
+
+One authenticated account can now hold at most 16 of the node's 32 pending
+repository transitions. All of its tokens and repository endpoints share that
+ceiling. Anonymous readers share a separate 16-slot bucket. Creation charges
+the site owner; metadata, candidate checks, collaboration, membership and Git/LFS
+routing carry the caller's identity into the existing residency boundary.
+Ready local routes bypass transition admission. Supervised tasks retain both
+permits through HTTP cancellation and ownership cleanup. Weak account entries
+are pruned on admission, so historical accounts do not accumulate semaphores.
+The locked Tokio 1.53.1 owned-permit contract retains the semaphore until drop;
+account ownership is dropped before global admission is returned.
+
+The HTTP regression pauses one cold Cell's storage read and admits sixteen
+requests for the owner. The seventeenth request returns 503, as do issue and Git
+routes for that cold repository. A second account activates another cold Cell
+through its issue route. Canceled clients retain their charges, and the saturated
+account can still use a ready local Git route. Unpausing storage permits exact
+Git clone verification and graceful shutdown. On base revision `8b497a8`, the
+regression times out awaiting the seventeenth request instead of receiving a
+bounded rejection. The old implementation does not isolate account admission.
+
+All four residency unit tests, fourteen residency integration tests, two peer
+routing tests and the visibility recovery test passed. All-target Clippy with
+warnings denied, formatting and the optimized build passed. Production code
+grows by 54 net lines to own account admission at the shared residency boundary;
+no dependency, schema or configuration changes were required.
+
+Real-provider run `canopy-account-activation-f58216cd9bb4` used the unchanged
+`scripts/smoke_s3_activation.py` against isolated RustFS `1.0.0-beta.8-glibc`
+limited to two CPUs and 4 GiB. Canopy ran on the shared macOS arm64 host.
+Base revision is `8b497a8` plus the archived patch; optimized binary SHA-256 is
+`891631e28a85455eef1e363fba24b636915282f8a59c447c273e1f32ef1cbe7f`.
+After SIGKILL and lease expiry, all 64 identities restored with eight clients
+and no retries. Three populated repositories passed native Git v0/v2 clone and
+strict fsck; shutdown and provider cleanup passed. Both server logs contain no
+warnings or errors. Source patch, driver and script hashes accompany the report.
+
+Cold reads took 8.506 seconds overall, with p50/p95/p99 of
+818.195/2019.652/2950.220 milliseconds. This functional run stays below the
+per-account ceiling; saturation isolation is proved by the injected-storage
+HTTP test, not this provider run. These shared-host observations do not establish
+a latency improvement or SLO. Two accounts can still saturate all 32 slots;
+transfer admission, Directory admission, resource-derived restore concurrency,
+full primitive composition and thousand-repository mixed workloads remain open.

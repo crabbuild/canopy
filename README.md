@@ -702,7 +702,9 @@ Cellule movement-rate denial, admission waits one second before a single retry.
 Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. Cold/remote routing admits at most 32
 transition operations, executing concurrently across different repositories or
-waiting for the same repository's transition. Slots are reserved before activation
+waiting for the same repository's transition. Each authenticated account may use
+at most 16 of those slots across its tokens and repository routes; anonymous
+readers share one separate 16-slot allowance. Slots are reserved before activation
 I/O and stay reserved through eviction cleanup. Full admission returns 503;
 disconnected clients retain admission until supervised work ends. Ready local
 repositories keep routing independently. SQL execution uses the
