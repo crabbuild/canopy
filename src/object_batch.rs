@@ -182,7 +182,7 @@ impl Command for PutObjects {
                     blake3,
                     sha256,
                 } => {
-                    if object.kind != ObjectKind::Blob || size > MAX_EXTERNAL_BLOB_BYTES as u64 {
+                    if object.kind != ObjectKind::Blob || size > MAX_EXTERNAL_BLOB_BYTES {
                         return Ok(CommandResult::Rejected(()));
                     }
                     (

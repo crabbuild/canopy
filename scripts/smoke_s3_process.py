@@ -393,19 +393,19 @@ def seed_large_repository(base_url, directory):
         name = f"random-{index}.bin"
         path = local / name
         with path.open("wb") as output:
-            for _ in range(40):
+            for _ in range(80):
                 output.write(os.urandom(1024 * 1024))
         with path.open("rb") as data:
             hashes[name] = hashlib.file_digest(data, "sha256").hexdigest()
         git("add", name, cwd=local)
         git("commit", "-m", f"Large object {index}", cwd=local)
-    # One push must carry both incompressible blobs, exceeding the former 64 MiB
-    # request limit. Client packet buffering stays small, exercising chunked HTTP.
+    # Each blob exceeds the former 64 MiB object limit. One push carries both
+    # incompressible bodies. Client packet buffering stays small, exercising chunked HTTP.
     started = time.monotonic()
     git("-c", "http.postBuffer=1048576", "-c",
         "http.extraHeader=Authorization: Bearer local-test-token",
         "push", url, "HEAD:refs/heads/main", cwd=local)
-    print(f"PASS: one push uploaded 80 MiB of random blob data in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: one push uploaded two 80 MiB random blobs in {time.monotonic() - started:.2f}s", flush=True)
     return git("rev-parse", "HEAD", cwd=local), hashes
 
 

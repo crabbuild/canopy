@@ -11,7 +11,12 @@ use std::{
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
 use flate2::{Compression, write::ZlibEncoder};
 
-use crate::{ObjectKind, RefExpectation, object_id, refs::valid_ref_name};
+use crate::{
+    ObjectKind, RefExpectation,
+    large_blob::{LargeBlobError, LargeBlobRead},
+    object_id,
+    refs::valid_ref_name,
+};
 
 pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
@@ -23,6 +28,8 @@ pub enum CacheError {
     Io(#[from] io::Error),
     #[error("Git cache disk admission failed")]
     Budget(#[from] LtxError),
+    #[error("Git blob hydration failed")]
+    Blob(#[from] LargeBlobError),
     #[error("Git cache worker failed")]
     Task(#[from] tokio::task::JoinError),
 }
@@ -85,18 +92,18 @@ impl GitCache {
         Ok(self.reservation()?.bytes())
     }
 
-    fn writer(&self, relative: &Path) -> io::Result<CacheWriter<'_>> {
+    fn writer(self: &Arc<Self>, relative: &Path) -> io::Result<CacheWriter> {
         let path = self.git_dir().join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         Ok(CacheWriter {
             file: OpenOptions::new().write(true).create_new(true).open(path)?,
-            reservation: self.reservation()?,
+            cache: Arc::clone(self),
         })
     }
 
-    fn write_file(&self, relative: &str, bytes: &[u8]) -> io::Result<()> {
+    fn write_file(self: &Arc<Self>, relative: &str, bytes: &[u8]) -> io::Result<()> {
         self.writer(Path::new(relative))?.write_all(bytes)
     }
 
@@ -138,6 +145,36 @@ impl GitCache {
             encoder.write_all(&body)?;
             encoder.finish()?;
             Ok(())
+        })
+        .await?
+    }
+
+    pub(crate) async fn store_blob(
+        self: &Arc<Self>,
+        mut reader: LargeBlobRead,
+    ) -> Result<(), CacheError> {
+        let reference = reader.reference();
+        let cache = Arc::clone(self);
+        let mut encoder = tokio::task::spawn_blocking(move || {
+            let hex = hex::encode(reference.oid);
+            let path = Path::new("objects").join(&hex[..2]).join(&hex[2..]);
+            let mut encoder = ZlibEncoder::new(cache.writer(&path)?, Compression::default());
+            encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
+            Ok::<_, CacheError>(encoder)
+        })
+        .await??;
+        while let Some(bytes) = reader.next().await? {
+            // The writer owns the cache reservation until each compression worker
+            // exits, including when its async waiter is canceled.
+            encoder = tokio::task::spawn_blocking(move || {
+                encoder.write_all(&bytes)?;
+                Ok::<_, CacheError>(encoder)
+            })
+            .await??;
+        }
+        tokio::task::spawn_blocking(move || {
+            encoder.finish()?;
+            Ok::<_, CacheError>(())
         })
         .await?
     }
@@ -200,22 +237,24 @@ impl Drop for GitCache {
     }
 }
 
-struct CacheWriter<'a> {
+struct CacheWriter {
     file: File,
-    reservation: &'a DiskReservation,
+    cache: Arc<GitCache>,
 }
 
-impl Write for CacheWriter<'_> {
+impl Write for CacheWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.reservation
+        self.cache
+            .reservation()?
             .try_grow(bytes.len() as u64)
             .map_err(io::Error::other)?;
         // Retain the full attempted charge on an I/O error; cache destruction is
         // the cleanup boundary. Successful short writes release unused admission.
         let count = self.file.write(bytes)?;
         if count < bytes.len() {
-            self.reservation
-                .resize(self.reservation.bytes() - (bytes.len() - count) as u64)
+            self.cache
+                .reservation()?
+                .resize(self.cache.reservation()?.bytes() - (bytes.len() - count) as u64)
                 .map_err(io::Error::other)?;
         }
         Ok(count)

@@ -9,7 +9,10 @@ use tokio::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::{MAX_SQLITE_OBJECT_BYTES, ObjectKind, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id};
+use crate::{
+    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, large_blob::MAX_EXTERNAL_BLOB_BYTES,
+    object_id,
+};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_LIMIT: usize = 128;
@@ -138,12 +141,12 @@ impl GitObjects {
     pub(crate) async fn read(
         &mut self,
         oid: [u8; 20],
-    ) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
+    ) -> Result<GitObject<'_, BufReader<ChildStdout>>, ObjectReadError> {
         timeout(IO_TIMEOUT, async {
             self.requests
                 .write_all(format!("{}\n", hex::encode(oid)).as_bytes())
                 .await?;
-            read_object(&mut self.batch.output, oid).await
+            open_object(&mut self.batch.output, oid).await
         })
         .await
         .map_err(|_| ObjectReadError::Timeout)?
@@ -186,10 +189,61 @@ fn parse_oid(bytes: &[u8]) -> Result<[u8; 20], ObjectReadError> {
     Ok(oid)
 }
 
-async fn read_object(
-    reader: &mut (impl AsyncRead + Unpin),
+pub(crate) struct GitObject<'a, R> {
+    pub(crate) oid: [u8; 20],
+    pub(crate) kind: ObjectKind,
+    pub(crate) size: u64,
+    pub(crate) reader: tokio::io::Take<&'a mut R>,
+}
+
+impl<R: AsyncRead + Unpin> GitObject<'_, R> {
+    pub(crate) async fn body(mut self) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
+        let limit = if self.kind == ObjectKind::Blob {
+            INLINE_OBJECT_LIMIT
+        } else {
+            MAX_SQLITE_OBJECT_BYTES
+        };
+        if self.size > limit as u64 {
+            return Err(ObjectReadError::TooLarge);
+        }
+        timeout(IO_TIMEOUT, async {
+            let mut body = vec![0; self.size as usize];
+            self.reader.read_exact(&mut body).await?;
+            let kind = self.kind;
+            let expected = self.oid;
+            self.finish().await?;
+            tokio::task::spawn_blocking(move || {
+                if object_id(kind, &body) != expected {
+                    return Err(ObjectReadError::Malformed);
+                }
+                Ok((kind, body))
+            })
+            .await?
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)?
+    }
+
+    // cat-file separates bodies with a newline. The sized reader prevents an
+    // external upload from consuming that separator or the following response.
+    pub(crate) async fn finish(self) -> Result<(), ObjectReadError> {
+        if self.reader.limit() != 0 {
+            return Err(ObjectReadError::Malformed);
+        }
+        let separator = timeout(IO_TIMEOUT, self.reader.into_inner().read_u8())
+            .await
+            .map_err(|_| ObjectReadError::Timeout)??;
+        if separator != b'\n' {
+            return Err(ObjectReadError::Malformed);
+        }
+        Ok(())
+    }
+}
+
+async fn open_object<R: AsyncRead + Unpin>(
+    reader: &mut R,
     expected: [u8; 20],
-) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
+) -> Result<GitObject<'_, R>, ObjectReadError> {
     let line = header(reader).await?.ok_or(ObjectReadError::Malformed)?;
     let mut fields = line.split(|byte| *byte == b' ');
     let (Some(oid), Some(kind), Some(size), None) =
@@ -207,31 +261,24 @@ async fn read_object(
         b"tag" => ObjectKind::Tag,
         _ => return Err(ObjectReadError::Malformed),
     };
-    let size: usize = std::str::from_utf8(size)
+    let size: u64 = std::str::from_utf8(size)
         .map_err(|_| ObjectReadError::Malformed)?
         .parse()
         .map_err(|_| ObjectReadError::Malformed)?;
-    // Check the declared size before allocating or reading the object's body.
     let limit = if kind == ObjectKind::Blob {
         MAX_EXTERNAL_BLOB_BYTES
     } else {
-        MAX_SQLITE_OBJECT_BYTES
+        MAX_SQLITE_OBJECT_BYTES as u64
     };
     if size > limit {
         return Err(ObjectReadError::TooLarge);
     }
-    let mut body = vec![0; size];
-    reader.read_exact(&mut body).await?;
-    if reader.read_u8().await? != b'\n' {
-        return Err(ObjectReadError::Malformed);
-    }
-    tokio::task::spawn_blocking(move || {
-        if object_id(kind, &body) != expected {
-            return Err(ObjectReadError::Malformed);
-        }
-        Ok((kind, body))
+    Ok(GitObject {
+        oid: expected,
+        kind,
+        size,
+        reader: reader.take(size),
     })
-    .await?
 }
 
 #[cfg(test)]

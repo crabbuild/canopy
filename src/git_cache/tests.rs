@@ -113,3 +113,47 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
     assert_eq!(retained, charged);
     Ok(())
 }
+
+#[tokio::test]
+async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let blobs = crate::large_blob::LargeBlobStore::new(
+        Arc::new(object_store::memory::InMemory::new()),
+        [7; 16],
+    );
+    let body = vec![17; 9 * 1024 * 1024];
+    let reference = blobs
+        .put(
+            object_id(ObjectKind::Blob, &body),
+            body.len() as u64,
+            &mut body.as_slice(),
+        )
+        .await?;
+    cache.store_blob(blobs.read(&reference).await?).await?;
+    let output = tokio::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(cache.git_dir())
+        .args(["cat-file", "blob", &hex::encode(reference.oid)])
+        .output()
+        .await?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, body);
+    assert_eq!(budget.used(), tree_bytes(cache.root())?);
+    drop(cache);
+    assert_eq!(budget.used(), 0);
+
+    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let occupied = budget.try_reserve(budget.capacity() - budget.used())?;
+    assert!(
+        cache
+            .store_blob(blobs.read(&reference).await?)
+            .await
+            .is_err_and(|error| error.is_admission())
+    );
+    drop(cache);
+    assert_eq!(budget.used(), occupied.bytes());
+    Ok(())
+}

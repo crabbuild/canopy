@@ -346,14 +346,20 @@ impl GitGateway {
                         blake3,
                         sha256,
                     } => {
-                        self.large_blobs
-                            .get(&LargeBlobReference {
-                                oid: object.oid,
-                                size,
-                                blake3,
-                                sha256,
-                            })
-                            .await?
+                        let reference = LargeBlobReference {
+                            oid: object.oid,
+                            size,
+                            blake3,
+                            sha256,
+                        };
+                        let reader = self.large_blobs.read(&reference).await?;
+                        body_time += read.elapsed();
+                        let written = Instant::now();
+                        backend.cache.store_blob(reader).await?;
+                        cache_time += written.elapsed();
+                        objects += 1;
+                        bytes += reference.size;
+                        continue;
                     }
                 };
                 body_time += read.elapsed();
@@ -450,28 +456,38 @@ impl GitGateway {
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
             for oid in candidates.into_iter().filter(|oid| !present.contains(oid)) {
-                let (kind, body) = objects.read(oid).await?;
-                let object = if kind != ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
-                    self.repository
-                        .stage_object(new_identity()?, kind, &body)
-                        .await
-                        .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                } else {
-                    let storage = if kind == ObjectKind::Blob && body.len() > INLINE_OBJECT_LIMIT {
-                        let uploaded = self.large_blobs.put(&body).await?;
-                        if uploaded.oid != oid {
-                            return Err(GatewayError::MalformedCache);
-                        }
-                        ObjectStorage::External {
-                            size: uploaded.size,
-                            blake3: uploaded.blake3,
-                            sha256: uploaded.sha256,
+                let mut input = objects.read(oid).await?;
+                let object =
+                    if input.kind == ObjectKind::Blob && input.size > INLINE_OBJECT_LIMIT as u64 {
+                        let uploaded = self
+                            .large_blobs
+                            .put(oid, input.size, &mut input.reader)
+                            .await?;
+                        input.finish().await?;
+                        StoredObject {
+                            oid,
+                            kind: ObjectKind::Blob,
+                            storage: ObjectStorage::External {
+                                size: uploaded.size,
+                                blake3: uploaded.blake3,
+                                sha256: uploaded.sha256,
+                            },
                         }
                     } else {
-                        ObjectStorage::Inline(body)
+                        let (kind, body) = input.body().await?;
+                        if body.len() > INLINE_OBJECT_LIMIT {
+                            self.repository
+                                .stage_object(new_identity()?, kind, &body)
+                                .await
+                                .map_err(|error| GatewayError::Cell(Box::new(error)))?
+                        } else {
+                            StoredObject {
+                                oid,
+                                kind,
+                                storage: ObjectStorage::Inline(body),
+                            }
+                        }
                     };
-                    StoredObject { oid, kind, storage }
-                };
                 if let Err(object) = batch.try_push(object) {
                     self.repository
                         .put_objects(new_identity()?, std::mem::take(&mut batch))

@@ -45,7 +45,7 @@ async fn collect(
     let mut objects = GitObjects::start(&path.join(".git"), included, excluded)?;
     let mut result = BTreeMap::new();
     while let Some(oid) = objects.next().await? {
-        let object = objects.read(oid).await?;
+        let object = objects.read(oid).await?.body().await?;
         assert!(result.insert(oid, object).is_none(), "duplicate object");
     }
     objects.finish().await?;
@@ -136,18 +136,21 @@ async fn malformed_and_oversized_batches_fail_before_publication() {
         format!("{} blob 3\nabc\n", "0".repeat(40)),
         "x".repeat(HEADER_LIMIT + 1),
     ] {
-        assert!(read_object(&mut data.as_bytes(), oid).await.is_err());
+        let mut input = data.as_bytes();
+        if let Ok(object) = open_object(&mut input, oid).await {
+            assert!(object.body().await.is_err());
+        }
     }
     for (kind, limit) in [
         ("blob", MAX_EXTERNAL_BLOB_BYTES),
-        ("tree", MAX_SQLITE_OBJECT_BYTES),
-        ("commit", MAX_SQLITE_OBJECT_BYTES),
-        ("tag", MAX_SQLITE_OBJECT_BYTES),
+        ("tree", MAX_SQLITE_OBJECT_BYTES as u64),
+        ("commit", MAX_SQLITE_OBJECT_BYTES as u64),
+        ("tag", MAX_SQLITE_OBJECT_BYTES as u64),
     ] {
         // No body supplied: the size must be rejected before attempting a body read.
         let data = format!("{hex} {kind} {}\n", limit + 1);
         assert!(matches!(
-            read_object(&mut data.as_bytes(), oid).await,
+            open_object(&mut data.as_bytes(), oid).await,
             Err(ObjectReadError::TooLarge)
         ));
     }
@@ -187,7 +190,23 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     tokio::fs::write(directory.path().join("large"), &body).await?;
     let output = git(directory.path(), &["hash-object", "-w", "large"]).await?;
     let oid = parse_oid(output.trim_ascii())?;
-    let objects = collect(directory.path(), vec![oid], vec![]).await?;
-    assert_eq!(objects[&oid], (ObjectKind::Blob, body));
+    let mut objects = GitObjects::start(&directory.path().join(".git"), vec![oid], vec![])?;
+    assert_eq!(objects.next().await?, Some(oid));
+    let mut object = objects.read(oid).await?;
+    let store = crate::large_blob::LargeBlobStore::new(
+        std::sync::Arc::new(object_store::memory::InMemory::new()),
+        [1; 16],
+    );
+    let reference = store.put(oid, object.size, &mut object.reader).await?;
+    object.finish().await?;
+    assert_eq!(objects.next().await?, None);
+    objects.finish().await?;
+    let mut reader = store.read(&reference).await?;
+    let mut offset = 0;
+    while let Some(bytes) = reader.next().await? {
+        assert_eq!(bytes.as_ref(), &body[offset..offset + bytes.len()]);
+        offset += bytes.len();
+    }
+    assert_eq!(offset, body.len());
     Ok(())
 }

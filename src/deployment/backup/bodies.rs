@@ -139,7 +139,9 @@ async fn verify(
 ) -> BackupResult<()> {
     match reference {
         Reference::Git(value) => {
-            LargeBlobStore::new(store, repository_id).get(value).await?;
+            LargeBlobStore::new(store, repository_id)
+                .verify(value)
+                .await?;
         }
         Reference::Lfs(value) => {
             verify_lfs_object(store, repository_id, *value, None).await?;

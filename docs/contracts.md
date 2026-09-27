@@ -26,7 +26,7 @@ before admitting persistent customer repositories.
 | Object publication | at most 128 records, 768 KiB inline payload and 64 MiB SQLite verification bytes per atomic command | `PutObjects`, operation 5, codec 2 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
-| External byte ceiling | 64 MiB per Git blob; 5 GiB per LFS object | Git body limit and conditional S3 copy part limit |
+| External byte ceiling | 5 GiB per Git blob or LFS object | Conditional S3 copy uses a single part |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout and 30-minute transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
@@ -399,7 +399,8 @@ single-record `next_object` API was removed from this unreleased crate.
 Debug events separate Repository Cell acquisition from successful cache
 hydration. Hydration reports object count, raw bytes, admitted cache bytes, total
 time, page-read/verification time, external/chunk body-read time and cache-write
-time. Cache writes include worker scheduling, OID verification and compression.
+time. Cache writes include worker scheduling, OID verification and compression; for
+external Git blobs this interval also includes streamed object-store reads.
 These elapsed wall times include waiting; they are not CPU profiles or a claim
 that all page time belongs to SQLite execution. Acquisition includes authority
 and root validation, sparse activation and publication. Failed phases remain
@@ -417,14 +418,39 @@ newly persisted.
 Both commands disable replacement refs so stored bytes retain their canonical
 identity. The batch reader caps headers at 128 bytes, validates kind and size
 before allocation, reads the exact body and delimiter, and recomputes its Git
-OID. Missing, truncated, malformed or corrupt output fails the push. Each enumeration read,
-object read and process completion has a 120-second timeout. OID hashing uses
-a blocking worker so large bodies do not occupy an async executor thread. Stderr is drained
+OID. Missing, truncated, malformed or corrupt output fails the push. Enumeration,
+headers, inline/non-blob body reads, delimiters and process completion have
+120-second deadlines. External blobs stream in at most 8 MiB chunks, with
+120-second input/part deadlines and a 30-minute upload/publication deadline.
+OID hashing uses a blocking worker so large bodies do not occupy an async
+executor thread. Stderr is drained
 concurrently, retaining at most 64 KiB per process. Dropping the reader kills
 both direct children and aborts pipe tasks; normal completion requires both
 successful exits before publishing refs or recording the successful report.
 Previously published graph closure makes exclusions safe; ref publication
 still requires every new tip to have a durable certificate.
+
+External Git blobs use multipart staging under a unique repository-scoped key.
+Canopy hashes the exact declared body as it streams, checks the Git OID before
+completion, conditionally copies to the immutable SHA-256 key, and verifies the
+destination before returning metadata. Conflicting canonical bytes fail; they
+are never overwritten. Staging deletion and incomplete multipart abort are
+attempted on ordinary failure. Process loss can leave staging/multipart debris;
+operator lifecycle cleanup and qualified collection remain required.
+
+Hydration and backup verification read at most 8 MiB per range, pinning the
+initial object version/ETag. The final range is withheld until Git SHA-1,
+SHA-256 and BLAKE3 all match the SQLite reference. A failed or canceled range
+invalidates its reader. Hydration compresses into disk-accounted cache files on
+blocking workers; each writer retains the cache reservation until it exits.
+The cache is not published for Git service until hydration finishes.
+
+The 5 GiB ceiling follows the adapter's one-part conditional copy and the
+[S3 part limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
+It does not raise the 512 MiB transmitted push limit or prove native Git peak
+memory/scratch bounds. Trees, commits and tags still use whole-object buffers
+bounded at 64 MiB. The larger external-blob acceptance contract changes the
+Repository module digest; use a fresh preview prefix until migrations exist.
 
 Candidate existence queries group up to 128 IDs. Missing records accumulate in
 an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
@@ -1889,8 +1915,8 @@ recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Bodies ar
 conditionally copied before the completion CAS. Conflicting destination bodies
 must verify or the operation fails. Snapshot disk reservations cover each restored
 database and remain held until its scratch directory is removed. Capture admits
-at most 100,000 Cells; body verification retains the Git blob ceiling of 64 MiB and streams LFS objects
-up to 5 GiB through the shared verified reader.
+at most 100,000 Cells. Git blob and LFS body verification stream bounded ranges
+up to their 5 GiB ceilings through their respective verified readers.
 
 Verify and restore enroll at the completed backup prefix and read no original
 source prefix. Restore copies into a disjoint, reserved prefix and preserves the

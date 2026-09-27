@@ -624,7 +624,10 @@ Incoming Git requests stream to temporary files charged to the same disk budget
 as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
 up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
 responses stream with backpressure and have no 64 MiB response ceiling. LFS
-streams objects up to 5 GiB; individual external Git blobs remain capped at 64 MiB.
+and external Git blobs stream objects up to 5 GiB using bounded 8 MiB transfers.
+The 512 MiB push request limit still applies to the transmitted pack; the blob
+ceiling describes decoded object size, not a guarantee that every 5 GiB file
+fits an admitted push. Native Git memory and scratch use need separate bounds.
 Trees, commits and tags above 768 KiB use 512 KiB SQLite chunks, up to 64 MiB
 per object. Publication verifies every chunk and the complete object identity;
 partial uploads stay invisible to Git.
@@ -807,10 +810,10 @@ one node, and verifies Directory and repository takeover through the surviving g
 without restarting it. It writes under a unique prefix in the supplied bucket.
 The backup phase creates a separate fixture, copies it, deletes that fixture's
 original prefix, then verifies and restores Git/LFS bytes and issue data from the
-backup using the real CLI and a fresh server process. Its LFS fixture includes
-an 80 MiB tracked file and an empty object.
+backup using the real CLI and a fresh server process. Its fixtures include an
+80 MiB ordinary Git blob, an 80 MiB LFS-tracked file and an empty LFS object.
 
-Add `--large-clone` to send two 40 MiB random blobs in a single push, then clone the
+Add `--large-clone` to send two 80 MiB random blobs in a single push, then clone the
 repository using protocol v0 and v2 after takeover. Each clone must receive a
 pack larger than 64 MiB, reproduce both file hashes and pass `git fsck`. This is
 a transfer-size qualification; it does not establish production capacity.
@@ -819,9 +822,13 @@ Add `--many-objects 256` to qualify a 256-file initial push, a one-file update
 with an annotated tag, and a verified clone after takeover. Combine it with
 `--large-clone` to exercise four repositories through resident eviction and
 verify Git/LFS recovery on the same node before restart. For local container
-stores, place data and logs on the mounted workspace and verify free
-inodes as well as bytes before qualification. A full container filesystem can
-turn storage publications into unresolved mutations even with free byte space.
+stores, verify that the intended host data/log volume is actually shared into
+the container VM before binding it; an unshared host path can instead consume
+the VM root disk. Check free inodes and bytes, including provider temporary
+storage. The 80 MiB backup fixture on RustFS `1.0.0-beta.8-glibc` exhausted a
+4 GiB tmpfs and completed on a dedicated Docker volume, ending at 5.4 GiB with
+5.1 GiB under its internal temporary directory. Size the test store accordingly;
+this observation does not establish a production storage bound.
 
 
 Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above

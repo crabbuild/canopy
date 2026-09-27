@@ -183,6 +183,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_batch.rs"));
                 source.update(include_bytes!("object_chunks.rs"));
                 source.update(include_bytes!("object_reads.rs"));
+                source.update(include_bytes!("large_blob.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("visibility.rs"));

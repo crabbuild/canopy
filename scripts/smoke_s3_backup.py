@@ -26,7 +26,7 @@ def qualify(binary, directory, settings, processes):
     git("config", "user.email", "backup@example.invalid", cwd=local)
     git("lfs", "install", "--local", cwd=local)
     git("lfs", "track", "*.lfs", cwd=local)
-    readme, lfs = b"independent Git backup\n" * 50_000, b"canopy-lfs" * (8 * 1024 * 1024)
+    readme, lfs = b"git-backup" * (8 * 1024 * 1024), b"canopy-lfs" * (8 * 1024 * 1024)
     (local / "README.md").write_bytes(readme)
     (local / "asset.lfs").write_bytes(lfs)
     git("add", ".", cwd=local)
@@ -106,4 +106,4 @@ def qualify(binary, directory, settings, processes):
     node.wait(timeout=30)
     assert node.returncode == 0
     print(f"LFS qualification: bytes={len(lfs)}, stock push={push_seconds:.2f}s, restored clone+verification={clone_seconds:.2f}s", flush=True)
-    print("PASS: stock 80 MiB and empty LFS transfers, then real backup CLI copies SQLite, external Git blobs and LFS; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)
+    print("PASS: stock 80 MiB Git blob plus 80 MiB and empty LFS transfers, then real backup CLI copies SQLite and external bodies; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)

@@ -10,7 +10,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration implemented; account deletion and audit records remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; per-object buffers and 64 MiB Git object ceilings remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; non-blob buffers/64 MiB ceilings and native process resource bounds remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS with a 5 GiB acceptance ceiling, shared transfer admission and deadlines implemented; stock push/pull after restart works; quotas and full-scale capacity proof remain |
@@ -2436,3 +2436,81 @@ Gate 2 remains partial. Account deletion, reactivation policy, audit records,
 account admission/rate limits and storage retention still require implementation
 or product decisions; the browser milestone does not close the broader hosting,
 performance or operations gates.
+
+## Bounded streaming Git blobs
+
+On 2026-09-26, external Git blob ingestion, cold-cache hydration and backup body
+verification moved from whole-object buffers to bounded transfers. The canonical
+SQLite references and immutable SHA-256 object keys remain unchanged. The blob
+acceptance ceiling increases to 5 GiB; the transmitted push limit remains
+512 MiB, and trees/commits/tags remain bounded at 64 MiB per object.
+
+The native `cat-file --batch` reader separates validated headers from a sized
+body stream and checks the trailing delimiter after consumption. Large blobs
+flow through 8 MiB multipart parts, incremental hashes and verified conditional
+publication. Range readers pin the observed ETag/version and withhold the final
+range until Git SHA-1, SHA-256 and BLAKE3 all match. Cache hydration compresses
+these ranges in blocking workers that retain disk admission through cancellation.
+Backup verification uses the same reader for source and destination objects.
+
+This removes the old buffered external-blob path. The added modules own bounded
+transfer state, integrity checks and cleanup rather than a second storage format.
+The Repository module digest now covers the external-blob acceptance limit; use
+a fresh preview prefix. No dependency, lockfile or schema changes are needed.
+
+Gate 3 remains partial. Native Git peak memory/scratch/CPU, non-blob streaming,
+full 5 GiB/provider qualification, storage quotas and safe collection remain open.
+Process death can leave staging/multipart debris requiring lifecycle cleanup.
+
+Local diagnostic observations from the release RustFS fixture:
+
+| Operation | Elapsed time |
+| --- | --- |
+| One push containing two 80 MiB random blobs | 73.55 seconds |
+| Cold cache hydration of 167,772,702 raw object bytes after takeover | 31.10 seconds |
+| Protocol v0 clone, including hashes and fsck | 74.75 seconds |
+| Protocol v2 clone using the warm server cache, including hashes and fsck | 32.19 seconds |
+
+Both clone packs contained 167,823,816 bytes. These timings come from a shared
+local development host and a tmpfs RustFS container; they are not a controlled
+before/after benchmark or a production throughput guarantee. A 600-second
+`ps` sampling window spanning the large push and both clones collected 1,109
+samples, targeting a 0.5-second interval. Peak aggregate Canopy RSS was 59.2 MiB;
+including its descendants it was 484.1 MiB. This excludes client processes,
+RustFS/Docker and the OS page cache, can miss short peaks, and does not cover the
+later backup phase. It does not establish a memory limit; native process resource
+admission remains required.
+
+Verification:
+
+- The 39-test Git unit suite passed. After binding cache metadata to its verified
+  reader, the final five blob/native-pipe tests plus the cache admission test
+  passed. They cover truncated/oversize input, immutable conflicts, all three
+  hash mismatches, replacement between ranges, preservation of the next native
+  Git frame, exact loose-object reconstruction and disk-admission cleanup.
+- All-target Clippy with warnings denied, formatting, Python syntax, whitespace
+  and the release build passed.
+- The RustFS process run with `--large-clone --sqlite-chunks --many-objects 256`
+  passed the large push, both stock Git clones, SQLite chunks, restart/SIGKILL
+  recovery, collaboration/auth checks, eight repositories on two HTTPS nodes,
+  public/private transitions and interrupted maintenance recovery.
+- That run stopped in the backup phase on a heartbeat publication error. An
+  isolated rerun exposed `No space left on device`: the 4 GiB tmpfs held roughly
+  3.7 GiB of provider-internal temporary files. The full run is not recorded as
+  passing. No retry or lease bypass was added to Canopy.
+- The same final binary then passed the complete isolated backup phase on a
+  dedicated disposable Docker volume: 80 MiB native Git plus 80 MiB/empty LFS,
+  create/retry, corrupt destination rejection without overwrite, repair/retry,
+  original source deletion, independent verification, isolated restore, exact
+  stock Git/LFS clone and issue recovery. RustFS ended with 402 MiB of bucket
+  data and about 5.1 GiB of internal temporary files (5.4 GiB total).
+- The provider volume and container were removed after verification. Container
+  auto-removal briefly delayed volume cleanup; removal was retried after the
+  container disappeared and the storage partition returned to its original
+  free capacity. An earlier unshared bind-mount attempt was also removed using
+  only its three identified fixture directories.
+
+This proves the exercised streaming/recovery paths, not full-limit capacity,
+provider power-loss behavior, or provider temporary-file retention. The runtime
+heartbeat error also hides the original failed storage update after its retries;
+upstream diagnostic preservation remains follow-up work.
