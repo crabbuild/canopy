@@ -290,3 +290,39 @@ python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 
 It verifies concurrency bounds, complete scheduled-outcome accounting, absence
 of retries, queue-delay inclusion and credential exclusion from the report.
+
+## Initial 1,000-repository read measurements
+
+The `34aa904` production code was exercised against RustFS
+`1.0.0-beta.8-glibc` on the shared Darwin arm64 development host, with client,
+server and provider colocated. Artifact ID: `canopy-density-8003fccfc019`.
+The corpus contains 1,000 private repository identities: 997 empty repositories
+and three one-commit Git samples. The server admits three repository Cells plus
+Directory. These results qualify this small SQL-only read workload; they do not
+establish the proposed Linux production envelope or full primitive capacity.
+
+| Workload | Offered rate / duration | Outcomes | Scheduled latency p95 / p99 |
+| --- | --- | --- | --- |
+| Metadata, three prewarmed repositories | 20 requests/s / 15 s | 300 successful, no failures | 11.076 / 11.334 ms |
+| Git v2 discovery, same resident set | 10 requests/s / 10 s | 100 successful, no failures | 342.510 / 681.942 ms |
+| Metadata, uniform choices across 1,000 identities | 10 requests/s / 15 s | 4 successful, 86 HTTP 503, 41 transport errors, 19 driver drops | 5011.409 / 5012.561 ms |
+
+The Git row starts with warm Cells, but Git caches were not explicitly prewarmed.
+It cannot be described as a pure warm Git-cache measurement. Percentiles include
+completed errors; the uniform row's low median must not be read as successful
+service latency. Read socket timeouts were five seconds and driver concurrency
+was eight for the first two rows and thirty-two for uniform pressure. No measured
+request was retried. A uniform choice distribution over the corpus does not mean
+every identity was visited during this short 150-arrival run.
+
+Sequential seeding took 1,233.833 seconds including the three sample pushes.
+Repository creation p50/p95/p99/max was 856.472 / 3345.383 / 4587.310 / 9441.362 ms.
+Setup used a thirty-second socket timeout. Slow creation is measured behavior,
+not evidence of an optimized write path.
+
+Conclusion: warm metadata is fast at the tested modest rate, while broad cold
+access fails the service target under the current three-Cell limit and serialized
+transitions. Prioritize measured active admission, bounded concurrent activation
+and retained validated local state. Larger realistic corpora, sustained load,
+independent clients, resource accounting and all-primitive workloads remain
+required. These read results alone make no owner-recovery claim.
