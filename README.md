@@ -729,15 +729,17 @@ object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.
 
-Cold cache hydration reads OID-ordered pages of at most 128 records and 768 KiB
+Cold cache hydration reads insertion-ordered pages of at most 128 records and 768 KiB
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
 reduce SQLite query overhead, but recovery still rebuilds the complete cache.
 While a gateway remains resident, verified object files are shared across private
-ref snapshots, pushes and merge candidates. Ref changes scan bounded metadata
-pages and hydrate only missing bodies. Native output stays private until it is
+ref snapshots, pushes and merge candidates. An indexed insertion cursor limits
+refresh to newly published object headers and missing bodies. Each refresh captures
+a fixed upper bound; each fully verified page advances the cursor. Failed pages
+retry without skipping bytes. Native output stays private until it is
 published to the Cell and subsequently verified into the reusable cache. See the
-[process proof and remaining limits](docs/performance-plan.md#incremental-object-body-reuse).
+[process proof and remaining limits](docs/performance-plan.md#indexed-object-refresh).
 
 ## Recover a lost push reply
 
@@ -894,7 +896,7 @@ writes. Page time includes inline integrity verification; cache time includes
 worker scheduling, OID verification, compression and admitted disk writes.
 Use release builds for performance measurements.
 
-The chunk, default-branch, repository-discovery, token-metadata, collaboration and visibility layouts
-change the unreleased schema; use a fresh development storage prefix when moving
+The chunk, default-branch, repository-discovery, token-metadata, collaboration,
+visibility and object insertion-sequence layouts change the unreleased schema; use a fresh development storage prefix when moving
 from older builds. No upgrade migration or mixed-build rolling upgrade is supported yet.
 Do not reuse an existing development prefix with this changed initialization schema.

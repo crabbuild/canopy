@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove incremental Git cache bodies and fresh-owner recovery on real S3 storage."""
+"""Prove incremental Git cache metadata and bodies and fresh-owner recovery on real S3 storage."""
 import argparse
 import hashlib
 import json
@@ -49,6 +49,8 @@ def qualify(args):
         body = os.urandom(2 * 1024**2)
         (source / "large.bin").write_bytes(body)
         (source / "README.md").write_text("Durable object cache\n")
+        for index in range(256):
+            (source / f"history-{index:03}.txt").write_text(f"Existing object {index}\n")
         git("add", ".", cwd=source)
         git("commit", "-m", "Initial objects", cwd=source)
         git("-c", AUTH, "push", url, "HEAD:refs/heads/main", cwd=source)
@@ -56,7 +58,9 @@ def qualify(args):
         git("-c", AUTH, "clone", url, str(cold))
         assert (cold / "large.bin").read_bytes() == body
         before = cached_objects(args.work_dir / "first")
-        assert len(before) == 4
+        assert len(before) == 260
+        first_log = args.work_dir / "first.log"
+        log_offset = len(first_log.read_text())
         (source / "increment.txt").write_text("Incremental bytes\n")
         git("add", "increment.txt", cwd=source)
         git("commit", "-m", "Small incremental push", cwd=source)
@@ -78,9 +82,19 @@ def qualify(args):
         after = cached_objects(args.work_dir / "first")
         assert len(after) == len(before) + 3
         assert all(after.get(path) == metadata for path, metadata in before.items())
-        report.update(cache_reuse_passed=True, initial_cached_objects=len(before),
+        refreshes = []
+        for line in first_log.read_text()[log_offset:].splitlines():
+            if "hydrated Git cache" in line:
+                refreshes.append({key: int(value) for key, value in re.findall(
+                    r"\b(objects|scanned|from_sequence|through_sequence|bytes)=([0-9]+)", line)})
+        assert refreshes, "hydration diagnostics required: enable canopy_server::git_gateway=debug"
+        assert sum(event["scanned"] for event in refreshes) == 3, refreshes
+        assert sum(event["objects"] for event in refreshes) == 3, refreshes
+        assert all(event["from_sequence"] > 0 for event in refreshes), refreshes
+        report.update(incremental_refreshes=refreshes, incremental_scanned_objects=3,
+                      cache_reuse_passed=True, initial_cached_objects=len(before),
                       final_cached_objects=len(after), reused_compressed_bytes=sum(item[0] for item in before.values()))
-        print("PASS: stock pushes/clones reuse existing object files and hydrate three new objects", flush=True)
+        print("PASS: stock pushes/clones reuse 260 object files and scan/hydrate only three new objects", flush=True)
         process.kill()
         process.wait(timeout=10)
         time.sleep(11)

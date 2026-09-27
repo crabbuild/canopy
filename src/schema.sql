@@ -10,7 +10,8 @@ CREATE TABLE object_chunks (
 ) WITHOUT ROWID;
 
 CREATE TABLE objects (
-    oid BLOB PRIMARY KEY CHECK(length(oid) = 20),
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    oid BLOB NOT NULL UNIQUE CHECK(length(oid) = 20),
     kind TEXT NOT NULL CHECK(kind IN ('blob', 'tree', 'commit', 'tag')),
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32),
@@ -25,7 +26,7 @@ CREATE TABLE objects (
         OR
         (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size BETWEEN 786433 AND 67108864)
     )
-) WITHOUT ROWID;
+);
 
 CREATE TABLE object_closure (
     oid BLOB PRIMARY KEY REFERENCES objects(oid) CHECK(length(oid) = 20)

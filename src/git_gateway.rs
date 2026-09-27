@@ -70,6 +70,11 @@ pub enum GatewayError {
     Task(#[from] tokio::task::JoinError),
 }
 
+struct CachedObjects {
+    cache: Arc<GitCache>,
+    through: i64,
+}
+
 struct CachedRepository {
     backend: GitHttpBackend,
     snapshot: RefSnapshot,
@@ -90,7 +95,7 @@ pub struct GitGateway {
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
     cache: Mutex<Option<Arc<CachedRepository>>>,
-    objects: Mutex<Option<Arc<GitCache>>>,
+    objects: Mutex<Option<CachedObjects>>,
     push: Mutex<()>,
 }
 
@@ -297,57 +302,64 @@ impl GitGateway {
         // Only hydration writes the shared cache, and only from durable Cell
         // records. Native pushes/merges write into their private generation.
         let mut objects = self.objects.lock().await;
-        let shared = match objects.as_ref() {
-            Some(shared) => Arc::clone(shared),
-            None => {
-                GitCache::create(
+        if objects.is_none() {
+            *objects = Some(CachedObjects {
+                cache: GitCache::create(
                     self.scratch_root.clone(),
                     self.disk_budget.clone(),
                     &snapshot.head,
                 )
-                .await?
-            }
-        };
-        self.hydrate(&shared).await?;
+                .await?,
+                through: 0,
+            });
+        }
+        let shared = objects.as_mut().ok_or(GatewayError::MalformedCache)?;
+        self.hydrate(shared).await?;
         let backend = GitHttpBackend {
             cache: GitCache::create_with_objects(
                 self.scratch_root.clone(),
                 self.disk_budget.clone(),
                 &snapshot.head,
-                Some(Arc::clone(&shared)),
+                Some(Arc::clone(&shared.cache)),
             )
             .await?,
         };
         backend.cache.store_refs(&snapshot.refs).await?;
-        *objects = Some(shared);
         Ok(CachedRepository { backend, snapshot })
     }
 
-    async fn hydrate(&self, cache: &Arc<GitCache>) -> Result<(), GatewayError> {
+    async fn hydrate(&self, shared: &mut CachedObjects) -> Result<(), GatewayError> {
         let started = Instant::now();
+        let cache = &shared.cache;
+        let from_sequence = shared.through;
+        // Bound this refresh even when other writers keep appending objects.
+        // The read follows the chosen ref snapshot, whose objects are durable.
+        let high_water = self
+            .repository
+            .object_high_water()
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
         let mut page_time = Duration::ZERO;
         let mut body_time = Duration::ZERO;
         let mut cache_time = Duration::ZERO;
         let mut objects = 0_u64;
         let mut scanned = 0_u64;
         let mut bytes = 0_u64;
-        let mut after = None;
-        loop {
+        while shared.through < high_water.output {
             let queried = Instant::now();
             let mut headers = self
                 .repository
-                .object_headers(after)
+                .object_headers(shared.through, &high_water)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            if headers.output.is_empty() {
-                break;
+            if headers.objects.output.is_empty() {
+                return Err(GatewayError::MalformedCache);
             }
-            after = headers.output.last().copied();
-            scanned += headers.output.len() as u64;
-            headers.output = cache.missing_objects(headers.output).await?;
+            scanned += headers.objects.output.len() as u64;
+            headers.objects.output = cache.missing_objects(headers.objects.output).await?;
             let page = self
                 .repository
-                .object_records(headers)
+                .object_records(headers.objects)
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
@@ -393,11 +405,16 @@ impl GitGateway {
                 cache.store_object(object.oid, object.kind, body).await?;
                 cache_time += written.elapsed();
             }
+            // Failed or cancelled pages retain their previous cursor. Verified
+            // files can be reused on retry, but no missing body is skipped.
+            shared.through = headers.through;
         }
         tracing::debug!(
             repository = %hex::encode(self.repository.repository_id()),
             objects,
             scanned,
+            from_sequence,
+            through_sequence = shared.through,
             reused = scanned - objects,
             bytes,
             cache_bytes = cache.bytes()?,

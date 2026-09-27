@@ -1,13 +1,20 @@
 //! Bounded immutable object pages for cold cache hydration.
 
 use cellule_runtime::{
-    Error, InvocationError, Observed, SqlBatch, SqlResultSet, SqlStatement, SqlValue,
+    Error, InvocationError, Observed, Receipt, SqlBatch, SqlResultSet, SqlStatement, SqlValue,
 };
 
 use crate::{
     INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, ObjectStorage, RepositoryCell,
     StoredObject, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_batch::MAX_OBJECTS, object_id,
 };
+
+pub(crate) struct ObjectHeaders {
+    pub(crate) objects: Observed<Vec<[u8; 20]>>,
+    pub(crate) through: i64,
+}
+
+const CHANGED_HEADERS: &str = "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence LIMIT ?3";
 
 impl RepositoryCell {
     /// Reads at most 128 objects and 768 KiB of inline bodies, in OID order.
@@ -18,49 +25,84 @@ impl RepositoryCell {
         &self,
         after: Option<[u8; 20]>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
-        self.object_records(self.object_headers(after).await?).await
+        let headers = self.read_object_headers(None, SqlStatement {
+            sql: "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
+            parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec())), SqlValue::Integer(MAX_OBJECTS as i64)],
+        }).await?;
+        self.object_records(headers.objects).await
+    }
+
+    pub(crate) async fn object_high_water(
+        &self,
+    ) -> Result<Observed<i64>, InvocationError<Vec<SqlResultSet>>> {
+        let result = self
+            .sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: vec![SqlStatement {
+                        sql: "SELECT COALESCE(MAX(sequence), 0) FROM objects".into(),
+                        parameters: vec![],
+                    }],
+                },
+            )
+            .await?;
+        let row = result.output.first().and_then(|set| set.rows.first());
+        let Some([SqlValue::Integer(sequence)]) = row.map(Vec::as_slice) else {
+            return Err(InvocationError::NotStarted(Error::Command(
+                "invalid object high water",
+            )));
+        };
+        Ok(Observed {
+            output: *sequence,
+            receipt: result.receipt,
+        })
     }
 
     pub(crate) async fn object_headers(
         &self,
-        after: Option<[u8; 20]>,
-    ) -> Result<Observed<Vec<[u8; 20]>>, InvocationError<Vec<SqlResultSet>>> {
-        let headers = self.sql.query(None, SqlBatch {
-            statements: vec![SqlStatement {
-                sql: "SELECT oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
-                parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec())), SqlValue::Integer(MAX_OBJECTS as i64)],
-            }],
-        }).await?;
+        after: i64,
+        high_water: &Observed<i64>,
+    ) -> Result<ObjectHeaders, InvocationError<Vec<SqlResultSet>>> {
+        self.read_object_headers(
+            Some(high_water.receipt),
+            SqlStatement {
+                sql: CHANGED_HEADERS.into(),
+                parameters: vec![
+                    SqlValue::Integer(after),
+                    SqlValue::Integer(high_water.output),
+                    SqlValue::Integer(MAX_OBJECTS as i64),
+                ],
+            },
+        )
+        .await
+    }
+
+    async fn read_object_headers(
+        &self,
+        minimum: Option<Receipt>,
+        statement: SqlStatement,
+    ) -> Result<ObjectHeaders, InvocationError<Vec<SqlResultSet>>> {
+        let headers = self
+            .sql
+            .query(
+                minimum,
+                SqlBatch {
+                    statements: vec![statement],
+                },
+            )
+            .await?;
         let rows = headers
             .output
             .first()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing object headers")))?;
-        let mut ids = Vec::new();
-        let mut bytes = 0;
-        for row in &rows.rows {
-            let [SqlValue::Blob(oid), SqlValue::Integer(size)] = row.as_slice() else {
-                return Err(InvocationError::NotStarted(Error::Command(
-                    "invalid object header",
-                )));
-            };
-            let oid: [u8; 20] = oid.as_slice().try_into().map_err(|_| {
-                InvocationError::NotStarted(Error::Command("invalid stored object ID"))
-            })?;
-            let size = usize::try_from(*size)
-                .ok()
-                .filter(|size| *size <= INLINE_OBJECT_LIMIT)
-                .ok_or_else(|| {
-                    InvocationError::NotStarted(Error::Command("invalid inline object size"))
-                })?;
-            if size > INLINE_OBJECT_LIMIT - bytes {
-                break;
-            }
-            bytes += size;
-            ids.push(oid);
-        }
-        Ok(Observed {
-            output: ids,
-            receipt: headers.receipt,
+        let (ids, through) = decode_headers(&rows.rows).map_err(InvocationError::NotStarted)?;
+        Ok(ObjectHeaders {
+            objects: Observed {
+                output: ids,
+                receipt: headers.receipt,
+            },
+            through,
         })
     }
 
@@ -70,7 +112,8 @@ impl RepositoryCell {
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
         // Callers may remove already cached IDs, but never add IDs: the header
         // query's size bound and receipt protect this body read's wire ceiling.
-        let ids = headers.output;
+        let mut ids = headers.output;
+        ids.sort_unstable();
         if ids.is_empty() {
             return Ok(Observed {
                 output: Vec::new(),
@@ -117,6 +160,40 @@ impl RepositoryCell {
             receipt: result.receipt,
         })
     }
+}
+
+fn decode_headers(rows: &[Vec<SqlValue>]) -> cellule_runtime::Result<(Vec<[u8; 20]>, i64)> {
+    let mut ids = Vec::new();
+    let mut bytes = 0;
+    let mut through = 0;
+    for row in rows {
+        let [
+            SqlValue::Integer(sequence),
+            SqlValue::Blob(oid),
+            SqlValue::Integer(size),
+        ] = row.as_slice()
+        else {
+            return Err(Error::Command("invalid object header"));
+        };
+        if *sequence <= 0 {
+            return Err(Error::Command("invalid object sequence"));
+        }
+        let oid = oid
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Command("invalid stored object ID"))?;
+        let size = usize::try_from(*size)
+            .ok()
+            .filter(|size| *size <= INLINE_OBJECT_LIMIT)
+            .ok_or(Error::Command("invalid inline object size"))?;
+        if size > INLINE_OBJECT_LIMIT - bytes {
+            break;
+        }
+        bytes += size;
+        ids.push(oid);
+        through = *sequence;
+    }
+    Ok((ids, through))
 }
 
 fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
@@ -186,3 +263,6 @@ fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
     };
     Ok(StoredObject { oid, kind, storage })
 }
+
+#[cfg(test)]
+mod tests;

@@ -425,14 +425,24 @@ and preserves a later ref deletion. Crashes during
 individual staging/publication boundaries, the full multi-node fault matrix and
 backup restore still need proof before service readiness.
 
-Cold hydration uses bounded object headers in ascending OID order.
-Each page contains at most 128 records and 768 KiB of aggregate inline bodies.
-A metadata query chooses the bounded prefix; a second query reads those exact
-missing records with the first query's receipt as its minimum observation. Metadata
-overhead fits beneath Cellule's 1 MiB query result ceiling. Callers continue from
-the last scanned OID until an empty header page; a short page or an entirely
-cached page is not end-of-stream. `RepositoryCell::object_page(after)` composes
-the same header/body reader for callers that need every record.
+Cache hydration reads objects by an indexed, repository-local insertion sequence.
+`objects.sequence` is an `INTEGER PRIMARY KEY AUTOINCREMENT`; `oid` remains unique
+and non-null. Only committed insertions matter, duplicates retain their existing
+sequence, and gaps are valid. SQLite never reuses a committed automatic sequence,
+including after deletion; this is why the extra AUTOINCREMENT bookkeeping is
+required. See [SQLite's contract](https://www.sqlite.org/autoinc.html).
+
+Each refresh captures the maximum stored sequence after reading its ref snapshot.
+Header pages query `after < sequence <= maximum` in sequence order, so concurrent
+new publications wait for a subsequent refresh. Each page contains at most 128
+records and 768 KiB of aggregate inline bodies. A second query reads the exact
+missing IDs, sorted by OID, with the header receipt as its minimum observation.
+A byte-limited page advances only through its selected prefix. The gateway advances
+its in-memory cursor only after every selected body has verified and completed its
+cache write. Failure or cancellation leaves the failed page eligible for retry;
+completed files are reused. The cursor belongs to the same cache owner and resets
+when that owner is discarded. `RepositoryCell::object_page(after)` retains its
+OID-ordered full enumeration and uses the same header decoder and body reader.
 
 Each gateway retains one disk-accounted cache of verified immutable objects.
 Ref snapshots, pushes and native merge candidates get separate bare directories
@@ -447,8 +457,9 @@ the lifetime of a fetch, even while new snapshots reuse the same object bytes.
 An object is compressed into an accounted temporary file, then installed at its
 OID only after verification and compression finish. Incomplete files never count
 as cache hits. Existing OIDs skip body queries, external downloads and compression;
-refresh still scans metadata and checks local paths in bounded batches. This is
-incremental body hydration, not an incremental metadata index. No cache serves as
+refresh seeks past the completed sequence and checks local paths only for new
+headers or a retried page. A ref-only refresh reads the high-water mark without
+scanning old headers. No cache serves as
 durable authority, and authorization still precedes cache access.
 
 Snapshot owners retain the shared cache through native work and streaming. If a
@@ -472,7 +483,7 @@ single-record `next_object` API was removed from this unreleased crate.
 
 Debug events separate Repository Cell acquisition from successful cache
 hydration. Hydration reports object count, raw bytes, admitted cache bytes, total
-time, scanned/reused object counts, page-read/verification time, external/chunk body-read time and cache-write
+time, starting/completed insertion sequence, scanned/reused object counts, page-read/verification time, external/chunk body-read time and cache-write
 time. Cache writes include worker scheduling, OID verification and compression; for
 external Git blobs this interval also includes streamed object-store reads.
 These elapsed wall times include waiting; they are not CPU profiles or a claim
@@ -841,7 +852,7 @@ process containment still require qualification. This cleanup does not enforce
 native peak disk usage or filesystem allocation overhead.
 
 Schema version 1 is still changing in this unreleased repository. The chunk,
-HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate and membership-version layouts, operations 7–10,
+HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate, object insertion-sequence and membership-version layouts, operations 7–10,
 and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module

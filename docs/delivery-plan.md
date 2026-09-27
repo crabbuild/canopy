@@ -3036,3 +3036,25 @@ full primitive workloads or queries overlapping runtime compaction. Earlier
 failed runs remain recorded. Next performance proof should prioritize the
 controlled Linux resource envelope, representative workload/cost measurement
 and safe residency/primitive integration rather than speculative socket tuning.
+
+
+## Indexed Git object refresh
+
+The repository stores an automatic insertion sequence beside each unique Git
+OID. Resident gateways retain a cursor with their shared verified cache. Refresh
+reads only new headers through a captured upper bound, committing progress after
+each fully verified page. This removes the full history metadata scan from small
+pushes and ref-only refreshes. Native pushes and merge candidates continue using
+private writable generations, and recovery rebuilds from durable Cell state.
+
+The new SQLite layout requires a fresh development prefix under the existing
+selected-release policy. Pack reuse, retained SQLite residency, idle renewal cost,
+full per-repository primitive integration and production capacity remain open.
+See [the indexed refresh evidence](performance-plan.md#indexed-object-refresh).
+
+The optimized S3 process proof reused all 260 existing objects and scanned only
+three new headers after an incremental push. Git v0/v2, strict fsck, SIGKILL/fresh
+local recovery and shutdown passed. Cursor/index tests, Repository Cell tests,
+stock Git pressure/concurrency tests and native merge candidates passed, along
+with Clippy, formatting and the optimized build. This establishes incremental
+cache refresh, not production throughput or full primitive capacity.

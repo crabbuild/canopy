@@ -99,8 +99,8 @@ permits it.
   includes the Directory Cell; it is an API limit, not a capacity result.
 - The managed SQLite connection requests a 64-KiB page cache. That is not the
   total Cell footprint or a hard process-memory limit.
-- Eviction deletes local SQLite state. Git snapshot refresh scans bounded object
-  metadata pages but reuses verified immutable bodies from a repository-scoped
+- Eviction deletes local SQLite state. Git snapshot refresh seeks through new
+  object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
 - Eight shared Git/LFS transfer slots and the bounded Linux profile establish
@@ -219,9 +219,10 @@ All derived data remains disposable and resource-accounted.
 
 Immutable body reuse is now wired through shared Git alternates and private
 snapshot directories. Old fetches retain their snapshot and object owner; native
-write failures cannot contaminate the reusable objects. Refresh still scans all
-object metadata. An indexed change cursor and derived pack/bitmap reuse remain
-open, as do representative large-history throughput measurements.
+write failures cannot contaminate the reusable objects. An indexed insertion
+cursor now limits refresh to newly published headers, with a captured upper bound
+and progress committed only after a complete page verifies. Derived pack/bitmap
+reuse and representative large-history throughput measurements remain open.
 
 Metadata and ref discovery must not require hydrating every stored object.
 Fetch/push preparation must preserve connectivity, object availability and
@@ -749,8 +750,9 @@ strict fsck. Cold restoration hydrates all seven objects. Graceful shutdown and
 fixture cleanup pass; neither server log contains warnings/errors.
 
 This proves body reuse and exact recovery for the small corpus, not a throughput
-or large-history latency target. The metadata scan remains proportional to total
-object count, and reusable pack/bitmap acceleration remains open. Existing stock
+or large-history latency target. At that revision the metadata scan remained
+proportional to total object count. The indexed refresh below removes that scan;
+reusable pack/bitmap acceleration remains open. Existing stock
 Git tests also cover coherent ref generations under concurrent changes, pressure
 and retry, LFS, and native pack semantics; merge-candidate/rebase callers use the
 same private-generation path.
@@ -775,3 +777,55 @@ The script retains reports/configuration/logs, cleans its Canopy processes, and
 leaves object-store-prefix cleanup to the caller. Enable gateway debug logging to
 collect scanned/reused/body counts. The immutable object cache remains disposable;
 SQLite and verified external bodies are the recovery source.
+
+
+## Indexed object refresh
+
+`objects.sequence` is now the insertion-ordered SQLite primary key, with a unique
+OID index. AUTOINCREMENT prevents reuse of a committed sequence; failed/ignored
+inserts may leave gaps. The gateway captures the maximum stored sequence after
+selecting its refs, reads bounded indexed ranges through that maximum, and advances
+its cache cursor only after all bodies in a selected page verify and finish writing.
+Concurrent later publications belong to the next refresh. Completed pages survive
+failed hydration; a failed page retries against the retained verified files.
+Discarding the shared cache also discards its cursor. Cold recovery still reads
+all objects, and OID-ordered `object_page` enumeration remains available.
+
+SQLite tests exercise descending OIDs, concurrent-later insertion, duplicate and
+rolled-back insertion, deletion/non-reuse, byte-limited prefixes and a three-object
+increment after 10,000 objects. Actual query counters show no full-table scan or
+sort for the bounded sequence range. The real Repository Cell suite covers atomic
+batch publication and body integrity; the stock Git suite covers failed hydration
+under disk pressure, retry, coherent snapshots and cache teardown.
+
+This changes the unreleased schema and selected release digest. Use a fresh
+preview prefix; an upgrade migration is not provided. No Cellule dependency,
+Git wire contract or durable acknowledgement boundary changes.
+
+The optimized real-process proof `canopy-incremental-cache-49657f0b912d`
+(base `0f57a5e` plus the archived source patch) used macOS arm64 and colocated
+RustFS `1.0.0-beta.8-glibc`. Executable SHA-256:
+`88bf55505c6703bf1a8b883e597caf09454627d2274d1e64f43fc736cc6f85a7`.
+The corpus contains 256 small history files, a README and a 2 MiB incompressible
+external blob, giving 260 initial objects. A small push adds a blob, tree and commit.
+
+| Refresh | Headers scanned | Bodies hydrated | Raw bytes | Cursor |
+| --- | ---: | ---: | ---: | --- |
+| Initial clone | 260 | 260 | 2,113,453 | 0 → 260 |
+| Before incremental receive | 0 | 0 | 0 | 260 → 260 |
+| Published incremental snapshot | 3 | 3 | 11,384 | 260 → 263 |
+| Fresh-state recovery | 263 | 263 | 2,124,837 | 0 → 263 |
+
+All 260 original object files retained their path, size and modification time;
+2,113,000 compressed bytes were reused. Stock Git v0/v2 clones and strict fsck
+passed before and after SIGKILL, lease expiry and restoration into an empty local
+workspace. Graceful shutdown and provider cleanup passed; logs contain no warnings
+or errors. The incremental push took 0.321 seconds in this functional probe; it is
+not a sustained-throughput or latency qualification.
+
+Four focused cursor/SQL tests, the Repository Cell suite, stock Git suite including
+32 coherent concurrent advertisements and disk-pressure retries, and three native
+merge-candidate tests passed. All-target Clippy with warnings denied, formatting
+and the optimized build passed. `scripts/smoke_s3_cache.py` now asserts the three
+scanned headers as well as body reuse; enable `canopy_server::git_gateway=debug`
+for the required diagnostic evidence. Broader capacity and pack reuse remain open.
