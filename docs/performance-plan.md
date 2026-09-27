@@ -334,7 +334,16 @@ access fails the service target under the tested three-Cell limit and serialized
 transitions. Prioritize measured active admission, bounded concurrent activation
 and retained validated local state. Larger realistic corpora, sustained load,
 independent clients, resource accounting and all-primitive workloads remain
-required. These read results alone make no owner-recovery claim.
+required.
+
+The same run subsequently passed owner SIGKILL, lease expiry and fresh-workspace
+recovery of all 1,000 identities. All three populated samples reproduced exact
+commit/file hashes under stock Git v0/v2 and passed strict fsck. Graceful shutdown
+and fixture cleanup succeeded. This proves recovery of the SQL-only identity
+corpus with three resident repository slots; it does not prove 1,000 simultaneously
+active Cells or all-primitive recovery. `binary-source.json` binds the measured
+binary to `34aa904`; the fixture's end-of-run Git HEAD includes later work and is
+not the binary source revision.
 
 
 ## Configured 100-Cell process qualification

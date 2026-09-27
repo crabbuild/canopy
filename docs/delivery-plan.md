@@ -2895,3 +2895,18 @@ provider/client and kernel cache memory. The corpus was 97 empty repositories
 and three one-commit samples on a shared colocated macOS host. The preceding
 failed attempt remains an unresolved tail-latency/fencing finding; this repeat
 does not establish stable production performance.
+
+
+## Completed 1,000-identity baseline recovery
+
+The original optimized `34aa904` run (`canopy-density-8003fccfc019`) completed
+SIGKILL, lease expiry and fresh-workspace recovery of all 1,000 repository
+identities. All three populated samples cloned with stock Git v0/v2, matched
+commit/file hashes and passed strict fsck. Graceful shutdown and cleanup passed.
+The binary SHA-256 matches the source-provenance sidecar recorded before later
+builds. The fixture's completion-time Git HEAD is not its binary source revision.
+
+The earlier read results remain unchanged: warm metadata passed, while uniform
+access with only three resident slots produced 146 failures out of 150 arrivals.
+Recovery success does not convert that pressure result into a capacity pass.
+This baseline is SQL-only, mostly empty and colocated on the development host.
