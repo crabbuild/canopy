@@ -4,7 +4,7 @@ CREATE TABLE object_uploads (
 
 CREATE TABLE object_chunks (
     upload_id BLOB NOT NULL REFERENCES object_uploads(id),
-    part INTEGER NOT NULL CHECK(part BETWEEN 0 AND 127),
+    part INTEGER NOT NULL CHECK(part >= 0),
     body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
     PRIMARY KEY(upload_id, part)
 ) WITHOUT ROWID;
@@ -24,7 +24,7 @@ CREATE TABLE objects (
         OR
         (storage = 'external' AND kind = 'blob' AND body IS NULL AND chunk_id IS NULL AND length(external_sha256) = 32)
         OR
-        (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size BETWEEN 786433 AND 67108864)
+        (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size > 786432)
     )
 );
 

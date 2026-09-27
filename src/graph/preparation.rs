@@ -106,7 +106,7 @@ impl RepositoryCell {
                     continue;
                 }
                 Visit::Leave(oid, kind, weight) => {
-                    if weight > MAX_SQLITE_OBJECT_BYTES as u64 - bytes {
+                    if !batch.0.is_empty() && weight > VERIFY_BATCH_BYTES.saturating_sub(bytes) {
                         self.certify_batch(std::mem::take(&mut batch)).await?;
                         bytes = 0;
                         ready.clear();
@@ -115,8 +115,7 @@ impl RepositoryCell {
                     bytes += weight;
                     ready.insert(oid, kind);
                     visiting.remove(&oid);
-                    if batch.0.len() == MAX_CERTIFICATES || bytes == MAX_SQLITE_OBJECT_BYTES as u64
-                    {
+                    if batch.0.len() == MAX_CERTIFICATES || bytes >= VERIFY_BATCH_BYTES {
                         self.certify_batch(std::mem::take(&mut batch)).await?;
                         bytes = 0;
                         ready.clear();

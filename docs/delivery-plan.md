@@ -10,10 +10,10 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Crab Cell revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration and atomic account audit history implemented; account deletion and broader audit coverage remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; a Linux cgroup/tmpfs deployment adds native resource ceilings; quotas, non-blob buffers/64 MiB ceilings and the complete resource fault matrix remain |
+| 3 Git object path | Streamed pack ingest, SQLite object chunks, verified external large blobs | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: push, database and object byte quotas removed; external bodies use immutable parts; disk admission and bounded batches remain. Non-blob materialization, runtime deadlines, provider limits and the complete resource fault matrix still need capacity qualification |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; a Linux tmpfs profile bounds aggregate native scratch; other platforms and production capacity proof remain |
-| 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS with a 5 GiB acceptance ceiling, shared transfer admission and deadlines implemented; stock push/pull after restart works; quotas and full-scale capacity proof remain |
+| 6 LFS | Batch/basic transfer, verified bytes and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS has no fixed logical byte quota; shared transfer admission and idle deadlines remain. Stock push/pull after restart works; full-scale capacity proof remains |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash/rebase candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; browser conflict resolution, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
@@ -3545,3 +3545,36 @@ and drain tests, owner restart/lost-reply replay, both report-parser unit tests,
 all-target Clippy with warnings denied, formatting and diff checks. These gates
 run in the existing Verify workflow. Hosted CI and real-provider fault
 qualification have not run for this change. No schema or dependency changes.
+
+
+## Removing product size quotas
+
+The current size contract supersedes the historical 512 MiB push/database,
+64 MiB non-blob and 5 GiB external-body ceilings recorded above. Push admission
+uses available node disk; Directory and Repository declarations and recovery
+use format-level database/index bounds. Large non-blob objects stay in SQLite
+chunks and are verified individually when above the batch target.
+
+Git blobs and LFS bodies share immutable 8 MiB parts plus a size manifest.
+Publication, reads, corruption detection and backup copies use the same layout.
+This is a hard cutover: initialize a fresh storage prefix; no legacy flat-body
+reader is provided. Hashing uses the already-resolved RustCrypto 0.11 crates,
+including automatic hardware detection on ARM.
+
+See [size qualification and remaining constraints](git-compatibility.md#size-qualification)
+for the executable large-transfer gate and the distinction between removing
+product quotas and proving arbitrary runtime/provider capacity.
+
+Local qualification passed against RustFS through the production S3 adapter:
+a 595,260,810-byte Git pack, a 591,167,488-byte Repository Cell database, and
+5,377,097,728-byte Git and LFS bodies. Fresh-disk recovery, stock Git clone,
+strict/full fsck, and full Git/LFS SHA-256 checks passed. The unoptimized gate
+took 2,836 seconds; this is capacity/integrity proof, not a latency benchmark.
+An additional live S3 check passed for an empty LFS upload/download.
+
+Other local proof: 42 focused unit tests, seven related integration tests
+(including a 65 MiB commit), all-target Clippy with warnings denied, formatting,
+and diff checks. The driver separately passed startup, S3 write/read and cleanup
+as the host UID. Hosted CI has not run; the large gate requires the documented
+test-volume capacity. Net production growth is the shared segmented-body
+implementation replacing duplicated flat-body transfer paths.

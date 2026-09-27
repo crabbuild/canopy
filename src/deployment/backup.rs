@@ -11,7 +11,7 @@ use crab_cell_runtime::{
     control::Control, recovery::backup::BackupPin, recovery::backup::BackupPinStore,
     recovery::backup::PinnedCatalogShard,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
+use crab_ltx::{CellReplica, DiskBudget, Host};
 use crab_storage::StorageError;
 use std::path::PathBuf;
 
@@ -30,6 +30,8 @@ pub enum BackupError {
     Ltx(#[from] crab_ltx::CrabError),
     #[error("backup storage operation failed")]
     Store(#[from] StorageError),
+    #[error("backup external part copy failed")]
+    External(#[from] object_store::Error),
     #[error("backup Git blob verification failed")]
     Blob(#[from] LargeBlobError),
     #[error("backup LFS verification failed")]
@@ -188,10 +190,7 @@ impl Deployment {
         BackupPinStore::new(
             self.layout.clone(),
             self.identity,
-            Limits {
-                max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
-                ..Limits::default()
-            },
+            crate::replica_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024),
             host,
         )
     }

@@ -22,20 +22,20 @@ before admitting persistent customer repositories.
 | Local residency | a reserved Directory SQL slot and at most `max_active_repositories` repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Crab transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
-| Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB and at most 64 MiB | `object_chunks`, verified before object publication |
-| Object publication | at most 128 records, 768 KiB inline payload and 64 MiB SQLite verification bytes per atomic command | `PutObjects`, operation 5, codec 2 |
+| Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB without a fixed byte quota | `object_chunks`, verified before object publication |
+| Object publication | at most 128 records, 768 KiB inline payload; SQLite verification targets 64 MiB, with larger objects verified individually | `PutObjects`, operation 5, codec 2 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
-| External byte ceiling | 5 GiB per Git blob or LFS object | Conditional S3 copy uses a single part |
+| External bodies | No fixed logical byte quota; 8 MiB immutable parts plus a 16-byte manifest | Each conditional S3 copy handles one bounded part |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
-| LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout and 30-minute transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
-| Git request admission | 512 MiB for receive-pack, 64 MiB for other requests; 120-second upload deadline | anonymous request spool |
+| LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout with no whole-transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
+| Git request admission | No receive-pack byte quota; 64 MiB for other requests; 120-second input idle deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer and rejection decision atomically with accepted refs | `CompletePush`, codec 3 |
-| Graph certificates | at most 128 candidate objects and 64 MiB SQLite object bytes per command; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
+| Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
 | Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
@@ -137,8 +137,8 @@ all typed children to be certified. It checks child metadata in groups of at mos
 128 rows. The same transaction records deduplicated parent/child edges in
 `object_edges`, with a reverse child index for fetch authorization. Only
 certified typed edges enter this index; gitlinks do not create local edges.
-Newly verified inline and chunked bodies share a 64 MiB budget per
-command; references to verified external blob bodies do not consume that budget.
+Newly verified inline and chunked bodies target 64 MiB per command; a larger
+chunked object is verified individually; references to verified external blob bodies do not consume that budget.
 The final ref transaction checks up to 100,000 new tips and their certificates
 in groups of 128, together with current ACL, versions and namespace conflicts.
 An ordered update map detects duplicates and planned ancestor conflicts. Exact
@@ -147,7 +147,7 @@ conflict must be removed by a deletion in the same plan, without truncating at a
 fixed number of matches.
 
 The certificate command is the trust boundary: incorrect candidate order,
-missing or mismatched children, corrupt data or work beyond the byte limit
+missing or mismatched children, corrupt data or an invalid verification batch
 rejects its whole application savepoint. The client traversal cannot assert a
 certificate. Certificates and refs are separate publications. A failed or
 interrupted preparation may retain valid certificates from earlier batches;
@@ -583,7 +583,7 @@ before allocation, reads the exact body and delimiter, and recomputes its Git
 OID. Missing, truncated, malformed or corrupt output fails the push. Enumeration,
 headers, inline/non-blob body reads, delimiters and process completion have
 120-second deadlines. External blobs stream in at most 8 MiB chunks, with
-120-second input/part deadlines and a 30-minute upload/publication deadline.
+120-second input/part idle deadlines and no whole-upload duration ceiling.
 OID hashing uses a blocking worker so large bodies do not occupy an async
 executor thread. Stderr is drained
 concurrently, retaining at most 64 KiB per process. Dropping the reader kills
@@ -592,34 +592,41 @@ successful exits before publishing refs or recording the successful report.
 Previously published graph closure makes exclusions safe; ref publication
 still requires every new tip to have a durable certificate.
 
-External Git blobs use multipart staging under a unique repository-scoped key.
-Canopy hashes the exact declared body as it streams, checks the Git OID before
-completion, conditionally copies to the immutable SHA-256 key, and verifies the
-destination before returning metadata. Conflicting canonical bytes fail; they
+External Git blobs use multipart staging for bounded parts under a unique
+repository-scoped prefix. Canopy hashes the exact declared body as it streams,
+checks the Git OID, conditionally copies the parts, and creates the immutable
+SHA-256 manifest. It verifies the destination before returning metadata. Conflicting canonical bytes fail; they
 are never overwritten. Staging deletion and incomplete multipart abort are
 attempted on ordinary failure. Process loss can leave staging/multipart debris;
 operator lifecycle cleanup and qualified collection remain required.
 
-Hydration and backup verification read at most 8 MiB per range, pinning the
-initial object version/ETag. The final range is withheld until Git SHA-1,
+Hydration and backup verification read one part of at most 8 MiB at a time,
+pinning the manifest version/ETag. The final range is withheld until Git SHA-1,
 SHA-256 and BLAKE3 all match the SQLite reference. A failed or canceled range
 invalidates its reader. Hydration compresses into disk-accounted cache files on
 blocking workers; each writer retains the cache reservation until it exits.
 The ref generation is not published for Git service until hydration finishes.
 
-The 5 GiB ceiling follows the adapter's one-part conditional copy and the
-[S3 part limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
-It does not raise the 512 MiB transmitted push limit or prove native Git peak
-memory/scratch bounds. Trees, commits and tags still use whole-object buffers
-bounded at 64 MiB. The larger external-blob acceptance contract changes the
-Repository module digest; use a fresh preview prefix until migrations exist.
+External objects consist of an immutable `CANOPY01` manifest (eight magic bytes,
+then an eight-byte little-endian logical size), and `<key>.parts/<16-digit hex
+index>` objects. Each part is at most 8 MiB; empty bodies have one empty part.
+Parts are conditionally copied before the manifest is created, and the whole
+logical body is reverified before SQLite metadata is published. Backup copies
+all referenced parts before copying the manifest. There is no whole-object S3
+copy and no fixed logical file-size quota. This storage cutover requires a fresh
+preview prefix; no old-body decoder or migration is provided.
+
+Trees, commits and tags have no fixed byte quota, but publication and graph
+parsing currently materialize individual bodies. Available worker memory remains
+a practical constraint; this is not production capacity qualification.
 
 Candidate existence queries group up to 128 IDs. Missing records accumulate in
 an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
 leaving room for metadata beneath the 1 MiB operation input limit. External
 blob records count toward the record limit; their bytes are verified and
 uploaded before publication. Chunk references count toward the record limit and
-a separate 64 MiB aggregate verification budget shared with inline bytes. The
+a 64 MiB aggregate verification target shared with inline bytes. An oversized
+individual object is verified alone. The
 decoder enforces these bounds before publication. One typed Cell command publishes the batch and returns one receipt.
 It recomputes inline Git OIDs and BLAKE3 digests, then compares every inserted
 or existing row with the complete expected record. A mismatch rejects the
@@ -628,7 +635,7 @@ identity and payload returns the recorded result through Crab deduplication.
 
 Trees, commits and tags larger than 768 KiB are staged in `object_uploads` and
 `object_chunks`; their bodies stay in SQLite. Each part is at most 512 KiB and
-one object is at most 64 MiB (128 parts). Part command identities derive from
+there is no fixed number of parts per object. Part command identities derive from
 the caller's upload identity and part index, so retrying the same staging
 operation replays committed parts. Staging does not create an `objects` row:
 queries and ref validation cannot see incomplete uploads.
@@ -767,7 +774,8 @@ Each write reserves bytes from the same `DiskBudget` used by the node's SQLite
 host. All repositories share that budget. Blocking writes retain the file and
 reservation together, including when an upload is cancelled. The OS removes
 spools when their last handle closes, including on process death. Uploads have
-a 120-second deadline; limits are 512 MiB per push and 64 MiB per fetch request.
+a 120-second idle deadline; pushes have no fixed byte quota and fetch requests
+remain bounded at 64 MiB.
 Oversized bodies return 413, failed request bodies 400, timeouts 408, and exhausted
 disk admission 507. Each repository serializes pushes before receiving its body.
 
@@ -785,7 +793,7 @@ then validates and decodes the entire gzip stream into a second anonymous spool
 before hydrating the cache or starting Git. Both spools share disk admission;
 the encoded charge is released when decoding completes. Each decoded write
 reserves capacity first. Both encoded and decoded sizes must fit the request's
-512 MiB push or 64 MiB fetch limit. Corrupt headers, checksums, truncated members
+optional request limit (none for pushes, 64 MiB for fetch requests). Corrupt headers, checksums, truncated members
 and trailing garbage return 400; decoded overflow returns 413 and exhausted
 admission returns 507. Concatenated valid gzip members are decoded together.
 
@@ -845,7 +853,7 @@ peak RAM, or native Git scratch bytes. The standalone lower-layer `GitHttpApi`
 fixtures do not apply the node's admission policy.
 
 LFS batch bodies have a 120-second reception deadline. Streaming object PUTs
-have a 120-second input idle timeout and a 30-minute transfer deadline; timeout
+have a 120-second input idle timeout with no whole-transfer deadline; timeout
 returns 408 (JSON for batch requests).
 This is separate from Git input, decode and subprocess deadlines. Outgoing LFS
 socket stall limits and scheduling fairness under combined-account saturation
@@ -2411,12 +2419,12 @@ Create copies the runtime pin/graph, then restores each pinned repository SQLite
 snapshot locally to enumerate external Git/LFS references. The pinned SQLite data
 is the body manifest: no second mutable index determines backup contents. Rows
 are paginated in batches of 256. Source and destination bytes must match the
-recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Bodies are
+recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Body parts and manifests are
 conditionally copied before the completion CAS. Conflicting destination bodies
 must verify or the operation fails. Snapshot disk reservations cover each restored
 database and remain held until its scratch directory is removed. Capture admits
 at most 100,000 Cells. Git blob and LFS body verification stream bounded ranges
-up to their 5 GiB ceilings through their respective verified readers.
+without a fixed logical byte quota through their respective verified readers.
 
 Verify and restore enroll at the completed backup prefix and read no original
 source prefix. Restore copies into a disjoint, reserved prefix and preserves the
@@ -2443,10 +2451,9 @@ survives original-prefix deletion, not loss of the shared bucket/provider.
 ## Streaming LFS bodies
 
 The LFS batch/basic API and repository-scoped immutable body keys are unchanged.
-LFS size is limited to 5 GiB: the configured object_store S3 conditional copy
-implementation copies one multipart part, whose [provider ceiling is 5 GiB](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
-This is an acceptance ceiling, not production capacity evidence. Direct object
-storage URLs, transfer resume and account quotas remain separate work.
+LFS has no fixed product file-size quota. Immutable 8 MiB parts avoid the
+configured S3 adapter's single-copy-part restriction. Direct object storage URLs,
+transfer resume and account quotas remain separate work.
 
 An upload is supervised through reception, cleanup and SQLite publication. It
 holds shared node transfer admission even if the awaiting client disconnects.
@@ -2454,9 +2461,9 @@ The body is consumed with backpressure into 8 MiB parts, hashing SHA-256/BLAKE3
 in blocking jobs that retain admission. Input size and known Content-Length are
 checked before completion. A hash mismatch, body error, excess length or timeout
 cannot complete a canonical object or publish its metadata. Received parts use
-a unique `repos/<uuid>/lfs-staging/<operation-uuid>` key. After verification, the
-multipart object completes, conditional copy creates/adopts the canonical key,
-and bounded reads verify the stored result. Staging deletion precedes the SQLite
+unique parts under `repos/<uuid>/lfs-staging/<operation-uuid>.parts/`. After
+verification, conditional copies create/adopt canonical parts, then a create-only
+manifest records the logical size. Bounded reads verify the stored result. Staging deletion precedes the SQLite
 reference transaction, which still rechecks repository write access.
 
 Failed transfers abort unfinished multipart uploads and delete their staging
@@ -2465,10 +2472,10 @@ unreferenced staging data or incomplete multipart uploads. Provider lifecycle
 cleanup and a future fenced collector remain necessary; no automatic collector
 is enabled. Canonical bytes are never deleted by failed-transfer cleanup.
 
-Downloads first check stored object size, then request at most 8 MiB per range
-with the observed ETag/version when present. Every response must match the
-requested range and full object size; collection rejects excess/truncated data.
-The reader hashes each range, withholding the final range until SHA-256 and
+Downloads first verify the manifest and pin its ETag/version when present.
+Each read rechecks the manifest and retrieves one part of at most 8 MiB. Part
+sizes must match exactly; collection rejects excess/truncated data.
+The reader hashes each part, withholding the final part until SHA-256 and
 BLAKE3 match SQLite. Thus a same-length corruption cannot satisfy HTTP's declared
 Content-Length before verification. Earlier ranges may already have been sent;
 a late error terminates the transfer, and stock LFS additionally verifies its OID.
@@ -2564,8 +2571,11 @@ supplied UUID derives exactly the supplied target. `ApplicationHandle::new`
 is fallible and validates the application name and registry digest; errors
 propagate at every binding site. Serving, idle acquisition and takeover read
 both database and capture limits directly from the compiled Cell type. Directory
-uses 64 MiB/16 MiB and Repository uses 512 MiB/64 MiB; the host rejects a replica
-whose limits differ.
+and Repository both use SQLite's representable database range; their capture
+chunk thresholds remain 16 MiB and 64 MiB respectively. LTX snapshot/recovery
+limits use its representable index range instead of its small defaults. Serving,
+recovery and backup share those declarations; the host rejects a replica whose
+limits differ.
 
 The repository UUID is stored with its immutable owner in
 `repository_identity`. External Git/LFS paths continue to use that UUID.

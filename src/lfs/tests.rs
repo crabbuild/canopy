@@ -37,8 +37,8 @@ impl http_body::Body for DeclaredBody {
 }
 
 #[tokio::test]
-async fn oversize_and_truncated_uploads_cannot_publish_bytes() -> TestResult {
-    for (size, oversized) in [(MAX_LFS_BYTES + 1, true), (20, false)] {
+async fn truncated_uploads_cannot_publish_bytes() -> TestResult {
+    for size in [5 * 1024 * 1024 * 1024 + 1, 20] {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let body = Body::new(DeclaredBody {
             size,
@@ -46,11 +46,7 @@ async fn oversize_and_truncated_uploads_cannot_publish_bytes() -> TestResult {
         });
         let result =
             upload::receive(store.clone(), [1; 16], object(b"short").sha256, body, None).await;
-        if oversized {
-            assert!(matches!(result, Err(LfsError::TooLarge)));
-        } else {
-            assert!(matches!(result, Err(LfsError::Corrupt)));
-        }
+        assert!(matches!(result, Err(LfsError::Corrupt)));
         let list = store.list_with_delimiter(None).await?;
         assert!(list.objects.is_empty() && list.common_prefixes.is_empty());
     }
@@ -70,9 +66,20 @@ async fn corruption_cannot_yield_a_complete_response() -> TestResult {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut bytes = vec![7; CHUNK_BYTES + 23];
     let expected = object(&bytes);
+    upload::receive(
+        store.clone(),
+        [1; 16],
+        expected.sha256,
+        Body::from(bytes.clone()),
+        None,
+    )
+    .await?;
     bytes[CHUNK_BYTES] = 9;
     store
-        .put(&lfs_path([1; 16], &expected.sha256), bytes.into())
+        .put(
+            &crate::external::part(&lfs_path([1; 16], &expected.sha256), 1),
+            bytes[CHUNK_BYTES..].to_vec().into(),
+        )
         .await?;
     let mut reader = LfsRead::open(store, [1; 16], expected, None).await?;
     let first = poll_fn(|cx| Pin::new(&mut reader).poll_next(cx))
@@ -97,7 +104,14 @@ async fn replacing_an_object_during_download_rejects_the_next_range() -> TestRes
     let bytes = vec![7; CHUNK_BYTES + 23];
     let expected = object(&bytes);
     let path = lfs_path([1; 16], &expected.sha256);
-    store.put(&path, bytes.into()).await?;
+    upload::receive(
+        store.clone(),
+        [1; 16],
+        expected.sha256,
+        Body::from(bytes),
+        None,
+    )
+    .await?;
     let mut reader = LfsRead::open(store.clone(), [1; 16], expected, None).await?;
     poll_fn(|cx| Pin::new(&mut reader).poll_next(cx))
         .await
@@ -183,7 +197,7 @@ async fn empty_upload_and_conflicting_destination_preserve_content_identity() ->
     assert_eq!(actual, empty);
     verify_lfs_object(store.clone(), [1; 16], actual, None).await?;
     let expected = object(b"correct bytes");
-    let path = lfs_path([1; 16], &expected.sha256);
+    let path = crate::external::part(&lfs_path([1; 16], &expected.sha256), 0);
     store
         .put(&path, Bytes::from_static(b"wrong bytes!!").into())
         .await?;
@@ -202,5 +216,44 @@ async fn empty_upload_and_conflicting_destination_preserve_content_identity() ->
         store.get(&path).await?.bytes().await?.as_ref(),
         b"wrong bytes!!"
     );
+    Ok(())
+}
+
+struct Progressing {
+    ticks: tokio::time::Interval,
+    remaining: usize,
+}
+
+impl Stream for Progressing {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        std::task::ready!(self.ticks.poll_tick(cx));
+        self.remaining -= 1;
+        Poll::Ready(Some(Ok(Bytes::from_static(b"x"))))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn progressing_upload_outlives_the_former_transfer_deadline() -> TestResult {
+    let expected = object(&[b'x'; 32]);
+    let body = Body::from_stream(Progressing {
+        ticks: tokio::time::interval(std::time::Duration::from_secs(100)),
+        remaining: 32,
+    });
+    let started = tokio::time::Instant::now();
+    let actual = upload::receive(
+        Arc::new(InMemory::new()),
+        [1; 16],
+        expected.sha256,
+        body,
+        None,
+    )
+    .await?;
+    assert!(started.elapsed() > std::time::Duration::from_secs(30 * 60));
+    assert_eq!(actual, expected);
     Ok(())
 }

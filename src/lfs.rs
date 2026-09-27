@@ -29,9 +29,7 @@ mod upload;
 pub use read::LfsRead;
 pub(crate) use read::verify_lfs_object;
 
-// Conditional S3 multipart copy uses one copied part, whose ceiling is 5 GiB.
-pub const MAX_LFS_BYTES: u64 = 5 * 1024 * 1024 * 1024;
-const CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const CHUNK_BYTES: usize = crate::external::PART_BYTES;
 const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Verified external LFS object described by its repository Cell.
@@ -60,7 +58,7 @@ pub enum LfsError {
     Forbidden,
     #[error("invalid LFS lock request: {0}")]
     InvalidLock(&'static str),
-    #[error("LFS object exceeds the configured byte ceiling")]
+    #[error("LFS object size overflows its storage representation")]
     TooLarge,
     #[error("LFS object identity or stored bytes are corrupt")]
     Corrupt,

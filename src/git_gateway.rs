@@ -23,7 +23,7 @@ use crate::{
     directory::TokenScope,
     git_cache::{CacheError, GitCache},
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
-    git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES, MAX_PUSH_BYTES},
+    git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES},
     git_objects::GitObjects,
     large_blob::{LargeBlobError, LargeBlobStore},
     lfs::LfsService,
@@ -165,7 +165,7 @@ impl GitGateway {
                 return Err(GatewayError::Unauthorized);
             }
             let _push = self.push.lock().await;
-            let request = self.receive(request, MAX_PUSH_BYTES, admission).await?;
+            let request = self.receive(request, None, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
             let digest = request_digest(&request).await?;
             if self.repository.begin_push(id, actor, digest).await? {
@@ -174,7 +174,7 @@ impl GitGateway {
                     id,
                 )));
             }
-            let request = self.decode(request, MAX_PUSH_BYTES).await?;
+            let request = self.decode(request, None).await?;
             let cache = self.build_cache(self.cell_refs().await?, true).await?;
             return self
                 .handle_push(&cache, request, actor, id, digest)
@@ -182,9 +182,9 @@ impl GitGateway {
                 .map(http_body);
         }
         let request = self
-            .receive(request, MAX_FETCH_REQUEST_BYTES, admission)
+            .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
             .await?;
-        let request = self.decode(request, MAX_FETCH_REQUEST_BYTES).await?;
+        let request = self.decode(request, Some(MAX_FETCH_REQUEST_BYTES)).await?;
         let capabilities = request.protocol_v2
             && request.method == "GET"
             && request.path_info == "/repo.git/info/refs"
@@ -255,7 +255,7 @@ impl GitGateway {
     async fn receive(
         &self,
         request: GitHttpRequest<Body>,
-        limit: u64,
+        limit: Option<u64>,
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<GitHttpRequest, GatewayError> {
         let GitHttpRequest {
@@ -291,7 +291,7 @@ impl GitGateway {
     async fn decode(
         &self,
         mut request: GitHttpRequest,
-        limit: u64,
+        limit: Option<u64>,
     ) -> Result<GitHttpRequest, GatewayError> {
         if request.gzip {
             request.body = request
@@ -327,8 +327,7 @@ impl GitGateway {
                     Err(error) => {
                         tracing::warn!(push_id = %hex::encode(id), error = ?error, "Git object ingestion failed");
                         let reason = match error {
-                            GatewayError::Objects(ObjectReadError::TooLarge)
-                            | GatewayError::Blob(LargeBlobError::TooLarge) => {
+                            GatewayError::Objects(ObjectReadError::TooLarge) => {
                                 "Canopy object ingestion failed: object exceeds server size limit"
                             }
                             _ => "Canopy object ingestion failed; retry push after server recovery",

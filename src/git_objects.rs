@@ -9,10 +9,7 @@ use tokio::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::{
-    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, large_blob::MAX_EXTERNAL_BLOB_BYTES,
-    object_id,
-};
+use crate::{INLINE_OBJECT_LIMIT, ObjectKind, object_id};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_LIMIT: usize = 128;
@@ -20,6 +17,8 @@ const STDERR_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ObjectReadError {
+    #[error("Git object memory allocation failed")]
+    Allocation(#[source] std::collections::TryReserveError),
     #[error("Git object process I/O failed")]
     Io(#[from] io::Error),
     #[error("Git object process failed: {0}")]
@@ -248,13 +247,16 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
         let limit = if self.kind == ObjectKind::Blob {
             INLINE_OBJECT_LIMIT
         } else {
-            MAX_SQLITE_OBJECT_BYTES
+            isize::MAX as usize
         };
         if self.size > limit as u64 {
             return Err(ObjectReadError::TooLarge);
         }
         timeout(IO_TIMEOUT, async {
-            let mut body = vec![0; self.size as usize];
+            let mut body = Vec::new();
+            body.try_reserve_exact(self.size as usize)
+                .map_err(ObjectReadError::Allocation)?;
+            body.resize(self.size as usize, 0);
             self.reader.read_exact(&mut body).await?;
             let kind = self.kind;
             let expected = self.oid;
@@ -313,9 +315,9 @@ async fn open_object<R: AsyncRead + Unpin>(
         .parse()
         .map_err(|_| ObjectReadError::Malformed)?;
     let limit = if kind == ObjectKind::Blob {
-        MAX_EXTERNAL_BLOB_BYTES
+        i64::MAX as u64
     } else {
-        MAX_SQLITE_OBJECT_BYTES as u64
+        isize::MAX as usize as u64
     };
     if size > limit {
         return Err(ObjectReadError::TooLarge);

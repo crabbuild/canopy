@@ -21,7 +21,7 @@ use crate::{
     directory::{Principal, TokenScope, validate_component},
     git_gateway::{GatewayError, GitGateway},
     git_http::GitHttpRequest,
-    lfs::{LfsError, MAX_LFS_BYTES},
+    lfs::LfsError,
 };
 
 /// Identity established by the outer HTTP authentication boundary.
@@ -244,8 +244,12 @@ async fn lfs_batch(State(api): State<Arc<GitHttpApi>>, request: Request<Body>) -
                 json!({"message": "Invalid LFS object ID"}),
             );
         };
-        if requested.size > MAX_LFS_BYTES {
-            objects.push(lfs_object_error(&requested, 422, "LFS object is too large"));
+        if i64::try_from(requested.size).is_err() {
+            objects.push(lfs_object_error(
+                &requested,
+                422,
+                "LFS object size overflows storage representation",
+            ));
             continue;
         }
         let stored = match api.gateway.lfs().lookup(oid).await {
@@ -390,7 +394,10 @@ async fn lfs_put(
             StatusCode::UNPROCESSABLE_ENTITY,
             "LFS object digest mismatch",
         ),
-        Err(LfsError::TooLarge) => plain(StatusCode::PAYLOAD_TOO_LARGE, "LFS object is too large"),
+        Err(LfsError::TooLarge) => plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "LFS object size overflows storage representation",
+        ),
         Err(LfsError::Timeout) => plain(StatusCode::REQUEST_TIMEOUT, "LFS request timed out"),
         Err(LfsError::Body(_)) => plain(StatusCode::BAD_REQUEST, "LFS request body failed"),
         Err(LfsError::Forbidden) => plain(StatusCode::FORBIDDEN, "LFS access denied"),

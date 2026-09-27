@@ -48,11 +48,42 @@ Signed commits and signed tags are ordinary stored Git objects; **signed push
 certificates are a different feature**. LFS uses SHA-256 content IDs already;
 that does not imply SHA-256 Git repository support. Xet is outside Canopy's scope.
 
-Current resource bounds also include a 512 MiB push body, 64 MiB fetch request,
-64 MiB individual non-blob object, 5 GiB external blob/LFS object, 512 MiB
-Repository Cell database and 120-second native Git process deadline. Full Git
-compatibility does not mean unlimited repository or request size; limits and
-their rejection behavior are part of the supported contract.
+Canopy imposes no fixed product byte quota on push bodies, Repository Cell
+SQLite databases, Git blobs, LFS objects, or individual SQLite Git objects.
+External bodies use immutable 8 MiB parts and a 16-byte manifest, so the S3
+adapter's single-part copy restriction does not bound logical file size. SQLite
+integer/page formats and available storage still impose physical limits.
+Node resource admission, bounded batch/chunk sizes, protocol validation, the
+64 MiB fetch-request and push-report bounds, ref-count/name constraints, and
+native-worker deadlines remain. These are not an unlimited-capacity claim.
+
+
+## Size qualification
+
+`python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
+`tests/multi_server/size.rs`. It requires Docker, the AWS CLI, Git, and a temporary
+directory with at least 40 GiB free. Set `TMPDIR` to the dedicated test volume.
+Docker must mount that host volume; the script verifies visibility before writes.
+Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
+The fixture uses public test credentials and removes its own container and data.
+The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
+this resource-intensive test.
+
+The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
+exceeds 512 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh
+local storage, then checks clone bytes, strict fsck, and the LFS download hash.
+The ordinary large-object integration test covers a 65 MiB commit and recovery.
+These are qualification points, not configured maxima or performance targets.
+
+The pinned runtime retains its five-second SQL command deadline. Very large
+non-blob verification still materializes a complete object inside a transaction;
+progressive verification is needed before claiming arbitrary structural-object
+capacity. LTX artifact promotion and backup copies still use the configured
+provider's conditional-copy implementation; very large LTX artifacts need
+separate provider qualification. External Git/LFS parts avoid that issue for
+file bodies. Neither a database format ceiling nor quota removal constitutes
+proof of unlimited capacity.
+
 
 ## Permanent gates and remaining work
 

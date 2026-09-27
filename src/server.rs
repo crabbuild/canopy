@@ -20,7 +20,7 @@ use crab_cell_runtime::{
     primitives::sql::SqlResultSet, recovery::manifest::RecoveryManifestStore,
     recovery::release::ReleaseStore,
 };
-use crab_ltx::{CellReplica, CrabError, DiskBudget, Host, Limits};
+use crab_ltx::{CellReplica, CrabError, DiskBudget, Host};
 use crab_storage::{StorageError, Store};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
@@ -783,11 +783,10 @@ pub(crate) async fn acquire_provisioned_sql_cell(
         ))?;
     // Acquisition and takeover must use the exact limits validated by the host.
     // Reading the declaration avoids separate serving/recovery limit policies.
-    let limits = Limits {
-        max_database_bytes: cell_type.database_limit_bytes(),
-        max_capture_bytes: cell_type.capture_limit_bytes(),
-        ..Limits::default()
-    };
+    let limits = crate::replica_limits(
+        cell_type.database_limit_bytes(),
+        cell_type.capture_limit_bytes(),
+    );
     let replica = CellReplica::new(
         layout.clone(),
         *target.cell_id().as_bytes(),

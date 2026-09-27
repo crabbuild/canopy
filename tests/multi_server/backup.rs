@@ -222,7 +222,7 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
             .ok_or("missing repository id")?,
     )?;
     let lfs_path = StorePath::from(format!(
-        "{backup}/repos/{}/lfs/{}",
+        "{backup}/repos/{}/lfs/{}.parts/0000000000000000",
         hex::encode(repository_id.as_bytes()),
         hex::encode(Sha256::digest(&lfs))
     ));

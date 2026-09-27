@@ -34,7 +34,7 @@ async fn packet_preflight_stops_before_pack_and_rewinds_after_rejection() -> Res
             Body::from(bytes.to_vec()),
             directory.path(),
             &budget,
-            1024,
+            Some(1024),
             None,
         )
         .await?;
@@ -61,7 +61,7 @@ async fn chunked_input_preserves_digest_and_rewinds_for_git() -> Result<()> {
         ]),
         directory.path(),
         &budget,
-        10,
+        Some(10),
         None,
     )
     .await?;
@@ -92,7 +92,7 @@ async fn limit_failure_reclaims_a_partial_spool() -> Result<()> {
         ]),
         directory.path(),
         &budget,
-        5,
+        Some(5),
         None,
     )
     .await;
@@ -106,9 +106,22 @@ async fn limit_failure_reclaims_a_partial_spool() -> Result<()> {
 async fn concurrent_spools_share_disk_admission() -> Result<()> {
     let directory = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(10);
-    let first =
-        GitInput::receive(Body::from("123456"), directory.path(), &budget, 10, None).await?;
-    let second = GitInput::receive(Body::from("12345"), directory.path(), &budget, 10, None).await;
+    let first = GitInput::receive(
+        Body::from("123456"),
+        directory.path(),
+        &budget,
+        Some(10),
+        None,
+    )
+    .await?;
+    let second = GitInput::receive(
+        Body::from("12345"),
+        directory.path(),
+        &budget,
+        Some(10),
+        None,
+    )
+    .await;
     assert!(matches!(second, Err(InputError::Budget(_))));
     assert_eq!(budget.used(), 6);
     drop(first);
@@ -125,7 +138,7 @@ async fn disconnected_input_reclaims_written_bytes() -> Result<()> {
         Err(std::io::Error::other("disconnected")),
     ]);
     assert!(matches!(
-        GitInput::receive(input, directory.path(), &budget, 10, None).await,
+        GitInput::receive(input, directory.path(), &budget, Some(10), None).await,
         Err(InputError::Body(_))
     ));
     assert_eq!(budget.used(), 0);
@@ -145,7 +158,7 @@ async fn cancelled_upload_releases_the_file_and_reservation() -> Result<()> {
             Body::from_stream(Frames(receiver)),
             &path,
             &uploader_budget,
-            10,
+            Some(10),
             None,
         )
         .await
@@ -183,12 +196,21 @@ async fn gzip_members_preserve_wire_digest_and_release_encoded_admission() -> Re
     let mut expected = blake3::Hasher::new();
     expected.update(&(wire.len() as u64).to_le_bytes());
     expected.update(&wire);
-    let input = GitInput::receive(Body::from(wire), directory.path(), &budget, 1024, None).await?;
+    let input = GitInput::receive(
+        Body::from(wire),
+        directory.path(),
+        &budget,
+        Some(1024),
+        None,
+    )
+    .await?;
     assert_eq!(
         input.digest(blake3::Hasher::new()).await?,
         *expected.finalize().as_bytes()
     );
-    let decoded = input.decode_gzip(directory.path(), &budget, 6).await?;
+    let decoded = input
+        .decode_gzip(directory.path(), &budget, Some(6))
+        .await?;
     assert_eq!(decoded.size(), 6);
     assert_eq!(budget.used(), 6);
     let mut bytes = Vec::new();
@@ -210,11 +232,13 @@ async fn gzip_expansion_enforces_the_decoded_limit_and_shared_disk_budget() -> R
             Body::from(wire.clone()),
             directory.path(),
             &budget,
-            200_000,
+            Some(200_000),
             None,
         )
         .await?;
-        let result = input.decode_gzip(directory.path(), &budget, limit).await;
+        let result = input
+            .decode_gzip(directory.path(), &budget, Some(limit))
+            .await;
         assert!(if expected_budget_error {
             matches!(result, Err(InputError::Budget(_)))
         } else {
@@ -223,10 +247,16 @@ async fn gzip_expansion_enforces_the_decoded_limit_and_shared_disk_budget() -> R
         assert_eq!(budget.used(), occupied.bytes());
         drop(occupied);
     }
-    let input =
-        GitInput::receive(Body::from(wire), directory.path(), &budget, 200_000, None).await?;
+    let input = GitInput::receive(
+        Body::from(wire),
+        directory.path(),
+        &budget,
+        Some(200_000),
+        None,
+    )
+    .await?;
     let decoded = input
-        .decode_gzip(directory.path(), &budget, 100_000)
+        .decode_gzip(directory.path(), &budget, Some(100_000))
         .await?;
     assert_eq!(decoded.size(), 100_000);
     drop(decoded);
@@ -255,10 +285,18 @@ async fn invalid_gzip_never_returns_a_partial_decoded_spool() -> Result<()> {
         trailing,
         last_member,
     ] {
-        let input =
-            GitInput::receive(Body::from(wire), directory.path(), &budget, 1 << 20, None).await?;
+        let input = GitInput::receive(
+            Body::from(wire),
+            directory.path(),
+            &budget,
+            Some(1 << 20),
+            None,
+        )
+        .await?;
         assert!(matches!(
-            input.decode_gzip(directory.path(), &budget, 1 << 20).await,
+            input
+                .decode_gzip(directory.path(), &budget, Some(1 << 20))
+                .await,
             Err(InputError::Gzip(_))
         ));
         assert_eq!(budget.used(), 0);
@@ -304,7 +342,7 @@ fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Res
             Body::from(wire),
             directory.path(),
             &budget,
-            1024,
+            Some(1024),
             Some(permit),
         )
         .await?;
@@ -315,7 +353,7 @@ fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Res
             held.recv()
         });
         ready.await?;
-        let mut decode = Box::pin(input.decode_gzip(directory.path(), &budget, 1024));
+        let mut decode = Box::pin(input.decode_gzip(directory.path(), &budget, Some(1024)));
         poll_fn(|cx| {
             assert!(decode.as_mut().poll(cx).is_pending());
             Poll::Ready(())
@@ -345,4 +383,33 @@ fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Res
         assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
         Ok(())
     })
+}
+
+#[tokio::test(start_paused = true)]
+async fn progressing_upload_outlives_the_idle_deadline() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1024);
+    let (sender, receiver) = mpsc::channel(1);
+    let path = directory.path().to_owned();
+    let upload_budget = budget.clone();
+    let upload = tokio::spawn(async move {
+        GitInput::receive(
+            Body::from_stream(Frames(receiver)),
+            &path,
+            &upload_budget,
+            None,
+            None,
+        )
+        .await
+    });
+    for total in 1..=3 {
+        sender.send(Ok(Bytes::from_static(b"x"))).await?;
+        while budget.used() != total {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(100)).await;
+    }
+    drop(sender);
+    assert_eq!(upload.await??.size(), 3);
+    Ok(())
 }

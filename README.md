@@ -123,9 +123,10 @@ upload and download through Canopy; bytes live in the configured object store at
 their size and verified hashes. No separate LFS server is needed. Uploads verify
 SHA-256 and store immutable bytes before publishing the SQLite reference.
 
-Transfers pass through Canopy with 8 MiB upload parts and read ranges, up to
-5 GiB per LFS object. Uploads hash bytes incrementally in temporary multipart
-storage, then conditionally copy the verified object to its immutable key.
+Transfers pass through Canopy with 8 MiB immutable parts and no fixed file-size
+quota. Uploads hash bytes incrementally in temporary multipart storage, then
+conditionally copy each verified part and publish a small immutable manifest.
+The logical key holds the manifest; `<key>.parts/<hex-index>` holds its bytes.
 Downloads verify both hashes before delivering their final range. The node's
 eight-transfer admission covers these operations, cleanup and outstanding output.
 Presigned direct-to-storage transfers are not implemented. Git LFS also supports
@@ -719,21 +720,19 @@ Provider failure, owner-loss and capacity qualification remain open.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
-as the node's SQLite files. Push requests admit up to 512 MiB; fetch requests
-up to 64 MiB. Push replies remain buffered and capped at 64 MiB. Clone and fetch
-responses stream with backpressure and have no 64 MiB response ceiling. LFS
-and external Git blobs stream objects up to 5 GiB using bounded 8 MiB transfers.
-The 512 MiB push request limit still applies to the transmitted pack; the blob
-ceiling describes decoded object size, not a guarantee that every 5 GiB file
-fits an admitted push. Native Git memory and scratch use need separate bounds.
-Trees, commits and tags above 768 KiB use 512 KiB SQLite chunks, up to 64 MiB
-per object. Publication verifies every chunk and the complete object identity;
-partial uploads stay invisible to Git.
+as the node's SQLite files. Push bodies have no fixed byte quota; fetch requests
+remain bounded at 64 MiB. Push reports are buffered up to 64 MiB, while clone/fetch
+packs stream with backpressure. Git blobs and LFS objects use immutable 8 MiB
+parts without a fixed logical file-size quota. Trees, commits and tags above
+768 KiB use SQLite chunks without a fixed individual object-size quota.
+Publication and graph parsing still materialize non-blob bodies, so very large
+structural objects depend on available worker memory.
+Partial uploads stay invisible to Git.
 Each node admits eight Git/LFS transfers across all repositories. Overload
 returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
 readiness and management routes remain outside this transfer limit. LFS
 batch reception has a 120-second deadline. LFS object uploads have a 120-second
-input idle timeout and a 30-minute transfer deadline (408 on timeout). Eight is
+input idle timeout with no whole-transfer deadline (408 on timeout). Eight is
 an initial operational bound, not a measured production capacity target.
 Ref advertisements use generation-checked pagination; sustained concurrent
 changes return a retryable 503. Gzip-compressed Git requests are supported.
@@ -766,7 +765,7 @@ release the workspace early. A failed node drain or destruction of the Tokio
 runtime before confirmed drain retains the workspace lock until process restart.
 Keep the runtime alive until shutdown finishes for graceful cleanup.
 
-Local recovery currently admits a 512 MiB SQLite database. The node reserves a
+Local recovery uses SQLite's representable database range without a Canopy byte quota. The node reserves a
 SQL slot for Directory ownership and admits `max_active_repositories` repository
 gateways, each bound to a local or remote Cell. This required configuration field
 accepts 1–9,999; the SQL pool receives that limit plus the Directory slot.
@@ -811,7 +810,7 @@ and release admission rejects a different compiled release. See the
 
 Before ref publication, bounded certificate batches verify the durable Git
 graph: commit trees and parents, tree entries and tag targets must exist with
-the correct object type. Each batch covers at most 128 objects and 64 MiB of
+the correct object type. Each batch covers at most 128 objects, targeting 64 MiB of
 SQLite object bytes. Ref publication checks certified tips atomically with
 permissions and ref versions; branch tips must be commits. Submodule gitlinks may name commits in another repository.
 SQLite certificates let later pushes reuse validated history. Push ingestion streams
@@ -819,7 +818,7 @@ candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
 are checked before allocation and canonical OIDs before storage. SQLite lookups
 group up to 128 candidate IDs; object publication groups up to 128 records and
-768 KiB of inline bytes in one Cell transaction, with at most 64 MiB of SQLite
+768 KiB of inline bytes in one Cell transaction, targeting 64 MiB of SQLite
 object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.

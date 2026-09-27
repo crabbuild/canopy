@@ -1,7 +1,7 @@
 use super::*;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures_core::Stream;
-use object_store::{GetOptions, GetRange, ObjectMeta, ObjectStoreExt};
+use object_store::ObjectMeta;
 use sha2::{Digest, Sha256};
 use std::{
     future::{Future, poll_fn},
@@ -36,16 +36,8 @@ impl LfsRead {
         expected: LfsObject,
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, LfsError> {
-        if expected.size > MAX_LFS_BYTES {
-            return Err(LfsError::TooLarge);
-        }
         let path = lfs_path(repository_id, &expected.sha256);
-        let meta = tokio::time::timeout(IO_TIMEOUT, store.head(&path))
-            .await
-            .map_err(|_| LfsError::Timeout)??;
-        if meta.size != expected.size {
-            return Err(LfsError::Corrupt);
-        }
+        let meta = crate::external::open(store.as_ref(), &path, expected.size).await?;
         let state = ReadState {
             store,
             path,
@@ -103,37 +95,15 @@ impl ReadState {
     }
 
     async fn read_range(mut self) -> Result<(Self, Bytes), LfsError> {
-        let end = self.expected.size.min(self.offset + CHUNK_BYTES as u64);
-        let range = self.offset..end;
-        let result = self
-            .store
-            .get_opts(
-                &self.path,
-                GetOptions {
-                    range: Some(GetRange::Bounded(range.clone())),
-                    if_match: self.meta.e_tag.clone(),
-                    version: self.meta.version.clone(),
-                    ..GetOptions::default()
-                },
-            )
-            .await?;
-        if result.meta.size != self.expected.size || result.range != range {
-            return Err(LfsError::Corrupt);
-        }
-        let mut input = result.into_stream();
-        let length = (end - self.offset) as usize;
-        let mut bytes = BytesMut::with_capacity(length);
-        while let Some(chunk) = poll_fn(|cx| input.as_mut().poll_next(cx)).await {
-            let chunk = chunk?;
-            if chunk.len() > length - bytes.len() {
-                return Err(LfsError::Corrupt);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        if bytes.len() != length {
-            return Err(LfsError::Corrupt);
-        }
-        let bytes = bytes.freeze();
+        let bytes = crate::external::read(
+            self.store.as_ref(),
+            &self.path,
+            &self.meta,
+            self.expected.size,
+            self.offset,
+        )
+        .await?;
+        let end = self.offset + bytes.len() as u64;
         tokio::task::spawn_blocking(move || {
             self.sha256.update(&bytes);
             self.blake3.update(&bytes);

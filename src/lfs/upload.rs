@@ -1,12 +1,10 @@
 use super::*;
+use crate::external::Upload;
 use axum::body::HttpBody;
 use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
-use object_store::{MultipartUpload, ObjectStoreExt};
 use sha2::{Digest, Sha256};
-use std::{future::poll_fn, pin::Pin, time::Duration};
-
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+use std::{future::poll_fn, pin::Pin};
 
 pub(super) async fn receive(
     store: Arc<dyn ObjectStore>,
@@ -16,51 +14,22 @@ pub(super) async fn receive(
     admission: Option<Arc<AdmissionPermit>>,
 ) -> Result<LfsObject, LfsError> {
     let declared = body.size_hint().exact();
-    if declared.is_some_and(|size| size > MAX_LFS_BYTES) {
-        return Err(LfsError::TooLarge);
-    }
     let stage = Path::from(format!(
         "repos/{}/lfs-staging/{}",
         hex::encode(repository_id),
         uuid::Uuid::new_v4()
     ));
-    let mut upload = tokio::time::timeout(IO_TIMEOUT, store.put_multipart(&stage))
-        .await
-        .map_err(|_| LfsError::Timeout)??;
-    let mut completed = false;
-    let result = tokio::time::timeout(UPLOAD_TIMEOUT, async {
-        let object = parts(upload.as_mut(), oid, body, declared, admission.clone()).await?;
-        upload.complete().await?;
-        completed = true;
-        // Only verified bytes reach the canonical key. Concurrent uploads must
-        // adopt the same immutable body; they may never overwrite one another.
-        match store
-            .copy_if_not_exists(&stage, &lfs_path(repository_id, &oid))
-            .await
-        {
-            Ok(()) | Err(object_store::Error::AlreadyExists { .. }) => {}
-            Err(error) => return Err(error.into()),
-        }
+    let mut upload = Upload::new(store.clone(), stage).await?;
+    let result = async {
+        let object = parts(&mut upload, oid, body, declared, admission.clone()).await?;
+        upload
+            .publish(&lfs_path(repository_id, &oid), object.size)
+            .await?;
         verify_lfs_object(store.clone(), repository_id, object, admission).await?;
-        Ok(object)
-    })
-    .await
-    .map_err(|_| LfsError::Timeout)
-    .and_then(|result| result);
-    // The supervised caller retains this upload through disconnect and timeout.
-    // Ambiguous completion still requires deleting the unique staging key.
-    if !completed {
-        match tokio::time::timeout(IO_TIMEOUT, upload.abort()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::warn!(error = %error, "LFS multipart abort failed"),
-            Err(_) => tracing::warn!("LFS multipart abort timed out"),
-        }
+        Ok::<_, LfsError>(object)
     }
-    let cleanup = match tokio::time::timeout(IO_TIMEOUT, store.delete(&stage)).await {
-        Ok(Ok(())) | Ok(Err(object_store::Error::NotFound { .. })) => Ok(()),
-        Ok(Err(error)) => Err(LfsError::Store(error)),
-        Err(_) => Err(LfsError::Timeout),
-    };
+    .await;
+    let cleanup = upload.cleanup().await;
     if result.is_err()
         && let Err(error) = &cleanup
     {
@@ -91,7 +60,7 @@ impl Hashes {
 }
 
 async fn parts(
-    upload: &mut dyn MultipartUpload,
+    upload: &mut Upload,
     oid: [u8; 32],
     body: Body,
     declared: Option<u64>,
@@ -115,7 +84,7 @@ async fn parts(
         let mut frame = frame?;
         received = received
             .checked_add(frame.len() as u64)
-            .filter(|size| *size <= MAX_LFS_BYTES)
+            .filter(|size| i64::try_from(*size).is_ok())
             .ok_or(LfsError::TooLarge)?;
         if declared.is_some_and(|size| received > size) {
             return Err(LfsError::Corrupt);
@@ -126,7 +95,7 @@ async fn parts(
             if buffer.len() == CHUNK_BYTES {
                 let (updated, bytes) = hashes.update(buffer.split().freeze()).await?;
                 hashes = updated;
-                upload.put_part(bytes.into()).await?;
+                upload.write(bytes).await?;
             }
         }
     }
@@ -136,7 +105,7 @@ async fn parts(
     if !buffer.is_empty() || received == 0 {
         let (updated, bytes) = hashes.update(buffer.freeze()).await?;
         hashes = updated;
-        upload.put_part(bytes.into()).await?;
+        upload.write(bytes).await?;
     }
     if hashes.sha256.finalize().as_slice() != oid {
         return Err(LfsError::Corrupt);

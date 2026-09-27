@@ -32,7 +32,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                     axum::body::Body::empty(),
                     root.path(),
                     &crab_ltx::DiskBudget::new(1 << 20),
-                    1 << 20,
+                    Some(1 << 20),
                     None,
                 )
                 .await?,

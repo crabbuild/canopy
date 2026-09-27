@@ -69,10 +69,7 @@ impl Deployment {
                 self.layout.clone(),
                 *control.cell.as_bytes(),
                 *control.incarnation.as_bytes(),
-                Limits {
-                    max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
-                    ..Limits::default()
-                },
+                crate::replica_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024),
             )?
             .with_host(host.clone());
             let directory = scratch.join(hex::encode(control.cell.as_bytes()));
@@ -120,6 +117,17 @@ impl Deployment {
                         };
                         if let (Some(source), Some(source_store)) = (source, &source_store) {
                             verify(source_store.clone(), repository_id, &reference).await?;
+                            let size = match &reference {
+                                Reference::Git(value) => value.size,
+                                Reference::Lfs(value) => value.size,
+                            };
+                            crate::external::copy_parts(
+                                self.layout.store().inner().as_ref(),
+                                &source.parts().chain(path.parts()).collect(),
+                                &self.prefix.parts().chain(path.parts()).collect(),
+                                size,
+                            )
+                            .await?;
                             match self
                                 .layout
                                 .store()

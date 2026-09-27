@@ -21,5 +21,7 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Qualify large Git and LFS storage
+        run: python3 scripts/qualify_size.py
       - name: Build server
         run: cargo build --locked --bin canopy

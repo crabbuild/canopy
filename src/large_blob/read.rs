@@ -1,7 +1,5 @@
 use super::*;
-use bytes::BytesMut;
-use object_store::{GetOptions, GetRange, ObjectMeta};
-use std::future::poll_fn;
+use object_store::ObjectMeta;
 
 /// Sequential bounded ranges from one immutable Git blob.
 pub struct LargeBlobRead {
@@ -19,16 +17,8 @@ impl LargeBlobRead {
         repository_id: [u8; 16],
         reference: LargeBlobReference,
     ) -> Result<Self, LargeBlobError> {
-        if reference.size > MAX_EXTERNAL_BLOB_BYTES {
-            return Err(LargeBlobError::TooLarge);
-        }
         let path = blob_path(repository_id, &reference.sha256);
-        let meta = tokio::time::timeout(IO_TIMEOUT, store.head(&path))
-            .await
-            .map_err(|_| LargeBlobError::Timeout)??;
-        if meta.size != reference.size {
-            return Err(LargeBlobError::Corrupt);
-        }
+        let meta = crate::external::open(store.as_ref(), &path, reference.size).await?;
         let read = Self {
             store,
             path,
@@ -70,37 +60,14 @@ impl LargeBlobRead {
     }
 
     async fn range(&self) -> Result<Bytes, LargeBlobError> {
-        let end = self.reference.size.min(self.offset + CHUNK_BYTES as u64);
-        let range = self.offset..end;
-        let result = self
-            .store
-            .get_opts(
-                &self.path,
-                GetOptions {
-                    range: Some(GetRange::Bounded(range.clone())),
-                    if_match: self.meta.e_tag.clone(),
-                    version: self.meta.version.clone(),
-                    ..GetOptions::default()
-                },
-            )
-            .await?;
-        if result.meta.size != self.reference.size || result.range != range {
-            return Err(LargeBlobError::Corrupt);
-        }
-        let length = (end - self.offset) as usize;
-        let mut bytes = BytesMut::with_capacity(length);
-        let mut input = result.into_stream();
-        while let Some(chunk) = poll_fn(|cx| input.as_mut().poll_next(cx)).await {
-            let chunk = chunk?;
-            if chunk.len() > length - bytes.len() {
-                return Err(LargeBlobError::Corrupt);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        if bytes.len() != length {
-            return Err(LargeBlobError::Corrupt);
-        }
-        Ok(bytes.freeze())
+        Ok(crate::external::read(
+            self.store.as_ref(),
+            &self.path,
+            &self.meta,
+            self.reference.size,
+            self.offset,
+        )
+        .await?)
     }
 
     fn check(&self, hashes: Hashes) -> Result<(), LargeBlobError> {

@@ -94,11 +94,7 @@ fn chunk_references_bound_total_verification_bytes_and_round_trip() {
         },
     };
     let mut batch = ObjectBatch::default();
-    assert!(
-        batch
-            .try_push(chunked(MAX_SQLITE_OBJECT_BYTES as u64))
-            .is_ok()
-    );
+    assert!(batch.try_push(chunked(VERIFY_BATCH_BYTES)).is_ok());
     assert!(batch.try_push(inline(1)).is_err());
     let mut encoded = BoundedEncoder::new(1 << 20).unwrap();
     batch.encode(&mut encoded).unwrap();
@@ -109,7 +105,7 @@ fn chunk_references_bound_total_verification_bytes_and_round_trip() {
     assert!(decoded.try_push(chunked(1)).is_err());
     let mut malicious = BoundedEncoder::new(1 << 20).unwrap();
     malicious.write_count(2).unwrap();
-    for size in [MAX_SQLITE_OBJECT_BYTES as u64, 1] {
+    for size in [VERIFY_BATCH_BYTES, 1] {
         malicious.write_bytes(&[1; 20]).unwrap();
         malicious.write_u8(2).unwrap();
         malicious.write_u8(2).unwrap();

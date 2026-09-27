@@ -6,8 +6,8 @@ use crab_cell_runtime::{
 };
 
 use crate::{
-    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, ObjectStorage, RepositoryCell,
-    StoredObject, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_batch::MAX_OBJECTS, object_id,
+    INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, RepositoryCell, StoredObject,
+    object_batch::MAX_OBJECTS, object_id,
 };
 
 pub(crate) struct ObjectHeaders {
@@ -262,7 +262,7 @@ fn decode_object(row: Vec<SqlValue>) -> crab_cell_runtime::Result<StoredObject> 
             ObjectStorage::Inline(body)
         }
         ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
-            if kind == ObjectKind::Blob && (0..=MAX_EXTERNAL_BLOB_BYTES as i64).contains(&size) =>
+            if kind == ObjectKind::Blob && size >= 0 =>
         {
             ObjectStorage::External {
                 size: size as u64,
@@ -273,9 +273,7 @@ fn decode_object(row: Vec<SqlValue>) -> crab_cell_runtime::Result<StoredObject> 
             }
         }
         ("chunked", SqlValue::Null, SqlValue::Null, SqlValue::Blob(upload))
-            if kind != ObjectKind::Blob
-                && size > INLINE_OBJECT_LIMIT as i64
-                && size <= MAX_SQLITE_OBJECT_BYTES as i64 =>
+            if kind != ObjectKind::Blob && size > INLINE_OBJECT_LIMIT as i64 =>
         {
             ObjectStorage::Chunked {
                 upload: upload

@@ -286,11 +286,13 @@ async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn
         .await?;
     // The first range can be written before the final range detects corruption.
     // Only the test-owned blob key is changed, then restored before retry.
-    let path = crate::large_blob::blob_path([9; 16], &reference.sha256);
+    let path = crate::external::part(&crate::large_blob::blob_path([9; 16], &reference.sha256), 1);
     let metadata = store.head(&path).await?;
     let last = body.last_mut().ok_or("empty fixture")?;
     *last ^= 1;
-    store.put(&metadata.location, body.clone().into()).await?;
+    store
+        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
+        .await?;
     assert!(
         cache
             .store_blob(blobs.read(&reference).await?)
@@ -302,7 +304,9 @@ async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn
         vec![reference.oid]
     );
     *body.last_mut().ok_or("empty fixture")? ^= 1;
-    store.put(&metadata.location, body.into()).await?;
+    store
+        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
+        .await?;
     cache.store_blob(blobs.read(&reference).await?).await?;
     assert!(cache.missing_objects(vec![reference.oid]).await?.is_empty());
     drop(cache);

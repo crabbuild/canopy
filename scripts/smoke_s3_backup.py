@@ -75,14 +75,16 @@ def qualify(binary, directory, settings, processes):
     aws = ["aws"]
     if os.environ.get("AWS_ENDPOINT"):
         aws.extend(["--endpoint-url", os.environ["AWS_ENDPOINT"]])
-    lfs_url = f"{backup_url}/repos/{uuid.UUID(repository).hex}/lfs/{hashlib.sha256(lfs).hexdigest()}"
+    lfs_url = f"{backup_url}/repos/{uuid.UUID(repository).hex}/lfs/{hashlib.sha256(lfs).hexdigest()}.parts/0000000000000000"
     corrupt = directory / "corrupt-backup-lfs"
     corrupt.write_bytes(b"corrupt fixture bytes")
     subprocess.run([*aws, "s3", "cp", str(corrupt), lfs_url, "--only-show-errors"], check=True, capture_output=True)
     administer("create", backup_prefix, fails=True)
     retained = subprocess.run([*aws, "s3", "cp", lfs_url, "-"], check=True, capture_output=True)
     assert retained.stdout == corrupt.read_bytes(), "conditional copy overwrote an existing object"
-    subprocess.run([*aws, "s3", "cp", str(local / "asset.lfs"), lfs_url, "--only-show-errors"], check=True, capture_output=True)
+    repair = directory / "repair-backup-lfs-part"
+    repair.write_bytes(lfs[:8 * 1024 * 1024])
+    subprocess.run([*aws, "s3", "cp", str(repair), lfs_url, "--only-show-errors"], check=True, capture_output=True)
     assert administer("create", backup_prefix) == saved
     # This source was created above under the caller's random process-smoke UUID.
     parsed = urllib.parse.urlsplit(source_url)

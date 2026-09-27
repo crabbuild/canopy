@@ -17,7 +17,6 @@ use crab_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) const MAX_PUSH_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) const MAX_FETCH_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
 const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -58,27 +57,22 @@ pub struct GitInput {
 }
 
 impl GitInput {
-    /// Receives a body under a byte limit, a shared disk budget and a 120-second deadline.
+    /// Receives a body with optional size bounds, shared disk admission and an idle timeout.
     pub async fn receive(
         body: Body,
         directory: &Path,
         budget: &DiskBudget,
-        limit: u64,
+        limit: Option<u64>,
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, InputError> {
-        tokio::time::timeout(
-            Duration::from_secs(120),
-            Self::spool(body, directory, budget, limit, admission),
-        )
-        .await
-        .map_err(|_| InputError::Timeout)?
+        Self::spool(body, directory, budget, limit, admission).await
     }
 
     async fn spool(
         body: Body,
         directory: &Path,
         budget: &DiskBudget,
-        limit: u64,
+        limit: Option<u64>,
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, InputError> {
         let spool = Arc::new(Spool {
@@ -88,12 +82,18 @@ impl GitInput {
         });
         let mut body = body.into_data_stream();
         let mut size = 0u64;
-        while let Some(frame) = poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await {
+        while let Some(frame) = tokio::time::timeout(
+            Duration::from_secs(120),
+            poll_fn(|cx| Pin::new(&mut body).poll_next(cx)),
+        )
+        .await
+        .map_err(|_| InputError::Timeout)?
+        {
             let frame = frame?;
             let next = size
                 .checked_add(frame.len() as u64)
                 .ok_or(InputError::TooLarge)?;
-            if next > limit {
+            if limit.is_some_and(|limit| next > limit) {
                 return Err(InputError::TooLarge);
             }
             for start in (0..frame.len()).step_by(CHUNK_BYTES) {
@@ -117,7 +117,7 @@ impl GitInput {
         self,
         directory: &Path,
         budget: &DiskBudget,
-        limit: u64,
+        limit: Option<u64>,
     ) -> Result<Self, InputError> {
         let output = Arc::new(Spool {
             file: tempfile::tempfile_in(directory)?,
@@ -154,7 +154,7 @@ impl GitInput {
                 }
                 size = size
                     .checked_add(count as u64)
-                    .filter(|size| *size <= limit)
+                    .filter(|size| limit.is_none_or(|limit| *size <= limit))
                     .ok_or(InputError::TooLarge)?;
                 output.reservation.try_grow(count as u64)?;
                 (&output.file).write_all(&buffer[..count])?;
@@ -167,10 +167,7 @@ impl GitInput {
         });
         // A blocking decoder cannot be aborted. Cancellation stops its bounded
         // read/write loop; the worker owns both files and charges until it exits.
-        tokio::time::timeout(Duration::from_secs(120), task)
-            .await
-            .map_err(|_| InputError::Timeout)?
-            .map_err(InputError::Task)?
+        task.await.map_err(InputError::Task)?
     }
 
     pub(crate) async fn prefix(&self, limit: usize) -> Result<Vec<u8>, InputError> {

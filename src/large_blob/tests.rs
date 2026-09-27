@@ -1,6 +1,6 @@
 use super::*;
 use crate::{ObjectKind, object_id};
-use object_store::memory::InMemory;
+use object_store::{ObjectStoreExt, memory::InMemory};
 use std::future::poll_fn;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -53,18 +53,12 @@ async fn bad_input_does_not_publish_and_existing_corruption_is_not_overwritten()
             .await
             .is_err()
     );
-    assert!(matches!(
-        blobs
-            .put(oid, MAX_EXTERNAL_BLOB_BYTES + 1, &mut body.as_slice())
-            .await,
-        Err(LargeBlobError::TooLarge)
-    ));
     let listing = store.list_with_delimiter(None).await?;
     assert!(listing.objects.is_empty() && listing.common_prefixes.is_empty());
     let reference = blobs
         .put(oid, body.len() as u64, &mut body.as_slice())
         .await?;
-    let path = blob_path([2; 16], &reference.sha256);
+    let path = crate::external::part(&blob_path([2; 16], &reference.sha256), 0);
     store
         .put(&path, Bytes::from(vec![0; body.len()]).into())
         .await?;
@@ -96,6 +90,13 @@ async fn metadata_hash_corruption_withholds_the_final_range() -> Result {
             &mut body.as_slice(),
         )
         .await?;
+    crate::external::copy_parts(
+        store.as_ref(),
+        &blob_path([3; 16], &reference.sha256),
+        &blob_path([3; 16], &[0; 32]),
+        reference.size,
+    )
+    .await?;
     store
         .copy(
             &blob_path([3; 16], &reference.sha256),

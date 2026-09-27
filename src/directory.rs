@@ -108,7 +108,8 @@ pub fn cell_type() -> crab_cell_runtime::Result<CellType> {
         DIRECTORY,
         CatalogRole::Sql,
         1,
-    )
+    )?
+    .with_limits(crate::REPOSITORY_DATABASE_LIMIT_BYTES, 16 * 1024 * 1024)
 }
 
 pub fn directory_target(

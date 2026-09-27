@@ -18,7 +18,7 @@ async fn large_tree_commit_and_tag_restore_from_sqlite_after_owner_restart()
     assert!(tree.len() > canopy_server::INLINE_OBJECT_LIMIT);
     let tree_oid = write_object(&local, "tree", &tree).await?;
     let mut commit = format!("tree {tree_oid}\nauthor Canopy <test@example.invalid> 0 +0000\ncommitter Canopy <test@example.invalid> 0 +0000\n\n").into_bytes();
-    commit.extend(vec![b'c'; 1_100_000]);
+    commit.extend(vec![b'c'; 65 * 1024 * 1024]);
     commit.push(b'\n');
     let commit_oid = write_object(&local, "commit", &commit).await?;
     let mut tag = format!("object {commit_oid}\ntype commit\ntag release\ntagger Canopy <test@example.invalid> 0 +0000\n\n").into_bytes();

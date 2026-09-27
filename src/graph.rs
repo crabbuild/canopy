@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{MAX_SQLITE_OBJECT_BYTES, ObjectKind, PushPlan, RepositoryModule, object_id};
+use crate::{ObjectKind, PushPlan, RepositoryModule, object_batch::VERIFY_BATCH_BYTES, object_id};
 use crab_cell_runtime::{
     CellModule, Command, Error, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
     codec::WireValue, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
@@ -88,9 +88,6 @@ fn statuses(results: &[SqlResultSet]) -> crab_cell_runtime::Result<BTreeMap<Oid,
         };
         let kind = parse_kind(kind.as_bytes()).ok_or(Error::Command("invalid graph kind"))?;
         let bytes = u64::try_from(*bytes).map_err(|_| Error::Command("invalid graph size"))?;
-        if bytes > MAX_SQLITE_OBJECT_BYTES as u64 {
-            return Err(Error::Command("graph object exceeds limit"));
-        }
         states.insert(
             oid.as_slice()
                 .try_into()
@@ -126,10 +123,10 @@ impl Command for CertifyObjects {
             if state.certified {
                 continue;
             }
-            verified += state.bytes;
-            if verified > MAX_SQLITE_OBJECT_BYTES as u64 {
+            if verified != 0 && state.bytes > VERIFY_BATCH_BYTES.saturating_sub(verified) {
                 return Ok(CommandResult::Rejected(false));
             }
+            verified += state.bytes;
             let Some(edges) = object_edges(context, oid, state.kind)? else {
                 return Ok(CommandResult::Rejected(false));
             };

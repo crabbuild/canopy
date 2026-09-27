@@ -23,6 +23,7 @@ pub mod checks;
 mod default_branch;
 pub mod deployment;
 pub mod directory;
+mod external;
 mod git_cache;
 pub mod git_gateway;
 pub mod git_http;
@@ -50,13 +51,27 @@ mod web;
 pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
-pub use object_chunks::{MAX_SQLITE_OBJECT_BYTES, ObjectStageError};
+pub use object_chunks::ObjectStageError;
 pub use push::PushError;
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
 pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
-pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+// SQLite's on-disk page count and maximum page size bound representable databases.
+// This is a format boundary, not a repository quota.
+pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = (u32::MAX as u64 - 1) * 65_536;
+
+pub(crate) fn replica_limits(database: u64, capture: u64) -> crab_ltx::Limits {
+    crab_ltx::Limits {
+        max_database_bytes: database,
+        max_capture_bytes: capture,
+        // LTX validates these against addressable index space. Snapshots and
+        // recovery plans must not retain the dependency's small default quotas.
+        max_file_bytes: (usize::MAX / 8) as u64,
+        max_plan_bytes: (usize::MAX / 8) as u64,
+        max_segments: usize::MAX / 8,
+    }
+}
 
 const SCHEMA: &str = include_str!("schema.sql");
 const COMMANDS: [OperationDescriptor; 9] = [
@@ -193,6 +208,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_chunks.rs"));
                 source.update(include_bytes!("object_reads.rs"));
                 source.update(include_bytes!("large_blob.rs"));
+                source.update(include_bytes!("external.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("push/plan.rs"));
                 source.update(include_bytes!("push/report.rs"));

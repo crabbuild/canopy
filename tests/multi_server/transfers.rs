@@ -37,9 +37,14 @@ async fn corrupt_lfs_download_cannot_complete_its_http_content_length()
         .send()
         .await?
         .error_for_status()?;
-    let key = StorePath::from(format!("{prefix}/repos/{}/lfs/{oid}", id.simple()));
+    let key = StorePath::from(format!(
+        "{prefix}/repos/{}/lfs/{oid}.parts/0000000000000001",
+        id.simple()
+    ));
     bytes[8 * 1024 * 1024] = 12;
-    store.put(&key, bytes.into()).await?;
+    store
+        .put(&key, bytes[8 * 1024 * 1024..].to_vec().into())
+        .await?;
     let response = client
         .get(&endpoint)
         .bearer_auth("local-test-token")

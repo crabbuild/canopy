@@ -10,13 +10,14 @@ use crab_cell_runtime::{
 };
 
 use crate::{
-    INLINE_OBJECT_LIMIT, MAX_SQLITE_OBJECT_BYTES, ObjectKind, ObjectStorage, RepositoryCell,
-    RepositoryModule, StoredObject, large_blob::MAX_EXTERNAL_BLOB_BYTES, object_id,
+    INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, RepositoryCell, RepositoryModule, StoredObject,
+    object_id,
 };
 
 pub(crate) const MAX_OBJECTS: usize = 128;
+pub(crate) const VERIFY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 
-/// At most 128 records, 768 KiB inline payload, and 64 MiB of SQLite bytes to verify.
+/// Batches small objects together and verifies oversized SQLite objects individually.
 #[derive(Default)]
 pub struct ObjectBatch {
     objects: Vec<StoredObject>,
@@ -38,7 +39,9 @@ impl ObjectBatch {
         };
         if self.objects.len() == MAX_OBJECTS
             || bytes > INLINE_OBJECT_LIMIT - self.inline_bytes
-            || verified > MAX_SQLITE_OBJECT_BYTES as u64 - self.verified_bytes
+            || i64::try_from(verified).is_err()
+            || (!self.objects.is_empty()
+                && verified > VERIFY_BATCH_BYTES.saturating_sub(self.verified_bytes))
         {
             return Err(object);
         }
@@ -183,7 +186,7 @@ impl Command for PutObjects {
                     blake3,
                     sha256,
                 } => {
-                    if object.kind != ObjectKind::Blob || size > MAX_EXTERNAL_BLOB_BYTES {
+                    if object.kind != ObjectKind::Blob || i64::try_from(size).is_err() {
                         return Ok(CommandResult::Rejected(()));
                     }
                     (

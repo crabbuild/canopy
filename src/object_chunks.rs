@@ -11,11 +11,10 @@ use crate::{
 };
 
 pub(crate) const CHUNK_BYTES: usize = 512 * 1024;
-pub const MAX_SQLITE_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ObjectStageError {
-    #[error("only non-blob objects above the inline limit and at most 64 MiB can be staged")]
+    #[error("only non-blob objects above the inline limit can be staged")]
     Invalid,
     #[error("object chunk staging failed")]
     Cell(#[from] InvocationError<Vec<SqlResultSet>>),
@@ -30,7 +29,8 @@ impl RepositoryCell {
         body: &[u8],
     ) -> Result<StoredObject, ObjectStageError> {
         if kind == ObjectKind::Blob
-            || !(INLINE_OBJECT_LIMIT + 1..=MAX_SQLITE_OBJECT_BYTES).contains(&body.len())
+            || body.len() <= INLINE_OBJECT_LIMIT
+            || i64::try_from(body.len()).is_err()
         {
             return Err(ObjectStageError::Invalid);
         }
@@ -138,9 +138,7 @@ impl Chunks {
         digest: [u8; 32],
     ) -> Option<Self> {
         let size = usize::try_from(size).ok()?;
-        if kind == ObjectKind::Blob
-            || !(INLINE_OBJECT_LIMIT + 1..=MAX_SQLITE_OBJECT_BYTES).contains(&size)
-        {
+        if kind == ObjectKind::Blob || size <= INLINE_OBJECT_LIMIT || i64::try_from(size).is_err() {
             return None;
         }
         Some(Self {
