@@ -452,3 +452,182 @@ async fn sha256_checks_reviews_and_merge_survive_restore() -> Result {
     restored.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sha256_native_merge_candidates_survive_restore_and_publish() -> Result {
+    use super::merge::{AUTH, OWNER, current, new_pull, oid, revision, value};
+    use reqwest::Client;
+    use serde_json::json;
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        config(address, workspace.path().join("first")),
+        Arc::clone(&store),
+    )
+    .await?;
+    let client = Client::new();
+    let mut prepared = Vec::new();
+    for strategy in ["merge_commit", "squash", "rebase"] {
+        let name = format!("sha256-{strategy}");
+        let created = value(
+            client
+                .post(format!("http://{address}/api/repositories"))
+                .bearer_auth(OWNER)
+                .json(&json!({"name":name,"object_format":"sha256"})),
+        )
+        .await?;
+        let repository = created["repository_id"].clone();
+        let url = created["clone_url"].as_str().ok_or("clone URL missing")?;
+        let repo = format!("http://{address}/api/repositories/{name}");
+        let local = workspace.path().join(&name);
+        run_git(
+            None,
+            &[
+                "init",
+                "--object-format=sha256",
+                "-b",
+                "main",
+                path_str(&local)?,
+            ],
+        )
+        .await?;
+        run_git(Some(&local), &["config", "user.name", "Canopy Test"]).await?;
+        run_git(
+            Some(&local),
+            &["config", "user.email", "test@example.invalid"],
+        )
+        .await?;
+        tokio::fs::write(local.join("shared"), b"common\n").await?;
+        run_git(Some(&local), &["add", "shared"]).await?;
+        run_git(
+            Some(&local),
+            &["-c", "commit.gpgsign=false", "commit", "-m", "Common"],
+        )
+        .await?;
+        run_git(Some(&local), &["checkout", "-b", "feature"]).await?;
+        tokio::fs::write(local.join("feature"), b"feature change\n").await?;
+        run_git(Some(&local), &["add", "feature"]).await?;
+        run_git(
+            Some(&local),
+            &["-c", "commit.gpgsign=false", "commit", "-m", "Feature"],
+        )
+        .await?;
+        let source = oid(&local, "HEAD").await?;
+        run_git(Some(&local), &["checkout", "main"]).await?;
+        tokio::fs::write(local.join("base"), b"base change\n").await?;
+        run_git(Some(&local), &["add", "base"]).await?;
+        run_git(
+            Some(&local),
+            &["-c", "commit.gpgsign=false", "commit", "-m", "Base"],
+        )
+        .await?;
+        let base = oid(&local, "HEAD").await?;
+        run_git(
+            Some(&local),
+            &[
+                "-c",
+                AUTH,
+                "push",
+                url,
+                "HEAD:refs/heads/main",
+                &format!("{source}:refs/heads/feature"),
+            ],
+        )
+        .await?;
+        let api = new_pull(
+            &client,
+            &repo,
+            &repository,
+            "refs/heads/feature",
+            &source,
+            &base,
+        )
+        .await?;
+        let request = json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":revision(&current(&client,&api).await?),"strategy":strategy,"message":if strategy == "rebase" { "" } else { "Reviewed merge" }});
+        let candidate = value(
+            client
+                .post(format!("{api}/merge-candidates"))
+                .bearer_auth(OWNER)
+                .json(&request),
+        )
+        .await?;
+        assert_eq!(candidate["candidate"]["result"]["state"], "ready");
+        let commit = candidate["candidate"]["result"]["oid"]
+            .as_str()
+            .ok_or("candidate OID missing")?;
+        assert_eq!(commit.len(), 64);
+        let fetch_ref = candidate["fetch_ref"]
+            .as_str()
+            .ok_or("candidate ref missing")?;
+        run_git(Some(&local), &["-c", AUTH, "fetch", url, fetch_ref]).await?;
+        assert_eq!(oid(&local, "FETCH_HEAD").await?, commit);
+        let parents = String::from_utf8(
+            run_git(Some(&local), &["show", "-s", "--format=%P", commit]).await?,
+        )?;
+        assert_eq!(
+            parents.trim(),
+            if strategy == "merge_commit" {
+                format!("{base} {source}")
+            } else {
+                base
+            }
+        );
+        prepared.push((name, repository, request, candidate));
+    }
+    server.shutdown().await?;
+
+    let restored_address = available_address().await?;
+    let restored = CanopyServer::start(
+        config(restored_address, workspace.path().join("restored")),
+        store,
+    )
+    .await?;
+    for (name, repository, request, candidate) in prepared {
+        let api = format!("http://{restored_address}/api/repositories/{name}/pulls/1");
+        let saved = value(
+            client
+                .get(format!(
+                    "{api}/merge-candidates/{}",
+                    request["id"].as_str().ok_or("candidate UUID missing")?
+                ))
+                .bearer_auth(OWNER),
+        )
+        .await?;
+        assert_eq!(saved, candidate);
+        let merge = json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":request["revision"],"strategy":request["strategy"],"candidate_id":request["id"]});
+        let merged = value(
+            client
+                .post(format!("{api}/merge"))
+                .bearer_auth(OWNER)
+                .json(&merge),
+        )
+        .await?;
+        assert_eq!(
+            merged["merge"]["oid"],
+            candidate["candidate"]["result"]["oid"]
+        );
+        let clone = workspace.path().join(format!("clone-{name}"));
+        run_git(
+            None,
+            &[
+                "-c",
+                AUTH,
+                "clone",
+                &format!("http://{restored_address}/canopy/{name}.git"),
+                path_str(&clone)?,
+            ],
+        )
+        .await?;
+        assert_eq!(oid(&clone, "HEAD").await?, merged["merge"]["oid"]);
+        assert_eq!(tokio::fs::read(clone.join("base")).await?, b"base change\n");
+        assert_eq!(
+            tokio::fs::read(clone.join("feature")).await?,
+            b"feature change\n"
+        );
+        run_git(Some(&clone), &["fsck", "--full", "--strict"]).await?;
+    }
+    restored.shutdown().await?;
+    Ok(())
+}
