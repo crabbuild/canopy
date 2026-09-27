@@ -86,7 +86,6 @@ struct CachedObjects {
 struct CachedRepository {
     backend: GitHttpBackend,
     snapshot: RefSnapshot,
-    includes_blobs: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -207,7 +206,7 @@ impl GitGateway {
             .await?;
             backend.stream(request, ()).await?
         } else if discovery::is_ref_discovery(&request).await? {
-            if let Some(cached) = self.current_cache(false).await? {
+            if let Some(cached) = self.current_cache().await? {
                 cached.backend.stream(request, Arc::clone(&cached)).await?
             } else {
                 let backend = self.discovery_cache(self.cell_refs().await?).await?;
@@ -215,13 +214,8 @@ impl GitGateway {
             }
         } else {
             let fetch = fetch::FetchRequest::read(&request).await?;
-            let include_blobs = fetch.includes_blobs;
-            let cached = self.fetch_cache(&fetch.wants, include_blobs).await?;
-            if !include_blobs {
-                let objects = self.objects.lock().await;
-                let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
-                self.hydrate_selected(&shared.cache, fetch.wants).await?;
-            }
+            let cached = self.fetch_cache(&fetch.wants).await?;
+            self.prepare_fetch(&cached, fetch).await?;
             cached.backend.stream(request, Arc::clone(&cached)).await?
         };
         Ok(GitHttpResponse {
@@ -231,10 +225,7 @@ impl GitGateway {
         })
     }
 
-    async fn current_cache(
-        &self,
-        include_blobs: bool,
-    ) -> Result<Option<Arc<CachedRepository>>, GatewayError> {
+    async fn current_cache(&self) -> Result<Option<Arc<CachedRepository>>, GatewayError> {
         // Hydration holds this mutex across storage I/O. Discovery must stay
         // independent, so inspect only a ready snapshot and release before SQL.
         let cached = self.cache.try_lock().ok().and_then(|cache| cache.clone());
@@ -249,9 +240,8 @@ impl GitGateway {
             .await
             .map_err(|error| GatewayError::Cell(Box::new(error)))?
             .output;
-        let current = cached.snapshot.generation == head.generation
-            && cached.snapshot.head == head.reference
-            && (!include_blobs || cached.includes_blobs);
+        let current =
+            cached.snapshot.generation == head.generation && cached.snapshot.head == head.reference;
         if current {
             tracing::debug!(
                 repository = %hex::encode(self.repository.repository_id()),
@@ -403,11 +393,7 @@ impl GitGateway {
             .await?,
         };
         backend.cache.store_refs(&snapshot.refs).await?;
-        Ok(CachedRepository {
-            backend,
-            snapshot,
-            includes_blobs: include_blobs,
-        })
+        Ok(CachedRepository { backend, snapshot })
     }
 
     async fn cell_refs(&self) -> Result<RefSnapshot, GatewayError> {

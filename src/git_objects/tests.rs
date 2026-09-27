@@ -163,7 +163,7 @@ async fn dropping_reader_kills_both_children() -> TestResult {
     let tip = oid(directory.path(), "HEAD").await?;
     let objects = GitObjects::start(&directory.path().join(".git"), vec![tip], vec![])?;
     let pids = [
-        objects.walk.child.id().unwrap(),
+        objects.walk.process.child.id().unwrap(),
         objects.batch.child.id().unwrap(),
     ];
     drop(objects);
@@ -208,5 +208,34 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
         offset += bytes.len();
     }
     assert_eq!(offset, body.len());
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_walk_streams_requested_history_without_unrelated_blobs() -> TestResult {
+    let directory = fixture().await?;
+    let path = directory.path();
+    let root = oid(path, "HEAD").await?;
+    let output = git(path, &["ls-tree", "-r", "--format=%(objectname)", "HEAD"]).await?;
+    let expected = output
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(parse_oid)
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    tokio::fs::write(path.join("unrelated"), b"not in requested history\n").await?;
+    git(path, &["add", "unrelated"]).await?;
+    git(path, &["commit", "-m", "Unrequested descendant"]).await?;
+    let unrelated = oid(path, "HEAD:unrelated").await?;
+    for oid in expected.iter().chain(std::iter::once(&unrelated)) {
+        let hex = hex::encode(oid);
+        tokio::fs::remove_file(path.join(".git/objects").join(&hex[..2]).join(&hex[2..])).await?;
+    }
+    let mut walk = GitObjectWalk::missing(&path.join(".git"), vec![root])?;
+    let mut found = std::collections::BTreeSet::new();
+    while let Some(oid) = walk.next().await? {
+        assert!(found.insert(oid), "duplicate missing object");
+    }
+    walk.finish().await?;
+    assert_eq!(found, expected);
     Ok(())
 }

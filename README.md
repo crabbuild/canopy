@@ -709,7 +709,8 @@ push publication path.
 
 SSH prepares non-blob history and advertised ref/tag targets before negotiation.
 Exact `blob:none` requests hydrate only explicit missing wants; full fetches and
-other filters finish full hydration before forwarding wants to native Git.
+other filters hydrate missing blobs reachable from requested tips before
+forwarding wants to native Git.
 SSH LFS authentication is not implemented; repositories cloned
 over SSH must configure an HTTPS LFS endpoint and HTTP credentials for LFS.
 The local compatibility suite covers stock Git transfers and fresh-disk recovery;
@@ -788,8 +789,9 @@ The [density benchmark and remaining scaling plan](docs/performance-plan.md)
 separate repository count, active Cells and simultaneous transfers.
 Git v2 capability discovery needs no object cache. Native v0 advertisements and
 v2 `ls-refs` prepare only ref targets and annotated-tag chains in a temporary
-cache. Blobless fetch omits ordinary blobs; full fetch and push prepare full
-history. Direct blob/tree refs require their
+cache. Blobless fetch omits ordinary blobs; full fetch prepares non-blob history
+and blobs reachable from requested tips. Push still prepares full history.
+Direct blob/tree refs require their
 own bodies, and very large ref sets still need separate capacity qualification.
 A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
@@ -826,8 +828,9 @@ Cold cache hydration reads insertion-ordered pages of at most 128 records and 76
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
 reduce SQLite query overhead. Blobless fetch (`--filter=blob:none`) skips ordinary
-blob bodies until explicitly requested; other filters and full fetch still
-rebuild the complete cache. Supported filters and remaining gaps are listed in
+blob bodies until explicitly requested; other filters and full fetch hydrate
+only missing blobs reachable from requested tips, plus advertised ref/tag targets.
+Non-blob history is still prepared across the repository. Supported filters and remaining gaps are listed in
 [Git compatibility](docs/git-compatibility.md).
 While a gateway remains resident, verified object files are shared across private
 ref snapshots, pushes and merge candidates. An indexed insertion cursor limits

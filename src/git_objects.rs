@@ -90,23 +90,31 @@ impl Process {
     }
 }
 
-pub(crate) struct GitObjects {
-    walk: Process,
+pub(crate) struct GitObjectWalk {
+    process: Process,
     revisions: AbortOnDropHandle<Result<(), io::Error>>,
-    batch: Process,
-    requests: ChildStdin,
+    missing_only: bool,
 }
 
-impl GitObjects {
-    pub(crate) fn start(
+impl GitObjectWalk {
+    pub(crate) fn missing(
+        git_dir: &Path,
+        included: Vec<[u8; 20]>,
+    ) -> Result<Self, ObjectReadError> {
+        Self::start(git_dir, included, Vec::new(), true)
+    }
+
+    fn start(
         git_dir: &Path,
         included: Vec<[u8; 20]>,
         excluded: Vec<[u8; 20]>,
+        missing_only: bool,
     ) -> Result<Self, ObjectReadError> {
-        let (walk, mut input) = Process::start(
-            git_dir,
-            &["rev-list", "--objects", "--no-object-names", "--stdin"],
-        )?;
+        let mut args = vec!["rev-list", "--objects", "--no-object-names", "--stdin"];
+        if missing_only {
+            args.push("--missing=print");
+        }
+        let (process, mut input) = Process::start(git_dir, &args)?;
         // Ref lists can exceed argv limits; feed stdin concurrently with stdout consumption.
         let revisions = AbortOnDropHandle::new(tokio::spawn(async move {
             for (prefix, roots) in [("", included), ("^", excluded)] {
@@ -118,24 +126,64 @@ impl GitObjects {
             }
             Ok(())
         }));
+        Ok(Self {
+            process,
+            revisions,
+            missing_only,
+        })
+    }
+
+    pub(crate) async fn next(&mut self) -> Result<Option<[u8; 20]>, ObjectReadError> {
+        timeout(IO_TIMEOUT, async {
+            while let Some(line) = header(&mut self.process.output).await? {
+                if self.missing_only {
+                    if let Some(oid) = line.strip_prefix(b"?") {
+                        return Ok(Some(parse_oid(oid)?));
+                    }
+                    parse_oid(&line)?;
+                } else {
+                    return Ok(Some(parse_oid(&line)?));
+                }
+            }
+            Ok(None)
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)?
+    }
+
+    pub(crate) async fn finish(self) -> Result<(), ObjectReadError> {
+        timeout(IO_TIMEOUT, async move {
+            self.revisions.await??;
+            self.process.finish().await
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)?
+    }
+}
+
+pub(crate) struct GitObjects {
+    walk: GitObjectWalk,
+    batch: Process,
+    requests: ChildStdin,
+}
+
+impl GitObjects {
+    pub(crate) fn start(
+        git_dir: &Path,
+        included: Vec<[u8; 20]>,
+        excluded: Vec<[u8; 20]>,
+    ) -> Result<Self, ObjectReadError> {
+        let walk = GitObjectWalk::start(git_dir, included, excluded, false)?;
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
         Ok(Self {
             walk,
-            revisions,
             batch,
             requests,
         })
     }
 
     pub(crate) async fn next(&mut self) -> Result<Option<[u8; 20]>, ObjectReadError> {
-        timeout(IO_TIMEOUT, async {
-            match header(&mut self.walk.output).await? {
-                Some(line) => Ok(Some(parse_oid(&line)?)),
-                None => Ok(None),
-            }
-        })
-        .await
-        .map_err(|_| ObjectReadError::Timeout)?
+        self.walk.next().await
     }
 
     pub(crate) async fn read(
@@ -154,7 +202,6 @@ impl GitObjects {
 
     pub(crate) async fn finish(self) -> Result<(), ObjectReadError> {
         timeout(IO_TIMEOUT, async move {
-            self.revisions.await??;
             self.walk.finish().await?;
             drop(self.requests);
             let mut batch = self.batch;

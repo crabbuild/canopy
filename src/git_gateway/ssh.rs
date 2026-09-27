@@ -23,7 +23,7 @@ impl GitGateway {
         // Advertisements need structure and ref/tag targets, not ordinary blobs.
         // Retain one ref snapshot, then hydrate each request before forwarding
         // its wants; native Git can begin object traversal as soon as it reads them.
-        let cached = self.fetch_cache(&BTreeSet::new(), false).await?;
+        let cached = self.fetch_cache(&BTreeSet::new()).await?;
         let mut command = cached.backend.transport_command()?;
         command
             .arg("upload-pack")
@@ -54,7 +54,6 @@ impl GitGateway {
             let result = async {
                 let mut reader = reader;
                 let mut remaining = MAX_FETCH_REQUEST_BYTES as usize;
-                let mut includes_blobs = cached.includes_blobs;
                 loop {
                     let Some(group) = packet_group(&mut reader, remaining).await? else {
                         return Ok::<_, GatewayError>(());
@@ -63,16 +62,7 @@ impl GitGateway {
                     let request = fetch::FetchRequest::parse(&group)?;
                     self.validate_wants(&cached.snapshot, &request.wants)
                         .await?;
-                    if !includes_blobs && !request.wants.is_empty() {
-                        let mut objects = self.objects.lock().await;
-                        let shared = objects.as_mut().ok_or(GatewayError::MalformedCache)?;
-                        if request.includes_blobs {
-                            self.hydrate(shared, true).await?;
-                            includes_blobs = true;
-                        } else {
-                            self.hydrate_selected(&shared.cache, request.wants).await?;
-                        }
-                    }
+                    self.prepare_fetch(&cached, request).await?;
                     stdin.write_all(&group).await?;
                     stdin.flush().await?;
                     if !protocol_v2 {

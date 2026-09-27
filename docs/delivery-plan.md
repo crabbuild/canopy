@@ -3488,3 +3488,34 @@ Local proof: both locking integration tests and the existing smart-HTTP Git/LFS
 publication suite pass; all-target Clippy, formatting and diff checks pass.
 The tests use an in-memory provider. Hosted CI and real-provider locking fault
 qualification have not run.
+
+## Requested blob preparation for cold fetch
+
+HTTP and SSH now share request preparation. Their cached ref snapshots contain
+non-blob history and advertised ref/tag targets. Exact `blob:none` requests add
+explicit wants; other fetches run native `rev-list --objects --missing=print`
+from the validated wants and stream missing IDs through 128-object hydration
+batches. This avoids loading unrelated or deleted branch blobs. The native
+object walker is shared with strict push ingestion; snapshot-wide blob flags
+and the separate SSH full-hydration branch are removed.
+
+The new stock-client regression failed on the previous implementation because
+an HTTP v0 single-branch clone hydrated an unrelated branch blob. It now passes
+for HTTP/SSH v0/v2 with three independent 2 MiB blobs: clone one branch, fetch
+another through the reused snapshot, and leave the deleted branch absent.
+A second cold restart tests negotiation from a client with unrequested history;
+its existing branch's blob remains absent from the server. Byte checks and
+strict/full fsck verify each client result.
+
+The partial-clone security fixture now explicitly fetches a referenced branch
+before deleting it. Its cached-unreachable-object rejection assertions remain;
+they no longer depend on eager orphan hydration. Existing shallow/mirror,
+filtered/lazy, SSH cancellation/publication and HTTP Git/LFS publication gates
+pass. Seven object-reader tests cover bounded enumeration, strict ingestion,
+corrupt input, large bodies and child-process cancellation.
+
+Non-blob preparation remains repository-wide. Other filters can still hydrate
+reachable blobs omitted from the client pack, and warm full fetches repeat the
+native walk. These remaining costs need optimization and provider/scale latency
+measurements. New tracing reports reachable blob counts, bytes and preparation
+time. Local tests use the in-memory provider; hosted CI has not run this slice.

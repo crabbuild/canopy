@@ -15,8 +15,8 @@ pub(super) async fn is_ref_discovery(request: &GitHttpRequest) -> Result<bool, I
     {
         return Ok(false);
     }
-    // Inspect only bounded command headers. Native Git validates the complete
-    // request; unclassified requests retain full object preparation.
+    // Inspect only bounded command headers. Other requests use fetch preparation;
+    // native Git still validates their complete protocol commands.
     Ok(ls_refs(&request.body.prefix(256 * 1024).await?))
 }
 

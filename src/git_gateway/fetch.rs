@@ -77,23 +77,71 @@ impl FetchRequest {
 }
 
 impl GitGateway {
+    pub(super) async fn prepare_fetch(
+        &self,
+        cached: &CachedRepository,
+        request: FetchRequest,
+    ) -> Result<(), GatewayError> {
+        if request.wants.is_empty() {
+            return Ok(());
+        }
+        let started = std::time::Instant::now();
+        let objects = self.objects.lock().await;
+        let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
+        let roots = request
+            .includes_blobs
+            .then(|| request.wants.iter().copied().collect());
+        self.hydrate_selected(&shared.cache, request.wants).await?;
+        let Some(roots) = roots else {
+            return Ok(());
+        };
+        // All structure is present; only blobs can be missing below validated wants.
+        // Walking --all would include unrelated and deleted history. Serialize
+        // hydration until these wants can safely reach native upload-pack.
+        let mut walk =
+            crate::git_objects::GitObjectWalk::missing(&cached.backend.git_dir(), roots)?;
+        let mut stats = Hydration::default();
+        loop {
+            let mut ids = Vec::with_capacity(MAX_OBJECTS);
+            for _ in 0..MAX_OBJECTS {
+                let Some(oid) = walk.next().await? else {
+                    break;
+                };
+                ids.push(oid);
+            }
+            if ids.is_empty() {
+                break;
+            }
+            self.hydrate_objects(&shared.cache, ids, &mut stats).await?;
+        }
+        walk.finish().await?;
+        tracing::debug!(
+            repository = %hex::encode(self.repository.repository_id()),
+            objects = stats.objects,
+            bytes = stats.bytes,
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            "prepared reachable Git blobs"
+        );
+        Ok(())
+    }
+
     pub(super) async fn fetch_cache(
         &self,
         wants: &BTreeSet<[u8; 20]>,
-        include_blobs: bool,
     ) -> Result<Arc<CachedRepository>, GatewayError> {
-        if let Some(cached) = self.current_cache(include_blobs).await? {
+        if let Some(cached) = self.current_cache().await? {
             self.validate_wants(&cached.snapshot, wants).await?;
             return Ok(cached);
         }
         let live_refs = self.cell_refs().await?;
         self.validate_wants(&live_refs, wants).await?;
         let mut cache = self.cache.lock().await;
-        if cache.as_ref().is_none_or(|cached| {
-            cached.snapshot != live_refs || (include_blobs && !cached.includes_blobs)
-        }) {
+        if cache
+            .as_ref()
+            .is_none_or(|cached| cached.snapshot != live_refs)
+        {
             *cache = None;
-            *cache = Some(Arc::new(self.build_cache(live_refs, include_blobs).await?));
+            *cache = Some(Arc::new(self.build_cache(live_refs, false).await?));
         }
         Ok(Arc::clone(
             cache.as_ref().ok_or(GatewayError::MalformedCache)?,
@@ -181,28 +229,38 @@ impl GitGateway {
                     pending.insert(oid);
                 }
             }
-            let mut missing: BTreeSet<_> = cache.missing_objects(ids).await?.into_iter().collect();
-            while !missing.is_empty() {
-                let selected: Vec<_> = missing.iter().copied().collect();
-                let page = self
-                    .repository
-                    .selected_objects(&selected)
-                    .await
-                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-                if page.is_empty() {
-                    return Err(GatewayError::MalformedCache);
-                }
-                for object in page {
-                    missing.remove(&object.oid);
-                    self.cache_object(cache, object, &mut stats).await?;
-                }
-            }
+            self.hydrate_objects(cache, ids, &mut stats).await?;
         }
         tracing::debug!(
             objects = stats.objects,
             bytes = stats.bytes,
             "hydrated explicit Git objects"
         );
+        Ok(())
+    }
+
+    async fn hydrate_objects(
+        &self,
+        cache: &Arc<GitCache>,
+        ids: Vec<[u8; 20]>,
+        stats: &mut Hydration,
+    ) -> Result<(), GatewayError> {
+        let mut missing: BTreeSet<_> = cache.missing_objects(ids).await?.into_iter().collect();
+        while !missing.is_empty() {
+            let selected: Vec<_> = missing.iter().copied().collect();
+            let page = self
+                .repository
+                .selected_objects(&selected)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            if page.is_empty() {
+                return Err(GatewayError::MalformedCache);
+            }
+            for object in page {
+                missing.remove(&object.oid);
+                self.cache_object(cache, object, stats).await?;
+            }
+        }
         Ok(())
     }
 }

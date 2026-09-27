@@ -729,17 +729,29 @@ An exact `blob:none` request uses a separate insertion cursor and the partial
 ref tips, peeled tag targets and explicit wants. Other ordinary blob bodies stay
 absent until needed. Cursor advancement follows verified page completion; a
 blob-only tail advances to the captured high-water mark. The full-object cursor
-stays independent, so a later full fetch cannot skip previously omitted blobs.
-A partial snapshot cannot satisfy a full preparation request. Shared immutable
-bytes and snapshot ownership use the same disk accounting and worker fences.
+stays independent for push/merge preparation. Fetch snapshots prepare missing
+blobs for each request's validated wants; reusing a snapshot never skips a new
+requested closure. Shared immutable bytes and snapshot ownership use the same
+disk accounting and worker fences.
 
-Other filters affect the client pack but still prepare the full server cache.
-Blobless preparation still scans all stored non-blob history, including retained
+Full fetches and other filters use native `rev-list --objects --missing=print`
+with requested OIDs on stdin, without `--all`, to enumerate missing reachable
+blobs. Explicit wants and tag chains are loaded first; all non-blob structure is
+already present. Missing IDs stream in batches of at most 128 into the existing
+bounded Cell reads and verified cache writes. The shared object lock serializes
+hydration until the request can safely reach upload-pack. Enumeration process
+failures abort preparation. The shared native object walker also continues to
+serve push ingestion with ordinary strict missing-object behavior.
+See [Git rev-list's missing-object contract](https://git-scm.com/docs/git-rev-list#Documentation/git-rev-list.txt---missingmissing-action).
+
+Other filters still load all reachable blobs even when the client pack omits
+some. Fetch preparation still scans all stored non-blob history, including retained
 orphans. Reverse traversal can visit the whole ancestor graph for an unreachable
 want. These costs require scale qualification; this is not a bounded-latency or
 requested-closure-only implementation. Local integration tests cover actual
 omissions, lazy fetch, fresh-disk restore and rejection of unreachable object
-kinds before and after full hydration. They use the in-memory object provider.
+kinds before and after caching and deleting their refs. They use the in-memory
+object provider.
 
 Incoming Git bodies stream into anonymous temporary files before CGI execution.
 Each write reserves bytes from the same `DiskBudget` used by the node's SQLite
@@ -1147,9 +1159,9 @@ group on Unix. Accepted push tasks drain before the node closes Cells.
 SSH fetch retains one ref snapshot and validates every initial v0 want or v2
 request group against certified Cell reachability before forwarding to native
 upload-pack. Initial hydration includes non-blob history and ref/tag targets.
-Exact `blob:none` requests hydrate explicit wants only; other requests finish
-full hydration before any wants reach Git. No-want discovery does not trigger
-full hydration. Native Git can traverse objects immediately while parsing wants,
+Exact `blob:none` requests hydrate explicit wants only; other requests prepare
+missing reachable blobs before any wants reach Git. No-want discovery skips
+blob enumeration. Native Git can traverse objects immediately while parsing wants,
 so request preparation must precede writing its packet group to stdin. This uses
 the same serialized object-cache hydration as HTTP; immutable files publish only
 after complete byte/hash verification. See Git's

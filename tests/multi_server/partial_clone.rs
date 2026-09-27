@@ -218,8 +218,33 @@ async fn filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_bl
         assert_eq!(tokio::fs::read(clone.join("two")).await?, bodies[1]);
         run_git(Some(&clone), &["fsck", "--strict"]).await?;
     }
-    // Full preparation can retain orphan bodies in the shared cache. The
-    // explicit want gate must still reject each unreachable object type.
+    // Explicitly cache the branch while referenced, then delete it again. Fetch
+    // no longer loads orphan blobs, but cached orphans must still be denied.
+    run_git(
+        Some(&source),
+        &["-c", AUTH, "push", &url, "refs/heads/discarded"],
+    )
+    .await?;
+    let discarded_clone = workspace.path().join("discarded-clone");
+    run_git(
+        None,
+        &[
+            "-c",
+            AUTH,
+            "clone",
+            "--single-branch",
+            "--branch",
+            "discarded",
+            &url,
+            path_str(&discarded_clone)?,
+        ],
+    )
+    .await?;
+    run_git(
+        Some(&source),
+        &["-c", AUTH, "push", &url, ":refs/heads/discarded"],
+    )
+    .await?;
     assert!(cache_contains(&restored_disk, &discarded)?);
     for oid in [
         &discarded,

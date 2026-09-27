@@ -34,8 +34,21 @@ proves that two large blobs start absent, lazy reading one hydrates only that
 blob, and deleted-ref objects remain unavailable even after full hydration.
 SQL work-bound tests exercise 10,000 stored objects. These are local correctness
 and query-work gates, not latency or real-provider throughput measurements.
-Other filters still prepare the full cache; narrowing preparation to requested
-reachable history and measuring cold/warm latency remain open.
+Full fetches and other filters now enumerate missing blobs reachable from the
+requested tips using native `rev-list --objects --missing=print`. HTTP and SSH
+share this path; IDs stream through batches of at most 128, using the existing
+bounded Cell object reads and verified cache writes. The regression fixture has
+three independent 2 MiB blobs. A cold single-branch clone loads its 2 MiB blob
+while the other live branch and deleted branch remain absent; fetching the other
+branch adds its blob and leaves the deleted branch absent. This runs for v0/v2
+over both transports, and establishes reduced preparation, not a latency target.
+
+Preparation logs report newly hydrated blob counts/bytes and elapsed time.
+The native walk still traverses requested history on warm requests; native Git's
+own traversal memory is not bounded by the Rust batch size. Non-blob history
+remains repository-wide, and filters other than exact `blob:none` still hydrate
+all blobs reachable from wants even when the resulting pack omits some of them.
+Narrowing these costs and measuring cold/warm latency remain open.
 
 ## Node design and resource model
 

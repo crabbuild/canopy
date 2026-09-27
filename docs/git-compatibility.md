@@ -36,7 +36,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Rejection reporting | Branch policy, unsupported names, command limits and late Cell refusals produce Git reports; clients declining reports receive HTTP 409, and infrastructure failures can still return HTTP 500 | Finish pre-publication resource/infrastructure reporting without mislabeling uncertain outcomes |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
-| Cold fetch | HTTP and SSH exact `blob:none` hydrate non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
+| Cold fetch | HTTP and SSH hydrate non-blob history and ref/tag targets; exact `blob:none` adds explicit wants only, while other fetches load missing blobs reachable from requested tips | Narrow non-blob preparation and filter-specific blob selection; measure cold/warm bytes and latency at scale |
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
@@ -92,7 +92,12 @@ close, and cancel during node shutdown.
 Stock OpenSSH authentication is tested with Ed25519, RSA and ECDSA P-256,
 P-384 and P-521 keys.
 `tests/multi_server/ssh_fetch.rs` verifies cold v0/v2 blobless clones, explicit
-lazy blob hydration, blob-tag advertisements and subsequent full clones.
+lazy blob hydration, blob-tag advertisements and subsequent full clones. Its
+full-fetch regression covers HTTP and SSH v0/v2: a cold single-branch clone
+omits unrelated/deleted branch blobs; a later fetch of another branch loads
+that branch's bytes without loading the deleted branch. A fresh server also
+handles negotiation from a client with unrelated history without hydrating its
+blobs. Strict fsck verifies the resulting clones.
 `tests/multi_server/ssh_publication.rs` pauses external ingestion after native
 acceptance: late ACL/policy refusals preserve both refs and generation, while an
 accepted push survives client disconnect and completes before shutdown releases
