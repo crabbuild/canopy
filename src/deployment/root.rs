@@ -87,11 +87,13 @@ pub(super) async fn load(store: &Store, root: &Path) -> Result<Option<RootClaim>
 
 pub(super) async fn reserve(store: &Store, root: &Path, purpose: RootPurpose) -> Result<RootClaim> {
     if load(store, root).await?.is_none()
-        && !matches!(purpose, RootPurpose::Service)
         && ApplicationIdentityStore::new(store.clone(), root.clone())
             .load()
             .await?
             .is_some()
+        // Current initialization writes the reservation before its identity.
+        // Recheck for a concurrent creator; never adopt an unmarked deployment.
+        && load(store, root).await?.is_none()
     {
         return Err(Error::Backup(
             "destination already contains an application identity",

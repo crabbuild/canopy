@@ -2186,8 +2186,11 @@ pin UUID identifies one immutable cut; repeating create reuses it.
 
 `<prefix>/canopy-root-v1.json` is a bounded, conditional-write reservation with
 Service, Backup or Restore purpose. Backup/Restore bind the source prefix and
-pin UUID. Service initialization competes on this same key. Copies reject another
-purpose/operation and previously unmarked application identities. Backup roots
+pin UUID. Service initialization competes on this same key. Every reservation,
+including Service, rejects an existing application identity without a root marker.
+Current initialization writes the marker first; admission rechecks it after
+reading an identity to allow a concurrent current-format creator. Copies also
+reject another purpose/operation. Backup roots
 never admit a service. Restore roots admit one only after a completion CAS;
 upstream runtime restoration may install Ready before external bodies finish,
 so the reservation is also checked on serving and maintenance admission. An older

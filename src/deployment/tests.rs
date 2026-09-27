@@ -70,27 +70,41 @@ async fn service_initialization_and_backup_reservation_are_exclusive() -> TestRe
 }
 
 #[tokio::test]
-async fn backup_reservation_rejects_an_existing_unmarked_deployment() -> TestResult {
-    let deployment = fixture()?;
-    deployment
-        .identities
-        .initialize(deployment.identity)
-        .await?;
-    let purpose = root::RootPurpose::Backup {
-        source: "source".into(),
-        pin: uuid::Uuid::new_v4().to_string(),
-        complete: false,
-    };
-    assert!(
-        root::reserve(deployment.layout.store(), &deployment.prefix, purpose)
-            .await
-            .is_err()
-    );
-    assert!(
-        root::load(deployment.layout.store(), &deployment.prefix)
-            .await?
-            .is_none()
-    );
+async fn root_reservations_reject_unmarked_deployments() -> TestResult {
+    for purpose in [
+        root::RootPurpose::Service,
+        root::RootPurpose::Backup {
+            source: "source".into(),
+            pin: uuid::Uuid::new_v4().to_string(),
+            complete: false,
+        },
+        root::RootPurpose::Restore {
+            source: "source".into(),
+            pin: uuid::Uuid::new_v4().to_string(),
+            complete: false,
+        },
+    ] {
+        let deployment = fixture()?;
+        deployment
+            .identities
+            .initialize(deployment.identity)
+            .await?;
+        assert!(matches!(
+            root::reserve(deployment.layout.store(), &deployment.prefix, purpose).await,
+            Err(Error::Backup(
+                "destination already contains an application identity"
+            ))
+        ));
+        assert!(
+            root::load(deployment.layout.store(), &deployment.prefix)
+                .await?
+                .is_none()
+        );
+        assert_eq!(
+            deployment.identities.load().await?,
+            Some(deployment.identity)
+        );
+    }
     Ok(())
 }
 
@@ -98,6 +112,7 @@ async fn backup_reservation_rejects_an_existing_unmarked_deployment() -> TestRes
 async fn interrupted_initial_activation_resumes_exact_phases() -> TestResult {
     for activate in [false, true] {
         let deployment = fixture()?;
+        deployment.claim_service_root().await?;
         deployment
             .identities
             .initialize(deployment.identity)

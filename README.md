@@ -726,8 +726,9 @@ Cellule, Crab CLI/server or Xet dependencies.
 
 Use a **fresh storage prefix** for this build. Crab derives a 33-byte entity
 partition from the repository UUID; the UUID is also persisted in repository
-SQLite for backup recovery. Previous Cellule prefixes/backups are not migrated;
-release admission rejects a different compiled release. See the
+SQLite for backup recovery. This is a hard cutover: previous Cellule
+prefixes/backups are unsupported. Startup rejects unmarked application roots,
+and release admission rejects a different compiled release. See the
 [runtime integration contract](docs/contracts.md#crab-cell-integration).
 
 Before ref publication, bounded certificate batches verify the durable Git

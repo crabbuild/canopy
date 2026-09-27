@@ -3300,3 +3300,32 @@ then verified and restored after all original source objects were deleted.
 Stock clone/LFS recovered exact bytes and the collaboration issue. The driver
 removed its container and volume. This is compatibility/recovery evidence,
 not a production performance or provider durability claim.
+
+
+## Hard cutover admission
+
+`src/deployment/root.rs` removes the Service exception that could adopt an
+application identity without a Canopy root marker. Service, Backup and Restore
+now reject that state without writing a reservation or changing the identity.
+Crab is the sole dependency/API/storage path; no Cellule decoder, adapter, alias,
+retained module code or data migration is provided.
+
+The same root reservation still serializes concurrent current-format startup
+and copy operations. Since current initialization writes its marker before its
+identity, admission rechecks the marker after discovering an identity. This
+preserves a concurrent creator without accepting an unmarked deployment.
+
+The regression failed on the previous Service exception and passes for all
+three purposes after its removal. All ten deployment tests pass, including
+concurrent startup, exact interrupted activation and recovery. The interrupted
+activation fixture now creates its root reservation before its identity,
+matching the production initialization order. All-target Clippy passes.
+
+
+Release build and real S3-compatible backup/restore passed in
+`canopy-hard-cutover-733b6768ae52` (disposable RustFS fixture). Binary SHA-256:
+`5e1f404e7089032b21fc45647fbbfdffab6b5a039e3add6f19e3e491f23ac4fa`.
+Stock Git/LFS restored exact 80 MiB Git and LFS bodies, empty LFS content and an
+issue after all original source objects were deleted. The fixture container and
+volume were removed. This verifies current-format startup and copy admission;
+it does not add an old-format upgrade path.
