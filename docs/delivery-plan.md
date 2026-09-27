@@ -3012,3 +3012,18 @@ queue saturation. The mix was readiness checks with every tenth request reading
 repository metadata; combined service p99 was 3.131 ms, not a metadata-only SLO.
 The provider fixture cleaned up. The larger repeated latency schedule remains
 required; this one-Cell pressure test does not qualify thousand-Cell capacity.
+
+The focused thousand-Cell repeat (`canopy-buffered-logging-bc264a7287ff`,
+optimized `78fef9d`) passed all 1,600 scheduled reads and graceful shutdown,
+with complete attempted-request/handler correlation and no logged warnings or
+errors. Uniform metadata p95/p99 was 10.303/11.608 ms over 1,200 arrivals at
+ten requests/second; warm three-repository metadata p99 was 11.461 ms. Sampled
+parent RSS peaked at 470,302,720 bytes. Fixture cleanup completed. The measured
+logging stall did not recur.
+
+This is the SQL-only, mostly-empty corpus on the shared macOS host. It neither
+repeats crash recovery nor qualifies production Linux capacity, large histories,
+full primitive workloads or queries overlapping runtime compaction. Earlier
+failed runs remain recorded. Next performance proof should prioritize the
+controlled Linux resource envelope, representative workload/cost measurement
+and safe residency/primitive integration rather than speculative socket tuning.

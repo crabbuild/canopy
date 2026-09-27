@@ -617,3 +617,36 @@ python3 -B scripts/smoke_s3_logging.py \
 
 The script owns and cleans up its server process. The caller owns provider-prefix
 cleanup. Reports and server logs remain in the chosen work directory.
+
+
+## Thousand-Cell repeat with nonblocking diagnostics
+
+The optimized `78fef9d` run, `canopy-buffered-logging-bc264a7287ff`, seeded
+1,000 identities in 77.247 seconds with 1,000 resident slots and a 4 GiB local
+disk allowance. The same mostly-empty SQL corpus shape and colocated RustFS
+provider were used on the shared macOS host. No sampler ran during this repeat.
+
+| Workload | Rate / duration | Outcomes | Scheduled p50 / p95 / p99 |
+| --- | --- | --- | --- |
+| Three prewarmed repositories, metadata | 20 requests/s / 15 s | 300 successful | 6.695 / 11.312 / 11.461 ms |
+| Same resident set, Git v2 discovery | 10 requests/s / 10 s | 100 successful | 43.224 / 61.301 / 67.875 ms |
+| Uniform choices across 1,000 identities, metadata | 10 requests/s / 120 s | 1,200 successful | 2.576 / 10.303 / 11.608 ms |
+
+All 1,600 arrivals succeeded without retries or driver drops. Every attempted
+request matched a completed handler trace. Uniform handler p99 was 4.879 ms;
+client service time minus handler time had p99 1.248 ms. Uniform scheduled max
+was 22.569 ms, including dispatch delay. The earlier hundreds-of-milliseconds
+logging gaps did not recur. Server logs contain no warnings or errors; graceful
+shutdown and fixture cleanup passed. Sampled parent RSS peaked at 470,302,720
+bytes across 225 samples, excluding other processes and kernel charges.
+
+The stalled-sink regression, blocking negative control, real paused-pipe test
+and stack profile establish the logging fix independently of this noisy-host
+comparison. This repeat meets the proposed warm metadata percentile values at
+the tested rates, but it does not qualify the reference Linux node, sustainable
+maximum throughput, realistic Git histories or the full primitive set. The last
+recorded compaction completed before the read schedules; read admission during
+compaction remains an unqualified runtime contract. Crash recovery was not
+repeated in this focused diagnosis run; its prior proof remains separately
+recorded. Idle ownership cost, broader resource enforcement and mixed-workload
+qualification remain open.
