@@ -64,6 +64,7 @@ impl Fixture {
             peer_endpoint: "https://idle.example.invalid".into(),
             peer_ca_pem: None,
             listen: ([127, 0, 0, 1], 0).into(),
+            ssh: None,
             data_dir: self.directory.join(name),
             store_prefix: self.prefix.clone(),
             local_disk_limit_bytes: 1536 * 1024 * 1024,

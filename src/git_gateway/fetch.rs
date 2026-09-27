@@ -29,7 +29,7 @@ impl FetchRequest {
         )
     }
 
-    fn parse(mut bytes: &[u8]) -> Result<Self, InputError> {
+    pub(super) fn parse(mut bytes: &[u8]) -> Result<Self, InputError> {
         let mut wants = BTreeSet::new();
         let mut filter = None;
         while !bytes.is_empty() {
@@ -77,6 +77,29 @@ impl FetchRequest {
 }
 
 impl GitGateway {
+    pub(super) async fn fetch_cache(
+        &self,
+        wants: &BTreeSet<[u8; 20]>,
+        include_blobs: bool,
+    ) -> Result<Arc<CachedRepository>, GatewayError> {
+        if let Some(cached) = self.current_cache(include_blobs).await? {
+            self.validate_wants(&cached.snapshot, wants).await?;
+            return Ok(cached);
+        }
+        let live_refs = self.cell_refs().await?;
+        self.validate_wants(&live_refs, wants).await?;
+        let mut cache = self.cache.lock().await;
+        if cache.as_ref().is_none_or(|cached| {
+            cached.snapshot != live_refs || (include_blobs && !cached.includes_blobs)
+        }) {
+            *cache = None;
+            *cache = Some(Arc::new(self.build_cache(live_refs, include_blobs).await?));
+        }
+        Ok(Arc::clone(
+            cache.as_ref().ok_or(GatewayError::MalformedCache)?,
+        ))
+    }
+
     pub(super) async fn validate_wants(
         &self,
         snapshot: &RefSnapshot,

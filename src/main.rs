@@ -30,9 +30,17 @@ struct FileConfig {
     peer_endpoint: String,
     peer_ca_certificate: Option<PathBuf>,
     listen: String,
+    ssh: Option<FileSshConfig>,
     data_dir: PathBuf,
     local_disk_limit_bytes: u64,
     max_active_repositories: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileSshConfig {
+    listen: SocketAddr,
+    host_key: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -41,6 +49,8 @@ enum StartupError {
         "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid> | canopy backup <config.json> create|verify <pin-uuid> <backup-prefix> | canopy backup <config.json> restore <pin-uuid> <backup-prefix> <destination-prefix>"
     )]
     Usage,
+    #[error("SSH host key is invalid")]
+    SshKey(#[from] ssh_key::Error),
     #[error("backup operation failed")]
     Backup(#[from] BackupError),
     #[error("backup prefix is invalid")]
@@ -173,13 +183,22 @@ async fn run() -> Result<(), StartupError> {
         peer_endpoint: file.peer_endpoint,
         peer_ca_pem: file.peer_ca_certificate.map(std::fs::read).transpose()?,
         listen: file.listen.parse::<SocketAddr>()?,
+        ssh: file
+            .ssh
+            .map(|ssh| {
+                Ok::<_, StartupError>(canopy_server::ssh::SshConfig {
+                    listen: ssh.listen,
+                    host_key: ssh_key::PrivateKey::read_openssh_file(ssh.host_key)?,
+                })
+            })
+            .transpose()?,
         data_dir: file.data_dir,
         store_prefix: provider.prefix().clone(),
         local_disk_limit_bytes: file.local_disk_limit_bytes,
         max_active_repositories: file.max_active_repositories,
     };
     let server = CanopyServer::start(config, provider.store_arc()).await?;
-    tracing::info!(address = %server.local_addr(), "Canopy is ready");
+    tracing::info!(address = %server.local_addr(), ssh_address = ?server.ssh_addr(), "Canopy is ready");
     server.serve_until(shutdown_signal()).await?;
     Ok(())
 }

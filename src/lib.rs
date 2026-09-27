@@ -43,6 +43,7 @@ mod push;
 mod refs;
 mod repository_http;
 pub mod server;
+pub mod ssh;
 mod transfer;
 mod web;
 

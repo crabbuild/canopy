@@ -22,7 +22,7 @@ use authorization::{authorized_route, readable_route};
 
 use std::sync::Arc;
 
-use crate::{AdmissionPermit, admission::AccountAdmission};
+use crate::AdmissionPermit;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -45,23 +45,12 @@ use crate::{
 
 pub(crate) struct RepositoryHttp {
     manager: Arc<RepositoryManager>,
-    transfers: AccountAdmission,
     tasks: TaskTracker,
 }
 
-const MAX_ACTIVE_TRANSFERS: usize = 8;
-
 impl RepositoryHttp {
     pub(crate) fn new(manager: Arc<RepositoryManager>, tasks: TaskTracker) -> Self {
-        Self {
-            manager,
-            transfers: AccountAdmission::new(
-                MAX_ACTIVE_TRANSFERS,
-                "node transfers",
-                "account transfers",
-            ),
-            tasks,
-        }
+        Self { manager, tasks }
     }
 
     pub(crate) fn router(self: Arc<Self>) -> Router {
@@ -234,18 +223,8 @@ impl RepositoryHttp {
         &self,
         actor: crate::ReadIdentity<'_>,
     ) -> Result<Arc<AdmissionPermit>, Response<Body>> {
-        if let Ok(permit) = self.transfers.acquire(actor).await {
-            return Ok(Arc::new(permit));
-        }
-        // A short bounded wait absorbs stock LFS concurrency without retry storms.
-        // Waiting does not reserve node slots and ends before any body is consumed.
-        if let Ok(Ok(permit)) = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            self.transfers.wait(actor),
-        )
-        .await
-        {
-            return Ok(Arc::new(permit));
+        if let Ok(permit) = self.manager.transfer_permit(actor).await {
+            return Ok(permit);
         }
         let mut response = plain(
             StatusCode::SERVICE_UNAVAILABLE,

@@ -37,6 +37,7 @@ mod candidates;
 mod discovery;
 mod fetch;
 mod hydration;
+mod ssh;
 
 use hydration::Hydration;
 
@@ -215,21 +216,7 @@ impl GitGateway {
         } else {
             let fetch = fetch::FetchRequest::read(&request).await?;
             let include_blobs = fetch.includes_blobs;
-            let cached = if let Some(cached) = self.current_cache(include_blobs).await? {
-                self.validate_wants(&cached.snapshot, &fetch.wants).await?;
-                cached
-            } else {
-                let live_refs = self.cell_refs().await?;
-                self.validate_wants(&live_refs, &fetch.wants).await?;
-                let mut cache = self.cache.lock().await;
-                if cache.as_ref().is_none_or(|cached| {
-                    cached.snapshot != live_refs || (include_blobs && !cached.includes_blobs)
-                }) {
-                    *cache = None;
-                    *cache = Some(Arc::new(self.build_cache(live_refs, include_blobs).await?));
-                }
-                Arc::clone(cache.as_ref().ok_or(GatewayError::MalformedCache)?)
-            };
+            let cached = self.fetch_cache(&fetch.wants, include_blobs).await?;
             if !include_blobs {
                 let objects = self.objects.lock().await;
                 let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;

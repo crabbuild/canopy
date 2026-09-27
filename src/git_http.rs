@@ -120,21 +120,7 @@ impl GitHttpBackend {
         })
     }
 
-    /// Streams Git output while retaining the caller's disposable cache owner.
-    pub(crate) async fn stream<T: Send + 'static>(
-        &self,
-        request: GitHttpRequest,
-        keep_alive: T,
-    ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
-        if request.gzip {
-            return Err(GitHttpError::EncodedInput);
-        }
-        if !request.path_info.starts_with("/repo.git/")
-            || request.path_info.contains("..")
-            || request.path_info.contains('\\')
-        {
-            return Err(GitHttpError::InvalidPath);
-        }
+    pub(crate) fn transport_command(&self) -> Result<Command, GitHttpError> {
         let mut process = crate::native_git::command(&self.git_dir())?;
         // The cache's HEAD must not implicitly protect a branch by name.
         // Repository policy belongs in the Cell ref transaction.
@@ -172,7 +158,27 @@ impl GitHttpBackend {
             .arg(format!(
                 "core.hooksPath={}",
                 self.git_dir().join("hooks").display()
-            ))
+            ));
+        Ok(process)
+    }
+
+    /// Streams Git output while retaining the caller's disposable cache owner.
+    pub(crate) async fn stream<T: Send + 'static>(
+        &self,
+        request: GitHttpRequest,
+        keep_alive: T,
+    ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
+        if request.gzip {
+            return Err(GitHttpError::EncodedInput);
+        }
+        if !request.path_info.starts_with("/repo.git/")
+            || request.path_info.contains("..")
+            || request.path_info.contains('\\')
+        {
+            return Err(GitHttpError::InvalidPath);
+        }
+        let mut process = self.transport_command()?;
+        process
             .arg("http-backend")
             .env("GIT_PROJECT_ROOT", self.cache.root())
             .env("GIT_HTTP_EXPORT_ALL", "1")

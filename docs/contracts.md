@@ -1098,11 +1098,10 @@ preview roots are not silently upgraded or read through a compatibility path.
 ### SSH key ownership
 
 The Directory Cell stores key material, SHA-256 fingerprints, immutable UUIDs,
-account ownership, read/write scope, revocation and creation time. This is the
-credential registry for SSH; the listener and Git command execution remain
-unfinished. `ssh_identity` resolves only enabled keys on enabled accounts. It is
-not proof of possession: the eventual transport must verify the SSH signature
-before accepting that identity and recheck it before admitting each command.
+account ownership, read/write scope, revocation and creation time.
+`ssh_identity` resolves only enabled keys on enabled accounts. It is not proof
+of possession: the transport accepts identity only from russh's verified
+`auth_publickey` callback and rechecks it before admitting each command.
 
 `ssh-key` parses OpenSSH text, verifies the outer/inner algorithm agreement and
 rejects trailing binary data. Canopy permits Ed25519, ECDSA and RSA with an actual
@@ -1111,9 +1110,56 @@ are rejected. RSA length is calculated from the positive modulus bytes because
 `ssh-key::RsaPublicKey::key_size` rounds up to a whole byte. Comments are removed
 before storing the canonical public key; fingerprints use binary key material.
 The parser is pinned to `ssh-key 0.7.0-rc.11`, matching the key type used by the
-selected `russh 0.63.3` transport dependency; russh is not yet linked or serving.
+`russh 0.63.3` transport dependency.
 Primary contracts: [PublicKey](https://docs.rs/ssh-key/0.7.0-rc.11/ssh_key/struct.PublicKey.html),
 [RSA key](https://docs.rs/ssh-key/0.7.0-rc.11/ssh_key/public/struct.RsaPublicKey.html).
+
+### SSH transport
+
+Optional `ssh.listen` and `ssh.host_key` configuration binds a separate listener
+before node enrollment. A stable decrypted OpenSSH host key is required. Only
+public-key authentication with username `git` is enabled. The offered-key
+callback does not establish identity; russh verifies the signature before the
+authenticated-key callback. See the dependency's
+[Handler contract](https://docs.rs/russh/0.63.3/russh/server/trait.Handler.html#method.auth_publickey).
+
+Exec accepts only `git-upload-pack` and `git-receive-pack` with one validated
+owner/repository path, optionally single-quoted, with optional leading slash and
+`.git` suffix. No shell executes the command. Only `GIT_PROTOCOL=version=0|1|2`
+is accepted before exec; v1 requests use v0. Shells, PTYs, subsystems and forwarding
+are denied. Each command checks current key/account status, key scope and
+repository access. Revocation blocks subsequent commands on existing connections;
+already admitted work may finish. Ref publication rechecks repository write
+permission in its existing Cell transaction.
+
+The node admits at most 64 SSH connections and four concurrent channels per
+connection. A connection closes after 4,096 channel admissions to bound lifetime
+bookkeeping retained by russh after locally initiated closes; reconnect to continue.
+Completed commands release channel admission even when russh has already removed
+the locally closed channel and ignores the peer's close acknowledgement. Transfer
+admission is shared with HTTP/LFS: eight per node, four per account, with bounded
+one-second waits. SSH uses 256 KiB windows, 32 KiB packets and bounded event queues.
+Identification has a 30-second deadline; connection inactivity and native fetch
+have 120-second deadlines. Disconnect cancels fetch and kills its native process
+group on Unix. Accepted push tasks drain before the node closes Cells.
+
+SSH fetch retains one ref snapshot and validates every initial v0 want or v2
+request group against certified Cell reachability before forwarding to native
+upload-pack. It currently hydrates the full cache before negotiation. SSH push
+uses the existing receive-pack ingestion and durable publication path; only the
+HTTP service announcement is stripped from its advertisement. Stock send-pack
+closes its input after writing a pack; deletion-only pushes dispatch after the
+command flush without waiting for EOF. Git status is sent after durable completion,
+then SSH exit status, EOF and close. SSH provides no explicit push retry ID.
+
+The transport does not yet implement `git-lfs-authenticate`. Configure HTTPS LFS
+separately for SSH repository URLs. Local tests cover stock Git transfer/recovery,
+reused-connection revocation, ACL/scope enforcement, unreachable wants and command
+restrictions. Held-fetch tests prove shared HTTP admission and cancellation on
+channel close and node shutdown. Interrupted publication, provider and capacity
+qualification remain.
+
+### SSH key management
 
 Key management uses the same `TokenAuthority` and owner-time authorization
 predicate as token management. Admin keys are forbidden; SSH keys cannot act as

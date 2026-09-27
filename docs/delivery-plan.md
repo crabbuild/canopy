@@ -3390,3 +3390,46 @@ races; owner restart and lost-reply replay; cross-node competing pushes; native
 candidate graph/path semantics; seven stream lifecycle tests; fragmented and
 malformed report tests; all-target Clippy and formatting. Hosted CI and
 real-provider qualification of this change remain pending.
+
+## SSH Git transport
+
+The optional SSH listener uses russh 0.63.3 with a stable configured host key.
+Directory keys identify accounts after signature verification; each exec rechecks
+revocation, account status, key scope and repository ACLs. Only upload-pack and
+receive-pack commands with validated repository paths are accepted. Git HTTP,
+SSH and LFS share account/node transfer admission. SSH push streams through the
+existing durable ingestion/publication path; fetch uses native upload-pack with
+the same certified reachability gate. Accepted push tasks remain in the node's
+shutdown tracker, and fetch cancellation drops its process group and cache pin.
+
+Permanent tests use stock Git/OpenSSH for mirror push, v0/v2 clone, shallow
+history, partial clone, lazy fetch, incremental pull, ref deletion and fresh-disk
+recovery. A 9 MiB incompressible blob exercises external storage and SSH windows;
+recovered refs, bytes and strict fsck must agree. Wire-level tests cover revocation
+after login, read-only keys, repository ACLs, forbidden commands/environment and
+forwarding, and unreachable commit/tree/blob requests.
+
+Five SSH integration tests pass locally, including stock OpenSSH authentication
+with RSA and ECDSA P-256/P-384/P-521 keys. Held fetches fill the shared account
+quota and produce HTTP 503, then release admission on channel close. Node shutdown
+cancels the remaining waiting native workers within the test deadline. Both
+existing HTTP/LFS transfer tests also pass, covering quota fairness, interrupted
+uploads and corrupt download detection.
+
+Native backend, smart HTTP publication/failure, HTTP compatibility and partial
+clone integration tests pass as well: eleven focused integration tests total.
+All-target Clippy, formatting and diff checks pass. Lockfile review found only
+registry package additions, with no removed packages or changed checksums.
+
+Those probes found a connection-reuse failure: after a server-initiated close,
+russh removes the protocol channel before receiving the peer acknowledgement and
+does not invoke the close callback. Canopy now reclaims completed command state
+when admitting new channels. A lifetime admission ceiling bounds sender
+bookkeeping retained by the dependency. Premature data is rejected before an
+unconsumed channel queue can block the session loop. Dependency sources were read
+for signature authentication, channel close ordering and stock send-pack EOF.
+
+SSH still prepares a full cache before negotiation. SSH LFS authentication,
+publication fault injection, provider/capacity qualification and hosted CI remain
+open. Push options, signed pushes, SHA-256 repository support and advanced LFS
+remain separate unfinished compatibility work.

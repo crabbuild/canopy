@@ -24,6 +24,8 @@ mod partial_clone;
 mod pulls;
 #[path = "multi_server/rebase.rs"]
 mod rebase;
+#[path = "multi_server/ssh.rs"]
+mod ssh;
 #[path = "multi_server/ssh_keys.rs"]
 mod ssh_keys;
 use std::{path::Path, sync::Arc};
@@ -607,6 +609,7 @@ fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> Server
         peer_endpoint: "https://canopy.test".into(),
         peer_ca_pem: None,
         listen: address,
+        ssh: None,
         data_dir,
         store_prefix: StorePath::from("single-server-test"),
         local_disk_limit_bytes: 1 << 30,

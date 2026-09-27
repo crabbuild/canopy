@@ -648,8 +648,8 @@ synchronized.
 Bootstrap and initial account credentials are non-expiring.
 
 SSH public keys have a separate durable registry, managed by the same account/site
-admin tokens. **SSH clone/push/fetch and a key-management UI are not implemented yet.**
-The API is available now:
+admin tokens. The optional SSH listener supports stock Git clone, push and fetch.
+Key management currently uses the API:
 
 | Method | Path | Result |
 | --- | --- | --- |
@@ -670,6 +670,32 @@ SSH keys and 256 registrations per rolling 24 hours (429 on either limit).
 Registration/revocation recheck the exact admin token in their Directory
 transaction and append an account-history event atomically. Events use
 `ssh_key_id` for the affected key, with `token_id` null.
+
+Enable SSH by adding a listener and a stable OpenSSH private host key to the
+server configuration:
+
+```json
+"ssh": {
+  "listen": "0.0.0.0:2222",
+  "host_key": "/run/secrets/canopy_ssh_host_ed25519_key"
+}
+```
+
+Generate the host key with `ssh-keygen -t ed25519 -N '' -f <path>` and preserve it
+across restarts. The configured key must be decrypted and readable by the server.
+Publish its fingerprint to clients through a trusted channel. Git URLs use the
+SSH user `git`, for example `ssh://git@example.com:2222/canopy/project.git`.
+The registered client key identifies the account; repository permissions and key
+scope both apply. New commands on existing connections recheck revocation and
+account status. Shell, SFTP, forwarding and arbitrary environment requests are
+denied. HTTP and SSH share the same node/account transfer limits and durable
+push publication path.
+
+SSH currently prepares a full native cache before fetch negotiation, including
+filtered clones. SSH LFS authentication is not implemented; repositories cloned
+over SSH must configure an HTTPS LFS endpoint and HTTP credentials for LFS.
+The local compatibility suite covers stock Git transfers and fresh-disk recovery;
+provider, interruption and capacity qualification remain open.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget

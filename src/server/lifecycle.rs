@@ -19,7 +19,7 @@ impl CanopyServer {
                     return Ok(());
                 }
             };
-            if ready.send(Ok(server.address)).is_ok() {
+            if ready.send(Ok((server.address, server.ssh_address))).is_ok() {
                 tokio::select! {
                     _ = receive_shutdown => {},
                     () = server.release_stop.cancelled() => {},
@@ -31,7 +31,7 @@ impl CanopyServer {
             }
             result
         });
-        let address = match receive_ready.await {
+        let (address, ssh_address) = match receive_ready.await {
             Ok(address) => address?,
             Err(_) => {
                 finished.await??;
@@ -42,6 +42,7 @@ impl CanopyServer {
         };
         Ok(Self {
             address,
+            ssh_address,
             shutdown,
             finished,
         })
@@ -73,6 +74,11 @@ impl CanopyServer {
         self.address
     }
 
+    #[must_use]
+    pub const fn ssh_addr(&self) -> Option<std::net::SocketAddr> {
+        self.ssh_address
+    }
+
     /// Stops ingress, drains accepted work, and withdraws the node advertisement.
     /// Cancelling this wait does not cancel the supervised shutdown.
     pub async fn shutdown(self) -> Result<(), ServerError> {
@@ -85,6 +91,11 @@ impl RunningServer {
     async fn shutdown(self) -> Result<(), ServerError> {
         self.ingress_stop.cancel();
         let serving = self.serving.await;
+        let ssh_serving = if let Some(task) = self.ssh_serving {
+            Some(task.await)
+        } else {
+            None
+        };
         self.tasks.close();
         self.tasks.wait().await;
         let drained = self.node.shutdown().await;
@@ -99,6 +110,9 @@ impl RunningServer {
             Err(error) => return Err(error),
         };
         serving??;
+        if let Some(result) = ssh_serving {
+            result??;
+        }
         drained?;
         renewal??;
         withdrawn?;

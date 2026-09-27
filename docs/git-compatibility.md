@@ -36,7 +36,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
 | Cold fetch | Exact `blob:none` hydrates non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
-| SSH | Durable key registration/list/revocation API implemented; no SSH listener or Git command endpoint yet | Signature authentication, repository ACLs, clone/push/fetch, cancellation and durable publication |
+| SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, fresh-disk recovery, shared HTTP admission and fetch cancellation tested | Interrupted push publication, real-provider and capacity qualification |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Rejected; object IDs and graph formats are SHA-1 throughout | Repository-level format identity, 32-byte graph/ref storage, negotiation, restore and mixed-format rejection |
@@ -74,6 +74,17 @@ after restoring policy/permission. The fragmented-report unit test covers 4,096
 Unicode refs and preserves existing native rejections.
 Hosted CI has not been run for these changes.
 
+`tests/multi_server/ssh.rs` exercises stock Git SSH mirror push, protocol v0/v2
+clone (v1 requests fall back to v0), shallow/unshallow, filtered lazy fetch,
+incremental pull, deletion and fresh-disk mirror recovery. Wire-level probes
+check unreachable commit/tree/blob wants, command and environment restrictions,
+forwarding denial, key scope, repository ACLs and revocation on an authenticated
+connection. Held fetches consume HTTP account capacity, release it on channel
+close, and cancel during node shutdown. SSH still prepares a full server cache
+even when clients filter.
+Stock OpenSSH authentication is tested with Ed25519, RSA and ECDSA P-256,
+P-384 and P-521 keys.
+
 The baseline real-provider probe used Apple Git 2.50.1 and disposable RustFS
 `1.0.0-beta.8-glibc` at Canopy commit `48dfc21`; it confirmed the bulk, filter,
 push-option, signed-push and SHA-256 gaps above. Unicode failed in that baseline
@@ -92,6 +103,7 @@ Implementation order:
    real-provider process/restart suite and cross-platform cache qualification.
 3. Further reduce cold preparation beyond blobless fetch; measure transferred
    and hydrated objects separately and qualify filter negotiation at scale.
-4. Add SSH using the same authorization, object ingestion and publication path.
+4. Qualify SSH interruption and publication failures using the shared authorization,
+   object ingestion and publication path.
 5. Complete the selected push, LFS and SHA-256 capabilities; keep unsupported
    services explicit until their acceptance gates pass.

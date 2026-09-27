@@ -65,6 +65,8 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("invalid SSH host key")]
+    SshKey(#[source] Box<directory::SshKeyError>),
     #[error("Crab runtime failed")]
     Runtime(#[from] Error),
     #[error("Crab LTX failed")]
@@ -99,6 +101,7 @@ pub struct ServerConfig {
     pub peer_endpoint: String,
     pub peer_ca_pem: Option<Vec<u8>>,
     pub listen: std::net::SocketAddr,
+    pub ssh: Option<crate::ssh::SshConfig>,
     pub data_dir: PathBuf,
     pub store_prefix: StorePath,
     pub local_disk_limit_bytes: u64,
@@ -142,12 +145,14 @@ impl AdvertisementIdentity {
 /// Controls a supervised node; dropping the handle requests graceful shutdown.
 pub struct CanopyServer {
     address: std::net::SocketAddr,
+    ssh_address: Option<std::net::SocketAddr>,
     shutdown: oneshot::Sender<()>,
     finished: JoinHandle<Result<(), ServerError>>,
 }
 
 struct RunningServer {
     address: std::net::SocketAddr,
+    ssh_address: Option<std::net::SocketAddr>,
     node: Arc<CellNode>,
     directory: NodeDirectory,
     advertisement: Arc<Mutex<VersionedNodeAdvertisement>>,
@@ -156,6 +161,7 @@ struct RunningServer {
     ingress_stop: CancellationToken,
     release_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
+    ssh_serving: Option<JoinHandle<std::io::Result<()>>>,
     tasks: TaskTracker,
     local: Arc<workspace::Workspace>,
 }
@@ -180,6 +186,7 @@ pub(crate) struct RepositoryManager {
     residency_transitions: Mutex<HashMap<[u8; 16], Weak<Mutex<()>>>>,
     residency_slots: Arc<Semaphore>,
     residency_admission: AccountAdmission,
+    transfers: AccountAdmission,
     tasks: TaskTracker,
 }
 
@@ -191,6 +198,27 @@ pub(crate) enum MembershipOutcome {
 }
 
 impl RepositoryManager {
+    pub(crate) async fn ssh_identity(
+        &self,
+        key: &crate::directory::SshKey,
+    ) -> Result<Option<crate::directory::SshIdentity>, ServerError> {
+        Ok(self.directory.ssh_identity(key, None).await?.output)
+    }
+
+    pub(crate) async fn transfer_permit(
+        &self,
+        actor: ReadIdentity<'_>,
+    ) -> Result<Arc<crate::AdmissionPermit>, Error> {
+        if let Ok(permit) = self.transfers.acquire(actor).await {
+            return Ok(Arc::new(permit));
+        }
+        // Both transports share bounded waits and the same account/node slots.
+        let permit = tokio::time::timeout(Duration::from_secs(1), self.transfers.wait(actor))
+            .await
+            .map_err(|_| Error::Capacity("node transfers"))??;
+        Ok(Arc::new(permit))
+    }
+
     pub(crate) async fn authenticate(
         &self,
         token_digest: [u8; 32],
@@ -427,7 +455,26 @@ impl RunningServer {
             identity.release,
         );
         let listener = TcpListener::bind(config.listen).await?;
+        let mut config = config;
         let address = listener.local_addr()?;
+        let ssh_listener = if let Some(ssh) = &config.ssh {
+            if ssh.host_key.is_encrypted() {
+                return Err(ServerError::Http("SSH host key must be decrypted"));
+            }
+            let public = ssh.host_key.public_key().to_openssh().map_err(|error| {
+                ServerError::SshKey(Box::new(directory::SshKeyError::Encoding(error)))
+            })?;
+            directory::SshKey::parse(&public)
+                .map_err(|error| ServerError::SshKey(Box::new(error)))?;
+            Some(TcpListener::bind(ssh.listen).await?)
+        } else {
+            None
+        };
+        let ssh_address = ssh_listener
+            .as_ref()
+            .map(TcpListener::local_addr)
+            .transpose()?;
+        let ssh_config = config.ssh.take();
         let disk_budget = DiskBudget::new(config.local_disk_limit_bytes);
         let node = Arc::new(
             CellNodeBuilder::new(Arc::clone(&application))
@@ -534,6 +581,7 @@ impl RunningServer {
                 loaded: Mutex::new(HashMap::new()),
                 residency_transitions: Mutex::new(HashMap::new()),
                 residency_slots: Arc::new(Semaphore::new(config.max_active_repositories)),
+                transfers: AccountAdmission::new(8, "node transfers", "account transfers"),
                 residency_admission: AccountAdmission::new(
                     MAX_PENDING_REPOSITORIES,
                     "pending repository activations",
@@ -541,12 +589,12 @@ impl RunningServer {
                 ),
                 tasks: tasks.clone(),
             });
-            let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));
+            let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;
-            Ok::<_, ServerError>((api, peer))
+            Ok::<_, ServerError>((api, peer, manager))
         }
         .await;
-        let (api, peer) = match startup {
+        let (api, peer, manager) = match startup {
             Ok(api) => api,
             Err(error) => {
                 match node.shutdown().await {
@@ -567,6 +615,18 @@ impl RunningServer {
             }
         };
         let ingress_stop = CancellationToken::new();
+        let ssh_serving = match (ssh_config, ssh_listener) {
+            (Some(config), Some(listener)) => {
+                let stop = ingress_stop.clone();
+                let tasks = tasks.clone();
+                let release = release_stop.clone();
+                Some(tokio::spawn(async move {
+                    let _release = release.drop_guard();
+                    crate::ssh::serve(config, listener, manager, tasks, stop).await
+                }))
+            }
+            _ => None,
+        };
         let serving_stop = ingress_stop.clone();
         let serving = tokio::spawn(async move {
             let peer_routes = axum::Router::new()
@@ -582,6 +642,8 @@ impl RunningServer {
         });
         Ok(Self {
             address,
+            ssh_address,
+            ssh_serving,
             node,
             directory,
             advertisement,
