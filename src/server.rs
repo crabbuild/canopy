@@ -629,11 +629,21 @@ async fn renew_lease(
         match directory.refresh(&current, next, now_ms).await {
             Ok(refreshed) => {
                 *current = refreshed;
-                guard.renew(now_ms, now_ms + LEASE_MS)?;
+                renew_node_lease(&guard, &current)?;
             }
             Err(error) => tracing::warn!(error = %error, "node lease renewal failed"),
         }
     }
+}
+
+pub(crate) fn renew_node_lease(
+    guard: &NodeLeaseGuard,
+    observed: &VersionedNodeAdvertisement,
+) -> Result<(), ServerError> {
+    // Storage latency consumes the signed lease. Using its issuance timestamp
+    // here would add that latency back to the runtime's monotonic deadline.
+    guard.renew(unix_now_ms()?, observed.advertisement().expires_at_ms())?;
+    Ok(())
 }
 
 pub(crate) struct SqlCellSpec<'a> {

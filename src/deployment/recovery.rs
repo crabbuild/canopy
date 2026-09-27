@@ -7,7 +7,7 @@ use crate::{
     directory::{self, DirectoryModule},
     server::{
         LEASE_MS, RENEW_INTERVAL, ServerError, SqlCellSpec, acquire_provisioned_sql_cell,
-        unix_now_ms, workspace,
+        renew_node_lease, unix_now_ms, workspace,
     },
 };
 use cellule_app::CellApplication;
@@ -139,7 +139,7 @@ impl Deployment {
                         .nodes
                         .refresh(&observed, sign(progress, now)?, now)
                         .await?;
-                    guard.renew(now, now + LEASE_MS)?;
+                    renew_node_lease(&guard, &observed)?;
                 }
             })?;
             local.require_drain();

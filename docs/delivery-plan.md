@@ -3112,4 +3112,24 @@ See [startup lease evidence](performance-plan.md#startup-lease-freshness-during-
 The cold-latency investigation remains open; faster timings on the quieter host
 are not evidence of a performance gain from this correctness fix. Delayed renewal
 response accounting across server, backup and maintenance is the next lifecycle
-audit; full primitive integration and production density remain open.
+audit, addressed below; full primitive integration and production density remain open.
+
+
+## Renewal replies consume their signed lease lifetime
+
+Server, backup and maintenance enrollment now use one response-time conversion
+from a confirmed signed advertisement to the local monotonic guard. A delayed
+storage reply no longer extends local authority past that advertisement's expiry.
+The regression delays a successful renewal reply, blocks the next publication,
+and observes HTTP readiness after signed expiry. It returned 200 on the old code
+and closes readiness with the fix. Dependency fencing and failed-publication
+behavior remain authoritative; late responses cannot revive an expired guard.
+See [renewal accounting evidence](performance-plan.md#renewal-response-latency-and-authority-bounds).
+
+
+All ten lifecycle tests, backup/restore and two-node maintenance integration tests
+pass, as do Clippy, formatting and the optimized build. The real-provider run
+`canopy-renewal-backup-ec78c6f21252` passes stock 80 MiB Git/LFS transfers, backup
+corruption rejection, verification without the original storage, isolated restore,
+exact file and issue recovery, and cleanup. This closes renewal reply accounting;
+it does not qualify full primitive workloads or production capacity.

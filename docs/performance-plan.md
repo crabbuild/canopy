@@ -963,8 +963,66 @@ The much shorter 9.271-second seed confirms materially different host conditions
 from the failed profiling attempts. Do not attribute the latency difference to
 this timestamp fix: the deterministic advertisement regression is its causal
 proof. The original cold-acquisition bottleneck and production mixed-workload
-SLO remain unqualified. A further lease audit must cover delayed refresh replies:
-server, backup and maintenance renewal currently pass the issuance timestamp to
-`NodeLeaseGuard::renew` after awaiting storage, while that API converts remaining
-wall-clock lifetime into a deadline at call time. Fault tests must prove response
-latency cannot extend local authority beyond the signed expiry.
+SLO remain unqualified. This investigation identified a further lease audit:
+at `0bca8bf`, server, backup and maintenance renewal passed the issuance timestamp
+to `NodeLeaseGuard::renew` after awaiting storage, while that API converts remaining
+wall-clock lifetime into a deadline at call time. The renewal work below addresses
+that separate defect.
+
+
+## Renewal response latency and authority bounds
+
+All three Canopy enrollment paths now call `renew_node_lease` only after their
+conditional advertisement refresh succeeds. That function samples response-time
+wall clock and passes the confirmed advertisement's signed expiry to Cellule's
+monotonic guard. The old paths reused request issuance time after the await,
+adding storage response latency to the guard's lifetime. The new function keeps
+that conversion at one boundary across serving, backup and maintenance workers.
+No dependency, schema, lease duration or renewal interval changed.
+
+The integration regression lets the first renewal persist, delays its reply by
+four seconds, and blocks the following renewal before publication. After the
+confirmed advertisement expires, HTTP readiness must return 503 or the listener
+must be closed. The old implementation returned HTTP 200 in two negative runs;
+the corrected implementation closes readiness. This exercises the real server,
+runtime watchdog and HTTP endpoint through a fault-injecting storage wrapper.
+Existing startup and long-drain lease tests were moved into the same lease test
+module without changing their behavior.
+
+The pinned runtime contract is explicit: `NodeLeaseGuard::renew` computes
+`Instant::now() + (expires_at_ms - now_ms)` and rejects already-fenced guards.
+Canopy must supply time measured after storage confirmation. Initial enrollment
+still starts its guard before publication, so request latency is already consumed
+there. Server, backup and maintenance callers preserve their existing cancellation,
+drain and withdrawal ownership. These correctness checks do not establish
+cold-recovery latency or thousand-Cell mixed-workload capacity.
+
+
+All ten lifecycle tests, the independent backup/restore integration test and the
+two-node maintenance integration test passed. All-target Clippy with warnings
+denied, formatting and the optimized build passed. The delayed-reply fault is
+exercised through serving; backup and maintenance use the same function and their
+normal lifecycle paths are integration-tested. Separate delayed-reply injection
+in each administrative worker was not performed.
+
+The optimized real-provider run `canopy-renewal-backup-ec78c6f21252` used the
+existing `scripts/smoke_s3_backup.py` qualification against isolated colocated
+RustFS `1.0.0-beta.8-glibc`, limited to two CPUs and 4 GiB. Canopy runs on the
+shared macOS host. Base revision is `0bca8bf` plus the archived patch; binary
+SHA-256 is `a007926531e3d24fe5689ff083cb69d6a7e08f8c533be0cf0b0ddacf85161a63`.
+The archived driver invokes the existing qualification function unchanged.
+
+Stock Git and LFS pushed an 80 MiB ordinary Git blob, an 80 MiB LFS object and an
+empty LFS object. Backup CLI create/repeat, deliberate destination-corruption
+rejection, verification after deleting the entire disposable original prefix,
+isolated restore, exact clone/LFS bytes and issue recovery all passed. The two
+Cells and three external objects were preserved. Both server processes stopped
+cleanly; provider cleanup passed and retained server logs contain no warnings or
+errors. CLI success output is asserted by the qualification; expected corruption
+errors are distinct from unexpected failures. Push took 4.49 seconds and restored
+clone/verification 5.82 seconds; these functional timings are not throughput SLOs.
+
+The shared conversion adds ten net production lines to prevent three enrollment
+paths from drifting on the time/expiry contract. No temporary production probes
+or dependency changes were introduced. Full repository primitives, bounded
+mixed-workload density and the remaining cold-restore investigation stay open.

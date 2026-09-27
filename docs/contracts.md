@@ -403,7 +403,12 @@ Cellule's task group (which is cancelled before runtime drain). Initial lease
 issuance follows storage probing, deployment validation and local runtime setup;
 preflight delay must not consume the node's advertised serving lifetime. The
 monotonic guard starts immediately before advertisement creation, so publication
-latency still consumes that lease. Normal shutdown
+latency still consumes that lease. Server, backup and maintenance renewal use
+one accounting function: after a successful storage response, it samples current
+wall time and renews the monotonic guard only through the confirmed advertisement's
+signed expiry. Response latency never becomes additional lease lifetime. Failed
+renewals do not advance the guard, and the runtime rejects revival after fencing.
+Normal shutdown
 and failed-startup cleanup retain renewal until runtime drain returns, then cancel
 and join it before withdrawing the advertisement. Unexpected renewal completion
 closes admission. Pending directory entries durably initialize the immutable

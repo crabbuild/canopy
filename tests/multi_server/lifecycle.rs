@@ -25,6 +25,8 @@ struct PausedStore {
     inner: InMemory,
     phase: Mutex<Option<ControlState>>,
     initial_advertisement: Mutex<Option<serde_json::Value>>,
+    delay_renewals: AtomicBool,
+    renewal_expiry: Mutex<Option<i64>>,
     read: Mutex<Option<(StorePath, usize)>>,
     entered: Notify,
     proceed: Notify,
@@ -60,10 +62,23 @@ impl ObjectStore for PausedStore {
             .iter()
             .flat_map(|bytes| bytes.iter().copied())
             .collect();
-        if let Ok(advertisement) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            && advertisement["lease"]["progress"] == "1"
-        {
-            *self.initial_advertisement.lock().unwrap() = Some(advertisement);
+        let advertisement = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+        let progress = advertisement
+            .as_ref()
+            .and_then(|value| value["lease"]["progress"].as_str())
+            .and_then(|value| value.parse::<u64>().ok());
+        if progress == Some(1) {
+            *self.initial_advertisement.lock().unwrap() = advertisement.clone();
+        }
+        let delayed = self.delay_renewals.load(Ordering::SeqCst);
+        if delayed && progress.is_some_and(|value| value > 2) {
+            // Keep later renewals unpublished until the confirmed lease expires.
+            self.entered.notify_one();
+            self.proceed.notified().await;
+            return Err(object_store::Error::PermissionDenied {
+                path: path.to_string(),
+                source: Box::new(std::io::Error::other("injected renewal denial")),
+            });
         }
         let pause = {
             let mut phase = self.phase.lock().unwrap();
@@ -88,7 +103,18 @@ impl ObjectStore for PausedStore {
                 });
             }
         }
-        self.inner.put_opts(path, payload, options).await
+        let result = self.inner.put_opts(path, payload, options).await;
+        if delayed && progress == Some(2) && result.is_ok() {
+            let expires = advertisement.as_ref().unwrap()["lease"]["expires_at_ms"]
+                .as_str()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap();
+            *self.renewal_expiry.lock().unwrap() = Some(expires);
+            self.entered.notify_one();
+            self.proceed.notified().await;
+        }
+        result
     }
     async fn put_multipart_opts(
         &self,
@@ -528,99 +554,5 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Result {
-    use canopy_server::{CanopyApplication, build_descriptor};
-    use cellule_app::CellApplication;
-    use cellule_runtime::{CellStorageLayout, NodeDirectory};
-
-    let files = tempfile::TempDir::new()?;
-    let store = Arc::new(PausedStore::default());
-    let address = available_address().await?;
-    let data = files.path().join("node");
-    let settings = config(address, data.clone());
-    let application = CanopyApplication::compile(build_descriptor(
-        include_bytes!("../../Cargo.lock"),
-        env!("CARGO_PKG_VERSION"),
-    ))?;
-    let directory = NodeDirectory::new(
-        CellStorageLayout::new(
-            cellule_store::Store::new(store.clone()),
-            settings.store_prefix.clone(),
-            *settings.application.as_bytes(),
-        ),
-        settings.fleet,
-        settings.image,
-        application.registry().release_digest(),
-    );
-    let now = || -> Result<i64> {
-        Ok(i64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_millis(),
-        )?)
-    };
-    let server = CanopyServer::start(settings, store.clone()).await?;
-    create_repository(address, "held").await?;
-    let advertised = directory.live(now()?, 2).await?;
-    let session = advertised
-        .first()
-        .ok_or("node advertisement missing")?
-        .session();
-    store.arm(ControlState::Idle);
-    let shutdown = tokio::spawn(server.shutdown());
-    store.wait().await?;
-    // Runtime drain must retain heartbeat ownership beyond the ten-second lease.
-    tokio::time::sleep(Duration::from_secs(12)).await;
-    let live = directory.is_live(session, now()?).await;
-    store.proceed.notify_one();
-    let drained = timeout(Duration::from_secs(10), shutdown).await??;
-    assert!(live?, "node lease expired before Cell release completed");
-    drained?;
-    assert!(!directory.is_live(session, now()?).await?);
-    wait_for_cleanup(&data).await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
-    let files = tempfile::TempDir::new()?;
-    let store = Arc::new(PausedStore::default());
-    let address = available_address().await?;
-    let settings = config(address, files.path().join("node"));
-    let layout = cellule_runtime::CellStorageLayout::new(
-        cellule_store::Store::new(store.clone()),
-        settings.store_prefix.clone(),
-        *settings.application.as_bytes(),
-    );
-    *store.read.lock().unwrap() = Some((layout.release_path(), 1));
-    let startup = tokio::spawn(CanopyServer::start(settings, store.clone()));
-    store.wait().await?;
-    // Deployment validation happens before this node owns any Cell. Its I/O
-    // must not spend the ten-second authority lease used by subsequent startup.
-    tokio::time::sleep(Duration::from_secs(11)).await;
-    let preflight_finished = i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_millis(),
-    )?;
-    store.proceed.notify_one();
-    let server = timeout(Duration::from_secs(10), startup).await???;
-    let initial = store
-        .initial_advertisement
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("initial advertisement missing")?;
-    let issued = initial["lease"]["issued_at_ms"]
-        .as_str()
-        .ok_or("advertisement issue time missing")?
-        .parse::<i64>()?;
-    create_repository(address, "after-slow-preflight").await?;
-    server.shutdown().await?;
-    assert!(
-        issued >= preflight_finished,
-        "preflight consumed the initial node lease"
-    );
-    Ok(())
-}
+#[path = "lifecycle/lease.rs"]
+mod lease;

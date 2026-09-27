@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::{LEASE_MS, RENEW_INTERVAL, workspace};
+use crate::server::{LEASE_MS, RENEW_INTERVAL, renew_node_lease, workspace};
 use cellule_runtime::{
     NodeAdvertisement, NodeCapacity, NodeFailureDomain, NodeLeaseGuard, SessionId,
 };
@@ -77,7 +77,7 @@ impl Deployment {
                         .nodes
                         .refresh(&current, sign(progress, now)?, now)
                         .await?;
-                    renewal_guard.renew(now, now + LEASE_MS)?;
+                    renew_node_lease(&renewal_guard, &current)?;
                 }
             }
             .await;
