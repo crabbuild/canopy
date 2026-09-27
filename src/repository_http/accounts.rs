@@ -171,13 +171,19 @@ pub(super) async fn audit(
             let next = (events.len() == directory::AUDIT_PAGE_SIZE)
                 .then(|| events.last().map(|event| event.id.to_string()))
                 .flatten();
-            let entries: Vec<_> = events.iter().map(|event| serde_json::json!({
+            let entries: Vec<_> = events.iter().map(|event| {
+                let mut entry = serde_json::json!({
                 "id": event.id.to_string(), "occurred_at_ms": event.occurred_at_ms,
                 "actor": event.actor, "actor_token_id": event.actor_token_id.map(|id| uuid::Uuid::from_bytes(id).to_string()),
                 "action": event.action, "account": event.account,
                 "token_id": event.token_id.map(|id| uuid::Uuid::from_bytes(id).to_string()),
                 "scope": event.scope.map(TokenScope::as_str), "expires_at_ms": event.expires_at_ms,
-            })).collect();
+                });
+                if let Some(id) = event.ssh_key_id {
+                    entry["ssh_key_id"] = uuid::Uuid::from_bytes(id).to_string().into();
+                }
+                entry
+            }).collect();
             json_response(
                 StatusCode::OK,
                 &serde_json::json!({"events": entries, "next_before": next}),

@@ -34,10 +34,10 @@ pub enum TokenChange {
 
 // The caller supplies site policy, not an authenticated account assertion.
 // Recheck the exact credential in the same SQL transaction as each mutation.
-const AUTHORIZED: &str = "EXISTS (SELECT 1 FROM access_tokens actor JOIN accounts a ON a.name = actor.account WHERE actor.digest = ?2 AND actor.enabled = 1 AND (actor.expires_ms IS NULL OR actor.expires_ms > ?1) AND actor.scope = 'admin' AND a.enabled = 1 AND (actor.account = ?3 OR actor.account = ?4)) AND EXISTS (SELECT 1 FROM accounts WHERE name = ?4 AND enabled = 1)";
+pub(super) const AUTHORIZED: &str = "EXISTS (SELECT 1 FROM access_tokens actor JOIN accounts a ON a.name = actor.account WHERE actor.digest = ?2 AND actor.enabled = 1 AND (actor.expires_ms IS NULL OR actor.expires_ms > ?1) AND actor.scope = 'admin' AND a.enabled = 1 AND (actor.account = ?3 OR actor.account = ?4)) AND EXISTS (SELECT 1 FROM accounts WHERE name = ?4 AND enabled = 1)";
 
 impl TokenAuthority<'_> {
-    fn parameters(&self) -> crab_cell_runtime::Result<Vec<SqlValue>> {
+    pub(super) fn parameters(&self) -> crab_cell_runtime::Result<Vec<SqlValue>> {
         validate_component(self.site_owner)?;
         validate_component(self.account)?;
         Ok(vec![

@@ -4,6 +4,8 @@ mod accounts;
 mod expiry;
 #[path = "support/objects.rs"]
 mod objects;
+#[path = "directory/ssh_keys.rs"]
+mod ssh_keys;
 
 use std::{
     path::Path,

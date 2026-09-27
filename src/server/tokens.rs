@@ -1,5 +1,5 @@
 use super::*;
-use crate::directory::{TokenAuthority, TokenChange, TokenInfo};
+use crate::directory::{SshKey, SshKeyChange, SshKeyInfo, TokenAuthority, TokenChange, TokenInfo};
 
 impl RepositoryManager {
     pub(crate) async fn account_events(
@@ -70,6 +70,57 @@ impl RepositoryManager {
         Ok(self
             .directory
             .revoke_token(mutation_identity()?, authority, id)
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn ssh_keys(
+        &self,
+        actor_digest: [u8; 32],
+        account: &str,
+        after: Option<[u8; 16]>,
+    ) -> Result<Option<Vec<SshKeyInfo>>, ServerError> {
+        Ok(self
+            .directory
+            .ssh_keys(self.token_authority(actor_digest, account), after)
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn register_ssh_key(
+        &self,
+        actor_digest: [u8; 32],
+        account: &str,
+        id: [u8; 16],
+        key: &SshKey,
+        scope: TokenScope,
+    ) -> Result<SshKeyChange, ServerError> {
+        Ok(self
+            .directory
+            .register_ssh_key(
+                mutation_identity()?,
+                self.token_authority(actor_digest, account),
+                id,
+                key,
+                scope,
+            )
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn revoke_ssh_key(
+        &self,
+        actor_digest: [u8; 32],
+        account: &str,
+        id: [u8; 16],
+    ) -> Result<SshKeyChange, ServerError> {
+        Ok(self
+            .directory
+            .revoke_ssh_key(
+                mutation_identity()?,
+                self.token_authority(actor_digest, account),
+                id,
+            )
             .await?
             .output)
     }

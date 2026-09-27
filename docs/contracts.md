@@ -1067,8 +1067,11 @@ no-store`. Reads use the table's integer primary key and an indexed credential
 lookup; they do not load the entire history.
 
 Each event contains `id`, `occurred_at_ms`, nullable `actor` and `actor_token_id`,
-`action`, `account`, nullable `token_id`, `scope` and `expires_at_ms`. Actions are
-`account.created`, `account.disabled`, `token.issued` and `token.revoked`.
+`action`, `account`, nullable `token_id`, `scope` and `expires_at_ms`.
+Only SSH key events add `ssh_key_id`. Actions are `account.created`,
+`account.disabled`, `token.issued`, `token.revoked`,
+`ssh_key.registered` and `ssh_key.revoked`. SSH key events use `ssh_key_id` and
+`scope`, with `token_id` and `expires_at_ms` null.
 Creation includes the initial token's public ID and scope. Disablement has no
 target credential. Trusted startup bootstrap has null actor fields. HTTP-created
 accounts identify the actual site-admin credential. Self-revocation retains the
@@ -1091,6 +1094,50 @@ this is committed state-change history, not a log of attempted actions or every
 repository operation. Retention and durable quotas remain delivery gates.
 The Directory schema/source digest changes; use a fresh preview prefix. Older
 preview roots are not silently upgraded or read through a compatibility path.
+
+### SSH key ownership
+
+The Directory Cell stores key material, SHA-256 fingerprints, immutable UUIDs,
+account ownership, read/write scope, revocation and creation time. This is the
+credential registry for SSH; the listener and Git command execution remain
+unfinished. `ssh_identity` resolves only enabled keys on enabled accounts. It is
+not proof of possession: the eventual transport must verify the SSH signature
+before accepting that identity and recheck it before admitting each command.
+
+`ssh-key` parses OpenSSH text, verifies the outer/inner algorithm agreement and
+rejects trailing binary data. Canopy permits Ed25519, ECDSA and RSA with an actual
+modulus bit length of 2048–8192. Certificate, DSA, FIDO and opaque key variants
+are rejected. RSA length is calculated from the positive modulus bytes because
+`ssh-key::RsaPublicKey::key_size` rounds up to a whole byte. Comments are removed
+before storing the canonical public key; fingerprints use binary key material.
+The parser is pinned to `ssh-key 0.7.0-rc.11`, matching the key type used by the
+selected `russh 0.63.3` transport dependency; russh is not yet linked or serving.
+Primary contracts: [PublicKey](https://docs.rs/ssh-key/0.7.0-rc.11/ssh_key/struct.PublicKey.html),
+[RSA key](https://docs.rs/ssh-key/0.7.0-rc.11/ssh_key/public/struct.RsaPublicKey.html).
+
+Key management uses the same `TokenAuthority` and owner-time authorization
+predicate as token management. Admin keys are forbidden; SSH keys cannot act as
+HTTP bearer tokens or satisfy the last-admin-token recovery rule. Site admins
+may manage any enabled account's keys; account admins may manage their own.
+A mutation rechecks the exact actor credential and account status inside the
+Directory transaction, including after delayed HTTP request-body reception.
+No key is installed in local authorized_keys files.
+
+Fingerprint and UUID uniqueness preserve ownership after revocation. Exact
+active-record retries converge only for the same UUID, key, account and scope.
+No retry reactivates a revoked key. Indexed account/UUID pages include revoked
+metadata, 32 records at a time. Active and daily limits are separate from token
+quotas: 64 active keys and 256 new keys per rolling 24 hours per target account.
+Exact retries precede quota decisions. Revocation frees active capacity without
+erasing issuance history. No credential retention cleanup exists yet.
+
+Each registration/revocation appends its audit event in the same transaction;
+an audit failure rolls back the key mutation. Duplicate and rejected operations
+add no event. Tests cover stock OpenSSH fingerprint agreement, comment-independent
+ownership, account disablement, revocation, quota churn, pagination, audit rollback,
+HTTP credential revocation during upload and recovery with a fresh local disk.
+The schema/source digest changes require a fresh deployment; no legacy reader
+or migration is introduced.
 
 ### Token lifecycle
 

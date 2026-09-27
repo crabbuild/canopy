@@ -13,6 +13,7 @@ pub struct AccountEvent {
     pub action: String,
     pub account: String,
     pub token_id: Option<[u8; 16]>,
+    pub ssh_key_id: Option<[u8; 16]>,
     pub scope: Option<TokenScope>,
     pub expires_at_ms: Option<i64>,
 }
@@ -60,7 +61,7 @@ impl DirectoryCell {
         page.push(before.map_or(SqlValue::Null, SqlValue::Integer));
         let result = self.credential_query(None, SqlBatch { statements: vec![
             SqlStatement { sql: format!("SELECT {authorized}"), parameters },
-            SqlStatement { sql: format!("SELECT id, occurred_ms, actor, actor_token_id, action, account, token_id, scope, expires_ms FROM account_events WHERE id <= coalesce(?4 - 1, 9223372036854775807) AND ({authorized}) ORDER BY id DESC LIMIT {AUDIT_PAGE_SIZE}"), parameters: page },
+            SqlStatement { sql: format!("SELECT id, occurred_ms, actor, actor_token_id, action, account, token_id, scope, expires_ms, ssh_key_id FROM account_events WHERE id <= coalesce(?4 - 1, 9223372036854775807) AND ({authorized}) ORDER BY id DESC LIMIT {AUDIT_PAGE_SIZE}"), parameters: page },
         ] }).await?;
         let allowed = matches!(
             result
@@ -103,6 +104,7 @@ fn event(row: &[SqlValue]) -> crab_cell_runtime::Result<AccountEvent> {
         token,
         scope,
         expires,
+        ssh_key,
     ] = row
     else {
         return Err(Error::Command("invalid audit record"));
@@ -132,6 +134,7 @@ fn event(row: &[SqlValue]) -> crab_cell_runtime::Result<AccountEvent> {
         action: action.clone(),
         account: account.clone(),
         token_id: token_id(token)?,
+        ssh_key_id: token_id(ssh_key)?,
         scope,
         expires_at_ms,
     })

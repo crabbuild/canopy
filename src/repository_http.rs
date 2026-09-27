@@ -12,6 +12,7 @@ mod default_branch;
 mod issues;
 mod merge;
 mod pulls;
+mod ssh_keys;
 mod threads;
 mod tokens;
 mod visibility;
@@ -91,6 +92,14 @@ impl RepositoryHttp {
             .route(
                 "/api/accounts/{account}/tokens/{id}",
                 axum::routing::delete(tokens::revoke),
+            )
+            .route(
+                "/api/accounts/{account}/ssh-keys",
+                get(ssh_keys::list).post(ssh_keys::register),
+            )
+            .route(
+                "/api/accounts/{account}/ssh-keys/{id}",
+                axum::routing::delete(ssh_keys::revoke),
             )
             .route(
                 "/api/repositories",

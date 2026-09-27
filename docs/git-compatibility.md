@@ -36,7 +36,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
 | Cold fetch | Exact `blob:none` hydrates non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
-| SSH | No SSH listener or Git command endpoint | Key ownership/revocation, repository ACLs, clone/push/fetch, cancellation and durable publication |
+| SSH | Durable key registration/list/revocation API implemented; no SSH listener or Git command endpoint yet | Signature authentication, repository ACLs, clone/push/fetch, cancellation and durable publication |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Rejected; object IDs and graph formats are SHA-1 throughout | Repository-level format identity, 32-byte graph/ref storage, negotiation, restore and mixed-format rejection |

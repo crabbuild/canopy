@@ -629,7 +629,7 @@ Expired/revoked IDs and secrets stay reserved. Revoking the site's last
 non-expiring admin token returns 409, including under concurrent requests.
 Expiring admins do not satisfy that recovery guard.
 
-Each account admits at most 64 active credentials and 256 new credentials per
+Each account admits at most 64 active tokens and 256 new tokens per
 rolling 24 hours, including its initial credential. HTTP 429 distinguishes an
 active-capacity limit from the issuance window. Revoke a credential or wait for
 its expiry to free active capacity; revocation and expiry do not erase issuance
@@ -646,6 +646,30 @@ recheck the authorizing credential and expiry in their mutation transaction.
 Expiry uses the Directory owner's clock at execution; keep fleet clocks
 synchronized.
 Bootstrap and initial account credentials are non-expiring.
+
+SSH public keys have a separate durable registry, managed by the same account/site
+admin tokens. **SSH clone/push/fetch and a key-management UI are not implemented yet.**
+The API is available now:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/accounts/<account>/ssh-keys?after=<UUID>` | Up to 32 key records and `next_after` |
+| POST | `/api/accounts/<account>/ssh-keys` | Register with `{"id":"<UUID>","public_key":"ssh-ed25519 AAAA...","scope":"write"}`; returns 204 |
+| DELETE | `/api/accounts/<account>/ssh-keys/<UUID>` | Revoke one key; returns 204 |
+
+Keys may have `read` or `write` scope. Accepted key formats are plain OpenSSH
+Ed25519, ECDSA and RSA (2048–8192 bits); authorized_keys options, certificates,
+DSA and security-key formats are rejected. Comments are discarded. Listing
+returns the canonical public key, OpenSSH SHA-256 fingerprint, ID, scope,
+creation time and enabled state. No private key is accepted or stored.
+An exact active registration retry returns 204. Conflicting IDs, ownership,
+scopes or revoked key material return 409, including when the comment changes.
+Revoked keys remain reserved; register a fresh key to rotate. Disabled accounts
+cannot resolve to an SSH identity. Each account has separate limits of 64 active
+SSH keys and 256 registrations per rolling 24 hours (429 on either limit).
+Registration/revocation recheck the exact admin token in their Directory
+transaction and append an account-history event atomically. Events use
+`ssh_key_id` for the affected key, with `token_id` null.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget

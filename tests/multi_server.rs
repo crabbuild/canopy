@@ -24,6 +24,8 @@ mod partial_clone;
 mod pulls;
 #[path = "multi_server/rebase.rs"]
 mod rebase;
+#[path = "multi_server/ssh_keys.rs"]
+mod ssh_keys;
 use std::{path::Path, sync::Arc};
 
 use canopy_server::server::{CanopyServer, ServerConfig};

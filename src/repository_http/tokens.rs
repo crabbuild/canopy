@@ -17,7 +17,7 @@ struct IssueRequest {
     expires_at_ms: Option<i64>,
 }
 
-async fn authorize(
+pub(super) async fn authorize(
     state: &RepositoryHttp,
     headers: &axum::http::HeaderMap,
     account: &str,
@@ -32,7 +32,7 @@ async fn authorize(
     if principal.account != account && principal.account != state.manager.owner {
         return Err(plain(
             StatusCode::FORBIDDEN,
-            "Token management is restricted",
+            "Account credential management is restricted",
         ));
     }
     if directory::validate_component(account).is_err() {

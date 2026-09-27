@@ -2,10 +2,12 @@
 
 mod accounts;
 mod audit;
+mod ssh_keys;
 mod timed_sql;
 mod tokens;
 pub use accounts::{ACCOUNT_PAGE_SIZE, AccountInfo, DisableAccountOutcome};
 pub use audit::{AUDIT_PAGE_SIZE, AccountEvent};
+pub use ssh_keys::{SSH_KEY_PAGE_SIZE, SshIdentity, SshKey, SshKeyChange, SshKeyError, SshKeyInfo};
 pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
 
 use std::sync::OnceLock;
@@ -61,6 +63,7 @@ impl CellModule for DirectoryModule {
                 source.update(include_bytes!("directory.rs"));
                 source.update(include_bytes!("directory/accounts.rs"));
                 source.update(include_bytes!("directory/audit.rs"));
+                source.update(include_bytes!("directory/ssh_keys.rs"));
                 source.update(include_bytes!("directory/tokens.rs"));
                 source.update(include_bytes!("directory/timed_sql.rs"));
                 source.update(SCHEMA.as_bytes());

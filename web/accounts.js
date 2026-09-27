@@ -121,7 +121,7 @@ const accountsView = (() => {
     const panel = element("section", undefined, "account-view"), heading = element("div", undefined, "account-heading"), title = element("div");
     title.append(element("p", "Site administration", "eyebrow"), element("h1", "Account history"));
     heading.append(title, button("Refresh", render)); panel.append(heading, element("p", "Committed account and credential changes, newest first. Unchanged retries and rejected requests do not add entries. Token secrets are never recorded here.", "hint"));
-    const actions = { "account.created": "Account created", "account.disabled": "Account disabled", "token.issued": "Token issued", "token.revoked": "Token revoked" };
+    const actions = { "account.created": "Account created", "account.disabled": "Account disabled", "token.issued": "Token issued", "token.revoked": "Token revoked", "ssh_key.registered": "SSH key registered", "ssh_key.revoked": "SSH key revoked" };
     const list = element("ol", undefined, "credential-list surface"); list.setAttribute("aria-label", "Account history");
     for (const event of data.events) {
       const row = element("li"), details = element("div"), labels = element("div", undefined, "credential-labels");
@@ -129,6 +129,7 @@ const accountsView = (() => {
       details.append(labels, element("p", `${date(event.occurred_at_ms)} · ${event.actor === null ? "System bootstrap" : `By ${event.actor}`} · Event ${event.id}`, "credential-date"));
       if (event.actor_token_id) details.append(element("p", `Actor credential: ${event.actor_token_id}`, "credential-id"));
       if (event.token_id) details.append(element("code", `Target credential: ${event.token_id}`, "credential-id"), element("p", `${event.scope} scope · Expires ${date(event.expires_at_ms)}`, "credential-date"));
+      if (event.ssh_key_id) details.append(element("code", `SSH key: ${event.ssh_key_id}`, "credential-id"), element("p", `${event.scope} scope`, "credential-date"));
       row.append(details); list.append(row);
     }
     panel.append(list);
