@@ -505,3 +505,50 @@ Recovery and lifecycle checks should run independently of latency pass/fail.
 The next fixture retains every read failure in its overall result while still
 executing SIGKILL recovery and the final graceful drain. This separates verification
 of the lease-lifetime fix from the unresolved read-latency gate.
+
+
+## Independent read and lifecycle gates
+
+The next optimized `fccf1de` run, `canopy-active1000-evidence-1f3d0e0b5a45`,
+keeps read failures in the process outcome while continuing independent recovery
+and drain checks. It uses the same 1,000-identity corpus shape, 1,000 active slots,
+4 GiB local disk allowance, colocated RustFS and shared macOS host. The uniform
+read schedule is extended to sixty seconds; this is not a controlled comparison
+with earlier fifteen-second runs.
+
+| Workload | Rate / duration | Outcomes | Scheduled p50 / p95 / p99 |
+| --- | --- | --- | --- |
+| Three prewarmed repositories, metadata | 20 requests/s / 15 s | 300 successful | 8.563 / 11.595 / 11.737 ms |
+| Same resident set, Git v2 discovery | 10 requests/s / 10 s | 100 successful | 40.008 / 46.478 / 49.684 ms |
+| Uniform choices across 1,000 identities, metadata | 10 requests/s / 60 s | 600 successful | 11.139 / 11.477 / 677.364 ms |
+
+All 1,000 scheduled reads succeeded with no retries or driver drops. Uniform p99
+still misses the proposed 50 ms target; its maximum was 1,276.822 ms. During
+uniform reads, thirteen HTTP attempts waited 70–1,274 ms in service. Twelve
+Directory authentication stages finished together after approximately 106 ms,
+immediately following a 105 ms quiet compaction. Directory lookups and repository
+metadata remained below 6 ms. Most of the longest HTTP wait is therefore outside
+the measured stages. Request ingress/scheduling and synchronous trace output
+need separate timing or profiling before claiming compaction explains the full
+stall. This repeat does not erase the preceding warm-read failure.
+
+A sample during uniform reads observed 8,052 numeric file descriptors and a
+`vmmap` physical footprint of `461.8M`. Both are parent-process observations,
+excluding child Git processes, provider/client resource use and kernel caches.
+The benchmark is SQL-only and mostly empty, not full primitive capacity proof.
+
+After SIGKILL and lease expiry, a fresh workspace recovered every one of the
+1,000 identities. All three populated samples passed stock Git v0/v2 clone,
+exact commit/file hashes and strict fsck. Graceful shutdown completed in
+10.316 seconds with exit status zero. Neither server log contains warnings
+or errors, and fixture process/container/volume cleanup completed. Sampled
+parent RSS peaked at 608,337,920 bytes across 754 samples; this is not an
+aggregate memory ceiling.
+
+The frozen source revision and optimized binary SHA-256 are retained with the
+outcome. The fixture's successful overall status means its functional read,
+recovery and shutdown assertions passed; it does not enforce a latency SLO.
+Uniform p99 remains a failed performance target, and the earlier traced warm
+read failure remains relevant. The twelve-second paused-release regression
+and this process run together qualify the corrected renewal lifetime for the
+tested SQL-only workload.

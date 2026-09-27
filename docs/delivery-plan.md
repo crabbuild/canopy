@@ -2952,3 +2952,19 @@ a Directory/runtime investigation but does not explain all HTTP wait time.
 The fixture stopped before recovery and graceful drain; it supplies no process
 proof for the lease fix. See `performance-plan.md` for limitations and the
 independent recovery gate in the next fixture.
+
+The independent-gate repeat (`canopy-active1000-evidence-1f3d0e0b5a45`,
+optimized `fccf1de`) passed all 1,000 scheduled read attempts, SIGKILL and
+fresh-workspace recovery of 1,000 identities, and stock Git v0/v2 clone/hash/fsck
+checks for all three populated samples. Final graceful shutdown completed in
+10.316 seconds with exit status zero; server logs contain no warnings or errors.
+Fixture cleanup completed. This supplies process-level proof for the retained
+renewal lifetime beyond the ten-second lease.
+
+Uniform-read p99 remains 677.364 ms, above the proposed 50 ms target, despite
+zero request failures in this repeat. Sampled parent RSS peaked at 608,337,920
+bytes; a uniform-read sample observed 8,052 numeric descriptors. These exclude
+other processes and kernel charges. The earlier 47 dropped warm arrivals and
+unattributed portions of the latency stalls remain open. All-primitive Cell
+integration, production Linux density, resource enforcement and idle ownership
+request-cost qualification are still required.
