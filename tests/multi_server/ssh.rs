@@ -177,6 +177,27 @@ async fn sha256_ssh_push_and_clone() -> Result {
     );
     git(Some(&clone), &ssh, &["fsck", "--full", "--strict"]).await?;
     server.shutdown().await?;
+    let restored_address = available_address().await?;
+    let restored = CanopyServer::start(
+        server_config(restored_address, workspace.path().join("restored"), &host)?,
+        store,
+    )
+    .await?;
+    let restored_ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
+    known_host(&known, restored_ssh_address, &host).await?;
+    let restored_url = format!("ssh://git@{restored_ssh_address}/canopy/sha256-ssh.git");
+    let recovered = workspace.path().join("recovered");
+    git(None, &ssh, &["clone", &restored_url, path_str(&recovered)?]).await?;
+    assert_eq!(
+        git(Some(&recovered), &ssh, &["rev-parse", "HEAD"]).await?,
+        git(Some(&source), &ssh, &["rev-parse", "HEAD"]).await?
+    );
+    assert_eq!(
+        tokio::fs::read(recovered.join("file")).await?,
+        b"sha256 over ssh\n"
+    );
+    git(Some(&recovered), &ssh, &["fsck", "--full", "--strict"]).await?;
+    restored.shutdown().await?;
     Ok(())
 }
 
