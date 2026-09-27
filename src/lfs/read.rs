@@ -26,7 +26,7 @@ struct ReadState {
     sha256: Sha256,
     blake3: blake3::Hasher,
     // Hash jobs retain transfer admission after the HTTP body is dropped.
-    _admission: Option<Arc<OwnedSemaphorePermit>>,
+    _admission: Option<Arc<AdmissionPermit>>,
 }
 
 impl LfsRead {
@@ -34,7 +34,7 @@ impl LfsRead {
         store: Arc<dyn ObjectStore>,
         repository_id: [u8; 16],
         expected: LfsObject,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, LfsError> {
         if expected.size > MAX_LFS_BYTES {
             return Err(LfsError::TooLarge);
@@ -162,7 +162,7 @@ pub(crate) async fn verify_lfs_object(
     store: Arc<dyn ObjectStore>,
     repository_id: [u8; 16],
     object: LfsObject,
-    admission: Option<Arc<OwnedSemaphorePermit>>,
+    admission: Option<Arc<AdmissionPermit>>,
 ) -> Result<(), LfsError> {
     let mut reader = LfsRead::open(store, repository_id, object, admission).await?;
     while let Some(chunk) = poll_fn(|cx| Pin::new(&mut reader).poll_next(cx)).await {

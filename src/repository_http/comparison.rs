@@ -24,21 +24,25 @@ pub(super) async fn compare(
 ) -> Response<Body> {
     // Share node admission with Git/LFS. Detached work and output frames retain
     // the permit, including blocking CPU work after its caller disconnects.
-    let Ok(permit) = Arc::clone(&state.transfers).try_acquire_owned() else {
-        let mut response = plain(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canopy transfer capacity is full; retry the request",
-        );
-        response.headers_mut().insert(
-            header::RETRY_AFTER,
-            axum::http::HeaderValue::from_static("1"),
-        );
-        return response;
+    let actor = match state.viewer(request.headers()).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
     };
-    let permit = Arc::new(permit);
+    let permit = match state.transfer_permit(actor.identity()).await {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
     let work_state = Arc::clone(&state);
     let task = state.tasks.spawn(async move {
-        let response = serve(&work_state, &name, number, request, Arc::clone(&permit)).await;
+        let response = serve(
+            &work_state,
+            &name,
+            number,
+            request,
+            actor,
+            Arc::clone(&permit),
+        )
+        .await;
         response.map(|body| crate::transfer::response_body(body, permit))
     });
     match task.await {
@@ -54,12 +58,14 @@ async fn serve(
     name: &str,
     number: i64,
     request: Request<Body>,
-    permit: Arc<OwnedSemaphorePermit>,
+    actor: Viewer,
+    permit: Arc<AdmissionPermit>,
 ) -> Response<Body> {
-    let (route, actor) = match readable_route(state, name, request.headers()).await {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let route =
+        match authorization::scoped_route(state, name, actor.identity(), TokenScope::Read).await {
+            Ok(route) => route,
+            Err(response) => return response,
+        };
     let body = match tokio::time::timeout(
         Duration::from_secs(30),
         to_bytes(request.into_body(), 32 * 1024),

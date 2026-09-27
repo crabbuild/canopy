@@ -320,7 +320,7 @@ async fn lfs_get(
     };
     let admission = request
         .extensions()
-        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .get::<Arc<crate::AdmissionPermit>>()
         .cloned();
     match api.gateway.lfs().get(oid, admission).await {
         Ok(body) if (api.ready)() => {
@@ -363,7 +363,7 @@ async fn lfs_put(
     };
     let admission = request
         .extensions()
-        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .get::<Arc<crate::AdmissionPermit>>()
         .cloned();
     let body = request.into_body();
     let Some(principal) = principal.principal() else {
@@ -514,7 +514,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
     };
     let admission = request
         .extensions()
-        .get::<Arc<tokio::sync::OwnedSemaphorePermit>>()
+        .get::<Arc<crate::AdmissionPermit>>()
         .cloned();
     match api
         .gateway

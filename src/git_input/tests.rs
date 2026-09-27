@@ -269,8 +269,8 @@ fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Res
         let budget = DiskBudget::new(1024);
         let wire = gzip(b"queued decoder")?;
         let wire_len = wire.len() as u64;
-        let transfers = Arc::new(tokio::sync::Semaphore::new(1));
-        let permit = Arc::new(Arc::clone(&transfers).try_acquire_owned()?);
+        let transfers = crate::admission::AccountAdmission::new(2, "total", "account");
+        let permit = Arc::new(transfers.acquire(crate::ReadIdentity::Anonymous).await?);
         let input = GitInput::receive(
             Body::from(wire),
             directory.path(),
@@ -294,13 +294,21 @@ fn cancelling_a_queued_decoder_retains_admission_until_its_worker_exits() -> Res
         .await;
         drop(decode);
         let retained = budget.used();
-        let available = transfers.available_permits();
+        let available = transfers
+            .acquire(crate::ReadIdentity::Anonymous)
+            .await
+            .is_ok();
         release.send(())?;
         blocker.await??;
         assert_eq!(retained, wire_len);
-        assert_eq!(available, 0);
+        assert!(!available);
         tokio::time::timeout(Duration::from_secs(5), async {
-            while budget.used() != 0 || transfers.available_permits() != 1 {
+            while budget.used() != 0
+                || transfers
+                    .acquire(crate::ReadIdentity::Anonymous)
+                    .await
+                    .is_err()
+            {
                 tokio::task::yield_now().await;
             }
         })

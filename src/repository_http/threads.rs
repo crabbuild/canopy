@@ -138,21 +138,28 @@ pub(super) async fn create(
 ) -> Response<Body> {
     // Anchor verification traverses Git objects. Share its admission and detached
     // lifetime with comparisons, including blocking diff work after cancellation.
-    let Ok(permit) = Arc::clone(&state.transfers).try_acquire_owned() else {
-        let mut response = plain(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canopy transfer capacity is full; retry the request",
-        );
-        response.headers_mut().insert(
-            header::RETRY_AFTER,
-            axum::http::HeaderValue::from_static("1"),
-        );
-        return response;
+    let actor = match state.require(request.headers(), TokenScope::Write).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
     };
-    let permit = Arc::new(permit);
+    let permit = match state
+        .transfer_permit(crate::ReadIdentity::Account(&actor.account))
+        .await
+    {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
     let work_state = Arc::clone(&state);
     let task = state.tasks.spawn(async move {
-        let response = create_inner(&work_state, &name, number, request, Arc::clone(&permit)).await;
+        let response = create_inner(
+            &work_state,
+            &name,
+            number,
+            request,
+            actor,
+            Arc::clone(&permit),
+        )
+        .await;
         response.map(|body| crate::transfer::response_body(body, permit))
     });
     match task.await {
@@ -165,10 +172,18 @@ async fn create_inner(
     name: &str,
     number: i64,
     request: Request<Body>,
-    permit: Arc<OwnedSemaphorePermit>,
+    actor: Principal,
+    permit: Arc<AdmissionPermit>,
 ) -> Response<Body> {
-    let (route, actor) = match pulls::writable_route(state, name, request.headers()).await {
-        Ok(value) => value,
+    let route = match authorization::scoped_route(
+        state,
+        name,
+        crate::ReadIdentity::Account(&actor.account),
+        TokenScope::Read,
+    )
+    .await
+    {
+        Ok(route) => route,
         Err(response) => return response,
     };
     let input: Create = match pulls::input(request).await {

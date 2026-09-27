@@ -11,10 +11,10 @@ use std::{
     time::Duration,
 };
 
+use crate::AdmissionPermit;
 use axum::body::Body;
 use cellule_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
-use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const MAX_PUSH_BYTES: u64 = 512 * 1024 * 1024;
@@ -46,7 +46,7 @@ struct Spool {
     // jobs retain this owner through cancellation until their work exits.
     file: File,
     reservation: DiskReservation,
-    admission: Option<Arc<OwnedSemaphorePermit>>,
+    admission: Option<Arc<AdmissionPermit>>,
 }
 
 /// An immutable request spool, deleted when its last file handle closes.
@@ -62,7 +62,7 @@ impl GitInput {
         directory: &Path,
         budget: &DiskBudget,
         limit: u64,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, InputError> {
         tokio::time::timeout(
             Duration::from_secs(120),
@@ -77,7 +77,7 @@ impl GitInput {
         directory: &Path,
         budget: &DiskBudget,
         limit: u64,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, InputError> {
         let spool = Arc::new(Spool {
             file: tempfile::tempfile_in(directory)?,

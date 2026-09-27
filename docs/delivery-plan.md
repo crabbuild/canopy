@@ -426,8 +426,11 @@ scratch usage and global request-concurrency admission remain open.
 
 ## Node transfer admission
 
-Each node now admits eight Git/LFS repository requests across its entire
-repository set. Excess requests receive 503 and `Retry-After: 1` immediately.
+Each node admits eight heavy repository requests across its entire repository
+set, with at most four per account. Git/LFS, browsing, comparisons, review-anchor
+creation and merge preparation/publication share admission. Excess requests
+may occupy at most eight waiting positions for up to one second; a full waiting
+pool or expired wait returns 503 and `Retry-After: 1`.
 Admission begins before cold repository resolution and lasts through tracked
 handler work, blocking input workers, native Git and outstanding HTTP data
 frames. Gzip workers retain their permits after timeout until cancellation has
@@ -442,7 +445,7 @@ The existing Tokio dependency gains only the `test-util` development feature
 for a deterministic virtual-time timeout test. No lockfile, schema, request-digest
 or runtime dependency revision changes are needed.
 
-A real TCP test holds eight uploads across two repositories. Both a Git request
+A real TCP test holds eight uploads across two accounts and repositories. Both a Git request
 and an LFS request receive 503 with the retry header, while health, readiness and
 repository listing remain available. Disconnecting one upload permits a Git
 advertisement; the other seven uploads finish and download with identical bytes.
@@ -456,7 +459,7 @@ the binary build pass.
 The additional production code provides one shared admission path and a body
 owner that cover background work and outstanding response bytes beyond the
 handler lifetime. Eight is an initial bound, not a measured concurrency target. Native Git
-peak scratch/RAM, slow outgoing LFS sockets, fairness across accounts,
+peak scratch/RAM, slow outgoing LFS sockets, scheduling under combined-account saturation,
 management/authentication capacity and production throughput remain open.
 
 
@@ -3203,3 +3206,43 @@ the injected-store test provides the contention proof. See the
 This closes the history-cache mutex dependency for discovery. Required ref-body
 reads, global resource admission, full primitive integration and production
 density remain separate gates.
+
+## Account isolation for heavy repository requests
+
+One account can hold at most four of eight node transfer slots, shared across
+its tokens and repositories. Anonymous reads have their own shared four-slot
+pool. Git/LFS, browsing, comparisons, review anchors, merge publication and
+candidate preparation authenticate before admission and retain current repository
+access checks after routing. Rejection remains HTTP 503 with `Retry-After: 1`. At most eight requests wait
+for up to one second; waiters acquire account capacity before node capacity.
+This keeps a busy account from reserving otherwise available node slots.
+
+The common `AccountAdmission` owns both transfer and existing 32/16 activation
+limits. `AdmissionPermit` replaces the single Tokio permit in the preview Rust
+transport interfaces so both leases survive response frames, blocking workers
+and cancellation. Expired weak account entries are pruned; neither semaphore
+state nor a new task/timer is allocated per repository. Dependency revisions,
+lockfile and stored formats are unchanged. The production growth pays for one
+shared quota owner and propagation through every existing admission consumer;
+there is no alternate legacy admission path.
+
+The new TCP regression fails on `549f775` (a fifth account request returns 200)
+and passes with the change. Four uploads spread across two tokens and two
+repositories block all seven heavy endpoint shapes for that account while a
+second account can discover refs. Eight uploads across two accounts block a
+third; management remains available. Disconnect releases capacity and remaining
+uploads finish with exact downloadable bytes. Body/frame ownership and queued
+decoder cancellation tests pass. Focused residency, browsing, comparisons,
+threads, merges, candidates and visibility checks, Clippy with warnings denied,
+formatting and the release build pass.
+
+`scripts/smoke_s3_transfer_fairness.py` exercises stock Git LFS against a
+caller-owned disposable S3 prefix. It holds three uploads, leaving one account
+slot, and records 503 responses while requiring successful default-concurrency
+push/pull, all file hashes, Git/LFS fsck, held-upload completion and clean node
+shutdown. Immediate rejection failed this workload by exhausting LFS retries;
+the bounded wait absorbs bursts without increasing active transfer capacity. See the performance plan for the measured run and its limitations.
+
+A lone account is limited to four transfers even on an idle node. This is an
+isolation policy, not proof of optimal throughput, scheduling fairness under
+combined-account saturation, or thousands of fully active repository Cells.

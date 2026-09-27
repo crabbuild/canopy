@@ -51,8 +51,9 @@ mod residency;
 mod tokens;
 pub(crate) mod workspace;
 
+use crate::admission::AccountAdmission;
+use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
-use residency::{ActivationAdmission, LoadedRepository};
 
 const MAX_PENDING_REPOSITORIES: usize = 32;
 pub(crate) const LEASE_MS: i64 = 10_000;
@@ -174,7 +175,7 @@ pub(crate) struct RepositoryManager {
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
     residency_transitions: Mutex<HashMap<[u8; 16], Weak<Mutex<()>>>>,
     residency_slots: Arc<Semaphore>,
-    residency_admission: ActivationAdmission,
+    residency_admission: AccountAdmission,
     tasks: TaskTracker,
 }
 
@@ -541,7 +542,11 @@ impl RunningServer {
                 loaded: Mutex::new(HashMap::new()),
                 residency_transitions: Mutex::new(HashMap::new()),
                 residency_slots: Arc::new(Semaphore::new(config.max_active_repositories)),
-                residency_admission: ActivationAdmission::new(),
+                residency_admission: AccountAdmission::new(
+                    MAX_PENDING_REPOSITORIES,
+                    "pending repository activations",
+                    "account repository activations",
+                ),
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));

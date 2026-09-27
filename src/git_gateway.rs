@@ -10,11 +10,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::AdmissionPermit;
 use axum::body::Body;
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{MutationIdentity, RequestId};
 use object_store::ObjectStore;
-use tokio::sync::{Mutex, OwnedSemaphorePermit};
+use tokio::sync::Mutex;
 
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
@@ -146,7 +147,7 @@ impl GitGateway {
         request: GitHttpRequest<Body>,
         actor: impl Into<ReadIdentity<'a>>,
         push_id: Option<[u8; 16]>,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<GitHttpResponse<Body>, GatewayError> {
         let actor = actor.into();
         if self.access_level(actor).await?.is_none() {
@@ -243,7 +244,7 @@ impl GitGateway {
         &self,
         request: GitHttpRequest<Body>,
         limit: u64,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<GitHttpRequest, GatewayError> {
         let GitHttpRequest {
             method,

@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     pin::Pin,
-    sync::{Arc, Weak},
+    sync::Arc,
     task::{Context, Poll},
     time::Instant,
 };
@@ -15,13 +15,10 @@ use axum::{
 };
 use cellule_runtime::{CatalogRole, CellClient, CellId, CellModule, CellTarget, Error};
 use http_body::{Frame, SizeHint};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit};
 use tower::ServiceExt;
 
-use super::{
-    MAX_PENDING_REPOSITORIES, RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell,
-    mutation_identity,
-};
+use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutation_identity};
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, ReadIdentity, RepositoryCell,
     RepositoryModule,
@@ -30,52 +27,6 @@ use crate::{
     http::GitHttpApi,
     repository_target,
 };
-
-pub(super) struct ActivationAdmission {
-    total: Arc<Semaphore>,
-    accounts: Mutex<HashMap<Option<String>, Weak<Semaphore>>>,
-}
-
-impl ActivationAdmission {
-    pub(super) fn new() -> Self {
-        Self {
-            total: Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES)),
-            accounts: Mutex::new(HashMap::new()),
-        }
-    }
-
-    async fn acquire(
-        &self,
-        actor: ReadIdentity<'_>,
-    ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), Error> {
-        let total = Arc::clone(&self.total)
-            .try_acquire_owned()
-            .map_err(|_| Error::Capacity("pending repository activations"))?;
-        let account = match actor {
-            ReadIdentity::Account(account) => Some(account.to_owned()),
-            ReadIdentity::Anonymous => None,
-        };
-        let semaphore = {
-            let mut accounts = self.accounts.lock().await;
-            // Permits retain their semaphore through detached ownership work.
-            // Global admission bounds this map; expired accounts need no state.
-            accounts.retain(|_, semaphore| semaphore.strong_count() != 0);
-            if let Some(semaphore) = accounts.get(&account).and_then(Weak::upgrade) {
-                semaphore
-            } else {
-                let semaphore = Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES / 2));
-                accounts.insert(account, Arc::downgrade(&semaphore));
-                semaphore
-            }
-        };
-        let account = semaphore
-            .try_acquire_owned()
-            .map_err(|_| Error::Capacity("account repository activations"))?;
-        // Release the account owner first so its map entry stays covered by
-        // global admission until the semaphore can no longer be retained.
-        Ok((account, total))
-    }
-}
 
 pub(super) struct LoadedRepository {
     repository: Arc<RepositoryCell>,

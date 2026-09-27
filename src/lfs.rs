@@ -6,13 +6,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::AdmissionPermit;
 use axum::body::Body;
 use cellule_runtime::{
     Error, InvocationError, MutationIdentity, Observed, RequestId, SqlBatch, SqlResultSet,
     SqlStatement, SqlValue,
 };
 use object_store::{ObjectStore, path::Path};
-use tokio::sync::OwnedSemaphorePermit;
 
 use crate::{
     RepositoryCell,
@@ -91,7 +91,7 @@ impl LfsService {
         actor: &str,
         oid: [u8; 32],
         body: Body,
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<LfsObject, LfsError> {
         let repository = self.repository.clone();
         let store = self.store.clone();
@@ -121,7 +121,7 @@ impl LfsService {
     pub async fn get(
         &self,
         oid: [u8; 32],
-        admission: Option<Arc<OwnedSemaphorePermit>>,
+        admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<LfsRead, LfsError> {
         let object = self.lookup(oid).await?.ok_or(LfsError::NotFound)?;
         LfsRead::open(

@@ -13,7 +13,7 @@ pub(super) async fn receive(
     repository_id: [u8; 16],
     oid: [u8; 32],
     body: Body,
-    admission: Option<Arc<OwnedSemaphorePermit>>,
+    admission: Option<Arc<AdmissionPermit>>,
 ) -> Result<LfsObject, LfsError> {
     let declared = body.size_hint().exact();
     if declared.is_some_and(|size| size > MAX_LFS_BYTES) {
@@ -75,7 +75,7 @@ struct Hashes {
     sha256: Sha256,
     blake3: blake3::Hasher,
     size: u64,
-    _admission: Option<Arc<OwnedSemaphorePermit>>,
+    _admission: Option<Arc<AdmissionPermit>>,
 }
 
 impl Hashes {
@@ -95,7 +95,7 @@ async fn parts(
     oid: [u8; 32],
     body: Body,
     declared: Option<u64>,
-    admission: Option<Arc<OwnedSemaphorePermit>>,
+    admission: Option<Arc<AdmissionPermit>>,
 ) -> Result<LfsObject, LfsError> {
     let mut hashes = Hashes {
         sha256: Sha256::new(),

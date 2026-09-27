@@ -28,7 +28,7 @@ pub(super) async fn readable_route(
     Ok((route, viewer))
 }
 
-async fn scoped_route(
+pub(super) async fn scoped_route(
     state: &RepositoryHttp,
     name: &str,
     actor: ReadIdentity<'_>,

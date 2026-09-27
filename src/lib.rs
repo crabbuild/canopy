@@ -12,6 +12,8 @@ use cellule_runtime::{
 use sha1::{Digest as _, Sha1};
 
 mod access;
+mod admission;
+pub use admission::AdmissionPermit;
 mod visibility;
 pub use visibility::{RepositoryVisibility, Visibility};
 mod ancestry;

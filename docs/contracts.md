@@ -700,12 +700,26 @@ Spooling adds a local-file pass before Git can begin pack ingestion.
 
 ### Node transfer admission
 
-The composed `CanopyServer` admits eight repository Git/LFS requests per node,
-after authentication and before repository lookup/loading. A full semaphore
-returns 503 with `Retry-After: 1` immediately; there is no waiting admission
-queue. All repositories and both transports share the same semaphore. Health,
+The composed `CanopyServer` admits eight expensive repository requests per node,
+with at most four per authenticated account. Tokens and repository names share
+the account's quota; anonymous reads use a separate shared four-slot pool.
+Git/LFS, repository browsing, pull comparisons, review-anchor creation, merge
+publication and candidate preparation share these limits. Authentication precedes
+admission, which precedes repository lookup/loading; current repository access is
+still checked after routing. If immediate admission fails, at most eight requests
+per node may wait up to one second before returning 503 with `Retry-After: 1`.
+A full waiting pool rejects immediately. Waiters acquire account capacity before
+node capacity and consume no request body while waiting. A busy account cannot
+reserve idle node transfer slots through its waiters. This short bounded queue
+absorbs client transfer bursts without allowing an unbounded backlog. Health,
 readiness, account and repository management routes bypass this transfer limit.
 Authentication and management work need separate capacity qualification.
+
+`AccountAdmission` also owns the existing 32/16 activation policy. Its opaque
+`AdmissionPermit` holds the account and node leases together; account ownership
+is dropped first. Weak account entries are pruned at admission, so state follows
+concurrent active/waiting work rather than the number of historical accounts.
+There is no per-repository transfer semaphore, task or timer.
 
 An admitted handler runs in a tracked task. Client disconnect does not abandon
 Cell transitions, cache hydration or push publication halfway through. Shutdown
@@ -728,7 +742,9 @@ LFS batch bodies have a 120-second reception deadline. Streaming object PUTs
 have a 120-second input idle timeout and a 30-minute transfer deadline; timeout
 returns 408 (JSON for batch requests).
 This is separate from Git input, decode and subprocess deadlines. Outgoing LFS
-socket stall limits and fair scheduling between accounts remain unqualified.
+socket stall limits and scheduling fairness under combined-account saturation
+remain unqualified. A lone account can use only four slots; this reserves
+capacity for other accounts but can reduce single-account bulk throughput.
 The limit of eight is an initial operational policy, not a throughput claim.
 
 ### Disposable Git cache admission

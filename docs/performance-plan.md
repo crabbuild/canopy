@@ -61,7 +61,7 @@ Use representative high-water measurements with all primitive schemas installed;
 SQL page-cache settings alone do not measure a Cell. Reserve separate capacity
 for Directory requests, lease renewal, durable publication and shutdown.
 Bound disk cache and restore scratch independently. Per-account admission limits
-one account to at most half the global cold transition capacity. Further
+one account to at most half the global cold transition and transfer capacity. Further
 scheduling fairness needs mixed-account load evidence.
 
 Warm request latency should consist of authentication, routing, a short SQL
@@ -106,8 +106,8 @@ permits it.
   object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
-- Eight shared Git/LFS transfer slots and the bounded Linux profile establish
-  containment. They do not establish latency, throughput or thousands of active
+- Eight shared heavy-request slots, a four-slot ceiling per account, and the
+  bounded Linux profile establish containment. They do not establish latency, throughput or thousands of active
   repositories. The profile's tmpfs charges cache bytes to memory; density
   qualification needs a separate bounded NVMe-backed profile.
 - The Linux profile sets both process descriptor limits to 16,384. Its checker
@@ -193,8 +193,9 @@ and makes it unavailable under the request-pin lock. An account can hold at most
 sixteen of the thirty-two transition slots;
 anonymous traffic shares its own sixteen-slot bucket. The task retains both
 charges through client cancellation. Ready local routes bypass this admission.
-This bounds one account's share; combined-account saturation, transfer-slot
-fairness and resource-derived restore concurrency still need qualification.
+This bounds one account's share. Transfers also apply a half-node account
+ceiling; combined-account scheduling fairness and resource-derived restore
+concurrency still need qualification.
 
 Acceptance: runs with 100, 500 and 1,000 active repositories within the same
 10,000-repository corpus publish their measured limits. A cold storm and a hot
@@ -1281,3 +1282,55 @@ and script hashes accompany the report. This run verifies ordinary recovery
 with the final binary; it does not inject the paused read. The public-HTTP fault
 test supplies the overlap evidence. Neither run establishes a production SLO or
 full-primitive repository density.
+
+## Account transfer isolation with bounded burst admission
+
+The node shares eight heavy-request slots across repositories, with four per
+account and a separate four-slot anonymous pool. All tokens for an account
+share its limit. Git/LFS, browsing, comparisons, review-anchor creation and
+merge preparation/publication use the same admission boundary. The paired
+account/node permit follows existing response-frame and background-worker
+owners. Authentication precedes admission; current Cell access checks remain.
+
+Immediate rejection is insufficient for ordinary LFS bursts. With three held
+uploads leaving one account slot, Git LFS 3.7.1 synchronized rejected work into
+successive retry batches and exhausted its eight retries for some OIDs.
+The [basic upload adapter](https://github.com/git-lfs/git-lfs/blob/v3.7.1/tq/basic_upload.go)
+marks those errors retriable; the
+[transfer queue](https://github.com/git-lfs/git-lfs/blob/v3.7.1/tq/transfer_queue.go)
+limits each OID's retries and applies exponential delay. Increasing client
+retries would hide the server scheduling problem.
+
+Admission now allows at most eight pending transfer requests per node to wait
+up to one second. Waiters acquire account capacity before node capacity, consume
+no request body and hold no active node slot while waiting. The separate
+activation policy remains nonwaiting at 32/16. Cancellation releases wait
+positions and partial leases. Current HTTP tests retain the 4/8 ceilings,
+Retry-After response, other-account progress and disconnect recovery; a unit
+test saturates pending admission, exercises another account and cancels a waiter.
+State is bounded by active/pending work, not repository or account history.
+
+Real-provider run `canopy-transfer-fairness-013e78122a08` used release binary
+`7e5f0a173cebd77aa65cbbe646f2566b75f462875653381f72a3795ddab48b57`
+(base `549f775` plus this patch), macOS arm64 and RustFS
+`1.0.0-beta.8-glibc` limited to 2 CPUs/4 GiB. The Canopy/client host was shared,
+not resource-isolated. With three uploads held throughout, stock Git LFS 3.7.1
+used its default eight workers to upload and download sixteen distinct 1 MiB
+files. Upload took 0.826 seconds; download took 0.924 seconds; neither needed a
+503 retry. Every file hash, Git fsck, LFS fsck, completion/readback of the held
+uploads and clean shutdown passed. Server logs contained no WARN/ERROR records;
+the provider fixture was removed. Driver, binary hash, script hash, source
+patch and report are retained with the external proof artifacts.
+
+The failing immediate-rejection runs remain recorded: `07c370b61547` and
+`2212385fe7fb` ended during LFS upload; the latter retains a sanitized trace
+showing eight exhausted retries. Earlier `bae3f4de3e8a` transferred all object
+bytes but failed working-tree checks because the isolated clone lacked local
+LFS filters. Offline installation/checkout reproduced and repaired that fixture
+error; the final script installs local filters and retains unchanged byte checks.
+No dependency, lockfile or durable format change was needed.
+
+This is a small saturation/correctness fixture, not a production throughput or
+latency SLO. A lone account cannot use more than four active transfer slots;
+combined-account fairness, large slow transfers, authentication capacity and
+full-primitive thousand-repository density remain unqualified.

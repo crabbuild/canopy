@@ -7,6 +7,7 @@ mod graph;
 pub(crate) mod patch;
 mod trees;
 
+use crate::AdmissionPermit;
 use crate::{
     ObjectKind, RepositoryCell,
     pulls::{PullRevision, parse_oid},
@@ -15,7 +16,6 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use cellule_runtime::{InvocationError, SqlBatch, SqlResultSet, SqlStatement, SqlValue};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
-use tokio::sync::OwnedSemaphorePermit;
 
 type Oid = [u8; 20];
 const FILE_PAGE: usize = 32;
@@ -115,15 +115,12 @@ pub(crate) struct FilePreview {
 
 pub(crate) struct Reader {
     repository: Arc<RepositoryCell>,
-    admission: Arc<OwnedSemaphorePermit>,
+    admission: Arc<AdmissionPermit>,
     bytes: u64,
     entries: usize,
 }
 impl Reader {
-    pub(crate) fn new(
-        repository: Arc<RepositoryCell>,
-        admission: Arc<OwnedSemaphorePermit>,
-    ) -> Self {
+    pub(crate) fn new(repository: Arc<RepositoryCell>, admission: Arc<AdmissionPermit>) -> Self {
         Self {
             repository,
             admission,

@@ -51,21 +51,20 @@ pub(super) async fn publish(
     Path((name, number)): Path<(String, i64)>,
     request: Request<Body>,
 ) -> Response<Body> {
-    let Ok(permit) = Arc::clone(&state.transfers).try_acquire_owned() else {
-        let mut response = plain(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canopy transfer capacity is full; retry the request",
-        );
-        response.headers_mut().insert(
-            header::RETRY_AFTER,
-            axum::http::HeaderValue::from_static("1"),
-        );
-        return response;
+    let actor = match state.require(request.headers(), TokenScope::Write).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
     };
-    let permit = Arc::new(permit);
+    let permit = match state
+        .transfer_permit(crate::ReadIdentity::Account(&actor.account))
+        .await
+    {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
     let work = Arc::clone(&state);
     let task = state.tasks.spawn(async move {
-        let response = serve(&work, &name, number, request).await;
+        let response = serve(&work, &name, number, request, actor).await;
         response.map(|body| crate::transfer::response_body(body, permit))
     });
     match task.await {
@@ -78,9 +77,17 @@ async fn serve(
     name: &str,
     number: i64,
     request: Request<Body>,
+    actor: Principal,
 ) -> Response<Body> {
-    let (route, actor) = match pulls::writable_route(state, name, request.headers()).await {
-        Ok(value) => value,
+    let route = match authorization::scoped_route(
+        state,
+        name,
+        crate::ReadIdentity::Account(&actor.account),
+        TokenScope::Read,
+    )
+    .await
+    {
+        Ok(route) => route,
         Err(response) => return response,
     };
     let input: Input = match pulls::input(request).await {

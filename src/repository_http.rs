@@ -21,6 +21,7 @@ use authorization::{authorized_route, readable_route};
 
 use std::sync::Arc;
 
+use crate::{AdmissionPermit, admission::AccountAdmission};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -30,7 +31,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::task::TaskTracker;
 
 use crate::{
@@ -44,7 +44,7 @@ use crate::{
 
 pub(crate) struct RepositoryHttp {
     manager: Arc<RepositoryManager>,
-    transfers: Arc<Semaphore>,
+    transfers: AccountAdmission,
     tasks: TaskTracker,
 }
 
@@ -54,7 +54,11 @@ impl RepositoryHttp {
     pub(crate) fn new(manager: Arc<RepositoryManager>, tasks: TaskTracker) -> Self {
         Self {
             manager,
-            transfers: Arc::new(Semaphore::new(MAX_ACTIVE_TRANSFERS)),
+            transfers: AccountAdmission::new(
+                MAX_ACTIVE_TRANSFERS,
+                "node transfers",
+                "account transfers",
+            ),
             tasks,
         }
     }
@@ -215,6 +219,34 @@ impl RepositoryHttp {
                 .as_deref()
                 .is_none_or(|user| user == principal.account)
         }))
+    }
+
+    async fn transfer_permit(
+        &self,
+        actor: crate::ReadIdentity<'_>,
+    ) -> Result<Arc<AdmissionPermit>, Response<Body>> {
+        if let Ok(permit) = self.transfers.acquire(actor).await {
+            return Ok(Arc::new(permit));
+        }
+        // A short bounded wait absorbs stock LFS concurrency without retry storms.
+        // Waiting does not reserve node slots and ends before any body is consumed.
+        if let Ok(Ok(permit)) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.transfers.wait(actor),
+        )
+        .await
+        {
+            return Ok(Arc::new(permit));
+        }
+        let mut response = plain(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Canopy transfer capacity is full; retry the request",
+        );
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+        Err(response)
     }
 
     async fn viewer(&self, headers: &axum::http::HeaderMap) -> Result<Viewer, Response<Body>> {
@@ -703,18 +735,10 @@ async fn dispatch_repository(
     if directory::validate_component(name).is_err() {
         return plain(StatusCode::NOT_FOUND, "Repository does not exist");
     }
-    let Ok(permit) = Arc::clone(&state.transfers).try_acquire_owned() else {
-        let mut response = plain(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canopy transfer capacity is full; retry the request",
-        );
-        response.headers_mut().insert(
-            header::RETRY_AFTER,
-            axum::http::HeaderValue::from_static("1"),
-        );
-        return response;
+    let permit = match state.transfer_permit(principal.identity()).await {
+        Ok(permit) => permit,
+        Err(response) => return response,
     };
-    let permit = Arc::new(permit);
     let name = name.to_owned();
     let manager = Arc::clone(&state.manager);
     // Detached requests retain admission while Cell transitions and blocking
@@ -727,7 +751,7 @@ async fn dispatch_repository(
                 // The inner router must extract only its own captures, especially the LFS OID.
                 parts.extensions = axum::http::Extensions::new();
                 parts.extensions.insert(principal);
-                parts.extensions.insert(Arc::<OwnedSemaphorePermit>::clone(&permit));
+                parts.extensions.insert(Arc::<AdmissionPermit>::clone(&permit));
                 let request = Request::from_parts(parts, body);
                 let response = route.dispatch(request).await;
                 tracing::debug!(owner, name, status = %response.status(), "repository response completed");

@@ -1,5 +1,6 @@
 //! Transfer admission retained by response bodies and their outstanding data frames.
 
+use crate::AdmissionPermit;
 use axum::body::{Body, Bytes, HttpBody};
 use http_body::{Frame, SizeHint};
 use std::{
@@ -7,9 +8,8 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::sync::OwnedSemaphorePermit;
 
-pub(crate) fn response_body(body: Body, permit: Arc<OwnedSemaphorePermit>) -> Body {
+pub(crate) fn response_body(body: Body, permit: Arc<AdmissionPermit>) -> Body {
     Body::new(TransferBody {
         body,
         permit: Some(permit),
@@ -18,7 +18,7 @@ pub(crate) fn response_body(body: Body, permit: Arc<OwnedSemaphorePermit>) -> Bo
 
 struct TransferBody {
     body: Body,
-    permit: Option<Arc<OwnedSemaphorePermit>>,
+    permit: Option<Arc<AdmissionPermit>>,
 }
 
 impl HttpBody for TransferBody {
@@ -63,7 +63,7 @@ impl HttpBody for TransferBody {
 
 struct TransferBytes {
     bytes: Bytes,
-    _permit: Arc<OwnedSemaphorePermit>,
+    _permit: Arc<AdmissionPermit>,
 }
 
 impl AsRef<[u8]> for TransferBytes {
@@ -75,8 +75,8 @@ impl AsRef<[u8]> for TransferBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ReadIdentity, admission::AccountAdmission};
     use std::{collections::VecDeque, future::poll_fn};
-    use tokio::sync::Semaphore;
 
     struct Frames(VecDeque<Result<Frame<Bytes>, std::io::Error>>);
     impl HttpBody for Frames {
@@ -90,9 +90,9 @@ mod tests {
         }
     }
 
-    fn admitted(body: Body) -> (Body, Arc<Semaphore>) {
-        let semaphore = Arc::new(Semaphore::new(1));
-        let permit = Arc::new(Arc::clone(&semaphore).try_acquire_owned().unwrap());
+    async fn admitted(body: Body) -> (Body, AccountAdmission) {
+        let semaphore = AccountAdmission::new(2, "total", "account");
+        let permit = Arc::new(semaphore.acquire(ReadIdentity::Anonymous).await.unwrap());
         (response_body(body, permit), semaphore)
     }
 
@@ -103,7 +103,8 @@ mod tests {
         let (mut body, semaphore) = admitted(Body::new(Frames(VecDeque::from([
             Ok(Frame::data(Bytes::from_static(b"payload"))),
             Ok(Frame::trailers(trailers)),
-        ]))));
+        ]))))
+        .await;
         let bytes = poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
             .await
             .unwrap()
@@ -112,7 +113,7 @@ mod tests {
             .unwrap();
         let copied = bytes.clone();
         assert_eq!(bytes, b"payload"[..]);
-        assert_eq!(semaphore.available_permits(), 0);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_err());
         let trailers = poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
             .await
             .unwrap()
@@ -120,7 +121,7 @@ mod tests {
             .into_trailers()
             .unwrap();
         assert_eq!(trailers["x-test"], "complete");
-        assert_eq!(semaphore.available_permits(), 0);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_err());
         assert!(
             poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
                 .await
@@ -129,31 +130,32 @@ mod tests {
         assert!(body.is_end_stream());
         drop(body);
         drop(bytes);
-        assert_eq!(semaphore.available_permits(), 0);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_err());
         drop(copied);
-        assert_eq!(semaphore.available_permits(), 1);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_ok());
     }
 
     #[tokio::test]
     async fn body_errors_release_admission() {
         let (mut body, semaphore) = admitted(Body::new(Frames(VecDeque::from([Err(
             std::io::Error::other("interrupted"),
-        )]))));
+        )]))))
+        .await;
         assert!(
             poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
                 .await
                 .unwrap()
                 .is_err()
         );
-        assert_eq!(semaphore.available_permits(), 1);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_ok());
     }
 
-    #[test]
-    fn dropping_an_unpolled_body_releases_admission_and_preserves_size_hint() {
-        let (body, semaphore) = admitted(Body::from("payload"));
+    #[tokio::test]
+    async fn dropping_an_unpolled_body_releases_admission_and_preserves_size_hint() {
+        let (body, semaphore) = admitted(Body::from("payload")).await;
         assert_eq!(body.size_hint().exact(), Some(7));
-        assert_eq!(semaphore.available_permits(), 0);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_err());
         drop(body);
-        assert_eq!(semaphore.available_permits(), 1);
+        assert!(semaphore.acquire(ReadIdentity::Anonymous).await.is_ok());
     }
 }
