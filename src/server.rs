@@ -24,7 +24,7 @@ use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     net::TcpListener,
-    sync::{Mutex, oneshot},
+    sync::{Mutex, Semaphore, oneshot},
     task::JoinHandle,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -51,6 +51,7 @@ use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
 
 const RESIDENT_REPOSITORIES: usize = 3;
+const MAX_PENDING_REPOSITORIES: usize = 32;
 pub(crate) const LEASE_MS: i64 = 10_000;
 pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -167,6 +168,7 @@ pub(crate) struct RepositoryManager {
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
     residency_change: Mutex<()>,
+    residency_admission: Arc<Semaphore>,
     tasks: TaskTracker,
 }
 
@@ -420,7 +422,7 @@ impl RunningServer {
         let node = Arc::new(
             CellNodeBuilder::new(Arc::clone(&application))
                 .with_runtime(
-                    SqlWorkerPool::new(1, RESIDENT_REPOSITORIES + 1)?,
+                    SqlWorkerPool::for_system(RESIDENT_REPOSITORIES + 1)?,
                     64 * 1024 * 1024,
                 )
                 .with_replica_host(Host::default().with_local_disk_budget(disk_budget.clone()))
@@ -516,6 +518,7 @@ impl RunningServer {
                 ready,
                 loaded: Mutex::new(HashMap::new()),
                 residency_change: Mutex::new(()),
+                residency_admission: Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES)),
                 tasks: tasks.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(manager, tasks.clone()));

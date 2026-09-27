@@ -276,6 +276,22 @@ starts. Requests for that candidate wait for the transition and recheck its
 serving state. Initialization must succeed before the ready route is exposed.
 Remote routes retain authoritative owner checks on the transition path.
 
+At most 32 transition operations may be executing or waiting on that path.
+Admission uses a nonwaiting semaphore before spawning supervised work; a full
+queue returns a capacity error (HTTP 503). The task owns its permit through
+completion or failure, including after the HTTP client disconnects. Ready local
+routes bypass this queue. Remote routes need authoritative ownership checks and
+consume the same admission. Directory query admission and the eight Git/LFS
+transfer permits remain independent bounds; a burst can be rejected there first.
+
+The node uses Cellule's `SqlWorkerPool::for_system`, which derives a fixed pool
+from available parallelism, with one worker when discovery fails and a maximum
+of sixteen. Each Cell remains assigned to one owning SQL worker. Active-Cell
+admission remains four (Directory plus three repositories); more SQL workers do
+not raise residency or establish throughput. Debug residency logs report
+`queue_seconds`, `transition_seconds` and success separately for each supervised
+transition, in addition to existing acquisition and Git hydration timings.
+
 ### Peer routing
 
 `server::peer::NodePeer` uses Cellule's signed `PeerSigner`, `PeerVerifier`,

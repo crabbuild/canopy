@@ -109,13 +109,30 @@ impl RepositoryManager {
         if let Some(route) = self.local_route(&entry).await? {
             return Ok(route);
         }
+        let admission = Arc::clone(&self.residency_admission)
+            .try_acquire_owned()
+            .map_err(|_| Error::Capacity("pending repository activations"))?;
+        let queued = Instant::now();
         let manager = Arc::clone(self);
         // Client cancellation must not abandon a release or acquisition halfway
         // through. Shutdown waits for these tracked tasks before draining.
         self.tasks
             .spawn(async move {
+                // Retain queue capacity through cancellation and transition cleanup.
+                // Releasing it with the HTTP waiter would allow unbounded detached work.
+                let _admission = admission;
                 let _change = manager.residency_change.lock().await;
-                manager.load_repository(&entry).await
+                let queue_seconds = queued.elapsed().as_secs_f64();
+                let started = Instant::now();
+                let result = manager.load_repository(&entry).await;
+                tracing::debug!(
+                    repository = %hex::encode(entry.repository_id),
+                    queue_seconds,
+                    transition_seconds = started.elapsed().as_secs_f64(),
+                    succeeded = result.is_ok(),
+                    "repository transition completed"
+                );
+                result
             })
             .await?
     }

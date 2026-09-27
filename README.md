@@ -696,7 +696,14 @@ each bound to a local or remote Cell. Additional repositories evict an inactive
 gateway; local Cell ownership is released before its slot is reused. On a temporary
 Cellule movement-rate denial, admission waits one second before a single retry.
 Requests and streamed responses pin their repository; admission returns 503 when
-no repository can be safely released. A terminal ownership-release failure leaves
+no repository can be safely released. Cold/remote routing admits at most 32
+pending transition operations, including the one executing. Full admission
+returns 503; disconnected clients retain their slot until supervised work ends.
+Ready local repositories keep routing independently. SQL execution uses the
+runtime's CPU-sized worker pool, capped at sixteen, with per-Cell ownership.
+The [density benchmark and remaining scaling plan](docs/performance-plan.md)
+separate repository count, active Cells and simultaneous transfers.
+A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.

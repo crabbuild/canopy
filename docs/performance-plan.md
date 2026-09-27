@@ -8,6 +8,12 @@ Ordinary Git objects remain authoritative in SQLite. Large Git blobs and LFS
 bodies remain immutable objects in the configured object store. Git smart HTTP
 continues to work with stock clients.
 
+The expanded objective also requires KV, queue, workflow, Blob, Cron, Timer,
+durable effects and projections in each same repository Cell. The current
+SQL-only benchmark is a baseline; complete capability integration and mixed
+primitive workloads are required before density qualification is complete.
+See [the repository Cell capability proposal](repository-cell-primitives.md).
+
 Repository count, open Cell count and simultaneous Git work are separate
 capacity dimensions. Report all three in every capacity claim. The initial
 qualification target is 10,000 repositories on one 8-vCPU, 32-GiB Linux node
@@ -15,10 +21,64 @@ with local NVMe and same-region object storage. It is a proposed target, not
 measured capacity. Uniform access and concentrated traffic require separate
 results; a small active set cannot establish uniform-access performance.
 
+## Node design and resource model
+
+Use three residency states independently of repository identity:
+
+| State | Retained resources | Request path |
+| --- | --- | --- |
+| Cold | Durable Cell identity, roots and external bodies | Acquire fenced ownership, restore and activate |
+| Cached | Verified local database/object files under a disk budget; no open SQL handle or per-repository worker | Validate authority and cache generation, then reopen through the runtime |
+| Active | Cell handle, bounded SQL state and request/background pins | Route to the owning worker; enqueue within its admission budget |
+
+The cached state is a proposed runtime contract, not implemented behavior.
+Closing a SQL handle, releasing Cell ownership and deleting cached files are
+separate decisions. Every transition must account for foreground streams and
+primitive obligations. A waiting workflow is durable state; runnable work and
+active leases require lifecycle checks before the Cell can sleep.
+
+Share SQL workers, native Git workers, object-store connections and scheduler
+runners across repositories. Do not allocate a thread, connection pool, polling
+loop or independent timer task for every repository. Use indexed durable due
+work and a bounded scheduler that activates only due Cells. Queue and workflow
+state stays inside the repository's Cell; the node scheduling index must be
+reconstructible and reconcile missed updates after crashes.
+
+Derive active admission from measured resource consumption:
+
+```text
+node memory = fixed runtime + active Cell state + Git workers
+            + transfer buffers + pending work + filesystem/cache charges
+
+active limit <= min(memory allowance / measured Cell allowance,
+                    descriptor allowance / measured Cell descriptor count,
+                    runtime active-Cell limit minus lifecycle headroom)
+```
+
+This is a sizing model, not an enforcement mechanism: allocations still need
+reservations and the deployment needs aggregate memory/process/disk ceilings.
+Use representative high-water measurements with all primitive schemas installed;
+SQL page-cache settings alone do not measure a Cell. Reserve separate capacity
+for Directory requests, lease renewal, durable publication and shutdown.
+Bound disk cache and restore scratch independently. Define per-account admission
+so one repository scan cannot monopolize the entire cold activation budget.
+
+Warm request latency should consist of authentication, routing, a short SQL
+operation and response delivery. Measure each term before introducing caches.
+Durable writes must include the runtime's publication work before success;
+object-store round trips therefore need a separate write-latency target.
+For bulk Git and LFS, report first-byte latency and throughput separately from
+metadata latency. Reuse immutable Git objects and pack data across ref changes;
+serve ref discovery without a full object hydration where the wire protocol
+permits it.
+
 ## Current evidence and constraints
 
 - The manager admits three repository entries plus one reserved Directory SQL
-  slot. The runtime has one SQL worker. These are qualification limits.
+  slot. The runtime uses its CPU-sized SQL worker pool, capped at sixteen.
+  Thirty-two supervised cold/remote transitions may execute or wait; excess
+  admission receives 503. Ready local routes bypass that queue. These are
+  qualification limits, not measured production capacity.
 - Ready local routes now pin under a short registry lock. Ownership transitions
   are separately serialized; a paused cold admission or release cannot hold
   the registry lock and block another ready local repository.
@@ -67,11 +127,14 @@ Acceptance: paused ownership lookup and release do not block an unrelated warm
 repository's metadata or stock Git discovery. Concurrent requests for the same
 cold repository converge on one serving entry. All pins, denied/lost release,
 cleanup failure, cancellation and shutdown tests continue to pass. The lock
-isolation part is implemented; the density driver and phase metrics remain open.
+isolation part is implemented. The initial density driver below measures metadata
+and Git v2 discovery, with stock Git sampling and full identity recovery checks.
+Transition queue/service timings are logged. Other workload classes, comprehensive
+resource metrics and independent load-generator deployment remain open.
 
 ### 2. Measured active-Cell admission
 
-Use a CPU-sized bounded SQL worker pool. Select the active-Cell allowance from
+The CPU-sized bounded SQL worker pool is implemented. Select the active-Cell allowance from
 measured memory, descriptor and disk budgets, retaining Directory and lifecycle
 headroom. Do not simply replace three with ten thousand. Account for native Git
 and outgoing streams separately from SQL connection caches.
@@ -166,3 +229,64 @@ full hosting service.
   suggested page-cache budget; not an aggregate RSS ceiling.
 - [Git pack-objects](https://git-scm.com/docs/git-pack-objects): packed-object,
   delta and bitmap reuse.
+
+
+## Running the initial density driver
+
+`scripts/benchmark_repositories.py` authenticates using the existing
+`CANOPY_GIT_TOKEN` environment variable. Point it at a dedicated Canopy instance
+and disposable storage prefix. It creates private repositories; it does not
+remove them. Keep generated client checkouts on the mounted qualification volume.
+The provider fixture owns storage cleanup, separately from the benchmark.
+
+```sh
+python3 -B scripts/benchmark_repositories.py --base-url http://127.0.0.1:8080 \
+  --manifest "$HOME/Workspace/crabbuild-target/canopy-density/corpus.json" \
+  seed --repositories 1000 --populated 3 \
+  --work-dir "$HOME/Workspace/crabbuild-target/canopy-density/seed"
+python3 -B scripts/benchmark_repositories.py --base-url http://127.0.0.1:8080 \
+  --manifest "$HOME/Workspace/crabbuild-target/canopy-density/corpus.json" \
+  run --active-repositories 1000 --distribution uniform --operation metadata \
+  --rate 10 --duration 30 --concurrency 32 \
+  --output "$HOME/Workspace/crabbuild-target/canopy-density/uniform.json"
+python3 -B scripts/benchmark_repositories.py --base-url http://127.0.0.1:8081 \
+  --manifest "$HOME/Workspace/crabbuild-target/canopy-density/corpus.json" \
+  verify --work-dir "$HOME/Workspace/crabbuild-target/canopy-density/restored"
+```
+
+Create the report parent directory first; seed/verify require fresh work
+directories, and measurement refuses existing output files. For another
+checkout/run, use a different qualification directory. `verify` may target a
+new node URL after owner takeover. It checks every identity and clones each
+populated sample with Git v0/v2, exact commit/file hashes and strict fsck.
+The default sample contains three one-commit repositories; the remainder are
+empty. This is a density smoke corpus, not realistic large-history qualification.
+An interrupted seed leaves an explicitly incomplete manifest and cannot be used
+as a complete corpus. Names have a unique prefix; the manifest records them.
+
+Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
+of requests to the selected working set's first tenth. A fixed seed determines
+working-set selection and offered arrivals. The driver never calls a working set
+warm automatically: its count is not the server's resident count. Prewarm a set
+that fits the node before claiming warm latency, or label the run as cold/mixed.
+
+Each worker reuses an HTTP connection. Arrivals follow a fixed clock schedule;
+end-to-end latency starts at the scheduled instant and includes driver dispatch
+delay and complete response consumption. A bounded semaphore limits outstanding
+requests. Saturation records `driver_busy` instead of accumulating an unbounded
+client queue. HTTP errors and transport failures are recorded without retries.
+`--timeout` bounds individual socket operations; it is not a whole-request
+deadline. All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
+error totals, scheduled/service/dispatch latency percentiles and the manifest
+SHA-256. Dropped arrivals have no fabricated zero latency. Any failure yields
+exit status 1 after reports are written. Latency percentiles include completed
+errors; always read them alongside error/drop counts.
+
+The driver unit test runs a real HTTP server that deliberately rejects requests:
+
+```sh
+python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
+```
+
+It verifies concurrency bounds, complete scheduled-outcome accounting, absence
+of retries, queue-delay inclusion and credential exclusion from the report.

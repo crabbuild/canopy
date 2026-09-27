@@ -17,11 +17,14 @@ Do not infer completion from compilation or a disposable cache test.
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash/rebase candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; browser conflict resolution, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
+| 10 Full Repository Cell | One repository Cell with SQL, KV, queue, workflow, Blob, Cron, Timer, effects and projections; thousands of such Cells per node | Same Cell identity and atomic composition, autonomous background work, ownership/recovery faults and mixed-workload density/latency evidence | Open: Canopy currently binds SQL only; the pinned runtime uses exclusive primitive roles. See [the capability proposal](repository-cell-primitives.md) |
 
 The **internal preview** requires gates 0–5, including real storage and
 two-node owner loss. A private beta requires gates 0–8. A public release
 requires gate 9 and measured limits for repository count, hot repository
 throughput, pack size, concurrent clients, restore time and storage cost.
+The expanded repository-Cell objective also requires gate 10; earlier SQL-only
+hosting gates do not establish completion of that requirement.
 Hosted CI runners, packages, forks and GitHub API compatibility require
 separate product decisions.
 
@@ -2761,3 +2764,54 @@ owner checks for remote routes remain. The next steps are the capacity driver,
 resource-derived admission and incremental Git caches in
 [the performance plan](performance-plan.md). Thousand-repository density and
 warm latency targets remain unproven; all broader delivery gates remain open.
+
+
+## Bounded activation admission and CPU-sized SQL execution
+
+The repository manager now bounds supervised cold/remote transitions at 32,
+including the executing operation and queued waiters. Admission happens before
+spawning. The supervised task retains its semaphore permit across client
+cancellation until completion or failure; repeated disconnects cannot create
+unbounded detached activation work. Ready local routes retain their short-lock
+path and bypass this queue. Full admission returns an existing capacity error
+through the API/Git routing boundary as HTTP 503. Directory query admission and
+Git/LFS transfer admission remain independent, so either can reject a burst
+before it reaches activation.
+
+The node now calls the pinned runtime's `SqlWorkerPool::for_system`: available
+parallelism with its documented one-worker fallback and sixteen-worker ceiling.
+Cells retain their single owning SQL worker and unchanged durable publication
+contract. The active-Cell limit remains four, including the Directory. Debug
+traces separate transition queue time and execution time. No configuration,
+dependency, persisted schema or wire-format change is introduced.
+
+Evidence:
+
+- All nine residency integration tests pass. The new test fills the 32-operation
+  bound while release is paused, checks prompt 503 rejection, disconnects the
+  queued clients, and confirms capacity remains held. Another warm repository
+  still serves metadata and Git v2 discovery. Releasing the fault permits later
+  admission and exact Git clone/fsck recovery.
+- An initial burst fixture also hit Directory admission and could not identify
+  which bound rejected its requests. The final fixture admits waiters gradually
+  before testing the activation boundary. The production bound was unchanged.
+- Both peer tests, all seven lifecycle tests and the stock Git/LFS/rename/ACL
+  restore test pass: nineteen scoped Rust integration tests in total. All-target
+  Clippy with warnings denied, optimized build and Rust formatting pass.
+- `scripts/benchmark_repositories.py` seeds a manifest, measures scheduled
+  metadata or Git-v2-discovery arrivals, and verifies every restored identity
+  plus stock Git v0/v2 samples. The driver bounds in-flight work, records drops,
+  failures and dispatch-inclusive latency, and never retries measured requests.
+  Its real-HTTP overload test verifies outcome accounting and concurrency;
+  Python syntax and that test pass.
+- Two exploratory RustFS seed runs exceeded a five-second setup deadline. The
+  instrumented follow-up keeps measured-read timeouts at five seconds and uses
+  the existing smoke harness's thirty-second deadline for setup/verification.
+  Per-repository creation time is recorded in the manifest; changing the setup
+  deadline is not claimed as a production latency improvement.
+
+The [performance plan](performance-plan.md) documents reproducible commands and
+remaining density/corpus/resource qualification. The expanded requirement for
+all primitives in each repository Cell has a separate
+[contract proposal](repository-cell-primitives.md) and remains gate 10. These
+SQL-only changes do not complete that requirement.
