@@ -1435,3 +1435,49 @@ These are dependency changes and remain approval-gated under the repository
 instructions. Increasing the concurrency constant alone or relaxing the
 coverage assertion does not establish fair progress. No dependency or
 production server code was changed for this measurement.
+
+## Warm Git ref-generation validation
+
+Warm discovery and fetch previously called `cell_refs` before inspecting the
+existing full Git cache. Every request scanned all 256-row ref pages even when
+HEAD and every ref were unchanged. `GitGateway::current_cache` now clones a
+ready cache owner without waiting on hydration and reads the existing singleton
+HEAD/generation row. A match reuses the immutable snapshot. Cold requests and
+changed generations retain coherent paginated acquisition; discovery-only
+requests retain no new cache. Current repository authorization still runs before
+this check, and response streams retain the selected cache owner.
+
+Production ref writers were checked together: direct/HTTP pushes and merges use
+`refs::apply_refs`; candidate publication calls `refs::advance_generation` in
+its transaction; default-branch and visibility updates increment the singleton
+generation in their authorized SQL statement. Ref deletion/recreation and HEAD
+ABA therefore invalidate a previous cache even when names or OIDs return.
+The pinned `SqlCell::query` continues to dispatch a bounded read-only Cell query;
+this change adds no dependency API, persistence format, configuration or TTL.
+
+`scripts/smoke_s3_cache.py` now publishes 300 lightweight tags in bounded pushes,
+warms the resulting 301-ref cache, then performs six stock `ls-remote` commands
+and two stock clones across Git v0/v2. Debug events must show ten or more cache
+hits and zero complete ref scans. Every clone passes `git fsck`; deletion and
+recreation of a tag at another OID must appear in subsequent native listings.
+
+The diagnostic-only baseline `canopy-warm-ref-baseline-8495f644de07` used base
+`c542b78` with the snapshot-scan event but without the optimization. It failed
+the unchanged probe with ten complete 301-ref scans and zero hits. Final run
+`canopy-warm-ref-generation-066d51a1e2a4`, base `c542b78` plus this change, used
+release binary SHA-256
+`6c38af3ea9d4527ca93fb4a44f62adc871687d40aa02c1f89367cf0ec4566839`
+and passed with zero scans and ten hits. Both used RustFS
+`1.0.0-beta.8-glibc` limited to 2 CPUs/4 GiB and a shared macOS arm64
+Canopy/client host. These runs prove reduced SQL work, not comparative latency:
+host load differed and the final run overlapped an independent integration test.
+
+The final process run also passed incremental object reuse (260 existing files,
+three new objects), SIGKILL and fresh-local-state recovery, cold discovery with
+no retained history cache, Git v0/v2 clones and graceful shutdown. Both server
+logs had zero WARN/ERROR records; the provider fixture was removed. Source patch,
+binary/script hashes and JSON results are retained with the external run.
+Focused smart-HTTP, default-branch recovery, visibility/revocation, paused-history
+discovery and fetchable merge-candidate tests passed, along with all-target
+Clippy, formatting and the release build. Full-primitive density, renewal
+fairness and production latency gates remain open.

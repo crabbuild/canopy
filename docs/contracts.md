@@ -86,6 +86,11 @@ an authorized collaborator attempting an owner operation receives 403.
 
 The cache key includes HEAD and the coherent ref generation. New generations
 get a new, disk-accounted HEAD file; active readers retain their original cache.
+After current authorization, a ready full Git cache is validated with the single
+row containing HEAD and generation. A match reuses the immutable snapshot without
+scanning ref pages. A miss acquires a coherent paginated snapshot as above.
+Inspection never waits for a cache currently hydrating history, so independent
+ref discovery remains available. Cold discovery retains no additional cache.
 Native Git supplies populated HEAD advertisements for protocols v0/v2 and the
 protocol-v2 [unborn HEAD response](https://git-scm.com/docs/protocol-v2#_ls_refs).
 Empty protocol-v0 clones cannot learn an unborn branch through that extension.

@@ -16,6 +16,67 @@ from smoke_s3_process import create_repository, git, start
 AUTH = "http.extraHeader=Authorization: Bearer local-test-token"
 
 
+def warm_ref_pages(source, url, work_dir, log, report):
+    # Cross the 256-row pagination boundary using supported 60-ref pushes.
+    names = [f"refs/tags/warm-{index:03}" for index in range(300)]
+    for offset in range(0, len(names), 60):
+        git("-c", AUTH, "push", url,
+            *(f"HEAD:{name}" for name in names[offset:offset + 60]), cwd=source)
+    expected = git("rev-parse", "HEAD", cwd=source)
+
+    def clone(name, protocol):
+        destination = work_dir / name
+        git("-c", AUTH, "-c", f"protocol.version={protocol}", "clone", url, str(destination))
+        assert git("rev-parse", "HEAD", cwd=destination) == expected
+        git("fsck", "--strict", "--full", cwd=destination)
+
+    clone("many-refs-seed", 2)
+    # The logger is asynchronous. Observe the setup scan before choosing the
+    # measured boundary, so a delayed setup event cannot contaminate this check.
+    deadline = time.monotonic() + 5
+    while True:
+        prefix = log.read_text()
+        if any("read Git ref snapshot" in line and "refs=301" in line
+               for line in prefix.splitlines()):
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError("missing 301-ref snapshot diagnostics")
+        time.sleep(0.01)
+    offset = len(prefix)
+    times = {}
+    for protocol in (0, 2):
+        started = time.monotonic()
+        for _ in range(3):
+            listing = git("-c", AUTH, "-c", f"protocol.version={protocol}",
+                          "ls-remote", url)
+            for name in names:
+                assert expected + b"\t" + name.encode() in listing
+        times[str(protocol)] = (time.monotonic() - started) / 3
+        clone(f"many-refs-warm-v{protocol}", protocol)
+    report.update(warm_ref_count=301, warm_ls_remote_mean_seconds=times)
+    # Read through the response-completed operations before any mutation; every
+    # scan logs before native Git starts producing the response.
+    events = log.read_text()[offset:].splitlines()
+    scans = [line for line in events if "read Git ref snapshot" in line]
+    hits = sum("reused Git ref snapshot" in line for line in events)
+    report["warm_ref_snapshot_scans"] = len(scans)
+    report["warm_ref_snapshot_hits"] = hits
+    assert not scans, scans
+    assert hits >= 10, hits
+
+    # An existing warm generation must observe both deletion and recreation,
+    # even though the ref name returns and object bodies are already cached.
+    git("-c", AUTH, "push", url, f":{names[0]}", cwd=source)
+    assert not git("-c", AUTH, "ls-remote", url, names[0])
+    git("-c", AUTH, "push", url, f"HEAD~1:{names[0]}", cwd=source)
+    previous = git("rev-parse", "HEAD~1", cwd=source)
+    for protocol in (0, 2):
+        assert git("-c", AUTH, "-c", f"protocol.version={protocol}",
+                   "ls-remote", url, names[0]) == previous + b"\t" + names[0].encode()
+    report["warm_ref_generation_passed"] = True
+    print("PASS: 301-ref warm v0/v2 listings and clones skip ref scans; deletion/recreation stays visible", flush=True)
+
+
 def cached_objects(data):
     objects = {}
     for cache in (data / "runtime-v1").glob("canopy-git-*/repo.git"):
@@ -151,6 +212,7 @@ def qualify(args):
         report["capability_discovery_passed"] = True
         print("PASS: cold Git v2 capabilities hydrate no objects and match warm discovery", flush=True)
         report["recovery_passed"] = True
+        warm_ref_pages(source, restored_url, args.work_dir, restored_log, report)
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=60)
         assert process.returncode == 0

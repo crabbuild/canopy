@@ -202,22 +202,12 @@ impl GitGateway {
             )
             .await?;
             backend.stream(request, ()).await?
+        } else if let Some(cached) = self.current_cache().await? {
+            cached.backend.stream(request, Arc::clone(&cached)).await?
         } else if discovery::is_ref_discovery(&request).await? {
             let snapshot = self.cell_refs().await?;
-            // A fetch can hold this mutex while restoring unrelated history.
-            // Reuse only a ready snapshot; discovery must not wait for that I/O.
-            let cached = self.cache.try_lock().ok().and_then(|cache| {
-                cache
-                    .as_ref()
-                    .filter(|cached| cached.snapshot == snapshot)
-                    .cloned()
-            });
-            if let Some(cached) = cached {
-                cached.backend.stream(request, Arc::clone(&cached)).await?
-            } else {
-                let backend = self.discovery_cache(snapshot).await?;
-                backend.stream(request, ()).await?
-            }
+            let backend = self.discovery_cache(snapshot).await?;
+            backend.stream(request, ()).await?
         } else {
             let live_refs = self.cell_refs().await?;
             let cached = {
@@ -238,6 +228,33 @@ impl GitGateway {
             headers: response.headers,
             body: Body::from_stream(response.body),
         })
+    }
+
+    async fn current_cache(&self) -> Result<Option<Arc<CachedRepository>>, GatewayError> {
+        // Hydration holds this mutex across storage I/O. Discovery must stay
+        // independent, so inspect only a ready snapshot and release before SQL.
+        let cached = self.cache.try_lock().ok().and_then(|cache| cache.clone());
+        let Some(cached) = cached else {
+            return Ok(None);
+        };
+        // Ref mutations, deletion/recreation and HEAD changes advance the same
+        // generation transactionally. Matching it avoids scanning every ref page.
+        let head = self
+            .repository
+            .default_branch(None)
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            .output;
+        let current =
+            cached.snapshot.generation == head.generation && cached.snapshot.head == head.reference;
+        if current {
+            tracing::debug!(
+                repository = %hex::encode(self.repository.repository_id()),
+                generation = head.generation,
+                "reused Git ref snapshot"
+            );
+        }
+        Ok(current.then_some(cached))
     }
 
     async fn receive(
@@ -391,6 +408,12 @@ impl GitGateway {
                     refs.insert(name, state);
                 }
                 if complete {
+                    tracing::debug!(
+                        repository = %hex::encode(self.repository.repository_id()),
+                        generation = page.generation,
+                        refs = refs.len(),
+                        "read Git ref snapshot"
+                    );
                     return Ok(RefSnapshot {
                         refs,
                         head: page.default_branch,
