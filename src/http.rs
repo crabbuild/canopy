@@ -557,6 +557,14 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::BAD_REQUEST,
             "Malformed Git receive-pack commands",
         ),
+        Err(GatewayError::Input(crate::git_input::InputError::Fetch)) => plain(
+            StatusCode::BAD_REQUEST,
+            "Malformed Git upload-pack commands",
+        ),
+        Err(GatewayError::UnreachableWant) => plain(
+            StatusCode::BAD_REQUEST,
+            "Requested Git object is not reachable from a current repository ref",
+        ),
         Err(GatewayError::Input(crate::git_input::InputError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large")
         }

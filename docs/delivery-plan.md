@@ -3329,3 +3329,31 @@ Stock Git/LFS restored exact 80 MiB Git and LFS bodies, empty LFS content and an
 issue after all original source objects were deleted. The fixture container and
 volume were removed. This verifies current-format startup and copy admission;
 it does not add an old-format upgrade path.
+
+
+## Partial clone and blobless preparation
+
+Native smart HTTP now advertises `blob:none`, `blob:limit`, `tree`, `object:type`
+and `combine` filters. Stock clients omit filtered objects and retrieve them on
+demand. `sparse:oid` remains disabled. The compatibility matrix lives in
+[Git compatibility](git-compatibility.md).
+
+Graph certification now persists typed, deduplicated object edges in the same
+transaction as closure certificates. Every explicit fetch want is checked
+against live refs and the selected ref generation. This is required because
+native Git's reachable-want check alone accepts unreferenced blob wants.
+A rejected certificate batch also rolls back its edges. The schema change uses
+the existing hard-cutover release admission; no backfill path is added.
+
+Exact blobless requests hydrate non-blob history through an indexed structural
+cursor, plus ref/tag targets and explicit wants. The full-object cursor remains
+independent. Other filters and full fetch still hydrate all stored objects;
+requested-closure-only preparation and measured provider latency remain open.
+
+Permanent local gates cover v0/v2 blobless clones and lazy reads, treeless/size/
+object-type/combined filters and checkout, fresh-disk recovery, and rejection of
+unreachable commits, trees, blobs and unknown OIDs before and after full cache
+hydration. Indexed query work is checked with 10,000 stored objects. Ordinary
+smart HTTP and Repository Cell publication/rollback regressions pass. These tests
+use the in-memory provider; hosted CI and real-provider filter qualification
+remain outstanding.

@@ -25,6 +25,18 @@ with local NVMe and same-region object storage. It is a proposed target, not
 measured capacity. Uniform access and concentrated traffic require separate
 results; a small active set cannot establish uniform-access performance.
 
+## Blobless fetch preparation
+
+`--filter=blob:none` now prepares non-blob history through a partial sequence
+index, plus ref/tag targets and explicit wants. Separate full and structural
+cursors preserve later full-fetch completeness. A fresh-disk integration test
+proves that two large blobs start absent, lazy reading one hydrates only that
+blob, and deleted-ref objects remain unavailable even after full hydration.
+SQL work-bound tests exercise 10,000 stored objects. These are local correctness
+and query-work gates, not latency or real-provider throughput measurements.
+Other filters still prepare the full cache; narrowing preparation to requested
+reachable history and measuring cold/warm latency remain open.
+
 ## Node design and resource model
 
 Use three residency states independently of repository identity:

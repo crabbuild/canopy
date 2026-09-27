@@ -29,6 +29,8 @@ pub enum InputError {
     Timeout,
     #[error("Git receive-pack commands are malformed")]
     Commands,
+    #[error("Git upload-pack commands are malformed")]
+    Fetch,
     #[error("Git request body failed")]
     Body(#[from] axum::Error),
     #[error("Git request gzip stream is invalid")]

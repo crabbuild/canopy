@@ -102,7 +102,11 @@ pub async fn verify(
             .contains(&SqlValue::Blob(root.to_vec()))
     );
     put(repository, ObjectKind::Blob, blob_body).await?;
-    for candidates in [vec![root, tree, blob], vec![blob, root]] {
+    for candidates in [
+        vec![root, tree, blob],
+        vec![blob, root],
+        vec![blob, tree, [71; 20]],
+    ] {
         assert!(matches!(
             application
                 .command::<CertificateCommand>(target, identity()?, CertificateInput(candidates))
@@ -115,6 +119,20 @@ pub async fn verify(
                 .contains(&SqlValue::Blob(blob.to_vec()))
         );
     }
+    // A rejected batch must roll back edges as well as closure certificates;
+    // otherwise a staged tree could authorize a later raw-OID fetch.
+    let edges = sql
+        .query(
+            None,
+            SqlBatch {
+                statements: vec![SqlStatement {
+                    sql: "SELECT child FROM object_edges WHERE parent = ?1".into(),
+                    parameters: vec![SqlValue::Blob(tree.to_vec())],
+                }],
+            },
+        )
+        .await?;
+    assert!(edges.output[0].rows.is_empty());
     assert!(
         application
             .command::<CertificateCommand>(target, identity()?, CertificateInput(vec![blob, tree]))

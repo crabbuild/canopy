@@ -144,6 +144,23 @@ impl Command for CertifyObjects {
                     return Ok(CommandResult::Rejected(false));
                 }
             }
+            // Only certified, typed edges enter the reachability index. Keeping
+            // this with closure publication prevents lazy fetch from trusting
+            // staged or malformed object graphs.
+            for edges in edges.chunks(MAX_CERTIFICATES) {
+                context.sql(&SqlBatch {
+                    statements: edges
+                        .iter()
+                        .map(|(child, _)| SqlStatement {
+                            sql: "INSERT INTO object_edges (parent, child) VALUES (?1, ?2)".into(),
+                            parameters: vec![
+                                SqlValue::Blob(oid.to_vec()),
+                                SqlValue::Blob(child.to_vec()),
+                            ],
+                        })
+                        .collect(),
+                })?;
+            }
             if state.kind == ObjectKind::Commit {
                 let parents: Vec<_> = edges
                     .iter()

@@ -13,6 +13,7 @@ also persist the accepted objects and refs before returning success.
 | Protocol v0 and v2 | Native discovery and transfer; a client requesting v1 also works by falling back to v0 |
 | Lightweight and annotated tags, notes, ordinary custom refs | Mirror round trip, exact ref/OID comparison and strict full `git fsck` |
 | Unicode UTF-8 branches and tags | Push, protected branch preflight, default branch selection, clone and fresh-disk recovery |
+| Partial clone and lazy fetch | Blobless v0/v2, treeless, blob-size, object-type and combined filters; omitted objects fetched on demand; unreachable commit/tree/blob wants rejected |
 | Shallow clone, deepen, unshallow | Verified history counts and subsequent incremental pull |
 | Branch deletion and fetch pruning | Deleted refs disappear from remote tracking refs |
 | Mirror clone and mirror push | Exact refs/tags/notes in a second repository; 4,096 long refs published in one generation and recovered after fresh-disk restart |
@@ -33,8 +34,8 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete and atomic generation qualified | Full-capacity and real-provider scale qualification remain |
 | Rejection reporting | Branch policy, unsupported ref names and command limits use native Git reports; late Cell conflicts still return HTTP 409 and infrastructure failures can return HTTP 500 | Resource/policy refusals produce clear Git reports without reporting uncommitted refs as accepted |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
-| Partial clone | Filters are not advertised; Git warns and downloads the full object set | Blobless/treeless clones actually omit objects, authorized lazy fetch succeeds, hidden/unreachable objects stay inaccessible |
-| Cold fetch | Transfer preparation hydrates all stored objects; discovery already prepares only ref tips and tag chains | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
+| Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
+| Cold fetch | Exact `blob:none` hydrates non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
 | SSH | No SSH listener or Git command endpoint | Key ownership/revocation, repository ACLs, clone/push/fetch, cancellation and durable publication |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
@@ -62,14 +63,19 @@ The existing `Verify` workflow runs these tests through `cargo test --locked`.
 Bulk tests additionally cover 1,001 distinct graph roots, namespace conflicts
 beyond several SQL pages, long plans exceeding the command wire ceiling, mixed
 and atomic rejection, bulk deletion and command-limit rejection/replay.
+`tests/multi_server/partial_clone.rs` verifies actual client omissions, on-demand
+bytes, fresh-disk blob omission and rejected unreachable wants before and after
+full cache hydration. SQL work-bound tests cover indexed structural reads and
+reachability short-circuiting with 10,000 stored objects.
 Hosted CI has not been run for these changes.
 
 The baseline real-provider probe used Apple Git 2.50.1 and disposable RustFS
 `1.0.0-beta.8-glibc` at Canopy commit `48dfc21`; it confirmed the bulk, filter,
 push-option, signed-push and SHA-256 gaps above. Unicode failed in that baseline
 and is corrected by the Unicode validator change and permanent integration tests.
-The former 64-ref cap is also removed; the current bulk qualification uses the
-in-memory provider and does not replace the earlier real-provider baseline.
+The former 64-ref cap is also removed, and filtered clones now pass local
+integration tests. Current bulk and filter qualification uses the in-memory
+provider and does not replace the earlier real-provider baseline.
 Tests using the in-memory provider do not qualify provider outages or performance.
 
 Implementation order:
@@ -79,8 +85,8 @@ Implementation order:
    independently committed ref batches or old inline HTTP completion remain.
 2. Add positive and negative CI gates alongside each capability, including a
    real-provider process/restart suite and cross-platform cache qualification.
-3. Add filter negotiation and lazy fetch while reducing cold preparation;
-   measure transferred and hydrated objects separately.
+3. Further reduce cold preparation beyond blobless fetch; measure transferred
+   and hydrated objects separately and qualify filter negotiation at scale.
 4. Add SSH using the same authorization, object ingestion and publication path.
 5. Complete the selected push, LFS and SHA-256 capabilities; keep unsupported
    services explicit until their acceptance gates pass.

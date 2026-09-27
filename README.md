@@ -718,7 +718,8 @@ The [density benchmark and remaining scaling plan](docs/performance-plan.md)
 separate repository count, active Cells and simultaneous transfers.
 Git v2 capability discovery needs no object cache. Native v0 advertisements and
 v2 `ls-refs` prepare only ref targets and annotated-tag chains in a temporary
-cache; fetch and push prepare full history. Direct blob/tree refs require their
+cache. Blobless fetch omits ordinary blobs; full fetch and push prepare full
+history. Direct blob/tree refs require their
 own bodies, and very large ref sets still need separate capacity qualification.
 A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
@@ -754,7 +755,10 @@ the whole batch. Recovery tests include annotated tags, submodules and
 Cold cache hydration reads insertion-ordered pages of at most 128 records and 768 KiB
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
-reduce SQLite query overhead, but recovery still rebuilds the complete cache.
+reduce SQLite query overhead. Blobless fetch (`--filter=blob:none`) skips ordinary
+blob bodies until explicitly requested; other filters and full fetch still
+rebuild the complete cache. Supported filters and remaining gaps are listed in
+[Git compatibility](docs/git-compatibility.md).
 While a gateway remains resident, verified object files are shared across private
 ref snapshots, pushes and merge candidates. An indexed insertion cursor limits
 refresh to newly published object headers and missing bodies. Each refresh captures

@@ -52,7 +52,7 @@ impl GitGateway {
         }) {
             return Ok(CandidateOutcome::Conflict);
         }
-        let cached = self.build_cache(self.cell_refs().await?).await?;
+        let cached = self.build_cache(self.cell_refs().await?, true).await?;
         let result = prepare_native(&self.repository, &cached.backend, &candidate).await?;
         if !valid_result(&result) {
             return Err(GitHttpError::TooLarge.into());

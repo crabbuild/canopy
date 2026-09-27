@@ -144,6 +144,24 @@ impl GitHttpBackend {
                 "receive.denyDeleteCurrent=ignore",
                 "-c",
                 "receive.autogc=false",
+                "-c",
+                "uploadpack.allowFilter=true",
+                // The gateway checks every want against certified Cell edges;
+                // Git's reachable-want check alone does not fence blob wants.
+                "-c",
+                "uploadpack.allowReachableSHA1InWant=true",
+                "-c",
+                "uploadpackfilter.allow=false",
+                "-c",
+                "uploadpackfilter.blob:none.allow=true",
+                "-c",
+                "uploadpackfilter.blob:limit.allow=true",
+                "-c",
+                "uploadpackfilter.tree.allow=true",
+                "-c",
+                "uploadpackfilter.object:type.allow=true",
+                "-c",
+                "uploadpackfilter.combine.allow=true",
                 // Stream large blobs and skip expensive delta search for them.
                 // Scope this to transport: the threshold also changes text merge
                 // behavior, so merge-tree must retain its ordinary Git semantics.

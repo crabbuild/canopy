@@ -18,6 +18,8 @@ mod comparison;
 mod compatibility;
 #[path = "multi_server/merge.rs"]
 mod merge;
+#[path = "multi_server/partial_clone.rs"]
+mod partial_clone;
 #[path = "multi_server/pulls.rs"]
 mod pulls;
 #[path = "multi_server/rebase.rs"]

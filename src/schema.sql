@@ -28,6 +28,15 @@ CREATE TABLE objects (
     )
 );
 
+CREATE INDEX objects_structure_sequence ON objects(sequence) WHERE kind != 'blob';
+
+CREATE TABLE object_edges (
+    parent BLOB NOT NULL REFERENCES objects(oid),
+    child BLOB NOT NULL REFERENCES objects(oid),
+    PRIMARY KEY(parent, child)
+) WITHOUT ROWID;
+CREATE INDEX object_edges_by_child ON object_edges(child, parent);
+
 CREATE TABLE object_closure (
     oid BLOB PRIMARY KEY REFERENCES objects(oid) CHECK(length(oid) = 20)
 ) WITHOUT ROWID;
@@ -37,6 +46,8 @@ CREATE TABLE refs (
     oid BLOB CHECK(oid IS NULL OR length(oid) = 20),
     version INTEGER NOT NULL CHECK(version > 0)
 ) WITHOUT ROWID;
+
+CREATE INDEX refs_by_oid ON refs(oid) WHERE oid IS NOT NULL;
 
 CREATE TABLE ref_generation (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),

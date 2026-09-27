@@ -133,7 +133,10 @@ It groups at most 128 candidate object IDs in dependency order. Its cache of obj
 for certification covers only the pending batch. `CertifyObjects` independently
 reads each candidate from SQLite, recomputes hashes and graph edges, and requires
 all typed children to be certified. It checks child metadata in groups of at most
-128 rows. Newly verified inline and chunked bodies share a 64 MiB budget per
+128 rows. The same transaction records deduplicated parent/child edges in
+`object_edges`, with a reverse child index for fetch authorization. Only
+certified typed edges enter this index; gitlinks do not create local edges.
+Newly verified inline and chunked bodies share a 64 MiB budget per
 command; references to verified external blob bodies do not consume that budget.
 The final ref transaction checks up to 100,000 new tips and their certificates
 in groups of 128, together with current ACL, versions and namespace conflicts.
@@ -164,7 +167,8 @@ Certificates rely on immutable object records and retained object bytes. There
 is currently no object mutation or collector through the product API. Any
 future collector or repair that removes or changes objects must invalidate all
 affected ancestor certificates before ref publication resumes; clearing the
-entire certificate table is the conservative implementation. Backup and restore
+entire certificate table and its object-edge index is the conservative
+implementation. Backup and restore
 must preserve the database and its referenced external bodies together. Each
 certificate transaction has explicit object/byte limits, but large individual
 objects, traversal frontier memory and production-scale latency still need
@@ -524,7 +528,8 @@ invalid descriptors, and inline size, Git OID or BLAKE3 mismatches. Inline bodie
 move into one bounded blocking verification task without a payload clone.
 Chunked and external records carry descriptors; their body readers verify the
 actual bytes before the gateway writes them to the disposable cache. Refs become
-visible there only after complete successful hydration. This bounds each query,
+visible there only after successful hydration for the selected fetch mode.
+This bounds each query,
 not total repository hydration time or native Git scratch usage. The previous
 single-record `next_object` API was removed from this unreleased crate.
 
@@ -662,18 +667,61 @@ Selected SQLite object reads reuse the 128-record/768-KiB inline page limit;
 chunked and external objects use the same verified hydration path as transfers.
 Missing or corrupt targets fail preparation instead of disappearing from refs.
 
-A current full cache is reused when its mutex is immediately available. Discovery
+A current ready cache is reused when its mutex is immediately available. Discovery
 never queues behind full-history preparation: a contended or absent cache uses
 the same temporary ref-target cache, pinned by its native worker. Concurrent
 requests can duplicate this bounded preparation; normal transfer and disk
 admission still apply. It does not advance the full-history cache's indexed
 cursor or add a retained cache per repository. The v2 classifier examines at most 256 KiB of decoded packet headers,
 ending at the first delimiter or flush. Requests without a single recognized
-`ls-refs` command use full preparation; native Git remains the parser for all
-commands and errors. Gzip is validated and decoded before classification. Fetch,
-receive-pack POST and merge preparation retain full history. Prefix filtering
+`ls-refs` command enter transfer preparation. Gzip is validated and decoded
+before classification. Receive-pack POST and merge preparation retain full
+history. Prefix filtering
 is performed by Git after preparation, so discovery work still scales with all
 ref targets and tag chains in the selected snapshot.
+
+### Partial clone and explicit fetch wants
+
+Native Git advertises filters and reachable-OID wants. Enabled filter kinds are
+`blob:none`, `blob:limit`, `tree`, `object:type` and `combine`; every other kind,
+including `sparse:oid`, is disabled. See Git's
+[upload-pack configuration](https://git-scm.com/docs/git-config#Documentation/git-config.txt-uploadpackallowFilter)
+and [partial-clone protocol](https://git-scm.com/docs/partial-clone).
+Canopy parses all decoded upload-pack request packets, including after flushes
+and v2 delimiters, within the existing 64 MiB request ceiling. Malformed framing,
+OID wants or duplicate filters return HTTP 400 before native Git runs.
+
+Every explicit want must reach a currently published ref through the reverse
+certified object-edge index. Each query also checks the snapshot generation;
+a mismatch returns 503. The correlated live-ref lookup uses `refs_by_oid` and
+stops on its first match. Objects retained only from rejected pushes or deleted
+refs cannot be fetched by OID even if their bytes remain in the shared cache. An admitted fetch
+retains its ref snapshot while it streams; subsequent ref changes do not revoke
+that in-flight snapshot. Repository ACL checks precede this preparation.
+
+This is a required Canopy boundary: Git 2.50.1's
+[`do_reachable_revlist`](https://github.com/git/git/blob/v2.50.1/upload-pack.c)
+walks commits without `--objects`, and a native-only probe accepted an unattached
+blob with `allowReachableSHA1InWant`. Native validation alone cannot authorize
+arbitrary tree/blob wants. The index is populated with graph certificates and
+requires a fresh schema/release; there is no backfill or old-reader fallback.
+
+An exact `blob:none` request uses a separate insertion cursor and the partial
+`objects_structure_sequence` index to hydrate non-blob objects. It also hydrates
+ref tips, peeled tag targets and explicit wants. Other ordinary blob bodies stay
+absent until needed. Cursor advancement follows verified page completion; a
+blob-only tail advances to the captured high-water mark. The full-object cursor
+stays independent, so a later full fetch cannot skip previously omitted blobs.
+A partial snapshot cannot satisfy a full preparation request. Shared immutable
+bytes and snapshot ownership use the same disk accounting and worker fences.
+
+Other filters affect the client pack but still prepare the full server cache.
+Blobless preparation still scans all stored non-blob history, including retained
+orphans. Reverse traversal can visit the whole ancestor graph for an unreachable
+want. These costs require scale qualification; this is not a bounded-latency or
+requested-closure-only implementation. Local integration tests cover actual
+omissions, lazy fetch, fresh-disk restore and rejection of unreachable object
+kinds before and after full hydration. They use the in-memory object provider.
 
 Incoming Git bodies stream into anonymous temporary files before CGI execution.
 Each write reserves bytes from the same `DiskBudget` used by the node's SQLite
