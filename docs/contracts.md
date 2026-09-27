@@ -720,6 +720,11 @@ aggregate local SQLite, request spools, Git cache and transient native scratch.
 The application admission budget is 1.5 GiB; kernel enforcement includes writes
 that have not reached the application's post-execution accounting. Shared memory
 is separately capped at 16 MiB and charged to the same memory cgroup.
+Each process has explicit soft and hard file-descriptor limits of 16,384.
+The checker requires eight descriptors for each admitted Repository/Directory
+Cell plus 1,024 descriptors of headroom. The runtime's reservation is not a
+measurement of all sockets, temporary files or native workers; the density
+harness also samples actual descriptor use.
 
 The image runs as UID/GID 10001, drops capabilities, enables no-new-privileges,
 uses an init reaper and has a read-only root. The only explicit writable data

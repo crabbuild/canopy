@@ -10,6 +10,7 @@ Use a cgroup v2 Docker Engine. Check the actual limits before admitting traffic.
 | Entire node, Git descendants and tmpfs memory | 4 GiB, no swap |
 | CPU bandwidth | Two CPUs per scheduling period |
 | Processes and threads | 256 |
+| File descriptors per process | 16,384 soft and hard |
 | Local SQLite, packs, loose objects, request spools and native temporary files | One 2 GiB tmpfs |
 | Shared memory | 16 MiB, also charged to the memory cgroup |
 | Container logs | Local driver, three 10 MiB files |
@@ -70,6 +71,12 @@ The three-repository active limit preserves this profile's existing qualificatio
 scope. Larger active sets need their own memory, descriptor and disk measurements;
 raise `max_active_repositories` only within that measured deployment envelope.
 Stored repository count can exceed this limit through eviction and restore.
+The checker budgets eight descriptors per active Cell (including Directory),
+plus 1,024 for sockets, Git and other I/O, against the explicit process limit.
+This reservation is a sizing floor; actual descriptor demand still needs sampling.
+The limit applies to each process, not to aggregate descriptors across the cgroup.
+Do not depend on Docker's inherited default: a 1,024-descriptor limit exhausted
+during the initial Linux density seed, long before memory was full.
 
 The 1.5 GiB application admission limit leaves filesystem headroom for native
 writes; the 2 GiB filesystem, including transient native writes, is the final
@@ -134,3 +141,55 @@ transfer charges, the Docker daemon, or the sum of several nodes. Size host
 capacity for all scheduled nodes. Docker/cgroup v1, other operating systems,
 per-account durable quotas and the complete crash/fault matrix remain separate
 delivery gates.
+
+## Measure repository density under these limits
+
+`scripts/benchmark_container.py` uses this same profile with an explicit active
+repository count. It disables automatic restart so an unexpected exit remains a
+failed measurement. Use an image built from the intended source revision; add
+`--label org.opencontainers.image.revision=<commit>` to the image build command.
+The report records that label, image ID and the executable's SHA-256 separately.
+
+```sh
+CARGO_TARGET_DIR="$HOME/Workspace/crabbuild-target/canopy-container-main" \
+  python3 -B scripts/benchmark_container.py \
+  --image canopy:local --network test-provider-network \
+  --storage-url s3://disposable-bucket/density-proof \
+  --provider-description 'Provider version and network placement' \
+  --output "$HOME/Workspace/crabbuild-target/canopy-container-main/density-run-1" \
+  --repositories 1000 --active-repositories 1000 --recover
+```
+
+Supply the same signing key and provider environment as the process smoke.
+The output directory must be new and inside the checkout's existing external
+target directory. The caller retains responsibility for cleaning the unique
+object-store prefix recorded in `environment.json`. Client repositories, logs,
+the corpus and reports remain available after success or failure.
+
+The default corpus has three one-commit repositories and 997 empty repositories.
+After seeding and a 15-second idle interval, the driver measures metadata for
+three prewarmed repositories, Git v2 discovery, then uniform metadata arrivals
+across the entire corpus. `--rate` and `--duration` control that last workload;
+defaults are 10 requests/s for 120 seconds. A repository count larger than the
+active limit deliberately measures activation/eviction pressure. Git caches are
+not explicitly prewarmed. No failed read is retried.
+
+Every five seconds the sampler records cgroup memory, CPU usage/throttling,
+process/thread count, aggregate process descriptors and tmpfs usage. The kernel's
+`memory.peak` covers missed memory peaks; descriptor and scratch peaks are only
+sampled. Sampling spawns a small process inside the measured cgroup and adds
+overhead. Memory includes Git descendants and tmpfs, unlike parent RSS. The
+sampler stops before crash recovery; recovery has a separate final snapshot.
+The idle interval measures resource use, not provider request counts.
+
+`--recover` kills the owner, waits for lease expiry, recreates the container
+with fresh tmpfs, verifies every repository identity, and clones all populated
+samples with stock Git v0/v2, exact hashes and strict fsck. Read failures do not
+skip this proof or graceful shutdown. `outcome.json` reports these results
+independently. Sampling errors, OOM evidence, failed reads, failed recovery or
+unclean shutdown fail the harness. Latency percentiles remain reported values;
+the harness does not turn a zero-error run into an SLO or throughput claim.
+
+This is a bounded Linux tmpfs baseline. It does not qualify the proposed
+NVMe-backed reference node, large histories, LFS throughput, all runtime
+primitives, a separate load-generator host, or production object-store latency.

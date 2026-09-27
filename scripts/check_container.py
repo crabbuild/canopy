@@ -58,9 +58,20 @@ def verify(container):
         raise ValueError("container data directory or listener differs from the profile")
     if not 0 < config["local_disk_limit_bytes"] <= scratch:
         raise ValueError("application disk admission exceeds the filesystem capacity")
+    descriptor_line = next(line for line in output("docker", "exec", container, "cat", "/proc/1/limits").splitlines()
+                           if line.startswith("Max open files"))
+    soft, hard = descriptor_line.split()[3:5]
+    if soft != "16384" or hard != "16384":
+        raise ValueError("soft and hard open-file limits must both be 16384")
+    # The pinned runtime reserves eight descriptors per active Cell. Directory
+    # also consumes one slot; keep 1024 descriptors for sockets, Git and I/O.
+    required_descriptors = 8 * (config["max_active_repositories"] + 1) + 1024
+    if required_descriptors > int(soft):
+        raise ValueError("active Cell admission leaves insufficient descriptor headroom")
     return {"memory_bytes": int(memory), "swap_bytes": 0,
             "cpu_quota": int(quota), "cpu_period": int(period),
-            "processes_and_threads": int(tasks), "scratch_bytes": scratch}
+            "processes_and_threads": int(tasks), "scratch_bytes": scratch,
+            "file_descriptors_per_process": int(soft)}
 
 
 def main():

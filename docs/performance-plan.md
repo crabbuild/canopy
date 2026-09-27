@@ -105,6 +105,9 @@ permits it.
   containment. They do not establish latency, throughput or thousands of active
   repositories. The profile's tmpfs charges cache bytes to memory; density
   qualification needs a separate bounded NVMe-backed profile.
+- The Linux profile sets both process descriptor limits to 16,384. Its checker
+  requires eight per admitted Repository/Directory Cell plus 1,024 headroom;
+  this is a reservation check, not measured aggregate process capacity.
 
 These facts come from `src/server.rs`, `src/server/residency.rs`,
 `src/git_gateway.rs`, `src/git_cache.rs`, `src/repository_http.rs`,
@@ -650,3 +653,67 @@ compaction remains an unqualified runtime contract. Crash recovery was not
 repeated in this focused diagnosis run; its prior proof remains separately
 recorded. Idle ownership cost, broader resource enforcement and mixed-workload
 qualification remain open.
+
+## Bounded Linux density qualification
+
+The repeatable `scripts/benchmark_container.py` harness materializes the checked-in
+deployment profile, verifies actual cgroup/mount/descriptor limits, and keeps
+read, crash-recovery and graceful-shutdown outcomes separate. See the
+[invocation and report contract](../deploy/README.md#measure-repository-density-under-these-limits).
+It retains reports and incomplete corpora on failure; measured requests are
+never retried. The default run still uses mostly empty SQL-only repositories.
+
+The first Linux attempt (`canopy-linux-density-faa843f4e0cf`, optimized source
+`c0a5be4`) stopped after creating 124 identities. The next creation returned 503;
+the server reported SQLite I/O failure `Too many open files`. The engine's default
+soft/hard descriptor limits were 1,024/524,288. Before failure the sampler observed
+716 aggregate descriptors and a cgroup memory peak of 84,590,592 bytes; its
+five-second interval did not capture the descriptor peak. No read schedule,
+recovery or explicit graceful-shutdown assertion ran. Fixture cleanup passed.
+
+The deployment now declares soft/hard limits of 16,384 and validates the actual
+process limits plus active-Cell headroom. The repeat uses the identical production
+binary and declared workload, changing the deployment descriptor contract.
+No dependency pin, runtime ownership rule or request timeout was changed.
+
+The repeated read workload (`canopy-linux-density-a46bc3c8bb61`) seeded all
+1,000 repositories in 37.487 seconds. It ran on Linux aarch64 in an 8-CPU,
+16,732,602,368-byte Docker VM. Canopy had two CPUs, 4 GiB memory, no swap,
+256 tasks, 16,384 descriptors per process and 2 GiB tmpfs. RustFS
+`1.0.0-beta.8-glibc` ran in the same VM with its own two-CPU/4-GiB cap; the client
+ran on the macOS host. The image ID is
+`sha256:310b66ded54aa36a5f759795152a6d3e1daefbec7372a2c1acb9f4c3d23036cd`;
+the report binds its `c0a5be4` source label to the executable SHA-256.
+
+| Workload | Rate / duration | Outcomes | Scheduled p50 / p95 / p99 |
+| --- | --- | --- | --- |
+| Three prewarmed repositories, metadata | 20 requests/s / 15 s | 300 successful | 14.075 / 28.914 / 65.727 ms |
+| Same resident set, Git v2 discovery | 10 requests/s / 10 s | 100 successful | 34.740 / 55.681 / 74.012 ms |
+| Uniform choices across 1,000 identities, metadata | 10 requests/s / 120 s | 1,200 successful | 10.907 / 25.439 / 45.214 ms |
+
+Every scheduled read succeeded without retry or dropped arrival. The warm
+metadata row misses the proposed p95/p99 values; uniform metadata meets the
+proposed p99 value but misses p95. Uniform service p99 was 35.163 ms; scheduled
+latency also includes host-client dispatch delay. This smaller tmpfs profile
+does not establish the proposed reference node's SLO or maximum throughput.
+
+After SIGKILL, lease expiry and recreation with fresh tmpfs, all 1,000 identities
+were verified. All three populated samples passed stock Git v0/v2 clone, exact
+commit/file hashes and strict fsck. The recovered node drained with exit status
+zero in 1.198 seconds. Both server logs contain no warnings/errors; container,
+provider and fixture cleanup passed.
+
+Forty-one resource samples recorded a kernel memory high-water mark of
+902,483,968 bytes (about 861 MiB), including descendants and tmpfs, a sampled
+maximum of 8,072 descriptors, 16 processes/threads and 336,891,904 scratch bytes.
+There were no sampler errors, OOM events or CPU-throttled periods in these
+observations. Sampling runs through reads, then takes a post-recovery snapshot;
+it does not establish descriptor/CPU peaks during recovery or drain. Sampled
+CPU usage during the short idle interval averaged approximately 0.065 cores;
+provider CPU and object-store operations are not included.
+
+This is evidence for 1,000 admitted repository Cells plus Directory under the
+declared small SQL-only workload. It is not full primitive, realistic-history,
+large-transfer, 5,000/10,000-Cell or production-provider qualification. Descriptor
+capacity was a concrete deployment failure, fixed independently of the remaining
+latency work. Retain the failed seed and the passing repeat together.

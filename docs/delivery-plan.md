@@ -53,6 +53,11 @@ separate product decisions.
    their text semantics. All native workers discard host configuration, object paths,
    tracing and provider credentials, with temporary paths inside their cache.
    The container checker verifies effective cgroup values and tmpfs capacity.
+   It also checks explicit process descriptor limits against Cell admission.
+   The [Linux density repeat](performance-plan.md#bounded-linux-density-qualification)
+   passed 1,000-identity reads, fresh-tmpfs recovery and stock Git sample clones
+   after fixing descriptor exhaustion; the mostly-empty corpus and remaining
+   latency misses do not close production capacity or full primitive gates.
    Expand OOM, process-exhaustion and CPU-throttling qualification; periodic
    sampling and per-file limits alone cannot prove aggregate peak usage. Managed
    runtime recovery now fences live nodes and Unix Git descendants before reclaiming crash-left files. Qualify OS power
