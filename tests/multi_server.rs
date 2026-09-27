@@ -8,6 +8,8 @@ mod accounts;
 mod backup;
 #[path = "multi_server/browse.rs"]
 mod browse;
+#[path = "multi_server/bulk_refs.rs"]
+mod bulk_refs;
 #[path = "multi_server/candidates.rs"]
 mod candidates;
 #[path = "multi_server/comparison.rs"]

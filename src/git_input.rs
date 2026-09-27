@@ -184,6 +184,58 @@ impl GitInput {
         .await??)
     }
 
+    pub(crate) async fn packet_prefix(&self, limit: usize) -> Result<Vec<u8>, InputError> {
+        let spool = Arc::clone(&self.spool);
+        tokio::task::spawn_blocking(move || {
+            let mut file = &spool.file;
+            file.rewind()?;
+            let result = (|| {
+                let mut bytes = Vec::new();
+                loop {
+                    let mut header = [0; 4];
+                    file.read_exact(&mut header).map_err(|error| {
+                        if error.kind() == io::ErrorKind::UnexpectedEof {
+                            InputError::Commands
+                        } else {
+                            InputError::Io(error)
+                        }
+                    })?;
+                    if !header.iter().all(u8::is_ascii_hexdigit) {
+                        return Err(InputError::Commands);
+                    }
+                    let length = std::str::from_utf8(&header)
+                        .ok()
+                        .and_then(|value| usize::from_str_radix(value, 16).ok())
+                        .ok_or(InputError::Commands)?;
+                    if length != 0 && !(5..=65520).contains(&length) {
+                        return Err(InputError::Commands);
+                    }
+                    if bytes.len() + length.max(4) > limit {
+                        return Err(InputError::TooLarge);
+                    }
+                    bytes.extend_from_slice(&header);
+                    if length == 0 {
+                        return Ok(bytes);
+                    }
+                    let start = bytes.len();
+                    bytes.resize(start + length - 4, 0);
+                    file.read_exact(&mut bytes[start..]).map_err(|error| {
+                        if error.kind() == io::ErrorKind::UnexpectedEof {
+                            InputError::Commands
+                        } else {
+                            InputError::Io(error)
+                        }
+                    })?;
+                }
+            })();
+            // Native Git must read the original stream even when preflight
+            // rejects it. Its report remains the authoritative wire encoding.
+            file.rewind()?;
+            result
+        })
+        .await?
+    }
+
     pub(crate) fn stdin(&self) -> Result<Stdio, std::io::Error> {
         Ok(Stdio::from(self.spool.file.try_clone()?))
     }

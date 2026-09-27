@@ -8,7 +8,7 @@ use crab_cell_runtime::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn identity() -> Result<MutationIdentity> {
+pub(super) fn identity() -> Result<MutationIdentity> {
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
     Ok(MutationIdentity {
         request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),

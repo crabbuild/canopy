@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crab_cell_runtime::{
     CellModule, Command, Error, InvocationError, Observed, Receipt, codec::BoundedDecoder,
     codec::BoundedEncoder, codec::CodecError, codec::WireValue, primitives::sql::SqlBatch,
@@ -11,7 +13,7 @@ use crate::{
     directory::{TokenScope, validate_component},
 };
 
-pub(crate) const MAX_UPDATES: usize = 64;
+pub(crate) const MAX_UPDATES: usize = 100_000;
 const MAX_REF_NAME_BYTES: usize = 255;
 pub(crate) const REF_PAGE_SIZE: usize = 256;
 
@@ -266,16 +268,21 @@ pub(crate) fn apply_refs(
     {
         return Ok(false);
     }
-    for (index, update) in plan.updates.iter().enumerate() {
+    let updates: BTreeMap<_, _> = plan
+        .updates
+        .iter()
+        .map(|update| (update.name.as_str(), update))
+        .collect();
+    if updates.len() != plan.updates.len() {
+        return Ok(false);
+    }
+    for update in &plan.updates {
         if server_owned_ref(&update.name)
             || !valid_ref_name(&update.name)
             || update
                 .expected
                 .as_ref()
                 .is_some_and(|old| old.version <= 0 || old.version == i64::MAX)
-            || plan.updates[..index]
-                .iter()
-                .any(|previous| previous.name == update.name)
         {
             return Ok(false);
         }
@@ -291,12 +298,7 @@ pub(crate) fn apply_refs(
         .iter()
         .filter(|update| update.new_oid.is_some())
     {
-        if plan.updates.iter().any(|other| {
-            other.new_oid.is_some()
-                && other.name != update.name
-                && namespace_conflict(&other.name, &update.name)
-        }) || existing_namespace_conflict(context, plan, &update.name)?
-        {
+        if existing_namespace_conflict(context, &updates, &update.name)? {
             return Ok(false);
         }
     }
@@ -399,42 +401,56 @@ fn decode_ref_row(row: &[SqlValue]) -> crab_cell_runtime::Result<RefExpectation>
 
 fn existing_namespace_conflict(
     context: &CommandContext<'_, '_>,
-    plan: &PushPlan,
+    updates: &BTreeMap<&str, &RefUpdate>,
     name: &str,
 ) -> crab_cell_runtime::Result<bool> {
-    let result = context.sql(&SqlBatch {
-        statements: vec![SqlStatement {
-            sql: "SELECT name FROM refs WHERE oid IS NOT NULL AND name != ?1 AND (substr(name, 1, length(?2)) = ?2 OR substr(?1, 1, length(name) + 1) = name || '/') LIMIT 65".into(),
-            parameters: vec![
-                SqlValue::Text(name.into()),
-                SqlValue::Text(format!("{name}/")),
-            ],
-        }],
-    })?;
-    let Some(rows) = result.first().map(|set| &set.rows) else {
-        return Err(Error::Command("missing ref namespace result"));
-    };
-    for row in rows {
-        let [SqlValue::Text(existing)] = row.as_slice() else {
-            return Err(Error::Command("invalid ref namespace row"));
+    // Planned deletions remove namespace conflicts in this same transaction.
+    // Exact ancestor lookups and indexed descendant pages avoid a full ref scan
+    // per update; there is no count-based truncation of the conflict check.
+    for (index, _) in name.match_indices('/') {
+        let ancestor = &name[..index];
+        let live = match updates.get(ancestor) {
+            Some(update) => update.new_oid.is_some(),
+            None => current_ref(context, ancestor)?.is_some_and(|state| state.oid.is_some()),
         };
-        if !plan
-            .updates
-            .iter()
-            .any(|update| update.name == *existing && update.new_oid.is_none())
-        {
+        if live {
             return Ok(true);
         }
     }
-    Ok(false)
-}
-
-fn namespace_conflict(left: &str, right: &str) -> bool {
-    left.strip_prefix(right)
-        .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|suffix| suffix.starts_with('/'))
+    let prefix = format!("{name}/");
+    let end = format!("{name}0");
+    if updates
+        .range(prefix.as_str()..end.as_str())
+        .any(|(_, update)| update.new_oid.is_some())
+    {
+        return Ok(true);
+    }
+    let mut after = prefix.clone();
+    loop {
+        let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
+            sql: "SELECT name FROM refs WHERE name > ?1 AND name < ?2 AND oid IS NOT NULL ORDER BY name LIMIT ?3".into(),
+            parameters: vec![SqlValue::Text(after.clone()), SqlValue::Text(end.clone()), SqlValue::Integer(REF_PAGE_SIZE as i64)],
+        }]})?;
+        let rows = &result
+            .first()
+            .ok_or(Error::Command("missing ref namespace result"))?
+            .rows;
+        for row in rows {
+            let [SqlValue::Text(existing)] = row.as_slice() else {
+                return Err(Error::Command("invalid ref namespace row"));
+            };
+            if updates
+                .get(existing.as_str())
+                .is_none_or(|update| update.new_oid.is_some())
+            {
+                return Ok(true);
+            }
+            after.clone_from(existing);
+        }
+        if rows.len() < REF_PAGE_SIZE {
+            return Ok(false);
+        }
+    }
 }
 
 pub(crate) fn valid_ref_name(name: &str) -> bool {

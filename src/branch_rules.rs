@@ -170,12 +170,25 @@ impl RepositoryCell {
             .await
     }
 
-    pub(crate) async fn branch_policy(
+    pub(crate) async fn branch_policies(
         &self,
-        update: &RefUpdate,
-    ) -> Result<Option<Policy>, InvocationError<Vec<SqlResultSet>>> {
-        let result = self.sql.query(None, policy_query(update)).await?;
-        decode_policy(&result.output).map_err(InvocationError::NotStarted)
+        updates: &[RefUpdate],
+    ) -> Result<Vec<Option<Policy>>, InvocationError<Vec<SqlResultSet>>> {
+        let result = self
+            .sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: updates.iter().map(policy_statement).collect(),
+                },
+            )
+            .await?;
+        result
+            .output
+            .iter()
+            .map(|set| decode_policy(std::slice::from_ref(set)))
+            .collect::<crab_cell_runtime::Result<Vec<_>>>()
+            .map_err(InvocationError::NotStarted)
     }
 
     pub(crate) async fn prepare_branch_proofs(
@@ -197,26 +210,28 @@ impl RepositoryCell {
         if !role.output.is_some_and(|role| role >= TokenScope::Write) {
             return Ok(());
         }
-        for update in &plan.updates {
-            let (Some(old), Some(new)) = (
-                update.expected.as_ref().and_then(|old| old.oid),
-                update.new_oid,
-            ) else {
-                continue;
-            };
-            let policy = self.branch_policy(update).await.map_err(|source| {
+        for updates in plan.updates.chunks(128) {
+            let policies = self.branch_policies(updates).await.map_err(|source| {
                 InvocationError::NotStarted(Error::Facility {
                     name: "branch proof policy",
                     source: Box::new(source),
                 })
             })?;
-            if policy.is_some_and(|policy| {
-                !policy.require_pull_request
-                    && policy.fast_forward_only
-                    && policy.checks_pass
-                    && !policy.ancestry
-            }) {
-                self.prepare_ancestry(old, new).await?;
+            for (update, policy) in updates.iter().zip(policies) {
+                let (Some(old), Some(new)) = (
+                    update.expected.as_ref().and_then(|old| old.oid),
+                    update.new_oid,
+                ) else {
+                    continue;
+                };
+                if policy.is_some_and(|policy| {
+                    !policy.require_pull_request
+                        && policy.fast_forward_only
+                        && policy.checks_pass
+                        && !policy.ancestry
+                }) {
+                    self.prepare_ancestry(old, new).await?;
+                }
             }
         }
         Ok(())
@@ -247,24 +262,29 @@ pub(crate) fn policies_allow(
     plan: &PushPlan,
     merge: Option<&crate::pulls::merge::ReviewedMerge>,
 ) -> crab_cell_runtime::Result<bool> {
-    for update in &plan.updates {
-        if decode_policy(&context.sql(&policy_query(update))?)?.is_some_and(|policy| {
-            !policy.allows_ref(update, true)
-                || (policy.require_pull_request
-                    && !merge.is_some_and(|merge| merge.authorizes(update)))
-        }) {
-            return Ok(false);
+    for updates in plan.updates.chunks(128) {
+        let result = context.sql(&SqlBatch {
+            statements: updates.iter().map(policy_statement).collect(),
+        })?;
+        for (update, set) in updates.iter().zip(&result) {
+            if decode_policy(std::slice::from_ref(set))?.is_some_and(|policy| {
+                !policy.allows_ref(update, true)
+                    || (policy.require_pull_request
+                        && !merge.is_some_and(|merge| merge.authorizes(update)))
+            }) {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
 }
 
-fn policy_query(update: &RefUpdate) -> SqlBatch {
+fn policy_statement(update: &RefUpdate) -> SqlStatement {
     let old = update.expected.as_ref().and_then(|old| old.oid);
-    SqlBatch { statements: vec![SqlStatement {
+    SqlStatement {
         sql: "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), (?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3)), b.require_pull_request FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1".into(),
         parameters: vec![SqlValue::Text(update.name.clone()), old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())), update.new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec()))],
-    }] }
+    }
 }
 fn decode_policy(sets: &[SqlResultSet]) -> crab_cell_runtime::Result<Option<Policy>> {
     let set = sets

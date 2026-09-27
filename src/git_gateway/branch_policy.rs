@@ -1,7 +1,10 @@
 use super::*;
-use crate::refs::{MAX_UPDATES, valid_ref_name};
+use crate::{
+    git_cache::ReceiveHook,
+    refs::{MAX_UPDATES, valid_ref_name},
+};
 
-const PREFIX_LIMIT: usize = 256 * 1024;
+const PREFIX_LIMIT: usize = 40 * 1024 * 1024;
 const ZERO: &str = "0000000000000000000000000000000000000000";
 
 impl GitGateway {
@@ -15,64 +18,95 @@ impl GitGateway {
         if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
             return Ok(());
         }
-        // Unprotected pushes keep native command parsing and per-ref reports.
-        // The Cell publisher independently enforces the reserved namespace.
-        if !self
+        let prefix = request.body.packet_prefix(PREFIX_LIMIT).await;
+        let updates = match prefix.and_then(|bytes| commands(&bytes)) {
+            Ok(updates) => updates,
+            Err(InputError::TooLarge) => {
+                let message = format!(
+                    "Canopy push command limit exceeded ({MAX_UPDATES} updates or {PREFIX_LIMIT} command bytes)"
+                );
+                cached
+                    .backend
+                    .cache
+                    .store_receive_hook(
+                        ReceiveHook::PreReceive,
+                        format!("#!/bin/sh\nprintf '%s\\n' '{message}' >&2\nexit 1\n").into_bytes(),
+                    )
+                    .await?;
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let has_rules = self
             .repository
             .has_branch_rules()
             .await
-            .map_err(|source| GatewayError::Cell(Box::new(source)))?
-        {
-            cached.backend.cache.store_update_hook(b"#!/bin/sh\ncase \"$1\" in\nrefs/canopy|refs/canopy/*) printf '%s\\n' 'Canopy server-owned ref is immutable' >&2; exit 1 ;;\n*) exit 0 ;;\nesac\n".to_vec()).await?;
-            return Ok(());
-        }
-        let prefix = request.body.prefix(PREFIX_LIMIT).await?;
-        let updates = commands(&prefix)?;
-        let mut protected = false;
-        let mut script = String::from("#!/bin/sh\ncase \"$1\" in\n");
-        for update in updates {
-            let policy = self
-                .repository
-                .branch_policy(&update)
-                .await
-                .map_err(|source| GatewayError::Cell(Box::new(source)))?;
-            let old = update
-                .expected
-                .as_ref()
-                .and_then(|old| old.oid)
-                .map_or_else(|| ZERO.into(), hex::encode);
-            let new = update.new_oid.map_or_else(|| ZERO.into(), hex::encode);
-            script.push_str(&format!(
-                "{})\n[ \"$2\" = '{old}' ] && [ \"$3\" = '{new}' ] || exit 1\n",
-                quote(&update.name)
-            ));
-            if crate::refs::server_owned_ref(&update.name) {
-                protected = true;
-                script.push_str(
-                    "printf '%s\\n' 'Canopy server-owned ref is immutable' >&2\nexit 1\n",
-                );
-            } else if let Some(policy) = policy {
-                protected = true;
-                if !policy.allows(&update, false) {
+            .map_err(|source| GatewayError::Cell(Box::new(source)))?;
+        let mut restricted = false;
+        let mut script = String::from(
+            "#!/bin/sh\ncase \"$1\" in\nrefs/canopy|refs/canopy/*) printf '%s\\n' 'Canopy server-owned ref is immutable' >&2; exit 1 ;;\n",
+        );
+        for updates in updates.chunks(128) {
+            let policies = if has_rules {
+                self.repository
+                    .branch_policies(updates)
+                    .await
+                    .map_err(|source| GatewayError::Cell(Box::new(source)))?
+            } else {
+                updates.iter().map(|_| None).collect()
+            };
+            for (update, policy) in updates.iter().zip(policies) {
+                if crate::refs::server_owned_ref(&update.name) {
+                    restricted = true;
+                    continue;
+                }
+                if !valid_ref_name(&update.name) {
+                    restricted = true;
+                    script.push_str(&format!("{}) printf '%s\\n' 'Canopy ref name exceeds supported format or length' >&2; exit 1 ;;\n", quote(&update.name)));
+                    continue;
+                }
+                let Some(policy) = policy else {
+                    continue;
+                };
+                let old = update
+                    .expected
+                    .as_ref()
+                    .and_then(|old| old.oid)
+                    .map_or_else(|| ZERO.into(), hex::encode);
+                let new = update.new_oid.map_or_else(|| ZERO.into(), hex::encode);
+                let allowed = policy.allows(update, false);
+                let ancestry = policy.fast_forward_only && old != ZERO && new != ZERO;
+                if allowed && !ancestry {
+                    continue;
+                }
+                restricted = true;
+                script.push_str(&format!(
+                    "{})\n[ \"$2\" = '{old}' ] && [ \"$3\" = '{new}' ] || exit 1\n",
+                    quote(&update.name)
+                ));
+                if !allowed {
                     script.push_str(
                         "printf '%s\\n' 'Canopy branch rule rejected this update' >&2\nexit 1\n",
                     );
-                } else if policy.fast_forward_only && old != ZERO && new != ZERO {
+                } else if ancestry {
                     script.push_str("git merge-base --is-ancestor \"$2\" \"$3\" || { printf '%s\\n' 'Canopy branch requires a fast-forward update' >&2; exit 1; }\n");
                 }
+                script.push_str("exit 0\n;;\n");
             }
-            script.push_str("exit 0\n;;\n");
         }
-        // Only commands decoded from this immutable request may use the hook.
-        // Publication rechecks current Cell policy; the hook supplies Git's report.
-        script.push_str("*) exit 1 ;;\nesac\n");
-        if !protected {
+        // The immutable spool contains all requested refs. When none need a
+        // hook, avoid a shell process per ref; publication still checks policy.
+        if !restricted {
             return Ok(());
         }
+        // Only restricted refs need hook entries.
+        // Native Git supplies per-ref/atomic reports, while Cell publication
+        // rechecks authorization, policy, namespace conflicts and expected tips.
+        script.push_str("*) exit 0 ;;\nesac\n");
         cached
             .backend
             .cache
-            .store_update_hook(script.into_bytes())
+            .store_receive_hook(ReceiveHook::Update, script.into_bytes())
             .await?;
         Ok(())
     }
@@ -84,8 +118,12 @@ fn quote(value: &str) -> String {
 
 fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
     let mut updates = Vec::new();
+    let mut names = BTreeSet::new();
     loop {
         let header = bytes.get(..4).ok_or(InputError::Commands)?;
+        if !header.iter().all(u8::is_ascii_hexdigit) {
+            return Err(InputError::Commands);
+        }
         let length = std::str::from_utf8(header)
             .ok()
             .and_then(|s| usize::from_str_radix(s, 16).ok())
@@ -122,7 +160,7 @@ fn commands(mut bytes: &[u8]) -> Result<Vec<RefUpdate>, InputError> {
         let old = parse_oid(&payload[..40]).ok_or(InputError::Commands)?;
         let new = parse_oid(&payload[41..81]).ok_or(InputError::Commands)?;
         let name = std::str::from_utf8(&payload[82..]).map_err(|_| InputError::Commands)?;
-        if !valid_ref_name(name) || updates.iter().any(|update: &RefUpdate| update.name == name) {
+        if !names.insert(name) {
             return Err(InputError::Commands);
         }
         updates.push(RefUpdate {

@@ -91,6 +91,13 @@ CREATE TABLE push_response_chunks (
     PRIMARY KEY(response_id, part)
 ) WITHOUT ROWID;
 
+CREATE TABLE push_plan_chunks (
+    response_id BLOB NOT NULL REFERENCES push_responses(id),
+    part INTEGER NOT NULL CHECK(part >= 0),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 65536),
+    PRIMARY KEY(response_id, part)
+) WITHOUT ROWID;
+
 CREATE TABLE issues (
     number INTEGER PRIMARY KEY AUTOINCREMENT,
     id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),

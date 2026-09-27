@@ -174,23 +174,25 @@ pub(crate) fn certified_roots(
     context: &CommandContext<'_, '_>,
     plan: &PushPlan,
 ) -> crab_cell_runtime::Result<bool> {
-    let oids: Vec<_> = plan
-        .updates
-        .iter()
-        .filter_map(|update| update.new_oid)
-        .collect();
-    if oids.is_empty() {
-        return Ok(true);
-    }
-    let states = statuses(&context.sql(&status_query(&oids))?)?;
-    Ok(plan.updates.iter().all(|update| {
-        update.new_oid.is_none_or(|oid| {
-            states.get(&oid).is_some_and(|state| {
-                state.certified
-                    && (!update.name.starts_with("refs/heads/") || state.kind == ObjectKind::Commit)
+    for updates in plan.updates.chunks(MAX_CERTIFICATES) {
+        let oids: Vec<_> = updates.iter().filter_map(|update| update.new_oid).collect();
+        if oids.is_empty() {
+            continue;
+        }
+        let states = statuses(&context.sql(&status_query(&oids))?)?;
+        if !updates.iter().all(|update| {
+            update.new_oid.is_none_or(|oid| {
+                states.get(&oid).is_some_and(|state| {
+                    state.certified
+                        && (!update.name.starts_with("refs/heads/")
+                            || state.kind == ObjectKind::Commit)
+                })
             })
-        })
-    }))
+        }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn object_edges(

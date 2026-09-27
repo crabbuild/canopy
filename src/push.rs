@@ -20,6 +20,9 @@ use crate::{
     refs::apply_refs,
 };
 
+mod plan;
+use plan::StagedPlan;
+
 const CHUNK_BYTES: usize = 512 * 1024;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -31,6 +34,8 @@ pub enum PushError {
     Conflict,
     #[error("stored push response is incomplete or corrupt")]
     InvalidResponse,
+    #[error("push ref plan is outside supported bounds")]
+    InvalidPlan,
     #[error("push response headers cannot be encoded")]
     Headers(#[from] serde_json::Error),
     #[error("system clock cannot create a push mutation identity")]
@@ -234,6 +239,33 @@ impl RepositoryCell {
             self.prepare_graph(plan).await?;
             self.prepare_branch_proofs(plan).await?;
         }
+        let plan = match &input.plan {
+            Some(plan) => {
+                if plan.actor != input.actor {
+                    return Err(InvocationError::NotStarted(Error::Command(
+                        "push plan actor mismatch",
+                    )));
+                }
+                Some(
+                    self.stage_push_plan(input.response_id, plan)
+                        .await
+                        .map_err(|source| {
+                            InvocationError::NotStarted(Error::Facility {
+                                name: "push ref staging",
+                                source: Box::new(source),
+                            })
+                        })?,
+                )
+            }
+            None => None,
+        };
+        let input = CompletePushInput {
+            id: input.id,
+            actor: input.actor,
+            digest: input.digest,
+            response_id: input.response_id,
+            plan,
+        };
         let identity = identity().map_err(|_| {
             InvocationError::NotStarted(Error::Command("push mutation clock failed"))
         })?;
@@ -251,7 +283,15 @@ pub(crate) struct PushCompletion {
     pub plan: Option<PushPlan>,
 }
 
-impl WireValue for PushCompletion {
+pub(crate) struct CompletePushInput {
+    id: [u8; 16],
+    actor: String,
+    digest: [u8; 32],
+    response_id: [u8; 16],
+    plan: Option<StagedPlan>,
+}
+
+impl WireValue for CompletePushInput {
     fn encode(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
         encoder.write_bytes(&self.id)?;
         encoder.write_text(&self.actor)?;
@@ -270,7 +310,7 @@ impl WireValue for PushCompletion {
             digest: fixed(decoder)?,
             response_id: fixed(decoder)?,
             plan: if decoder.read_bool()? {
-                Some(PushPlan::decode(decoder)?)
+                Some(StagedPlan::decode(decoder)?)
             } else {
                 None
             },
@@ -290,8 +330,8 @@ pub(crate) struct CompletePush;
 impl Command for CompletePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 4;
-    const CODEC_VERSION: u32 = 1;
-    type Input = PushCompletion;
+    const CODEC_VERSION: u32 = 2;
+    type Input = CompletePushInput;
     type Output = bool;
 
     fn execute(
@@ -335,7 +375,11 @@ impl Command for CompletePush {
             return Ok(CommandResult::Rejected(false));
         }
         let allowed = match &input.plan {
-            Some(plan) => plan.actor == input.actor && apply_refs(context, plan, None)?,
+            Some(plan) => apply_refs(
+                context,
+                &plan.load(context, input.response_id, &input.actor)?,
+                None,
+            )?,
             None => decode_access(&context.sql(&SqlBatch {
                 statements: vec![access_statement(&input.actor)],
             })?)?
@@ -354,6 +398,14 @@ impl Command for CompletePush {
                     SqlValue::Blob(input.response_id.to_vec()),
                     SqlValue::Blob(input.id.to_vec()),
                 ],
+            }],
+        })?;
+        // Replays need only the saved response. Reclaim the plan atomically
+        // with publication so rollback keeps every staged chunk available.
+        context.sql(&SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "DELETE FROM push_plan_chunks WHERE response_id = ?1".into(),
+                parameters: vec![SqlValue::Blob(input.response_id.to_vec())],
             }],
         })?;
         Ok(CommandResult::Success(true))

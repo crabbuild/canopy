@@ -41,6 +41,11 @@ impl CacheError {
     }
 }
 
+pub(crate) enum ReceiveHook {
+    Update,
+    PreReceive,
+}
+
 pub(crate) struct GitCache {
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
@@ -183,18 +188,23 @@ impl GitCache {
         ))
     }
 
-    pub(crate) async fn store_update_hook(
+    pub(crate) async fn store_receive_hook(
         self: &Arc<Self>,
+        hook: ReceiveHook,
         bytes: Vec<u8>,
     ) -> Result<(), CacheError> {
+        let path = match hook {
+            ReceiveHook::Update => "hooks/update",
+            ReceiveHook::PreReceive => "hooks/pre-receive",
+        };
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            cache.write_file("hooks/update", &bytes)?;
+            cache.write_file(path, &bytes)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(
-                    cache.git_dir().join("hooks/update"),
+                    cache.git_dir().join(path),
                     fs::Permissions::from_mode(0o700),
                 )?;
             }

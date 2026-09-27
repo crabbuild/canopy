@@ -22,6 +22,35 @@ fn body(parts: Vec<std::result::Result<Bytes, std::io::Error>>) -> Body {
 }
 
 #[tokio::test]
+async fn packet_preflight_stops_before_pack_and_rewinds_after_rejection() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1024);
+    for bytes in [
+        b"0008test0000PACKnot-read".as_slice(),
+        b"0008truncated".as_slice(),
+        b"+005x0000".as_slice(),
+    ] {
+        let input = GitInput::receive(
+            Body::from(bytes.to_vec()),
+            directory.path(),
+            &budget,
+            1024,
+            None,
+        )
+        .await?;
+        assert!(input.packet_prefix(7).await.is_err());
+        assert_eq!(input.prefix(1024).await?, bytes);
+        if bytes.ends_with(b"PACKnot-read") {
+            assert_eq!(input.packet_prefix(12).await?, b"0008test0000");
+        } else {
+            assert!(input.packet_prefix(1024).await.is_err());
+        }
+        assert_eq!(input.prefix(1024).await?, bytes);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn chunked_input_preserves_digest_and_rewinds_for_git() -> Result<()> {
     let directory = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(10);

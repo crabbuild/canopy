@@ -602,9 +602,11 @@ old approval retries, new comments and revoke/regrant cannot restore eligibility
 Ordinary pushes retain allowed sibling refs when another ref is rejected;
 `git push --atomic` rejects the group. The final Cell transaction rechecks policy,
 so a concurrent rule/check change can return HTTP 409 for the accepted group
-before any success report is sent. Ref names are at most 255 UTF-8 bytes. When
-rules are enabled, command preflight accepts at most 64 updates within a 256 KiB
-prefix. The Git response is recorded only after durable ref publication; an exact
+before any success report is sent. Ref names are at most 255 UTF-8 bytes. Push
+preflight accepts at most 100,000 updates within 40 MiB of packet-line commands.
+Plans are staged in bounded SQLite chunks and published in one transaction;
+ref format and command limits receive native Git rejection reports.
+The Git response is recorded only after durable ref publication; an exact
 completed retry returns that saved response without reapplying refs.
 
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its

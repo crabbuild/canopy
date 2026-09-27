@@ -33,9 +33,9 @@ before admitting persistent customer repositories.
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
-| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 1 |
+| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 2 |
 | Graph certificates | at most 128 candidate objects and 64 MiB SQLite object bytes per command; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
-| Git connectivity at ref publication | at most 64 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
+| Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
 The `objects` table stores one verified kind, size and independent BLAKE3
@@ -51,6 +51,16 @@ ref plans. `FinalizePush` uses codec version 3 for this expectation shape.
 Before reporting accepted refs, a push persists all new objects and publishes
 the accepted ref changes and replayable response through `CompletePush`. Both
 `CompletePush` and the direct `FinalizePush` command share the same ref checks.
+HTTP plans use `push_plan_chunks`, bound to one response UUID, with 128 updates
+and at most 64 KiB per chunk. Completion carries the count and BLAKE3 digest,
+loads every ordered chunk inside its transaction, verifies actor/count/digest,
+and applies the whole plan. Ref generation advances once; the saved response
+and deletion of consumed plan chunks commit atomically with refs. Interrupted
+staging never publishes refs. Unconsumed chunks from failed attempts remain
+until a future retention policy collects them. Direct typed `FinalizePush`
+inputs retain their 1 MiB wire bound; HTTP bulk plans are not limited by it.
+This changes the development schema and completion codec; use a fresh deployment
+prefix, with no compatibility reader for the old inline completion shape.
 Rejected or interrupted pushes may leave unreferenced objects; collection is not
 implemented yet.
 
@@ -125,8 +135,12 @@ reads each candidate from SQLite, recomputes hashes and graph edges, and require
 all typed children to be certified. It checks child metadata in groups of at most
 128 rows. Newly verified inline and chunked bodies share a 64 MiB budget per
 command; references to verified external blob bodies do not consume that budget.
-The final ref transaction checks only the at-most-64 new tips, their certificates
-and branch types, together with current ACL, versions and namespace conflicts.
+The final ref transaction checks up to 100,000 new tips and their certificates
+in groups of 128, together with current ACL, versions and namespace conflicts.
+An ordered update map detects duplicates and planned ancestor conflicts. Exact
+ancestor lookups and indexed descendant pages check existing namespaces; every
+conflict must be removed by a deletion in the same plan, without truncating at a
+fixed number of matches.
 
 The certificate command is the trust boundary: incorrect candidate order,
 missing or mismatched children, corrupt data or work beyond the byte limit
@@ -1331,15 +1345,20 @@ without reapplying refs, even if current rules changed. Already rejected refs
 stay rejected if policy becomes permissive during that request; retry normally.
 
 The [receive-pack command list](https://git-scm.com/docs/pack-protocol#_reference_update_request_and_packfile_transfer)
-is parsed only when a repository has enabled rules. It admits shallow lines,
-first-command capabilities and at most 64 unique updates in a 256 KiB prefix;
-pack data after the flush remains native Git's responsibility. Malformed command
-input is HTTP 400 and too many updates is 413. Unsupported media types retain
-native Git's response. Repositories without enabled rules retain native error
-reports, including rejected requests containing more commands than can be
-published. Final publication always checks current rules, even if none existed
-at preflight. An `(enabled, reference)` index bounds the presence probe; rule and
-requirement primary keys and the check-attempt index bound final policy lookups.
+is preflighted for every push. It admits shallow lines, first-command
+capabilities and at most 100,000 unique updates in 40 MiB of commands. The
+reader stops at the flush packet instead of buffering pack data. Malformed
+packet/command syntax, duplicate commands and non-UTF-8 names return HTTP 400.
+Exhausted command limits install a rejecting pre-receive hook, producing Git's
+per-ref failure report. Unsupported ref names install rejecting update
+hook entries, allowing valid siblings unless the client requested atomic push.
+Unsupported media types retain native Git's response. Only restricted refs get
+update-hook entries; ordinary refs do not enlarge its shell case list. This
+uses Git's documented [pre-receive and update hook contracts](https://git-scm.com/docs/githooks#pre-receive).
+Final publication always checks current rules, even if none existed at preflight.
+Policy reads use batches of at most 128 statements. An `(enabled, reference)`
+index bounds the presence probe; rule and requirement primary keys and the
+check-attempt index bound final policy lookups.
 
 Reads, proof commands and final per-ref decisions are bounded. Ancestry search
 limits discovered commits to 100,000 and parent edges to 250,000; exhaustion is
