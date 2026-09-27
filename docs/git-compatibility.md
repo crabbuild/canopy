@@ -20,7 +20,7 @@ also persist the accepted objects and refs before returning success.
 | Force-with-lease, mixed rejection and atomic push | Existing owner-race and protected-branch integration tests |
 | Git LFS basic upload/download | Stock `git-lfs`, SQLite metadata, immutable object-store bodies and restart/backup tests |
 | Git LFS locking | Stock lock/list/unlock, forced unlock, pre-push conflict checks, paginated verification, ACLs and fresh-disk recovery |
-| SHA-256 Git repositories | Repository format selected at creation; stock HTTP/SSH push and clone, annotated tag, external blob, LFS pull, browser resolve, filtered clone, incremental fetch, reviewed pull request and required check merge, native merge/squash/rebase candidates, and fresh-disk restore; strict full `git fsck` |
+| SHA-256 Git repositories | Repository format selected at creation; stock HTTP/SSH push and clone, annotated tag, external blob, LFS pull, browser resolve, filtered clone, incremental fetch, reviewed pull request and required check merge, native merge/squash/rebase candidates, and fresh-disk restore; strict full `git fsck`; Git/LFS and candidate recovery also pass against isolated RustFS |
 | Recovery without original local disk | Rebuild from durable Cell state, compare every live ref/OID and run strict full fsck |
 
 Local operations such as commit, diff, merge, rebase, stash and cherry-pick run
@@ -41,7 +41,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
-| SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Real-provider qualification remains |
+| SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
 | Advanced LFS | HTTP basic transfers, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
@@ -61,13 +61,16 @@ native-worker deadlines remain. These are not an unlimited-capacity claim.
 ## Size qualification
 
 `python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
-`tests/multi_server/size.rs`. It requires Docker, the AWS CLI, Git, and a temporary
+`tests/multi_server/size.rs` plus the ignored SHA-256 provider tests in
+`tests/multi_server/sha256.rs`. It requires Docker, the AWS CLI, Git, and a temporary
 directory with at least 40 GiB free. Set `TMPDIR` to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
 Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
 The fixture uses public test credentials and removes its own container and data.
 The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
-this resource-intensive test.
+the resource-intensive provider tests. `--sha256-only` runs the smaller SHA-256
+probes against an isolated Docker volume when the host's large test volume is
+unavailable.
 
 The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
 exceeds 512 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh

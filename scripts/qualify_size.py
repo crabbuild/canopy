@@ -1,4 +1,5 @@
-"""Run the large-size gate against an isolated, disposable RustFS bucket."""
+"""Run large-size and SHA-256 gates against an isolated RustFS bucket."""
+import argparse
 import os
 from pathlib import Path
 import subprocess
@@ -13,32 +14,46 @@ def run(*args, **kwargs):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sha256-only", action="store_true")
+    args = parser.parse_args()
     name = f"canopy-size-{uuid.uuid4().hex[:12]}"
     with tempfile.TemporaryDirectory(prefix=name) as temporary:
         directory = Path(temporary).resolve()
         image = "rustfs/rustfs:1.0.0-beta.8-glibc"
         owner = f"{os.getuid()}:{os.getgid()}"
-        # A VM can silently bind its own empty directory at an unshared host path.
-        # Prove this is the requested test volume before the provider writes data.
-        probe = directory / ".canopy-bind-probe"
-        probe.write_text(name)
-        try:
-            observed = run("docker", "run", "--rm", "--user", owner, "--entrypoint", "cat",
-                           "-v", f"{directory}:/data", image, "/data/.canopy-bind-probe")
-        except subprocess.CalledProcessError as error:
-            raise RuntimeError(f"Docker must share the host test volume: {directory}") from error
-        if observed != name:
-            raise RuntimeError("Docker cannot see the selected temporary volume")
-        probe.unlink()
+        volume = None
+        if args.sha256_only:
+            # Small provider probes can use VM storage when Docker cannot mount
+            # the host's separate qualification volume.
+            volume = f"{name}-data"
+            data = volume
+            owner = "10001:10001"
+        else:
+            # A VM can silently bind its own empty directory at an unshared host path.
+            # Prove this is the requested test volume before the provider writes data.
+            probe = directory / ".canopy-bind-probe"
+            probe.write_text(name)
+            try:
+                observed = run("docker", "run", "--rm", "--user", owner, "--entrypoint", "cat",
+                               "-v", f"{directory}:/data", image, "/data/.canopy-bind-probe")
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError(f"Docker must share the host test volume: {directory}") from error
+            if observed != name:
+                raise RuntimeError("Docker cannot see the selected temporary volume")
+            probe.unlink()
+            data = directory
         started = False
         env = {**{key: value for key, value in os.environ.items() if not key.startswith("AWS_")}, "AWS_ACCESS_KEY_ID": "canopy-test-access",
                "AWS_SECRET_ACCESS_KEY": "canopy-test-secret", "AWS_DEFAULT_REGION": "us-east-1",
                "AWS_EC2_METADATA_DISABLED": "true", "AWS_CONFIG_FILE": os.devnull,
                "AWS_SHARED_CREDENTIALS_FILE": os.devnull}
         try:
+            if volume is not None:
+                run("docker", "volume", "create", volume)
             run("docker", "run", "-d", "--name", name,
                 "--user", owner,
-                "-p", "127.0.0.1::9000", "-v", f"{directory}:/data",
+                "-p", "127.0.0.1::9000", "-v", f"{data}:/data",
                 "-e", "RUSTFS_OBS_LOG_DIRECTORY=/data/logs",
                 "-e", "RUSTFS_ACCESS_KEY=canopy-test-access", "-e", "RUSTFS_SECRET_KEY=canopy-test-secret",
                 image, "/data")
@@ -62,9 +77,22 @@ def main():
                 raise RuntimeError("RustFS fixture did not become ready")
             env["CANOPY_TEST_S3_ENDPOINT"] = endpoint
             env["CANOPY_TEST_S3_BUCKET"] = "canopy-size"
-            subprocess.run(["cargo", "test", "--locked", "--test", "multi_server", "size::",
-                            "--", "--ignored", "--nocapture"], env=env, check=True,
-                           cwd=Path(__file__).resolve().parents[1])
+            tests = [] if args.sha256_only else [
+                "size::push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore"
+            ]
+            tests.extend([
+                "sha256::sha256_real_provider_round_trip",
+                "sha256::sha256_real_provider_native_merge_candidates",
+            ])
+            listed = subprocess.run(["cargo", "test", "--locked", "--test", "multi_server",
+                                     "--", "--list"], env=env, check=True, capture_output=True,
+                                    text=True, cwd=Path(__file__).resolve().parents[1]).stdout
+            for test in tests:
+                if f"{test}: test" not in listed.splitlines():
+                    raise RuntimeError(f"qualification test is missing: {test}")
+                subprocess.run(["cargo", "test", "--locked", "--test", "multi_server", test,
+                                "--", "--exact", "--ignored", "--nocapture"],
+                               env=env, check=True, cwd=Path(__file__).resolve().parents[1])
         except Exception:
             if started:
                 subprocess.run(["docker", "logs", "--tail", "60", name])
@@ -72,6 +100,8 @@ def main():
         finally:
             if started:
                 subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+            if volume is not None:
+                subprocess.run(["docker", "volume", "rm", volume], capture_output=True)
 
 
 if __name__ == "__main__":

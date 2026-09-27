@@ -4,7 +4,37 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sha256_repository_push_clone_fetch_and_restore() -> Result {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    sha256_repository_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn sha256_real_provider_round_trip() -> Result {
+    sha256_repository_round_trip(real_provider_store()?).await
+}
+
+fn real_provider_store() -> Result<Arc<dyn ObjectStore>> {
+    use object_store::{
+        aws::{AmazonS3Builder, S3CopyIfNotExists},
+        prefix::PrefixStore,
+    };
+
+    let store = AmazonS3Builder::new()
+        .with_endpoint(std::env::var("CANOPY_TEST_S3_ENDPOINT")?)
+        .with_bucket_name(std::env::var("CANOPY_TEST_S3_BUCKET")?)
+        .with_region("us-east-1")
+        .with_access_key_id("canopy-test-access")
+        .with_secret_access_key("canopy-test-secret")
+        .with_allow_http(true)
+        .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+        .build()?;
+    Ok(Arc::new(PrefixStore::new(
+        Arc::new(store),
+        StorePath::from(format!("sha256-{}", uuid::Uuid::new_v4())),
+    )))
+}
+
+async fn sha256_repository_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let first_address = available_address().await?;
     let first = CanopyServer::start(
@@ -455,11 +485,20 @@ async fn sha256_checks_reviews_and_merge_survive_restore() -> Result {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sha256_native_merge_candidates_survive_restore_and_publish() -> Result {
+    sha256_native_merge_candidates(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn sha256_real_provider_native_merge_candidates() -> Result {
+    sha256_native_merge_candidates(real_provider_store()?).await
+}
+
+async fn sha256_native_merge_candidates(store: Arc<dyn ObjectStore>) -> Result {
     use super::merge::{AUTH, OWNER, current, new_pull, oid, revision, value};
     use reqwest::Client;
     use serde_json::json;
 
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
     let address = available_address().await?;
     let server = CanopyServer::start(
