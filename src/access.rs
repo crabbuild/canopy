@@ -124,7 +124,7 @@ impl RepositoryCell {
         validate_component(owner).map_err(InvocationError::NotStarted)?;
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "INSERT INTO repository_identity (singleton, owner, repository_id, object_format) VALUES (1, ?1, ?2, ?3) ON CONFLICT(singleton) DO NOTHING".into(),
+                sql: "INSERT INTO repository_identity (singleton, owner, repository_id, object_format, push_cert_seed) VALUES (1, ?1, ?2, ?3, randomblob(32)) ON CONFLICT(singleton) DO NOTHING".into(),
                 parameters: vec![SqlValue::Text(owner.into()), SqlValue::Blob(self.id.to_vec()), SqlValue::Text(self.object_format.as_str().into())],
             }],
         }).await?;
@@ -156,25 +156,17 @@ impl RepositoryCell {
                 minimum,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT owner, repository_id, object_format FROM repository_identity WHERE singleton = 1".into(),
+                        sql: "SELECT owner, repository_id, object_format, push_cert_seed FROM repository_identity WHERE singleton = 1".into(),
                         parameters: Vec::new(),
                     }],
                 },
             )
             .await?;
-        let matches = observed
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(Vec::as_slice)
-            == Some(
-                [
-                    SqlValue::Text(owner.into()),
-                    SqlValue::Blob(self.id.to_vec()),
-                    SqlValue::Text(self.object_format.as_str().into()),
-                ]
-                .as_slice(),
-            );
+        let matches = matches!(
+            observed.output.first().and_then(|set| set.rows.first()).map(Vec::as_slice),
+            Some([SqlValue::Text(saved_owner), SqlValue::Blob(saved_id), SqlValue::Text(saved_format), SqlValue::Blob(seed)])
+                if saved_owner == owner && saved_id == &self.id && saved_format == self.object_format.as_str() && seed.len() == 32
+        );
         Ok(Observed {
             output: matches,
             receipt: observed.receipt,

@@ -75,7 +75,8 @@ CREATE TABLE repository_identity (
     object_format TEXT NOT NULL CHECK(object_format IN ('sha1', 'sha256')),
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     repository_id BLOB NOT NULL CHECK(length(repository_id) = 16),
-    owner TEXT NOT NULL
+    owner TEXT NOT NULL,
+    push_cert_seed BLOB NOT NULL CHECK(length(push_cert_seed) = 32)
 ) WITHOUT ROWID;
 
 CREATE TABLE repository_members (

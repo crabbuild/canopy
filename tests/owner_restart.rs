@@ -10,6 +10,7 @@ use canopy_server::{
 };
 use crab_cell_app::{CellApplication, CompiledApplication};
 use crab_cell_host::{CellNode, CellNodeBuilder};
+use crab_cell_runtime::primitives::sql::{SqlBatch, SqlCell, SqlStatement, SqlValue};
 use crab_cell_runtime::{
     ApplicationId, CellClient, CellModule, Digest, Error, InvocationError, NodeLeaseGuard,
     SessionId, TenantId, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
@@ -99,9 +100,15 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         repository_id,
         canopy_server::ObjectFormat::Sha1,
     )?);
-    repository
-        .ensure_owner(support::identity()?, "canopy")
-        .await?;
+    let owner_identity = support::identity()?;
+    repository.ensure_owner(owner_identity, "canopy").await?;
+    let first_seed = push_cert_seed(&app_handle.sql::<RepositoryModule>(target.clone())?).await?;
+    assert_eq!(first_seed.len(), 32);
+    repository.ensure_owner(owner_identity, "canopy").await?;
+    assert_eq!(
+        push_cert_seed(&app_handle.sql::<RepositoryModule>(target.clone())?).await?,
+        first_seed
+    );
     let first_gateway = Arc::new(GitGateway::new(
         Arc::clone(&repository),
         first_disk.path().to_path_buf(),
@@ -294,12 +301,14 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         tenant,
         application_id,
     )?;
+    let sql = app_handle.sql::<RepositoryModule>(target.clone())?;
     let repository = Arc::new(RepositoryCell::new(
         &app_handle,
         target,
         repository_id,
         canopy_server::ObjectFormat::Sha1,
     )?);
+    assert_eq!(push_cert_seed(&sql).await?, first_seed);
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,
         refs_generation
@@ -477,6 +486,32 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         .withdraw(&second_advertisement, unix_now_ms()?)
         .await?;
     Ok(())
+}
+
+async fn push_cert_seed(
+    sql: &SqlCell<RepositoryModule>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let output = sql
+        .query(
+            None,
+            SqlBatch {
+                statements: vec![SqlStatement {
+                    sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton = 1"
+                        .into(),
+                    parameters: Vec::new(),
+                }],
+            },
+        )
+        .await?
+        .output;
+    match output
+        .first()
+        .and_then(|set| set.rows.first())
+        .map(Vec::as_slice)
+    {
+        Some([SqlValue::Blob(seed)]) => Ok(seed.clone()),
+        _ => Err("missing push certificate seed".into()),
+    }
 }
 
 async fn node(

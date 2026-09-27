@@ -2635,7 +2635,11 @@ recovery and backup share those declarations; the host rejects a replica whose
 limits differ.
 
 The repository UUID is stored with its immutable owner in
-`repository_identity`. External Git/LFS paths continue to use that UUID.
+`repository_identity`. The same row holds a private 32-byte seed generated on
+its first insert for native Git push-certificate nonces; repeat owner setup and
+fresh-disk recovery retain that seed. Signed pushes remain unadvertised until
+signer authorization, replay prevention and audit publication are wired.
+External Git/LFS paths continue to use the UUID.
 Backup restores the authority-pinned SQLite root, reads the UUID, and verifies
 its derived target against the catalog partition and control Cell ID before
 copying referenced bodies. A provisioned repository before owner initialization
