@@ -10,9 +10,9 @@ Do not infer completion from compilation or a disposable cache test.
 | 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration implemented; account deletion and audit records remain |
-| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; non-blob buffers/64 MiB ceilings and native process resource bounds remain |
+| 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; a Linux cgroup/tmpfs deployment adds native resource ceilings; quotas, non-blob buffers/64 MiB ceilings and the complete resource fault matrix remain |
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
-| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
+| 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; a Linux tmpfs profile bounds aggregate native scratch; other platforms and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS with a 5 GiB acceptance ceiling, shared transfer admission and deadlines implemented; stock push/pull after restart works; quotas and full-scale capacity proof remain |
 | 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash/rebase candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; browser conflict resolution, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
@@ -33,22 +33,23 @@ separate product decisions.
    branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
    proposes the UUID partition contract. The storage capability probe also
    needs to land upstream before Canopy can pin a revision on `main`.
-2. Enforce native Git scratch limits and qualify residency under faults and larger
+2. Qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
    three repository gateway entries, backed by local or remote Cells. Inactive
    local repositories release their Cell and reload on demand; unpinned remote
    entries can be dropped without releasing their owner. Admission returns 503
    when no entry is safe to evict. The resident limit is not a production capacity target.
    Hydration and retained caches now use shared disk admission; native Git's
-   completed writes are measured before publication, but its peak usage remains
-   unbounded. Native pack workers, delta caches and mappings now have explicit
-   budgets; HTTP streams eligible blobs above 8 MiB while merge operations retain
+   completed writes are measured before publication. The Linux container profile
+   caps aggregate memory, CPU, processes and local scratch; direct binary execution
+   still needs an OS boundary. Native pack workers, delta caches and mappings
+   now have explicit budgets; HTTP streams eligible blobs above 8 MiB while merge operations retain
    their text semantics. All native workers discard host configuration, object paths,
    tracing and provider credentials, with temporary paths inside their cache.
-   Enforce the remaining byte ceiling with filesystem quotas or a proven bound
-   on every native write; periodic sampling and per-file limits alone cannot
-   prove aggregate peak usage. Managed runtime recovery now fences live nodes
-   and Unix Git descendants before reclaiming crash-left files. Qualify OS power
+   The container checker verifies effective cgroup values and tmpfs capacity.
+   Expand OOM, process-exhaustion and CPU-throttling qualification; periodic
+   sampling and per-file limits alone cannot prove aggregate peak usage. Managed
+   runtime recovery now fences live nodes and Unix Git descendants before reclaiming crash-left files. Qualify OS power
    loss and Windows process containment next. A node supervisor retains startup
    and drain across caller cancellation; abrupt runtime destruction retains local
    exclusion until process restart when SQL drain is unconfirmed.
@@ -2617,3 +2618,53 @@ No dependency or lockfile changes. Operations 9/10 advance to codecs 4/2 and the
 Repository source digest changes; use a fresh preview prefix. This slice adds
 bounded linear rebase support; hard aggregate native resource limits, quotas,
 collection, fault matrices and the other open delivery gates remain open.
+
+
+## Bounded Linux container qualification
+
+The 2026-09-26 deployment adds a runtime Dockerfile, a Compose profile and an
+operator checker. The checker reads kernel cgroup v2 values, tmpfs capacity,
+mount policy and application configuration. One node and its Git descendants
+have a 4 GiB memory ceiling including tmpfs, zero swap, two CPUs of bandwidth,
+256 processes/threads and a 2 GiB state filesystem. Application disk admission
+is 1.5 GiB. The root is read-only, the user is unprivileged and capability-free,
+and shared memory/log rotation are bounded separately. See
+[deployment](../deploy/README.md) and [contract](contracts.md#bounded-linux-container).
+
+Evidence from the checked-in `scripts/smoke_container.py` against RustFS
+`1.0.0-beta.8-glibc` on a dedicated Docker volume/network, Linux arm64/cgroup v2:
+
+- A locked optimized cross-build with Rust 1.97.0 and the aarch64 GNU C compiler
+  succeeds. The runtime image starts and serves the compiled binary.
+- Stock Git v0/v2 push/clone, a 64 MiB incompressible ordinary blob and a 4 MiB
+  LFS object round-trip byte-identically; strict Git fsck passes.
+- The kernel reports `memory.max=4294967296`, `memory.swap.max=0`,
+  `cpu.max=200000 100000`, `pids.max=256`, and 2,147,483,648 bytes of tmpfs.
+  The checker also rejects a real container configured with a three-CPU quota.
+- A fresh-state pressure fixture uses a 512 MiB tmpfs, 384 MiB application disk
+  admission and 2 GiB memory. Filling its filesystem leaves 48 MiB free. A small
+  incoming delta reconstructing a second 64 MiB random blob reaches native Git
+  ENOSPC. The client fails and `ls-remote` proves the published ref did not move.
+- SIGKILL followed by recreation with the normal profile and an empty tmpfs
+  restores the prior Git commit and exact LFS bytes. Retrying the rejected push
+  succeeds; a new clone has the changed 64 MiB blob and passes strict fsck.
+- The fixture removes its own containers, volume, network and temporary files.
+  Python syntax and diff-whitespace checks pass; no Rust source, dependencies,
+  lockfiles or persisted application formats change in this slice.
+
+The tested runtime image is
+`sha256:d08b86d14846c897d7581fd14edc18dbd4be1a6e4d97321ceabca21596da3a82`.
+Resolved Debian packages: Git `1:2.47.3-0+deb13u1`, libc6 `2.41-12+deb13u4`,
+curl `8.14.1-2+deb13u5`, CA certificates `20250419`. The image digest is local
+qualification evidence, not an image published to a registry. The pinned base
+plus current distro repositories does not guarantee identical future builds.
+
+An exploratory 128 MiB scratch/96 MiB admission fixture failed during Cell
+recovery; it is not a qualified deployment size. A full-pack pressure probe
+returned HTTP 500 with native exit 141 before delivering an ENOSPC diagnostic;
+the checked-in delta fixture avoids that competing input-pipe failure. Memory
+OOM, process exhaustion, sustained CPU throttling, interrupted shutdown/maintenance
+and all publication fault boundaries still need dedicated qualification.
+Direct binary use and other operating systems need their own OS boundaries.
+Per-account durable quotas, safe collection and the remaining delivery gates
+remain open; this profile establishes aggregate ceilings for one Linux node.

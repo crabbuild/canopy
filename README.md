@@ -654,7 +654,9 @@ Gzip is fully validated before Git runs; decoded bytes have the same request
 size limits and share disk admission with the encoded upload.
 Disposable Git caches retain shared disk reservations. Hydration admits bytes
 before writing; native Git writes are measured before durable ref publication.
-Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.
+Exhaustion returns 507. Direct binary execution does not hard-bound native Git's
+peak scratch usage. The [bounded Linux container profile](deploy/README.md)
+enforces aggregate memory, CPU, process and writable-filesystem ceilings.
 All native Git workers use an isolated environment: host Git configuration,
 object paths, tracing and provider credentials are removed. Home and temporary
 paths point into the disposable cache; Git is selected through the host `PATH`.
@@ -662,7 +664,8 @@ Pack/index work uses two workers with explicit delta/cache/mapping budgets.
 Smart HTTP streams eligible blobs above 8 MiB and skips delta search for them;
 smaller files retain delta compression. Merge operations retain ordinary text
 semantics. These are resource policies, not hard process or filesystem limits.
-See [native pack policy](docs/contracts.md#native-pack-resource-policy).
+See [native pack policy](docs/contracts.md#native-pack-resource-policy) and
+[container containment](docs/contracts.md#bounded-linux-container).
 The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors

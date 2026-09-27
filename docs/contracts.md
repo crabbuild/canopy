@@ -612,8 +612,10 @@ This accounts retained caches and bounds Canopy's hydration writes. It does
 are measured after execution, and a rejected push can temporarily exceed the
 budget. File lengths also exclude filesystem allocation and inode overhead.
 Managed crash-left directories are reclaimed at startup on Unix as described
-below; native scratch enforcement remains a release gate. These reservations are
-shared node admission, not per-account durable storage quotas.
+below; the bounded Linux container profile supplies aggregate filesystem
+enforcement for that deployment. Direct binary execution still needs an OS
+boundary. These reservations provide shared node admission; per-account durable
+storage quotas remain separate.
 
 Every native Git entry point now uses one process environment policy: HTTP
 backend, post-push ref enumeration, incremental object readers and candidate
@@ -658,8 +660,45 @@ Git 2.50.1's [pack writer](https://github.com/git/git/blob/v2.50.1/builtin/pack-
 [indexer](https://github.com/git/git/blob/v2.50.1/builtin/index-pack.c), and
 [unpacker](https://github.com/git/git/blob/v2.50.1/builtin/unpack-objects.c) consume
 these policies. Object metadata, graph traversal, delta reconstruction and merge
-working sets remain outside these cache budgets. Aggregate native RAM, CPU and
-filesystem enforcement remain release gates; no filesystem quota is implied.
+working sets remain outside these cache budgets. Direct binary execution has no
+aggregate native RAM, CPU or filesystem ceiling. Use the deployment boundary below
+for a bounded Linux node.
+
+### Bounded Linux container
+
+`deploy/compose.yaml` runs Canopy and every native descendant in one Linux cgroup
+v2. Effective ceilings are 4 GiB memory including tmpfs pages, no swap, two CPUs
+of bandwidth and 256 processes/threads. A 2 GiB tmpfs at `/var/lib/canopy` bounds
+aggregate local SQLite, request spools, Git cache and transient native scratch.
+The application admission budget is 1.5 GiB; kernel enforcement includes writes
+that have not reached the application's post-execution accounting. Shared memory
+is separately capped at 16 MiB and charged to the same memory cgroup.
+
+The image runs as UID/GID 10001, drops capabilities, enables no-new-privileges,
+uses an init reaper and has a read-only root. The only explicit writable data
+mount is the bounded state tmpfs; configuration is a read-only bind. TMPDIR points
+to state, and the native environment further confines temporary paths to its
+cache. The tmpfs must permit Canopy's generated receive hook to execute. Docker
+logs use the local driver with 10 MiB rotation and three retained files; daemon
+storage and overhead are outside the node's filesystem boundary.
+
+`scripts/check_container.py` inspects effective kernel limits, actual filesystem
+capacity, mounts and configuration before admission. It fails closed on unlimited
+or weaker limits and prints only resource numbers. It never emits Docker inspect
+or resolved Compose configuration, which may contain provider secrets. The checker
+is a deployment check, not a replacement for `/readyz` or ongoing monitoring.
+
+ENOSPC can reject Git work; the memory controller can kill a worker or the node.
+No success is implied by admission. Existing durable ref publication and Cell
+lease fencing remain authoritative after failure. A container restart discards
+local tmpfs; restoration uses object storage and the stable configured node
+identity. `on-failure` restarts crashes, while a clean maintenance exit stays
+stopped. The two-minute stop grace permits drain before forced termination.
+
+See [deployment instructions](../deploy/README.md) for packaging a Linux binary
+and verifying the running container. These ceilings cover one node. Per-account
+durable quotas, fleet-wide capacity, other operating systems/cgroup v1 and the
+complete OOM/CPU/process/crash fault matrix require separate qualification.
 
 ### Local runtime recovery
 

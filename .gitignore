@@ -2,3 +2,6 @@
 .env
 .env.*
 !.env.example
+
+/deploy/config.json
+/deploy/.proof-*/
