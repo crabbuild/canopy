@@ -1334,3 +1334,104 @@ This is a small saturation/correctness fixture, not a production throughput or
 latency SLO. A lone account cannot use more than four active transfer slots;
 combined-account fairness, large slow transfers, authentication capacity and
 full-primitive thousand-repository density remain unqualified.
+
+## Reproducing idle ownership measurements
+
+`examples/benchmark_idle.rs` runs the actual `CanopyServer` with a measured
+object-store client. It seeds empty SQL repository Cells through authenticated
+HTTP, observes idle windows at increasing active counts, drains the node, then
+starts a fresh local node with the same durable identities and measures them
+released. Three sampled repository identities must restore correctly afterward.
+This tool intentionally makes no Git-throughput or full-primitive capacity claim.
+
+Use a caller-owned disposable S3 bucket/prefix and credentials already provided
+through the normal provider environment. Each invocation adds a unique storage
+prefix. The output directory must be new and belong on the mounted workspace
+volume. For this checkout:
+
+```bash
+CARGO_INCREMENTAL=0 \
+CARGO_TARGET_DIR="$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f" \
+cargo run --release --locked --example benchmark_idle -- \
+  s3://disposable-bucket/idle-qualification \
+  "$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f/idle-qualification" \
+  0,100,500,1000 30
+```
+
+Each phase waits four seconds after foreground work, then measures without HTTP
+requests for the requested interval (10–60 seconds). The report records successful
+conditional Cell-control updates, unchanged-root updates, root changes, updated
+Cell identities, PUT failures and payload bytes, GET/HEAD starts, and unfinished
+PUT calls at the boundaries. A valid phase requires exactly the expected serving
+Cells at both ends, renewals from every expected Cell, no failed PUT and no root
+change. Active count includes one Directory Cell. Restarts and both graceful
+drains must complete for the overall report to pass.
+
+Counts are at the `object_store` API boundary: successful writes can be counted
+while an earlier started call finishes in the window. Provider-internal HTTP
+retries and billing are not measured. List/delete calls and multipart parts are
+not counted; the conditional-control count is the primary metric. The example
+binary links the same Canopy server code with a measurement wrapper and Cargo's
+example/dev-dependency feature set. Process measurements include the wrapper and
+in-process seed client. This is qualification instrumentation, not a production
+metrics endpoint or an aggregate resource limit. Normal service configuration,
+protocols, dependency revisions and stored formats are unchanged.
+
+### Observed idle renewal ceiling
+
+Run `canopy-idle-density-116abedfec0f` used Cellule revision
+`56b35ab376ff93ec85d502c70bb436c918463958`, Canopy base `542d377` plus
+the measurement example, and example binary SHA-256
+`943e0dae661e0759169af922dbbb476febbc24d129d23c95806f8736068c44fe`.
+The host was shared macOS arm64; RustFS `1.0.0-beta.8-glibc` was limited
+to 2 CPUs and 4 GiB. The table reports 30-second idle windows, not foreground
+request capacity. Every repository was empty and SQL-only.
+
+| Repository Cells | Serving Cells including Directory | Successful control updates/s | Distinct Cells updated | Window gate |
+| --- | --- | --- | --- | --- |
+| 0 | 1 | 0.300 | 1 | Passed |
+| 100 | 101 | 32.763 | 101 | Passed |
+| 500 | 501 | 160.748 | 501 | Passed |
+| 1,000 | 1,001 | 319.966 | 992 | **Failed** |
+
+All windows had zero failed PUT calls and zero root changes. In the last
+window, nine Cells remained recorded as serving but emitted no successful
+control update. This fails the renewal coverage gate even though the server
+logged no warning or error. The failure stopped the released comparison;
+the report does not establish complete shutdown/restart qualification.
+The smaller run `canopy-idle-density-241de34da571` passed all gates with
+three repositories: four active Cells produced about 1.200 updates/s,
+and the fresh node with only Directory active produced about 0.300 updates/s.
+That restart used a fresh local directory, not a retained database cache.
+
+The pinned runtime explains a likely mechanism. In `cellule-runtime/src/actor.rs`,
+`start_due_renewals` runs only on a 100-ms tick and admits at most 32 renewals.
+Renewal completion calls `continue_cell` but does not refill renewal capacity.
+Selection iterates a HashMap without deadline ordering. Thus dispatch is capped
+at roughly 320 starts/s even with fast storage; repeatedly selecting newly due
+entries can leave other overdue entries waiting. The measured 9,600 updates in
+30 seconds and 992 distinct updated Cells are consistent with that mechanism.
+The dispatch ceiling is source-backed; exact starvation causality still needs
+a controlled scheduler regression. The existing
+`idle_owner_progress_is_renewed_without_a_per_cell_task` test covers one Cell.
+
+Before raising active density, implement and qualify these runtime changes:
+
+1. Dispatch the oldest eligible overdue renewal first, with bounded concurrency
+   and capacity refill after completion. Avoid a full Cell scan per completion;
+   use a deadline index with generation checks and bounded stale-entry cleanup.
+2. Preserve coordination admission, publisher exclusivity, node lease checks,
+   effect/generation fencing and shutdown behavior. Foreground publication,
+   compaction, transfer and release share these invariants.
+3. Prove progress above the old dispatch ceiling, including slow storage,
+   concurrent foreground work, takeover and drain. Record worst renewal delay
+   and missed deadlines, not only average update rate.
+4. Repeat the unchanged real-store coverage gate at 100, 500 and 1,000 Cells.
+   Separately audit whether node-session liveness can reduce per-Cell idle
+   writes safely. Scheduling fairness fixes starvation; it does not remove the
+   approximately linear storage traffic of active publishers.
+
+These are dependency changes and remain approval-gated under the repository
+instructions. Increasing the concurrency constant alone or relaxing the
+coverage assertion does not establish fair progress. No dependency or
+production server code was changed for this measurement.
