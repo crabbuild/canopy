@@ -389,7 +389,7 @@ struct CertificateCommand;
 impl crab_cell_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CertificateInput;
     type Output = bool;
     fn execute(
