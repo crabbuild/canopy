@@ -11,6 +11,7 @@ use tokio::sync::Notify;
 use super::*;
 
 mod admission;
+mod git_discovery;
 
 #[derive(Clone, Copy, Debug)]
 enum ReleaseFault {

@@ -203,13 +203,14 @@ impl GitGateway {
             backend.stream(request, ()).await?
         } else if discovery::is_ref_discovery(&request).await? {
             let snapshot = self.cell_refs().await?;
-            let cached = self
-                .cache
-                .lock()
-                .await
-                .as_ref()
-                .filter(|cached| cached.snapshot == snapshot)
-                .cloned();
+            // A fetch can hold this mutex while restoring unrelated history.
+            // Reuse only a ready snapshot; discovery must not wait for that I/O.
+            let cached = self.cache.try_lock().ok().and_then(|cache| {
+                cache
+                    .as_ref()
+                    .filter(|cached| cached.snapshot == snapshot)
+                    .cloned()
+            });
             if let Some(cached) = cached {
                 cached.backend.stream(request, Arc::clone(&cached)).await?
             } else {

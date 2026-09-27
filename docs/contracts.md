@@ -643,9 +643,12 @@ Selected SQLite object reads reuse the 128-record/768-KiB inline page limit;
 chunked and external objects use the same verified hydration path as transfers.
 Missing or corrupt targets fail preparation instead of disappearing from refs.
 
-An already-current full cache is reused for discovery. Otherwise the discovery
-cache is temporary and pinned by its native worker. It does not advance the full-history cache's indexed cursor or add a retained cache per
-repository. The v2 classifier examines at most 256 KiB of decoded packet headers,
+A current full cache is reused when its mutex is immediately available. Discovery
+never queues behind full-history preparation: a contended or absent cache uses
+the same temporary ref-target cache, pinned by its native worker. Concurrent
+requests can duplicate this bounded preparation; normal transfer and disk
+admission still apply. It does not advance the full-history cache's indexed
+cursor or add a retained cache per repository. The v2 classifier examines at most 256 KiB of decoded packet headers,
 ending at the first delimiter or flush. Requests without a single recognized
 `ls-refs` command use full preparation; native Git remains the parser for all
 commands and errors. Gzip is validated and decoded before classification. Fetch,

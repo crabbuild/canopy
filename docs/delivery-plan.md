@@ -3188,3 +3188,18 @@ intermittent immediate teardown assertion remains documented and unresolved.
 See [ref discovery evidence](performance-plan.md#ref-discovery-without-full-history-hydration).
 Large ref sets, concurrent cache preparation, full primitive composition and
 thousand-repository mixed workloads remain open.
+
+## Ref discovery stays independent of history restoration
+
+A nonwaiting lookup now reuses a ready full cache or prepares the existing
+ref-target cache independently while a fetch owns the history-cache mutex.
+The regression fails on `46c731c`, then proves v0 fetch/push advertisements and
+v2 `ls-refs` while a native clone's external blob read is paused. The resumed
+clone reproduces exact bytes and passes strict fsck. Fifteen residency tests,
+smart HTTP, Clippy, formatting and the optimized build pass. Real-store run
+`canopy-concurrent-discovery-4062d64342ef` passes ordinary cache/recovery checks;
+the injected-store test provides the contention proof. See the
+[overlap evidence](performance-plan.md#ref-discovery-during-full-history-restoration).
+This closes the history-cache mutex dependency for discovery. Required ref-body
+reads, global resource admission, full primitive integration and production
+density remain separate gates.

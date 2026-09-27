@@ -1227,8 +1227,8 @@ the Cell in 0.301 seconds without caching objects. Subsequent native v0/v2
 Cell already active and the Git history cache empty. Each request prepared one
 243-byte commit; neither retained any object files or hydrated full history.
 These single colocated-provider observations are not latency SLOs or a controlled
-benchmark comparison. Concurrent full-cache preparation can still delay the
-warm-snapshot lookup; mixed-workload contention needs separate qualification.
+benchmark comparison. At that revision, concurrent full-cache preparation could
+delay the warm-snapshot lookup; the following section addresses that dependency.
 
 Both subsequent clones restored all 263 objects, reproduced exact commits and
 file bytes, and passed strict fsck. Before the crash, incremental refresh read
@@ -1236,3 +1236,48 @@ only three new headers/bodies (11,384 raw bytes), preserving all 260 earlier
 files and their 2,113,001 compressed bytes. Both logs contain no warnings/errors.
 Graceful shutdown and provider cleanup passed. The full primitive and production
 density gates remain open.
+
+## Ref discovery during full-history restoration
+
+Discovery's optional warm-cache lookup now uses Tokio's nonwaiting `try_lock`.
+If another request owns the mutex while preparing history, discovery builds its
+existing ref-target cache independently. No new cache mode, configuration,
+protocol implementation or dependency is introduced. Fetches still share the
+serialized full-history cache and verified incremental object materializer.
+The pinned Tokio 1.53.1 mutex returns immediately when the permit is unavailable;
+the cloned immutable snapshot remains pinned after the guard is dropped.
+
+The regression uses the public HTTP server, one real repository Cell and native
+Git. It pushes a 2 MiB ordinary Git blob, evicts the repository, starts a clone,
+and pauses that blob's object-store read during full-history hydration. While
+the first clone remains paused, metadata and v0 upload-pack/receive-pack
+advertisements plus a v2 `ls-refs` response complete. Releasing the fault allows
+the clone to reproduce the exact commit and body and pass strict fsck, followed
+by server shutdown. The same test times out on `46c731c` before the mutex change.
+The injected store wraps the in-memory provider; it exercises actual HTTP,
+SQLite, Cell restoration and Git processes, not a mocked gateway result.
+
+This removes the cache-mutex dependency on unrelated history reads. A ref that
+itself targets a slow large object still needs that object's body, and global
+transfer/SQL/disk admission may still reject work. Mixed-tenant throughput,
+large-ref-set cost, full primitive composition and thousand-repository capacity
+remain open. The earlier intermittent immediate teardown assertion is unchanged.
+
+
+All fifteen residency tests and the smart-HTTP suite passed, along with
+all-target Clippy with warnings denied, formatting and the optimized build.
+The production diff is one net line and introduces no new retained state.
+The real-store run `canopy-concurrent-discovery-4062d64342ef` uses the unchanged
+`scripts/smoke_s3_cache.py` against isolated RustFS `1.0.0-beta.8-glibc` limited
+to two CPUs and 4 GiB; Canopy runs on the shared macOS arm64 host. Base revision
+is `46c731c` plus the archived patch. Binary SHA-256 is
+`ff3400e29a9c9264fd880a7b72ebce71f7d1b6880fc57f2b5485dd0342572f3e`.
+
+The provider run passes one-tip v0/v2 discovery, incremental refresh of three
+objects, reuse of 260 existing files, SIGKILL/fresh-workspace recovery of all
+263 objects, exact native clones and strict fsck. Both server logs contain no
+warnings/errors; graceful shutdown and provider cleanup pass. Source, driver
+and script hashes accompany the report. This run verifies ordinary recovery
+with the final binary; it does not inject the paused read. The public-HTTP fault
+test supplies the overlap evidence. Neither run establishes a production SLO or
+full-primitive repository density.
