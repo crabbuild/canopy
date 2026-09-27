@@ -12,6 +12,7 @@ pub enum MergeStrategy {
     FastForward,
     MergeCommit,
     Squash,
+    Rebase,
 }
 /// Retry identity and exact reviewed branches for a selected merge strategy.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -104,7 +105,7 @@ pub(crate) fn valid_request(request: &MergeRequest) -> bool {
         && parse_oid(&request.revision.base_oid).is_some()
         && match request.strategy {
             MergeStrategy::FastForward => request.candidate_id.is_none(),
-            MergeStrategy::MergeCommit | MergeStrategy::Squash => {
+            MergeStrategy::MergeCommit | MergeStrategy::Squash | MergeStrategy::Rebase => {
                 request.candidate_id.as_ref().is_some_and(|id| {
                     uuid::Uuid::parse_str(id).ok().is_some_and(|value| {
                         value.to_string() == *id

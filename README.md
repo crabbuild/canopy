@@ -178,7 +178,7 @@ across navigation, disconnect or reload.
 The **Pull requests** tab opens, edits, closes and reopens requests between local
 branches. It includes draft state, paged reviews, unified text diffs, current
 approval requirements and commit check results. Reviews bind the displayed pull
-version and both branch tips. Writers can fast-forward or prepare a merge/squash
+version and both branch tips. Writers can fast-forward or prepare a merge/squash/rebase
 candidate, inspect its files, fetch it for testing, then explicitly publish it.
 Publication rechecks the revision, permissions, reviews and required checks.
 Stale or conflicting candidates cannot be published. Check reporting, branch
@@ -325,8 +325,8 @@ Pull requests and reviews are repository-local SQLite records:
 | GET / PUT | `/api/repositories/<name>/pulls/<number>/threads/<thread>` | Read / resolve or reopen at an expected version |
 | GET / POST | `/api/repositories/<name>/pulls/<number>/threads/<thread>/comments` | List / append discussion replies |
 | GET | `/api/repositories/<name>/pulls/<number>/review-policy` | Read current review requirements and counts |
-| POST | `/api/repositories/<name>/pulls/<number>/merge` | Publish a reviewed fast-forward, merge commit or squash |
-| POST | `/api/repositories/<name>/pulls/<number>/merge-candidates` | Prepare a merge commit or squash |
+| POST | `/api/repositories/<name>/pulls/<number>/merge` | Publish a reviewed fast-forward, merge commit, squash or rebase |
+| POST | `/api/repositories/<name>/pulls/<number>/merge-candidates` | Prepare a merge commit, squash or rebase |
 | GET | `/api/repositories/<name>/pulls/<number>/merge-candidates/<id>` | Read the frozen candidate and fetch ref |
 
 To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
@@ -499,8 +499,19 @@ server-owned and rejects every push update, including owner pushes.
 
 Native Git handles three-way content merges, renames and multiple merge bases.
 Merge drivers and signing commands from host Git configuration are disabled.
-Rebase, conflict resolution, forks and retargeting remain
-to be delivered.
+For `rebase`, prepare with `message: ""`: original authors, author dates,
+message bytes, encodings and extra headers are preserved. Each source-only
+commit is replayed onto the base in order; empty commits are retained. The
+committer becomes the preparing account at the reserved time; original commit
+and ancestry signatures are removed. The source branch is unchanged.
+
+Rebase preparation accepts a linear history of at most 128 commits, each at most
+64 KiB before and after rewriting. It returns `rebase_unavailable` with reason
+`merge_history`, `no_commits`, `limit` or `commit_format` when it cannot prepare;
+these results cannot publish. Resolve conflicts or rewrite unsupported history
+locally and push, then prepare a new candidate. A conflict at any intermediate
+commit stops replay even when the final source tree would merge cleanly.
+Conflict resolution in the browser, forks and retargeting remain to be delivered.
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.

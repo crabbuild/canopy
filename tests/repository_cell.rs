@@ -20,6 +20,8 @@ mod objects;
 mod pages;
 #[path = "repository_cell/pulls.rs"]
 mod pulls;
+#[path = "repository_cell/rebase.rs"]
+mod rebase;
 #[path = "repository_cell/visibility.rs"]
 mod visibility;
 
@@ -445,6 +447,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         branch_rules::verify(&repository, &graph_sql, &application_handle, &target).await?;
         pulls::verify(&repository).await?;
         merge::verify(&repository, &graph_sql, &application_handle, &target).await?;
+        rebase::verify(&repository, &graph_sql).await?;
         chunks::exercise(&repository, &graph_sql).await?;
         Ok(())
     }

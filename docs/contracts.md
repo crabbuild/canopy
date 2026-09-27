@@ -1280,7 +1280,7 @@ not hydrate the native bare Git cache. Current no-GC storage makes immutable
 object traversal safe; future collection must fence active comparison roots.
 
 Historical merged comparisons persist the pre-merge revision in `pull_merges`;
-operation 9 codec 3 commits it with publication. Schema 1 remains unreleased and
+operation 9 codec 4 commits it with publication. Schema 1 remains unreleased and
 requires a fresh development prefix. No dependency or lockfile change is needed.
 Fast-forward review policy and atomic publication are implemented below. Native
 rebase candidate preparation and line-based review remain open delivery gates.
@@ -1453,7 +1453,7 @@ moves refs. Source must descend from base for this strategy even when the branch
 rule does not require fast-forward pushes. Non-ancestor or unrelated histories
 conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
-Operation 9, codec 3 publishes the merge in one Repository Cell command:
+Operation 9, codec 4 publishes the merge in one Repository Cell command:
 
 1. Check current write authority. For an existing application UUID, compare its
    binding to actor, pull number, full requested revision and strategy; an exact
@@ -1501,12 +1501,13 @@ every merge publication boundary and production capacity qualification also
 remain open. No dependency or lockfile changed.
 
 
-### Native merge and squash candidates
+### Native merge, squash and rebase candidates
 
 Preparation and branch publication are separate actions. A writer POSTs
 `/api/repositories/<name>/pulls/<number>/merge-candidates` with `repository_id`,
-canonical UUID `id`, exact pull `revision`, `strategy` (`merge_commit` or `squash`)
-and a nonblank UTF-8 `message` of at most 16 KiB, with no NUL. Fast-forward is
+canonical UUID `id`, exact pull `revision`, and `strategy`. `merge_commit` and
+`squash` require a nonblank UTF-8 `message` of at most 16 KiB, with no NUL;
+`rebase` requires an empty `message`. Fast-forward is
 invalid here. A read-scoped member can GET that path plus `/<id>`. Responses
 contain `repository_id`, `candidate` and `fetch_ref` (null until ready). The candidate includes
 its original request fields, pull `number`, `actor`, `created_at_ms`, and `result`:
@@ -1517,8 +1518,9 @@ its original request fields, pull `number`, `actor`, `created_at_ms`, and `resul
 | `ready` | `oid`, `tree_oid` | Certified native result with an immutable fetch ref |
 | `conflicted` | `paths_base64` | Native Git reported conflicts; cannot publish |
 | `unrelated` | none | Native Git found no common ancestor; cannot publish |
+| `rebase_unavailable` | `reason` | `merge_history`, `no_commits`, `limit` or `commit_format`; cannot publish |
 
-Operation 10, codec 1 reserves the UUID against actor, pull and complete intent.
+Operation 10, codec 2 reserves the UUID against actor, pull and complete intent.
 It retains the first timestamp. Retrying completed preparation returns the
 original result, even if the pull later changes or merges; current write access
 is still required for POST. GET requires current read access. For pending
@@ -1560,7 +1562,7 @@ still publish permitted siblings, while atomic pushes reject the group. Ready
 candidate refs stay immutable after publication, so stock Git and CI can fetch
 and test the exact commit before or after a merge.
 
-For publication, `/merge` accepts `strategy: "merge_commit"` or `"squash"` with
+For publication, `/merge` accepts `strategy: "merge_commit"`, `"squash"` or `"rebase"` with
 `candidate_id`. Fast-forward requires candidate_id absent or null. The command
 requires a ready candidate belonging to the same pull, strategy and original
 revision, validates its bytes/closure again, and uses its OID for the canonical
@@ -1585,7 +1587,7 @@ Candidate input/result objects and their ancestor closure are retention roots.
 No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
 historic candidates need quota/retention policy before persistent public use.
 Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
-codec 3 require a fresh development prefix. No dependency or lockfile changes.
+codec 4 require a fresh development prefix. No dependency or lockfile changes.
 
 
 ## Repository browser
@@ -2006,3 +2008,54 @@ transfer size does not introduce an unbounded backup allocation. There is no
 whole-object Canopy buffer or local disk spool on this path. The upstream backend
 may have its own buffers; total process RSS, outgoing socket timeouts, fairness
 and production throughput still need broader qualification.
+
+
+### Linear rebase preparation
+
+`rebase` uses the same durable intent, immutable candidate ref, current ACL,
+revision, review, check and atomic publication contracts as other candidates.
+Operation 9 uses codec 4 and operation 10 uses codec 2. The Repository module
+source digest includes the shared rebase byte transformation. SQLite schema and
+dependencies are unchanged; this remains a preview release with no old-release
+migration promise. Use a fresh preview prefix when changing the selected release.
+
+The worker enumerates `base..source` in reverse topological order with a 129-entry
+sentinel. At most 128 source-only commits can be replayed. Every commit must have
+one parent, the first parent must be the common ancestor, and subsequent parents
+must equal the preceding original commit. A merge in the source-only range
+returns `merge_history`; merges already contained in the base do not prevent a
+linear continuation. An empty range returns `no_commits`. Unrelated history
+keeps the existing `unrelated` result.
+
+For each commit, native `merge-tree --write-tree --merge-base=<original-parent>`
+merges the current replay tip and original commit. The explicit base applies
+that commit's change, including native rename/content handling. Exit status 1
+returns `conflicted` with raw-path encoding and stops before any candidate ref
+is published. This deliberately detects intermediate conflicts even if later
+source commits undo the conflicting change. It preserves empty commits and
+commits whose patch is already present; there is no patch-ID deduplication.
+
+The canonical transformation replaces tree, parent and committer headers,
+retains original author/date, encoding, extra headers and message bytes, and
+removes whole `gpgsig`, `gpgsig-sha256` and `mergetag` headers including continuation
+lines. It does not claim that rewritten commits retain their original signature.
+`hash-object -t commit -w --stdin` stores the resulting bytes in the disposable
+cache. The deterministic committer and timestamp come from the reserved intent.
+Input and rewritten commit bodies are each capped at 64 KiB; unsupported commit
+header shapes return `commit_format`, and size/count limits return `limit`.
+The original branch stays unchanged.
+
+At readiness and publication, the Cell walks both original and rewritten chains
+backward, bounded to 128 pairs of 64 KiB objects. Every object must have certified
+graph closure and a matching Git OID. It checks the exact byte transformation
+for every pair, the advertised tip tree, a rewritten chain ending at the selected
+base, and a source chain ending at that base or a positively certified ancestor.
+The trusted native worker still owns replay selection and merged-tree semantics;
+the Cell does not rerun Git inside its transaction. No client-supplied chain or
+result OID is accepted by HTTP. Existing current-policy checks remain atomic with
+the target ref move and pull state transition.
+
+The browser offers Rebase alongside merge and squash, disables replacement
+message input while selected, explains authors/signatures, and displays terminal
+unavailability and conflict results. A ready result follows the existing inspect,
+fetch, check and explicit publish workflow.

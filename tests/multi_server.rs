@@ -14,6 +14,8 @@ mod comparison;
 mod merge;
 #[path = "multi_server/pulls.rs"]
 mod pulls;
+#[path = "multi_server/rebase.rs"]
+mod rebase;
 use std::{path::Path, sync::Arc};
 
 use canopy_server::server::{CanopyServer, ServerConfig};

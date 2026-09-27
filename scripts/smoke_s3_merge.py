@@ -83,7 +83,7 @@ def seed_candidates(base_url, repository_id, local, source, base, author_token):
         "reporter": "canopy", "enabled": True,
     })
     states = []
-    for strategy in ("merge_commit", "squash"):
+    for strategy in ("merge_commit", "squash", "rebase"):
         branch = f"candidate-{strategy}"
         subprocess.run(["git", "-c", AUTH, "push", f"{base_url}/canopy/other.git",
                         f"{base}:refs/heads/{branch}"], cwd=local, check=True, capture_output=True)
@@ -102,7 +102,7 @@ def seed_candidates(base_url, repository_id, local, source, base, author_token):
         api = f"{REPOSITORY}/pulls/{created['number']}"
         current = revision(request(base_url, api)["pull"])
         payload = {"repository_id": repository_id, "id": str(uuid.uuid4()),
-                   "revision": current, "strategy": strategy, "message": f"Checked {strategy}"}
+                   "revision": current, "strategy": strategy, "message": "" if strategy == "rebase" else f"Checked {strategy}"}
         candidate = request(base_url, f"{api}/merge-candidates", "POST", payload)
         assert candidate["candidate"]["result"]["state"] == "ready"
         request(base_url, f"{api}/reviews", "POST", {
@@ -152,4 +152,4 @@ def verify_candidates(base_url, local, states):
         assert request(base_url, f"{api}/comparison", "POST", {
             "repository_id": payload["repository_id"], "target": {"kind": "merged"}, "query": {"kind": "files"},
         }) == state["comparison"]
-    print("PASS: native merge/squash candidates fetch and publish after recovery, then replay after owner loss", flush=True)
+    print("PASS: native merge/squash/rebase candidates fetch and publish after recovery, then replay after owner loss", flush=True)

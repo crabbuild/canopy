@@ -63,8 +63,8 @@ const COMMANDS: [OperationDescriptor; 9] = [
     operation(6),
     operation(7),
     operation_with_codec(8, 2),
-    operation_with_codec(9, 3),
-    operation(10),
+    operation_with_codec(9, 4),
+    operation_with_codec(10, 2),
 ];
 const QUERIES: [OperationDescriptor; 1] = [operation(2)];
 
@@ -192,6 +192,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("pulls.rs"));
                 source.update(include_bytes!("pulls/merge.rs"));
                 source.update(include_bytes!("pulls/candidates.rs"));
+                source.update(include_bytes!("pulls/candidates/rebase.rs"));
                 source.update(include_bytes!("pulls/candidates/command.rs"));
                 source.update(include_bytes!("pulls/merge/command.rs"));
                 source.update(include_bytes!("pulls/mutations.rs"));

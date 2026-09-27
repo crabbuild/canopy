@@ -5,7 +5,7 @@ use super::*;
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 
-async fn file(local: &Path, path: &str, body: &[u8], message: &str) -> Result {
+pub(super) async fn file(local: &Path, path: &str, body: &[u8], message: &str) -> Result {
     tokio::fs::write(local.join(path), body).await?;
     run_git(Some(local), &["add", "."]).await?;
     run_git(Some(local), &["commit", "-m", message]).await?;
@@ -48,7 +48,7 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
     )
     .await?;
     let mut saved = Vec::new();
-    for strategy in ["merge_commit", "squash"] {
+    for strategy in ["merge_commit", "squash", "rebase"] {
         let url = create_repository(address, strategy).await?;
         let repo = format!("http://{address}/api/repositories/{strategy}");
         let repository =
@@ -112,6 +112,19 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
             "Large source edit",
         )
         .await?;
+        if strategy == "rebase" {
+            run_git(
+                Some(&local),
+                &[
+                    "commit",
+                    "--allow-empty",
+                    "--author=Original Author <original@example.invalid>",
+                    "-m",
+                    "Intentional empty commit",
+                ],
+            )
+            .await?;
+        }
         let source = oid(&local, "HEAD").await?;
         push(
             &local,
@@ -144,7 +157,7 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
         status(client.put(format!("{repo}/check-contexts/unit")).bearer_auth(OWNER).json(&json!({"repository_id":repository,"expected_version":0,"enabled":true,"reporter":"canopy"})),StatusCode::NO_CONTENT).await?;
         status(client.put(format!("{repo}/branch-rules")).bearer_auth(OWNER).json(&json!({"repository_id":repository,"rule":{"reference":"refs/heads/main","expected_version":0,"enabled":true,"deny_deletions":true,"fast_forward_only":true,"required_checks":["unit"],"require_pull_request":true,"required_approvals":1}})),StatusCode::NO_CONTENT).await?;
         check(&client, &repo, &repository, &source).await?;
-        let request = json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":rev,"strategy":strategy,"message":"Reviewed native merge\n\nKeeps both changes."});
+        let request = json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":rev,"strategy":strategy,"message":if strategy == "rebase" { "" } else { "Reviewed native merge\n\nKeeps both changes." }});
         let endpoint = format!("{api}/merge-candidates");
         status(
             client.post(&endpoint).json(&request),
@@ -249,14 +262,66 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
         let parents = String::from_utf8(
             run_git(Some(&local), &["show", "-s", "--format=%P", commit]).await?,
         )?;
-        assert_eq!(
-            parents.trim(),
-            if strategy == "merge_commit" {
-                format!("{base} {source}")
-            } else {
-                base.clone()
+        if strategy == "rebase" {
+            let originals = String::from_utf8(
+                run_git(
+                    Some(&local),
+                    &["rev-list", "--reverse", &format!("{base}..{source}")],
+                )
+                .await?,
+            )?;
+            let replayed = String::from_utf8(
+                run_git(
+                    Some(&local),
+                    &["rev-list", "--reverse", &format!("{base}..{commit}")],
+                )
+                .await?,
+            )?;
+            assert_eq!(originals.lines().count(), 4);
+            assert_eq!(replayed.lines().count(), 4);
+            run_git(Some(&local), &["checkout", "--detach", &base]).await?;
+            for (original, rewritten) in originals.lines().zip(replayed.lines()) {
+                assert_eq!(
+                    run_git(
+                        Some(&local),
+                        &["show", "-s", "--format=%an%n%ae%n%aI%n%B", original]
+                    )
+                    .await?,
+                    run_git(
+                        Some(&local),
+                        &["show", "-s", "--format=%an%n%ae%n%aI%n%B", rewritten]
+                    )
+                    .await?
+                );
+                run_git(
+                    Some(&local),
+                    &["cherry-pick", "--keep-redundant-commits", original],
+                )
+                .await?;
+                assert_eq!(
+                    oid(&local, "HEAD^{tree}").await?,
+                    oid(&local, &format!("{rewritten}^{{tree}}")).await?
+                );
+                assert_eq!(
+                    run_git(
+                        Some(&local),
+                        &["show", "-s", "--format=%cn <%ce>", rewritten]
+                    )
+                    .await?,
+                    b"canopy <canopy@users.canopy.invalid>\n"
+                );
             }
-        );
+            run_git(Some(&local), &["checkout", "feature"]).await?;
+        } else {
+            assert_eq!(
+                parents.trim(),
+                if strategy == "merge_commit" {
+                    format!("{base} {source}")
+                } else {
+                    base.clone()
+                }
+            );
+        }
         assert_eq!(
             run_git(Some(&local), &["show", &format!("{commit}:shared.txt")]).await?,
             b"ONE\ntwo\nthree\nfour\nfive\nsix\nSEVEN\n"
@@ -291,7 +356,8 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
         assert!(!advertised.contains("refs/heads/blocked-sibling"));
 
         let mut changed = request.clone();
-        changed["message"] = json!("different intent");
+        changed["revision"]["base_version"] =
+            json!(rev["base_version"].as_i64().ok_or("base version")? + 1);
         status(
             client.post(&endpoint).bearer_auth(OWNER).json(&changed),
             StatusCode::CONFLICT,
@@ -545,7 +611,7 @@ async fn conflicts_and_unrelated_histories_never_publish_and_stale_candidates_ca
     Ok(())
 }
 
-async fn git_input(local: &Path, args: &[&str], bytes: &[u8]) -> Result<Vec<u8>> {
+pub(super) async fn git_input(local: &Path, args: &[&str], bytes: &[u8]) -> Result<Vec<u8>> {
     use tokio::io::AsyncWriteExt;
     let mut child = Command::new("git")
         .current_dir(local)
@@ -568,7 +634,12 @@ async fn git_input(local: &Path, args: &[&str], bytes: &[u8]) -> Result<Vec<u8>>
     );
     Ok(output.stdout)
 }
-async fn commit(local: &Path, tree: &str, parents: &[&str], message: &str) -> Result<String> {
+pub(super) async fn commit(
+    local: &Path,
+    tree: &str,
+    parents: &[&str],
+    message: &str,
+) -> Result<String> {
     let mut args = vec!["commit-tree", tree, "-m", message];
     for parent in parents {
         args.extend(["-p", *parent]);

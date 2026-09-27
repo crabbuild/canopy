@@ -67,7 +67,7 @@ pub(crate) struct PrepareCandidate;
 impl Command for PrepareCandidate {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 10;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CandidateAction;
     type Output = CandidateOutcome;
     fn execute(

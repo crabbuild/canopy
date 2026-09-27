@@ -286,7 +286,15 @@ const pullsView = (() => {
             send: payload => api(`${path}/merge-candidates`, { method: "POST", body: payload, signal }), published: () => finished("Candidate state refreshed.") }); panel.append(node);
         }
       } else {
-        panel.append(element("p", candidate.result.state === "unrelated" ? "The branches have unrelated histories." : "Resolve these conflicts in Git, push the result, then prepare again.", "error"));
+        let explanation = "Resolve these conflicts in Git, push the result, then prepare again.";
+        if (candidate.result.state === "unrelated") explanation = "The branches have unrelated histories.";
+        else if (candidate.result.state === "rebase_unavailable") explanation = {
+          merge_history: "Rebase requires a linear source history. Rebase locally or choose merge commit or squash.",
+          no_commits: "All source commits already belong to the base history.",
+          limit: "Rebase exceeds 128 commits or 64 KiB per commit. Rebase locally and push the result.",
+          commit_format: "This commit format cannot be rebased here. Rebase locally or choose another strategy."
+        }[candidate.result.reason] || "Rebase is unavailable.";
+        panel.append(element("p", explanation, "error"));
         for (const name of candidate.result.paths_base64 || []) {
           let label;
           try { label = safe(new TextDecoder("utf-8", { fatal: true }).decode(bytes(name))); }
@@ -296,9 +304,15 @@ const pullsView = (() => {
       }
     } else panel.append(await checks(repository, rev.source_oid, signal));
     if (!writer(repository)) { panel.append(element("p", "Repository write access and a write-scoped token are required to merge.", "hint")); return panel; }
-    const prep = form("Prepare a merge candidate"), strategy = select(prep, "Merge strategy", [["merge_commit", "Merge commit"], ["squash", "Squash"]], "merge_commit");
+    const prep = form("Prepare a merge candidate"), strategy = select(prep, "Merge strategy", [["merge_commit", "Merge commit"], ["squash", "Squash"], ["rebase", "Rebase"]], "merge_commit");
     const message = field(prep, "body", "Commit message", `Merge pull request #${pull.number}: ${pull.title}`, 16384, true);
-    submit({ repository, form: prep, signal, label: "Prepare candidate", payload: () => ({ revision: rev, strategy: strategy.value, message: message.value }),
+    const rebaseHint = element("p", "Rebase preserves each commit’s author and message. It rewrites the committer and removes original signatures.", "hint");
+    rebaseHint.hidden = true; prep.append(rebaseHint);
+    strategy.addEventListener("change", () => {
+      const rebasing = strategy.value === "rebase";
+      message.disabled = rebasing; message.required = !rebasing; rebaseHint.hidden = !rebasing;
+    });
+    submit({ repository, form: prep, signal, label: "Prepare candidate", payload: () => ({ revision: rev, strategy: strategy.value, message: strategy.value === "rebase" ? "" : message.value }),
       send: payload => api(`${path}/merge-candidates`, { method: "POST", body: payload, signal }),
       published: result => { navigate({ ...current, candidate: result.candidate.id }); notice("Candidate status updated."); } }); panel.append(prep);
     if (!policy.reviews_satisfied) { panel.append(element("p", "Required reviews are not satisfied. Preparation is available; publication waits for eligible reviews.", "hint")); return panel; }

@@ -3,6 +3,7 @@
 use crate::ReadIdentity;
 
 pub(crate) mod command;
+pub(crate) mod rebase;
 use super::merge::{MergeStrategy, oid, policy_state, policy_statement};
 use super::*;
 use crate::ObjectKind;
@@ -25,6 +26,16 @@ pub enum CandidateResult {
     Ready { oid: String, tree_oid: String },
     Conflicted { paths_base64: Vec<String> },
     Unrelated,
+    RebaseUnavailable { reason: RebaseUnavailable },
+}
+/// A rebase that requires local history changes or exceeds preparation limits.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RebaseUnavailable {
+    MergeHistory,
+    NoCommits,
+    Limit,
+    CommitFormat,
 }
 /// A frozen candidate intent, creation time and first completed native result.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -68,7 +79,11 @@ pub(crate) fn valid_request(request: &CandidateRequest) -> bool {
         candidate_id: Some(request.id.clone()),
     }) && request.strategy != MergeStrategy::FastForward
         && valid_body(&request.message)
-        && !request.message.trim().is_empty()
+        && if request.strategy == MergeStrategy::Rebase {
+            request.message.is_empty()
+        } else {
+            !request.message.trim().is_empty()
+        }
 }
 pub(crate) fn valid_result(result: &CandidateResult) -> bool {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -80,7 +95,7 @@ pub(crate) fn valid_result(result: &CandidateResult) -> bool {
         CandidateResult::Ready { oid, tree_oid } => {
             parse_oid(oid).is_some() && parse_oid(tree_oid).is_some()
         }
-        CandidateResult::Unrelated => true,
+        CandidateResult::Unrelated | CandidateResult::RebaseUnavailable { .. } => true,
         CandidateResult::Conflicted { paths_base64 } => paths_base64.iter().all(|path| {
             URL_SAFE_NO_PAD.decode(path).ok().is_some_and(|bytes| {
                 !bytes.is_empty() && !bytes.contains(&0) && URL_SAFE_NO_PAD.encode(bytes) == *path
@@ -169,7 +184,7 @@ pub(crate) fn commit_body(candidate: &MergeCandidate, tree_oid: &str) -> Vec<u8>
             revision.base_oid, revision.source_oid
         ),
         MergeStrategy::Squash => format!("parent {}\n", revision.base_oid),
-        MergeStrategy::FastForward => String::new(),
+        MergeStrategy::FastForward | MergeStrategy::Rebase => String::new(),
     };
     let actor = &candidate.actor;
     let time = candidate.created_at_ms / 1000;
@@ -212,6 +227,9 @@ fn certified(
     commit: &str,
     tree: &str,
 ) -> cellule_runtime::Result<bool> {
+    if candidate.request.strategy == MergeStrategy::Rebase {
+        return rebase::certified(context, candidate, commit, tree);
+    }
     // The trusted native worker owns tree-merging semantics. The transaction
     // verifies exact parent order, author, timestamp, message and graph closure.
     let body = commit_body(candidate, tree);

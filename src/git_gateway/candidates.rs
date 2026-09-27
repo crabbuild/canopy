@@ -14,6 +14,8 @@ use cellule_runtime::InvocationError;
 use std::process::{ExitStatus, Stdio};
 use tokio::io::AsyncWriteExt;
 
+mod rebase;
+
 impl GitGateway {
     pub(crate) async fn prepare_candidate(
         &self,
@@ -51,7 +53,7 @@ impl GitGateway {
             return Ok(CandidateOutcome::Conflict);
         }
         let cached = self.build_cache(self.cell_refs().await?).await?;
-        let result = prepare_native(&cached.backend, &candidate).await?;
+        let result = prepare_native(&self.repository, &cached.backend, &candidate).await?;
         if !valid_result(&result) {
             return Err(GitHttpError::TooLarge.into());
         }
@@ -97,6 +99,7 @@ impl GitGateway {
 }
 
 async fn prepare_native(
+    repository: &RepositoryCell,
     backend: &GitHttpBackend,
     candidate: &MergeCandidate,
 ) -> Result<CandidateResult, GatewayError> {
@@ -113,37 +116,16 @@ async fn prepare_native(
         Some(1) => return Ok(CandidateResult::Unrelated),
         _ => return Err(related.error()),
     }
+    if candidate.request.strategy == MergeStrategy::Rebase {
+        let common = output_oid(&related.stdout)?;
+        return rebase::prepare(repository, backend, candidate, &common).await;
+    }
     // Native merge-tree consolidates multiple merge bases itself. Never select
     // one merge base or infer a clean result from an empty conflict-path list.
-    let merged = run(
-        backend,
-        &[
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            "--no-messages",
-            "-z",
-            &revision.base_oid,
-            &revision.source_oid,
-        ],
-        b"",
-        &[],
-    )
-    .await?;
-    if !matches!(merged.status.code(), Some(0 | 1)) {
-        return Err(merged.error());
-    }
-    let (tree_oid, paths) = merge_output(&merged.stdout)?;
-    if merged.status.code() == Some(1) {
-        return Ok(CandidateResult::Conflicted {
-            paths_base64: paths
-                .into_iter()
-                .map(|path| URL_SAFE_NO_PAD.encode(path))
-                .collect(),
-        });
-    }
-    if !paths.is_empty() {
-        return Err(GatewayError::MalformedCache);
+    let (tree_oid, conflict) =
+        merge_tree(backend, &revision.base_oid, &revision.source_oid, None).await?;
+    if let Some(conflict) = conflict {
+        return Ok(conflict);
     }
     let mut args = vec!["commit-tree", &tree_oid, "-p", &revision.base_oid];
     if candidate.request.strategy == MergeStrategy::MergeCommit {
@@ -168,15 +150,59 @@ async fn prepare_native(
     if !commit.status.success() {
         return Err(commit.error());
     }
-    let text = std::str::from_utf8(&commit.stdout).map_err(|_| GatewayError::MalformedCache)?;
+    Ok(CandidateResult::Ready {
+        oid: output_oid(&commit.stdout)?,
+        tree_oid,
+    })
+}
+
+fn output_oid(bytes: &[u8]) -> Result<String, GatewayError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| GatewayError::MalformedCache)?;
     let oid = text
         .strip_suffix('\n')
         .ok_or(GatewayError::MalformedCache)?;
     parse_oid(oid)?;
-    Ok(CandidateResult::Ready {
-        oid: oid.into(),
-        tree_oid,
-    })
+    Ok(oid.into())
+}
+
+async fn merge_tree(
+    backend: &GitHttpBackend,
+    base: &str,
+    source: &str,
+    ancestor: Option<&str>,
+) -> Result<(String, Option<CandidateResult>), GatewayError> {
+    let mut args = vec![
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "--no-messages",
+        "-z",
+    ];
+    let explicit;
+    if let Some(ancestor) = ancestor {
+        explicit = format!("--merge-base={ancestor}");
+        args.push(&explicit);
+    }
+    args.extend([base, source]);
+    let merged = run(backend, &args, b"", &[]).await?;
+    if !matches!(merged.status.code(), Some(0 | 1)) {
+        return Err(merged.error());
+    }
+    let (tree, paths) = merge_output(&merged.stdout)?;
+    let conflict = if merged.status.code() == Some(1) {
+        Some(CandidateResult::Conflicted {
+            paths_base64: paths
+                .into_iter()
+                .map(|path| URL_SAFE_NO_PAD.encode(path))
+                .collect(),
+        })
+    } else {
+        if !paths.is_empty() {
+            return Err(GatewayError::MalformedCache);
+        }
+        None
+    };
+    Ok((tree, conflict))
 }
 
 fn merge_output(bytes: &[u8]) -> Result<(String, Vec<&[u8]>), GatewayError> {

@@ -61,7 +61,7 @@ pub(crate) struct MergePull;
 impl Command for MergePull {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 3;
+    const CODEC_VERSION: u32 = 4;
     type Input = MergeInput;
     type Output = MergeOutcome;
     fn execute(
@@ -94,6 +94,7 @@ impl Command for MergePull {
                 MergeStrategy::FastForward => "fast_forward",
                 MergeStrategy::MergeCommit => "merge_commit",
                 MergeStrategy::Squash => "squash",
+                MergeStrategy::Rebase => "rebase",
             },
             input.request.candidate_id.as_deref().unwrap_or(""),
         ]);
@@ -130,7 +131,7 @@ impl Command for MergePull {
         let base = oid(&input.request.revision.base_oid)?;
         let source = match input.request.strategy {
             MergeStrategy::FastForward => oid(&input.request.revision.source_oid)?,
-            MergeStrategy::MergeCommit | MergeStrategy::Squash => {
+            MergeStrategy::MergeCommit | MergeStrategy::Squash | MergeStrategy::Rebase => {
                 match super::super::candidates::publication_oid(
                     context,
                     input.number,

@@ -14,7 +14,7 @@ Do not infer completion from compilation or a disposable cache test.
 | 4 Atomic push | Durable push session, graph closure proof, ACL and branch rules in finalization, recorded retry outcome | Concurrent and multi-ref pushes, ABA, owner death at every publication boundary | Partial: ref CAS, ACL, ABA protection, ordinary mixed push results, atomic rejection and exact HTTP push replay survive recovery; typed graph closure uses bounded certificate commands; exact branch rules, required checks and verified ancestry implemented; publication fault matrix remains |
 | 5 Fetch | Bounded streaming upload-pack, snapshot refs, cold recovery | Clone/fetch after owner takeover while refs move; large corpus capacity evidence | Partial: paginated refs/objects, gzip requests and backpressured fetch work; v0/v2 clones above 80 MiB and a 13,591-object real history pass after takeover; native scratch limits and production capacity proof remain |
 | 6 LFS | Batch/basic transfer, verified bytes, quotas and transfer admission | Stock `git-lfs` push/pull after owner loss; wrong hash/size and interruption fail closed | Partial: bounded streaming LFS with a 5 GiB acceptance ceiling, shared transfer admission and deadlines implemented; stock push/pull after restart works; quotas and full-scale capacity proof remain |
-| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; rebase, discussion moderation and releases remain |
+| 7 Collaboration | Issues, comments, checks, rules, pulls, reviews, merge, releases, repository UI | Create, review, check, merge and reload across owner change | Partial: issue/comment, check/rule, pull/review, comparison, review requirements, atomic fast-forward merges and native merge/squash/rebase candidates, repository browser, issue/pull UI and bounded unified diffs and line discussions implemented; browser conflict resolution, discussion moderation and releases remain |
 | 8 Recovery and operations | Two-node routing, backups, restore, conservative GC, audit and metrics | Kill owner, lose local disk, restore from backup, clone and inspect collaboration data | Partial: signed HTTPS routing across live nodes, survivor takeover without restart, cold clone, fenced Unix runtime reclamation, conservative maintenance admission, enrolled owner recovery, same-provider backup and isolated restore implemented; full maintenance/routing/backup fault matrices, GC and telemetry remain |
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 
@@ -72,7 +72,7 @@ separate product decisions.
    issuance, expiry selection, listing and revocation.
    Active-credential and rolling issuance limits are enforced in the Directory.
    Qualify admitted Git/LFS operations during revocation and owner takeover.
-5. Continue collaboration as vertical slices: rebase and conflict resolution; discussion editing/moderation;
+5. Continue collaboration as vertical slices: browser conflict resolution; discussion editing/moderation;
    issue labels/assignees; releases and assets; collaboration UI. Each
    slice ships with its own public action and owner-recovery proof.
 
@@ -2568,3 +2568,52 @@ these observations are not a controlled before/after speedup or capacity bound.
 RustFS logged internal BrokenPipe diagnostics while operating on staging data;
 all client operations and final integrity/recovery checks passed. This does not
 qualify every provider failure or establish error-free provider behavior.
+
+
+## Linear rebase candidate qualification
+
+The 2026-09-26 implementation adds rebase preparation and publication through
+the existing Repository Cell candidate workflow. Original author/date and message
+bytes survive each replay; the reserved actor/time becomes the committer. Empty
+commits are retained, old signatures removed, and the source branch is unchanged.
+The Cell certifies the entire bounded rewritten chain before readiness and again
+before atomic publication. Native Git remains responsible for replay selection
+and tree semantics. Preparation accepts linear source-only histories of up to
+128 commits and 64 KiB per original/rewritten commit; other histories and limits
+produce explicit terminal results. Full contracts are in
+[Linear rebase preparation](contracts.md#linear-rebase-preparation).
+
+Evidence on Darwin arm64 with Git 2.50.1:
+
+- `multi_server candidates::`: all three tests pass (140.90 s). The main test
+  now covers merge, squash and rebase with a 9 MiB text file, disjoint edits,
+  renames, binary content, an intentional empty commit and a distinct author.
+  Every rebase tree matches native `cherry-pick --keep-redundant-commits`.
+  Concurrent retries, revoked access, reserved refs, required reviews/checks,
+  fresh local-state recovery, candidate fetch, merge and strict Git fsck pass.
+- The rebase failure test passes (6.13 s): intermediate conflict despite a clean
+  final merge, source merge commits, 129-commit history, oversized commit,
+  already-contained and unrelated history, immutable terminal retries after
+  restore, wrong replacement-message rejection, and stale source ABA rejection.
+  A raw ISO-8859-1 message, multiline extra header and signature-shaped header
+  prove byte preservation and signature removal.
+- The Repository Cell integration test passes (8.82 s). Even with valid object
+  closure certificates, a dropped intermediate commit, forged author and changed
+  message cannot publish; a correctly rewritten chain can.
+- The optimized binary passes a targeted RustFS `1.0.0-beta.8-glibc` run on a
+  dedicated Docker volume. Merge/squash/rebase candidates, reviews and exact-OID
+  checks restore before publication. Chrome then selects Rebase, shows the
+  disabled message field and author/signature explanation, prepares a candidate,
+  and publishes it; the visible pull becomes merged at the candidate OID.
+  Native fetch verifies both source files and the independent base file with
+  strict fsck. A second fresh local-state restore preserves that browser-created
+  merge and exact prior publication retries. The fixture exits successfully and
+  removes its own container and volume. RustFS emits initialization diagnostics
+  on the fresh volume; this is not general provider or capacity qualification.
+- All-target Clippy with warnings denied, release build, Rust formatting,
+  JavaScript syntax and diff-whitespace checks pass.
+
+No dependency or lockfile changes. Operations 9/10 advance to codecs 4/2 and the
+Repository source digest changes; use a fresh preview prefix. This slice adds
+bounded linear rebase support; hard aggregate native resource limits, quotas,
+collection, fault matrices and the other open delivery gates remain open.
