@@ -202,6 +202,85 @@ async fn sha256_ssh_push_and_clone() -> Result {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ssh_push_options_cover_pack_and_delete_only_requests() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let host = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[10; 32]).into(),
+        "canopy-test",
+    )?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        server_config(address, workspace.path().join("node"), &host)?,
+        store,
+    )
+    .await?;
+    create_repository(address, "ssh-options").await?;
+    let key = key(workspace.path(), "client").await?;
+    register(address, "canopy", &key, "write").await?;
+    let known = workspace.path().join("known_hosts");
+    let ssh_address = server.ssh_addr().ok_or("SSH listener missing")?;
+    known_host(&known, ssh_address, &host).await?;
+    let ssh = transport(&key, &known)?;
+    let url = format!("ssh://git@{ssh_address}/canopy/ssh-options.git");
+    let source = workspace.path().join("source");
+    git(None, &ssh, &["init", "-b", "main", path_str(&source)?]).await?;
+    git(Some(&source), &ssh, &["config", "user.name", "Canopy Test"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["config", "user.email", "test@example.invalid"],
+    )
+    .await?;
+    tokio::fs::write(source.join("file"), b"ssh push option\n").await?;
+    git(Some(&source), &ssh, &["add", "file"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "First"],
+    )
+    .await?;
+    git(
+        Some(&source),
+        &ssh,
+        &[
+            "push",
+            "-o",
+            "canopy.note=first",
+            "-o",
+            "canopy.note=second",
+            &url,
+            "HEAD:refs/heads/main",
+            "HEAD:refs/heads/side",
+        ],
+    )
+    .await?;
+    let expected = git(Some(&source), &ssh, &["rev-parse", "HEAD"]).await?;
+    let rejected = git_command(
+        Some(&source),
+        &ssh,
+        &["push", "-o", "ci.skip", &url, ":refs/heads/side"],
+    )
+    .output()
+    .await?;
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("canopy.note"));
+    git(
+        Some(&source),
+        &ssh,
+        &["push", "-o", "canopy.note=retire", &url, ":refs/heads/side"],
+    )
+    .await?;
+    let refs = git(None, &ssh, &["ls-remote", &url, "refs/heads/*"]).await?;
+    assert_eq!(
+        refs,
+        [expected.trim_ascii(), b"\trefs/heads/main\n"].concat()
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stock_ssh_clone_push_fetch_filters_and_revocation_survive_disk_loss() -> Result {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

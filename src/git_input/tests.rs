@@ -51,6 +51,24 @@ async fn packet_preflight_stops_before_pack_and_rewinds_after_rejection() -> Res
 }
 
 #[tokio::test]
+async fn option_group_stops_before_pack_and_preserves_the_spool() -> Result<()> {
+    let directory = tempfile::TempDir::new()?;
+    let bytes = b"0008test00000008note0000PACKnot-read";
+    let input = GitInput::receive(
+        Body::from(bytes.as_slice()),
+        directory.path(),
+        &DiskBudget::new(1024),
+        Some(1024),
+        None,
+    )
+    .await?;
+    assert_eq!(input.packet_prefix(12).await?, b"0008test0000");
+    assert_eq!(input.packet_group(12, 12).await?, b"0008note0000");
+    assert_eq!(input.prefix(1024).await?, bytes);
+    Ok(())
+}
+
+#[tokio::test]
 async fn chunked_input_preserves_digest_and_rewinds_for_git() -> Result<()> {
     let directory = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(10);

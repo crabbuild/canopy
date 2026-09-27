@@ -12,6 +12,7 @@ mod default_branch;
 mod issues;
 mod merge;
 mod pulls;
+mod pushes;
 mod ssh_keys;
 mod threads;
 mod tokens;
@@ -135,6 +136,7 @@ impl RepositoryHttp {
                 "/api/repositories/{name}/pulls",
                 get(pulls::list).post(pulls::create),
             )
+            .route("/api/repositories/{name}/pushes/{id}", get(pushes::read))
             .route(
                 "/api/repositories/{name}/pulls/{number}",
                 get(pulls::read).put(pulls::edit),

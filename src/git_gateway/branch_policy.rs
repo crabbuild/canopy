@@ -5,6 +5,7 @@ use crate::{
 };
 
 const PREFIX_LIMIT: usize = 40 * 1024 * 1024;
+const OPTION_PREFIX_LIMIT: usize = 32 * 1024;
 
 pub(super) enum PushCommands {
     OtherMedia,
@@ -13,6 +14,9 @@ pub(super) enum PushCommands {
         updates: Vec<RefUpdate>,
         report_status: bool,
         sideband: bool,
+        options_requested: bool,
+        options: Vec<String>,
+        options_error: Option<&'static str>,
     },
 }
 
@@ -22,16 +26,58 @@ impl PushCommands {
         if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
             return Ok(Self::OtherMedia);
         }
-        match request
-            .body
-            .packet_prefix(PREFIX_LIMIT)
-            .await
-            .and_then(|bytes| commands(&bytes))
-        {
-            Ok(commands) => Ok(commands),
+        match request.body.packet_prefix(PREFIX_LIMIT).await {
+            Ok(prefix) => {
+                let mut parsed = commands(&prefix)?;
+                if let Self::Parsed {
+                    options_requested: true,
+                    options,
+                    options_error,
+                    ..
+                } = &mut parsed
+                {
+                    match request
+                        .body
+                        .packet_group(prefix.len() as u64, OPTION_PREFIX_LIMIT)
+                        .await
+                    {
+                        Ok(group) => match parse_options(&group) {
+                            Ok(parsed) => *options = parsed,
+                            Err(()) => *options_error = Some("Canopy push options are malformed"),
+                        },
+                        Err(InputError::TooLarge | InputError::Commands) => {
+                            *options_error = Some("Canopy push options are malformed or too large")
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok(parsed)
+            }
             Err(InputError::TooLarge) => Ok(Self::Limited),
             Err(error) => Err(error),
         }
+    }
+
+    pub(super) fn options(&self) -> &[String] {
+        match self {
+            Self::Parsed { options, .. } => options,
+            Self::OtherMedia | Self::Limited => &[],
+        }
+    }
+
+    pub(super) fn option_error(&self) -> Option<&'static str> {
+        let Self::Parsed {
+            options,
+            options_error,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        options_error.or_else(|| {
+            (!crate::push::valid_options(options))
+                .then_some("Canopy supports only canopy.note=<text> push options")
+        })
     }
 
     pub(super) fn rejection(&self, reason: &str) -> Result<Option<GitHttpResponse>, PushError> {
@@ -39,6 +85,7 @@ impl PushCommands {
             updates,
             report_status,
             sideband,
+            ..
         } = self
         else {
             return Ok(None);
@@ -160,6 +207,7 @@ fn quote(value: &str) -> String {
 fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
     let mut report_status = false;
     let mut sideband = false;
+    let mut options_requested = false;
     let mut updates = Vec::new();
     let mut names = BTreeSet::new();
     loop {
@@ -176,6 +224,9 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
                 updates,
                 report_status,
                 sideband,
+                options_requested,
+                options: Vec::new(),
+                options_error: None,
             });
         }
         if !(5..=65520).contains(&length) {
@@ -198,6 +249,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
                 match capability {
                     b"report-status" | b"report-status-v2" => report_status = true,
                     b"side-band-64k" => sideband = true,
+                    b"push-options" => options_requested = true,
                     _ => {}
                 }
             }
@@ -236,6 +288,38 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
     }
 }
 
+pub(super) fn requests_push_options(bytes: &[u8]) -> Result<bool, InputError> {
+    match commands(bytes)? {
+        PushCommands::Parsed {
+            options_requested, ..
+        } => Ok(options_requested),
+        PushCommands::OtherMedia | PushCommands::Limited => Ok(false),
+    }
+}
+
+fn parse_options(mut bytes: &[u8]) -> Result<Vec<String>, ()> {
+    let mut options = Vec::new();
+    loop {
+        let header = bytes.get(..4).ok_or(())?;
+        let length = std::str::from_utf8(header)
+            .ok()
+            .and_then(|value| usize::from_str_radix(value, 16).ok())
+            .ok_or(())?;
+        if length == 0 {
+            return (bytes.len() == 4).then_some(options).ok_or(());
+        }
+        if !(5..=1028).contains(&length) || options.len() == 16 {
+            return Err(());
+        }
+        let payload = bytes.get(4..length).ok_or(())?;
+        if !payload.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+            return Err(());
+        }
+        options.push(std::str::from_utf8(payload).map_err(|_| ())?.to_owned());
+        bytes = bytes.get(length..).ok_or(())?;
+    }
+}
+
 fn parse_oid(value: &[u8]) -> Option<crate::ObjectId> {
     crate::ObjectId::from_hex(value).ok()
 }
@@ -255,7 +339,7 @@ mod tests {
     fn commands_separate_capabilities_and_ignore_pack_bytes() {
         let mut input = packet(
             format!(
-                "{ZERO} {} refs/heads/a'b\0report-status side-band-64k\n",
+                "{ZERO} {} refs/heads/a'b\0report-status side-band-64k push-options\n",
                 "12".repeat(20)
             )
             .as_bytes(),
@@ -265,11 +349,13 @@ mod tests {
             updates: plan,
             report_status,
             sideband,
+            ..
         } = commands(&input).expect("valid commands")
         else {
             panic!("parsed commands");
         };
         assert!(report_status && sideband);
+        assert!(requests_push_options(&input).expect("valid capabilities"));
         assert_eq!(plan[0].name, "refs/heads/a'b");
         assert_eq!(quote(&plan[0].name), "'refs/heads/a'\\''b'");
         assert_eq!(plan[0].new_oid, Some(crate::ObjectId::Sha1([0x12; 20])));
@@ -283,5 +369,24 @@ mod tests {
         input.extend(input.clone());
         input.extend_from_slice(b"0000");
         assert!(matches!(commands(&input), Err(InputError::Commands)));
+    }
+
+    #[test]
+    fn push_option_packets_preserve_order_and_reject_invalid_frames() {
+        let mut input = packet(b"canopy.note=first");
+        input.extend(packet(b"canopy.note=second"));
+        input.extend_from_slice(b"0000");
+        assert_eq!(
+            parse_options(&input).expect("valid options"),
+            ["canopy.note=first", "canopy.note=second"]
+        );
+        for invalid in [
+            b"0004".as_slice(),
+            b"0008abc",
+            b"0008a\nb!0000",
+            b"0000PACK",
+        ] {
+            assert!(parse_options(invalid).is_err());
+        }
     }
 }

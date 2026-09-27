@@ -34,7 +34,7 @@ before admitting persistent customer repositories.
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
-| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer and rejection decision atomically with accepted refs | `CompletePush`, codec 3 |
+| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer, rejection decision and ordered push notes atomically with accepted refs | `CompletePush`, codec 5 |
 | Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
 | Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
@@ -1204,7 +1204,8 @@ after complete byte/hash verification. See Git's
 SSH push uses the existing receive-pack ingestion and durable publication path; only the
 HTTP service announcement is stripped from its advertisement. Stock send-pack
 closes its input after writing a pack; deletion-only pushes dispatch after the
-command flush without waiting for EOF. Git status is sent after durable completion,
+command flush and, when negotiated, the options flush without waiting for EOF.
+Git status is sent after durable completion,
 then SSH exit status, EOF and close. SSH provides no explicit push retry ID.
 
 `git-lfs-authenticate` follows the Git LFS
@@ -1584,7 +1585,7 @@ A completed push replay returns its original report
 without reapplying refs, even if current rules changed. Already rejected refs
 stay rejected if policy becomes permissive during that request; retry normally.
 
-The [receive-pack command list](https://git-scm.com/docs/pack-protocol#_reference_update_request_and_packfile_transfer)
+The [receive-pack command list](https://git-scm.com/docs/gitprotocol-pack#_reference_update_request_and_packfile_transfer)
 is preflighted for every push. It admits shallow lines, first-command
 capabilities and at most 100,000 unique updates in 40 MiB of commands. The
 reader stops at the flush packet instead of buffering pack data. Malformed
@@ -1596,6 +1597,16 @@ Unsupported media types retain native Git's response. Only restricted refs get
 update-hook entries; ordinary refs do not enlarge its shell case list. This
 uses Git's documented [pre-receive and update hook contracts](https://git-scm.com/docs/githooks#pre-receive).
 Final publication always checks current rules, even if none existed at preflight.
+Native receive-pack advertises push options over HTTP and SSH. Canopy accepts up
+to 16 ordered `canopy.note=<text>` options, each at most 1,024 printable ASCII
+bytes with a nonempty note. It rejects unknown, malformed or oversized options
+through a durable Git report before native pack processing or ref publication.
+Completed notes are stored in the same `CompletePush` transaction as the Git
+response and refs. `GET /api/repositories/<name>/pushes/<UUID>` returns the push
+author and notes to the current repository owner or the author while they retain
+read access; other readers receive 404. A missing or unfinished push also returns
+404. Notes are audit metadata; they do not run hooks or alter checks. This
+unreleased schema and operation 4 codec 5 require a fresh development prefix.
 Policy reads use batches of at most 128 statements. An `(enabled, reference)`
 index bounds the presence probe; rule and requirement primary keys and the
 check-attempt index bound final policy lookups.

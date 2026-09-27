@@ -3430,8 +3430,9 @@ unconsumed channel queue can block the session loop. Dependency sources were rea
 for signature authentication, channel close ordering and stock send-pack EOF.
 
 SSH LFS authentication, provider/capacity qualification and hosted CI remain open.
-Push options, signed pushes, SHA-256 repository support and advanced LFS remain
-separate unfinished compatibility work.
+Push option notes now work over HTTP and SSH; signed pushes and advanced LFS
+remain unfinished. SHA-256 repositories pass local and RustFS compatibility
+probes, with cloud-provider and cross-platform qualification still open.
 
 ### SSH publication and cold blobless fetch
 

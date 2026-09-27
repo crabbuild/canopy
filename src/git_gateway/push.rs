@@ -9,7 +9,14 @@ impl GitGateway {
         digest: [u8; 32],
     ) -> Result<GitHttpResponse, GatewayError> {
         let commands = branch_policy::PushCommands::read(&request).await?;
+        let option_error = commands.option_error();
         let prepared = async {
+            if let Some(reason) = option_error {
+                let response = commands
+                    .rejection(reason)?
+                    .ok_or(GatewayError::MalformedCache)?;
+                return Ok::<_, GatewayError>((response, None));
+            }
             let cached = self.build_cache(self.cell_refs().await?, true).await?;
             self.install_branch_policy(&cached, &commands).await?;
             let before = cached.snapshot.refs.clone();
@@ -64,6 +71,11 @@ impl GitGateway {
                 (response, None)
             }
         };
+        let options = if option_error.is_some() {
+            Vec::new()
+        } else {
+            commands.options().to_vec()
+        };
         // Release parsed command names before staging a potentially large report.
         drop(commands);
         // Preparation and native Git mutate only disposable refs. Record their
@@ -77,6 +89,7 @@ impl GitGateway {
                 actor: actor.into(),
                 digest,
                 response_id,
+                options,
                 plan,
             })
             .await

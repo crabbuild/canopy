@@ -132,6 +132,8 @@ impl GitHttpBackend {
                 "-c",
                 "receive.autogc=false",
                 "-c",
+                "receive.advertisePushOptions=true",
+                "-c",
                 "uploadpack.allowFilter=true",
                 // The gateway checks every want against certified Cell edges;
                 // Git's reachable-want check alone does not fence blob wants.

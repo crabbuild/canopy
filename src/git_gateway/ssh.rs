@@ -156,15 +156,26 @@ impl GitGateway {
         )
         .await
         .map_err(|_| InputError::Timeout)??;
-        let Some(commands) = commands else {
+        let Some(mut commands) = commands else {
             return Ok(());
         };
         if commands == b"0000" {
             return Ok(());
         }
         let needs_pack = has_new_objects(&commands)?;
+        if branch_policy::requests_push_options(&commands)? {
+            let options = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                packet_group(&mut reader, 32 * 1024),
+            )
+            .await
+            .map_err(|_| InputError::Timeout)??
+            .ok_or(InputError::Commands)?;
+            commands.extend_from_slice(&options);
+        }
         // Stock send-pack closes its write fd after pack-objects. Delete-only
-        // pushes have no pack and await status without closing stdin.
+        // pushes have no pack and await status without closing stdin. Preserve
+        // their negotiated options group before dispatching the completed body.
         let body = if needs_pack {
             Body::from_stream(ReaderStream::new(
                 std::io::Cursor::new(commands).chain(reader),

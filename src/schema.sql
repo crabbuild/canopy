@@ -92,6 +92,7 @@ CREATE TABLE pushes (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),
     actor TEXT NOT NULL,
     request_digest BLOB NOT NULL CHECK(length(request_digest) = 32),
+    options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 32768),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     rejected INTEGER CHECK(rejected IN (0, 1)),
     CHECK((response_id IS NULL) = (rejected IS NULL))

@@ -24,6 +24,8 @@ mod partial_clone;
 mod paused_blobs;
 #[path = "multi_server/pulls.rs"]
 mod pulls;
+#[path = "multi_server/push_options.rs"]
+mod push_options;
 #[path = "multi_server/rebase.rs"]
 mod rebase;
 #[path = "multi_server/sha256.rs"]

@@ -12,9 +12,29 @@ use crab_cell_runtime::{
     registry::CommandContext, registry::CommandResult,
 };
 
+use crate::access::READ_ACCESS;
 use crate::{
     PushPlan, RepositoryCell, RepositoryModule, git_http::GitHttpResponse, refs::apply_refs,
 };
+
+/// One completed push's authenticated, durable option annotation.
+#[derive(Debug, serde::Serialize)]
+pub struct PushReceipt {
+    pub id: String,
+    pub actor: String,
+    pub options: Vec<String>,
+}
+
+pub(crate) fn valid_options(options: &[String]) -> bool {
+    options.len() <= 16
+        && options.iter().all(|option| {
+            option.strip_prefix("canopy.note=").is_some_and(|note| {
+                !note.is_empty()
+                    && option.len() <= 1024
+                    && option.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+            })
+        })
+}
 
 mod plan;
 pub(crate) mod report;
@@ -44,6 +64,36 @@ fn cell(error: impl StdError + Send + Sync + 'static) -> PushError {
 }
 
 impl RepositoryCell {
+    /// Reads completed push options for its author or current repository owner.
+    pub async fn push_receipt(
+        &self,
+        actor: &str,
+        id: [u8; 16],
+    ) -> Result<Option<PushReceipt>, PushError> {
+        crate::directory::validate_component(actor).map_err(cell)?;
+        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
+            sql: format!("SELECT actor, options FROM pushes WHERE id = ?2 AND response_id IS NOT NULL AND (actor = ?1 OR EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)) AND ({READ_ACCESS})"),
+            parameters: vec![SqlValue::Text(actor.into()), SqlValue::Blob(id.to_vec())],
+        }]}).await.map_err(cell)?;
+        let set = result.output.first().ok_or(PushError::InvalidResponse)?;
+        let Some(row) = set.rows.first() else {
+            return Ok(None);
+        };
+        let [SqlValue::Text(author), SqlValue::Text(options)] = row.as_slice() else {
+            return Err(PushError::InvalidResponse);
+        };
+        let options: Vec<String> =
+            serde_json::from_str(options).map_err(|_| PushError::InvalidResponse)?;
+        if !valid_options(&options) {
+            return Err(PushError::InvalidResponse);
+        }
+        Ok(Some(PushReceipt {
+            id: uuid::Uuid::from_bytes(id).to_string(),
+            actor: author.clone(),
+            options,
+        }))
+    }
+
     pub(crate) async fn completed_response(
         &self,
         push_id: [u8; 16],
@@ -234,6 +284,11 @@ impl RepositoryCell {
         &self,
         input: PushCompletion,
     ) -> Result<crab_cell_runtime::Committed<bool>, InvocationError<bool>> {
+        if !valid_options(&input.options) {
+            return Err(InvocationError::NotStarted(Error::Command(
+                "invalid push options",
+            )));
+        }
         if let Some(plan) = &input.plan {
             self.prepare_graph(plan).await?;
             self.prepare_branch_proofs(plan).await?;
@@ -263,6 +318,7 @@ impl RepositoryCell {
             actor: input.actor,
             digest: input.digest,
             response_id: input.response_id,
+            options: input.options,
             plan,
         };
         let identity = identity().map_err(|_| {
@@ -279,6 +335,7 @@ pub(crate) struct PushCompletion {
     pub actor: String,
     pub digest: [u8; 32],
     pub response_id: [u8; 16],
+    pub options: Vec<String>,
     pub plan: Option<PushPlan>,
 }
 
@@ -287,6 +344,7 @@ pub(crate) struct CompletePushInput {
     actor: String,
     digest: [u8; 32],
     response_id: [u8; 16],
+    options: Vec<String>,
     plan: Option<StagedPlan>,
 }
 
@@ -296,6 +354,9 @@ impl WireValue for CompletePushInput {
         encoder.write_text(&self.actor)?;
         encoder.write_bytes(&self.digest)?;
         encoder.write_bytes(&self.response_id)?;
+        encoder.write_bytes(
+            &serde_json::to_vec(&self.options).map_err(|_| CodecError::Invalid("push options"))?,
+        )?;
         encoder.write_bool(self.plan.is_some())?;
         if let Some(plan) = &self.plan {
             plan.encode(encoder)?;
@@ -308,6 +369,8 @@ impl WireValue for CompletePushInput {
             actor: decoder.read_text()?.into(),
             digest: fixed(decoder)?,
             response_id: fixed(decoder)?,
+            options: serde_json::from_slice(decoder.read_bytes()?)
+                .map_err(|_| CodecError::Invalid("push options"))?,
             plan: if decoder.read_bool()? {
                 Some(StagedPlan::decode(decoder)?)
             } else {
@@ -329,7 +392,7 @@ pub(crate) struct CompletePush;
 impl Command for CompletePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 4;
-    const CODEC_VERSION: u32 = 4;
+    const CODEC_VERSION: u32 = 5;
     type Input = CompletePushInput;
     type Output = bool;
 
@@ -337,6 +400,9 @@ impl Command for CompletePush {
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
     ) -> crab_cell_runtime::Result<CommandResult<bool>> {
+        if !valid_options(&input.options) {
+            return Ok(CommandResult::Rejected(false));
+        }
         let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
             sql: "SELECT response_id FROM pushes WHERE id = ?1 AND actor = ?2 AND request_digest = ?3".into(),
             parameters: vec![SqlValue::Blob(input.id.to_vec()), SqlValue::Text(input.actor.clone()), SqlValue::Blob(input.digest.to_vec())],
@@ -368,12 +434,13 @@ impl Command for CompletePush {
         // Staged chunks from interrupted attempts are never returned as completed outcomes.
         context.sql(&SqlBatch {
             statements: vec![SqlStatement {
-                sql: "UPDATE pushes SET response_id = ?1, rejected = ?3 WHERE id = ?2 AND response_id IS NULL"
+                sql: "UPDATE pushes SET response_id = ?1, rejected = ?3, options = ?4 WHERE id = ?2 AND response_id IS NULL"
                     .into(),
                 parameters: vec![
                     SqlValue::Blob(input.response_id.to_vec()),
                     SqlValue::Blob(input.id.to_vec()),
                     SqlValue::Integer(i64::from(rejected)),
+                    SqlValue::Text(serde_json::to_string(&input.options).map_err(|_| Error::Command("invalid push options"))?),
                 ],
             }],
         })?;

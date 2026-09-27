@@ -18,6 +18,7 @@ also persist the accepted objects and refs before returning success.
 | Branch deletion and fetch pruning | Deleted refs disappear from remote tracking refs |
 | Mirror clone and mirror push | Exact refs/tags/notes in a second repository; 4,096 long refs published in one generation and recovered after fresh-disk restart |
 | Force-with-lease, mixed rejection and atomic push | Existing owner-race and protected-branch integration tests |
+| Push option notes | Stock HTTP/SSH `git push -o canopy.note=...`, ordered durable receipts, unsupported-option rejection, delete-only push and fresh-disk recovery |
 | Git LFS basic upload/download | Stock `git-lfs`, SQLite metadata, immutable object-store bodies and restart/backup tests |
 | Git LFS locking | Stock lock/list/unlock, forced unlock, pre-push conflict checks, paginated verification, ACLs and fresh-disk recovery |
 | SHA-256 Git repositories | Repository format selected at creation; stock HTTP/SSH push and clone, annotated tag, external blob, LFS pull, browser resolve, filtered clone, incremental fetch, reviewed pull request and required check merge, native merge/squash/rebase candidates, and fresh-disk restore; strict full `git fsck`; Git/LFS and candidate recovery also pass against isolated RustFS |
@@ -39,7 +40,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
 | Cold fetch | HTTP and SSH hydrate non-blob history and ref/tag targets; exact `blob:none` adds explicit wants only; native tree/type/combined filters select missing reachable blobs before hydration | Narrow non-blob preparation and size-filter hydration; measure cold/warm bytes and latency at scale |
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
-| Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
+| Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
 | Advanced LFS | HTTP basic transfers, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |

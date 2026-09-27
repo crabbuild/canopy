@@ -3,7 +3,7 @@
 use std::{
     fs::File,
     future::poll_fn,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::Path,
     pin::Pin,
     process::Stdio,
@@ -184,10 +184,18 @@ impl GitInput {
     }
 
     pub(crate) async fn packet_prefix(&self, limit: usize) -> Result<Vec<u8>, InputError> {
+        self.packet_group(0, limit).await
+    }
+
+    pub(crate) async fn packet_group(
+        &self,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<u8>, InputError> {
         let spool = Arc::clone(&self.spool);
         tokio::task::spawn_blocking(move || {
             let mut file = &spool.file;
-            file.rewind()?;
+            file.seek(SeekFrom::Start(offset))?;
             let result = (|| {
                 let mut bytes = Vec::new();
                 loop {
