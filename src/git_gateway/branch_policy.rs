@@ -210,6 +210,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
     let mut options_requested = false;
     let mut updates = Vec::new();
     let mut names = BTreeSet::new();
+    let mut certificate = None;
     loop {
         let header = bytes.get(..4).ok_or(InputError::Commands)?;
         if !header.iter().all(u8::is_ascii_hexdigit) {
@@ -220,6 +221,9 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             .and_then(|s| usize::from_str_radix(s, 16).ok())
             .ok_or(InputError::Commands)?;
         if length == 0 {
+            if certificate.is_some_and(|state| state != Certificate::Done) {
+                return Err(InputError::Commands);
+            }
             return Ok(PushCommands::Parsed {
                 updates,
                 report_status,
@@ -234,6 +238,26 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
         }
         let payload = bytes.get(4..length).ok_or(InputError::Commands)?;
         bytes = &bytes[length..];
+        if let Some(state) = &mut certificate {
+            // These ref names feed policy and SSH pack detection only. This
+            // parser does not verify a signature or authorize publication.
+            match state {
+                Certificate::Headers if payload == b"\n" => *state = Certificate::Updates,
+                Certificate::Headers if payload.ends_with(b"\n") => {}
+                Certificate::Updates if payload.starts_with(b"-----BEGIN ") => {
+                    *state = Certificate::Signature;
+                }
+                Certificate::Updates if payload.ends_with(b"\n") => {
+                    parse_update(&payload[..payload.len() - 1], &mut updates, &mut names)?;
+                }
+                Certificate::Signature if payload == b"push-cert-end\n" => {
+                    *state = Certificate::Done;
+                }
+                Certificate::Signature if payload.ends_with(b"\n") => {}
+                _ => return Err(InputError::Commands),
+            }
+            continue;
+        }
         let payload = payload.strip_suffix(b"\n").unwrap_or(payload);
         if let Some(shallow) = payload.strip_prefix(b"shallow ") {
             if !updates.is_empty() || parse_oid(shallow).is_none() {
@@ -245,55 +269,90 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             if !updates.is_empty() {
                 return Err(InputError::Commands);
             }
-            for capability in payload[nul + 1..].split(|byte| *byte == b' ') {
-                match capability {
-                    b"report-status" | b"report-status-v2" => report_status = true,
-                    b"side-band-64k" => sideband = true,
-                    b"push-options" => options_requested = true,
-                    _ => {}
-                }
-            }
+            capabilities(
+                &payload[nul + 1..],
+                &mut report_status,
+                &mut sideband,
+                &mut options_requested,
+            );
             &payload[..nul]
         } else {
             payload
         };
-        if updates.len() == MAX_UPDATES {
-            return Err(InputError::TooLarge);
+        if payload == b"push-cert" {
+            certificate = Some(Certificate::Headers);
+            continue;
         }
-        let mut fields = payload.splitn(3, |byte| *byte == b' ');
-        let old = fields
-            .next()
-            .and_then(parse_oid)
-            .ok_or(InputError::Commands)?;
-        let new = fields
-            .next()
-            .and_then(parse_oid)
-            .ok_or(InputError::Commands)?;
-        if old.format() != new.format() {
-            return Err(InputError::Commands);
-        }
-        let name = std::str::from_utf8(fields.next().ok_or(InputError::Commands)?)
-            .map_err(|_| InputError::Commands)?;
-        if name.contains(['\0', '\n', '\r']) || !names.insert(name) {
-            return Err(InputError::Commands);
-        }
-        updates.push(RefUpdate {
-            name: name.into(),
-            expected: (!old.is_zero()).then_some(RefExpectation {
-                oid: Some(old),
-                version: 1,
-            }),
-            new_oid: (!new.is_zero()).then_some(new),
-        });
+        parse_update(payload, &mut updates, &mut names)?;
     }
 }
 
-pub(super) fn requests_push_options(bytes: &[u8]) -> Result<bool, InputError> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Certificate {
+    Headers,
+    Updates,
+    Signature,
+    Done,
+}
+
+fn capabilities(bytes: &[u8], report_status: &mut bool, sideband: &mut bool, options: &mut bool) {
+    for capability in bytes.split(|byte| *byte == b' ') {
+        match capability {
+            b"report-status" | b"report-status-v2" => *report_status = true,
+            b"side-band-64k" => *sideband = true,
+            b"push-options" => *options = true,
+            _ => {}
+        }
+    }
+}
+
+fn parse_update<'a>(
+    payload: &'a [u8],
+    updates: &mut Vec<RefUpdate>,
+    names: &mut BTreeSet<&'a str>,
+) -> Result<(), InputError> {
+    if updates.len() == MAX_UPDATES {
+        return Err(InputError::TooLarge);
+    }
+    let mut fields = payload.splitn(3, |byte| *byte == b' ');
+    let old = fields
+        .next()
+        .and_then(parse_oid)
+        .ok_or(InputError::Commands)?;
+    let new = fields
+        .next()
+        .and_then(parse_oid)
+        .ok_or(InputError::Commands)?;
+    if old.format() != new.format() {
+        return Err(InputError::Commands);
+    }
+    let name = std::str::from_utf8(fields.next().ok_or(InputError::Commands)?)
+        .map_err(|_| InputError::Commands)?;
+    if name.contains(['\0', '\n', '\r']) || !names.insert(name) {
+        return Err(InputError::Commands);
+    }
+    updates.push(RefUpdate {
+        name: name.into(),
+        expected: (!old.is_zero()).then_some(RefExpectation {
+            oid: Some(old),
+            version: 1,
+        }),
+        new_oid: (!new.is_zero()).then_some(new),
+    });
+    Ok(())
+}
+
+pub(super) fn command_flags(bytes: &[u8]) -> Result<(bool, bool), InputError> {
     match commands(bytes)? {
         PushCommands::Parsed {
-            options_requested, ..
-        } => Ok(options_requested),
-        PushCommands::OtherMedia | PushCommands::Limited => Ok(false),
+            options_requested,
+            updates,
+            ..
+        } => Ok((
+            options_requested,
+            updates.iter().any(|update| update.new_oid.is_some()),
+        )),
+        PushCommands::OtherMedia | PushCommands::Limited => Ok((false, false)),
     }
 }
 
@@ -355,10 +414,70 @@ mod tests {
             panic!("parsed commands");
         };
         assert!(report_status && sideband);
-        assert!(requests_push_options(&input).expect("valid capabilities"));
+        assert!(command_flags(&input).expect("valid capabilities").0);
         assert_eq!(plan[0].name, "refs/heads/a'b");
         assert_eq!(quote(&plan[0].name), "'refs/heads/a'\\''b'");
         assert_eq!(plan[0].new_oid, Some(crate::ObjectId::Sha1([0x12; 20])));
+    }
+    #[test]
+    fn signed_commands_drive_policy_and_ssh_pack_detection() -> Result<(), InputError> {
+        for (old, new, needs_pack) in [
+            (ZERO.to_owned(), "12".repeat(20), true),
+            ("12".repeat(32), "00".repeat(32), false),
+        ] {
+            let mut input = packet(b"push-cert\0report-status side-band-64k push-options");
+            for line in [
+                "certificate version 0.1\n".to_owned(),
+                "pusher test@example.invalid 123 +0000\n".to_owned(),
+                "nonce 123-abcd\n".to_owned(),
+                "push-option canopy.note=signed\n".to_owned(),
+                "\n".to_owned(),
+                format!("{old} {new} refs/heads/café\n"),
+                "-----BEGIN SSH SIGNATURE-----\n".to_owned(),
+                "signature-data\n".to_owned(),
+                "-----END SSH SIGNATURE-----\n".to_owned(),
+                "push-cert-end\n".to_owned(),
+            ] {
+                input.extend(packet(line.as_bytes()));
+            }
+            input.extend_from_slice(b"0000PACKignored");
+            let PushCommands::Parsed {
+                updates,
+                report_status,
+                sideband,
+                options_requested,
+                ..
+            } = commands(&input)?
+            else {
+                panic!("signed commands did not parse");
+            };
+            assert_eq!(updates[0].name, "refs/heads/café");
+            assert!(report_status && sideband && options_requested);
+            assert_eq!(command_flags(&input)?, (true, needs_pack));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_or_mixed_certificate_is_rejected() {
+        let mut input = packet(b"push-cert\0report-status");
+        input.extend(packet(b"certificate version 0.1\n"));
+        input.extend(packet(b"\n"));
+        input.extend(packet(
+            format!("{ZERO} {} refs/heads/main\n", "12".repeat(20)).as_bytes(),
+        ));
+        assert!(matches!(
+            commands(&[input.as_slice(), b"0000"].concat()),
+            Err(InputError::Commands)
+        ));
+        input.extend(packet(b"-----BEGIN SSH SIGNATURE-----\n"));
+        input.extend(packet(b"-----END SSH SIGNATURE-----\n"));
+        input.extend(packet(b"push-cert-end\n"));
+        input.extend(packet(
+            format!("{ZERO} {} refs/heads/extra\n", "12".repeat(20)).as_bytes(),
+        ));
+        input.extend_from_slice(b"0000");
+        assert!(matches!(commands(&input), Err(InputError::Commands)));
     }
     #[test]
     fn malformed_and_duplicate_commands_cannot_escape_the_hook() {

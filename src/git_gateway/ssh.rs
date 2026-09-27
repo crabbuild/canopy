@@ -162,8 +162,8 @@ impl GitGateway {
         if commands == b"0000" {
             return Ok(());
         }
-        let needs_pack = has_new_objects(&commands)?;
-        if branch_policy::requests_push_options(&commands)? {
+        let (options_requested, needs_pack) = branch_policy::command_flags(&commands)?;
+        if options_requested {
             let options = tokio::time::timeout(
                 std::time::Duration::from_secs(120),
                 packet_group(&mut reader, 32 * 1024),
@@ -284,25 +284,4 @@ async fn packet_group(
             return Ok(Some(bytes));
         }
     }
-}
-
-fn has_new_objects(mut bytes: &[u8]) -> Result<bool, InputError> {
-    let mut has_new = false;
-    while bytes != b"0000" {
-        let length = std::str::from_utf8(bytes.get(..4).ok_or(InputError::Commands)?)
-            .ok()
-            .and_then(|s| usize::from_str_radix(s, 16).ok())
-            .ok_or(InputError::Commands)?;
-        let packet = bytes.get(4..length).ok_or(InputError::Commands)?;
-        if !packet.starts_with(b"shallow ") {
-            let oid = packet
-                .split(|byte| *byte == b' ')
-                .nth(1)
-                .and_then(|value| crate::ObjectId::from_hex(value).ok())
-                .ok_or(InputError::Commands)?;
-            has_new |= !oid.is_zero();
-        }
-        bytes = bytes.get(length..).ok_or(InputError::Commands)?;
-    }
-    Ok(has_new)
 }
