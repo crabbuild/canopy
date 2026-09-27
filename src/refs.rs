@@ -453,8 +453,45 @@ pub(crate) fn valid_ref_name(name: &str) -> bool {
             && !part.starts_with('.')
             && !part.ends_with(".lock")
             && part.bytes().all(|byte| {
-                byte.is_ascii_graphic()
+                byte > b' '
+                    && byte != 0x7f
                     && !matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_ref_name;
+
+    #[test]
+    fn ref_format_matches_git_for_utf8_and_forbidden_ascii() -> Result<(), std::io::Error> {
+        let mut names: Vec<_> = (1..=127)
+            .map(|byte| format!("refs/heads/a{}b", char::from(byte)))
+            .collect();
+        names.extend(
+            [
+                "refs/heads/café",
+                "refs/heads/開発",
+                "refs/tags/🌳",
+                "refs/heads/.hidden",
+                "refs/heads/a.lock",
+                "refs/heads/a.lock/b",
+                "refs/heads/a..b",
+                "refs/heads/a@{b",
+                "refs/heads/a.",
+                "refs/heads/a//b",
+                "refs/heads/a/",
+            ]
+            .map(String::from),
+        );
+        for name in names {
+            let native = std::process::Command::new("git")
+                .args(["check-ref-format", &name])
+                .output()?;
+            assert_eq!(valid_ref_name(&name), native.status.success(), "{name:?}");
+        }
+        assert!(!valid_ref_name("refs/heads/a\0b"));
+        Ok(())
+    }
 }

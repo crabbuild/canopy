@@ -67,7 +67,7 @@ Successful scans therefore describe one coherent ref state. That state can
 become older while its disposable cache is hydrated; admitted readers retain
 the selected generation, and immutable objects remain readable without GC.
 
-HEAD must name a valid `refs/heads/` reference under Canopy's existing ASCII,
+HEAD must name a valid `refs/heads/` reference under Canopy's UTF-8,
 255-byte ref policy. Changing it requires the owner, an expected ref generation,
 and either a live target branch or no live branches. Owner authorization, target
 existence and generation comparison occur in one Cell SQL update. Concurrent

@@ -112,11 +112,11 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     put(
         &client,
         &api,
-        &update(&initial, "refs/heads/trunk"),
+        &update(&initial, "refs/heads/開発"),
         StatusCode::OK,
     )
     .await?;
-    clone_branch(&url, &workspace.path().join("unborn"), "2", "trunk", None).await?;
+    clone_branch(&url, &workspace.path().join("unborn"), "2", "開発", None).await?;
     // Protocol v2 explicitly carries the unborn target even before any refs exist.
     let unborn = b"0014command=ls-refs\n0001000csymrefs\n000bunborn\n0000";
     let response = client
@@ -131,7 +131,7 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
         .bytes()
         .await?;
     assert!(
-        String::from_utf8_lossy(&response).contains("unborn HEAD symref-target:refs/heads/trunk")
+        String::from_utf8_lossy(&response).contains("unborn HEAD symref-target:refs/heads/開発")
     );
     let selected = read(&client, &api).await?;
     put(
@@ -170,10 +170,10 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     tokio::fs::write(local.join("README.md"), b"main branch\n").await?;
     run_git(Some(&local), &["add", "README.md"]).await?;
     run_git(Some(&local), &["commit", "-m", "Main"]).await?;
-    run_git(Some(&local), &["checkout", "-b", "trunk"]).await?;
+    run_git(Some(&local), &["checkout", "-b", "開発"]).await?;
     tokio::fs::write(local.join("README.md"), b"trunk branch\n").await?;
     run_git(Some(&local), &["commit", "-am", "Trunk"]).await?;
-    run_git(Some(&local), &["-c", AUTH, "push", &url, "main", "trunk"]).await?;
+    run_git(Some(&local), &["-c", AUTH, "push", &url, "main", "開発"]).await?;
     for protocol in ["0", "2"] {
         discovery(&url, protocol, "main").await?;
     }
@@ -188,7 +188,7 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     put(
         &client,
         &api,
-        &update(&before, "refs/heads/trunk"),
+        &update(&before, "refs/heads/開発"),
         StatusCode::OK,
     )
     .await?;
@@ -200,12 +200,12 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     )
     .await?;
     for protocol in ["0", "2"] {
-        discovery(&url, protocol, "trunk").await?;
+        discovery(&url, protocol, "開発").await?;
         clone_branch(
             &url,
             &workspace.path().join(format!("live-{protocol}")),
             protocol,
-            "trunk",
+            "開発",
             Some(b"trunk branch\n"),
         )
         .await?;
@@ -262,19 +262,19 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     // that branch restores clone behavior without another administrative write.
     run_git(
         Some(&local),
-        &["-c", AUTH, "push", &url, ":refs/heads/trunk"],
+        &["-c", AUTH, "push", &url, ":refs/heads/開発"],
     )
     .await?;
-    assert_eq!(read(&client, &api).await?["reference"], "refs/heads/trunk");
+    assert_eq!(read(&client, &api).await?["reference"], "refs/heads/開発");
     let deleted = read(&client, &api).await?;
     put(
         &client,
         &api,
-        &update(&deleted, "refs/heads/trunk"),
+        &update(&deleted, "refs/heads/開発"),
         StatusCode::CONFLICT,
     )
     .await?;
-    run_git(Some(&local), &["-c", AUTH, "push", &url, "trunk"]).await?;
+    run_git(Some(&local), &["-c", AUTH, "push", &url, "開発"]).await?;
     let final_state = read(&client, &api).await?;
     server.shutdown().await?;
     let address = available_address().await?;
@@ -284,12 +284,12 @@ async fn default_branch_controls_discovery_and_clone_after_fresh_owner_restore()
     let api = format!("http://{address}/api/repositories/branches/default-branch");
     assert_eq!(read(&client, &api).await?, final_state);
     for protocol in ["0", "2"] {
-        discovery(&url, protocol, "trunk").await?;
+        discovery(&url, protocol, "開発").await?;
         clone_branch(
             &url,
             &workspace.path().join(format!("restored-{protocol}")),
             protocol,
-            "trunk",
+            "開発",
             Some(b"trunk branch\n"),
         )
         .await?;

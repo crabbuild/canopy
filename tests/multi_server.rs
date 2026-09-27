@@ -12,6 +12,8 @@ mod browse;
 mod candidates;
 #[path = "multi_server/comparison.rs"]
 mod comparison;
+#[path = "multi_server/compatibility.rs"]
+mod compatibility;
 #[path = "multi_server/merge.rs"]
 mod merge;
 #[path = "multi_server/pulls.rs"]

@@ -10,6 +10,9 @@ dependency.
 
 ## Current implementation
 
+See [Git compatibility](docs/git-compatibility.md) for verified operations,
+current limits and the remaining transport and object-format work.
+
 This repository is an implementation under construction. The `canopy` binary
 starts one leased Crab Cell node and serves repositories created through its API.
 It probes the object store's fencing capabilities, publishes and renews a signed node
@@ -599,7 +602,7 @@ old approval retries, new comments and revoke/regrant cannot restore eligibility
 Ordinary pushes retain allowed sibling refs when another ref is rejected;
 `git push --atomic` rejects the group. The final Cell transaction rechecks policy,
 so a concurrent rule/check change can return HTTP 409 for the accepted group
-before any success report is sent. Ref names are at most 255 ASCII bytes. When
+before any success report is sent. Ref names are at most 255 UTF-8 bytes. When
 rules are enabled, command preflight accepts at most 64 updates within a 256 KiB
 prefix. The Git response is recorded only after durable ref publication; an exact
 completed retry returns that saved response without reapplying refs.
