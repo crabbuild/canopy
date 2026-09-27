@@ -691,11 +691,14 @@ account status. Shell, SFTP, forwarding and arbitrary environment requests are
 denied. HTTP and SSH share the same node/account transfer limits and durable
 push publication path.
 
-SSH currently prepares a full native cache before fetch negotiation, including
-filtered clones. SSH LFS authentication is not implemented; repositories cloned
+SSH prepares non-blob history and advertised ref/tag targets before negotiation.
+Exact `blob:none` requests hydrate only explicit missing wants; full fetches and
+other filters finish full hydration before forwarding wants to native Git.
+SSH LFS authentication is not implemented; repositories cloned
 over SSH must configure an HTTPS LFS endpoint and HTTP credentials for LFS.
 The local compatibility suite covers stock Git transfers and fresh-disk recovery;
-provider, interruption and capacity qualification remain open.
+late policy/access refusal and disconnected-push drain are also covered locally.
+Provider failure, owner-loss and capacity qualification remain open.
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget

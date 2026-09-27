@@ -25,7 +25,7 @@ async fn stored_objects(path: &Path) -> Result<String> {
     )?)
 }
 
-fn cache_contains(root: &Path, oid: &str) -> Result<bool> {
+pub(super) fn cache_contains(root: &Path, oid: &str) -> Result<bool> {
     let suffix = std::path::PathBuf::from("objects")
         .join(&oid[..2])
         .join(&oid[2..]);

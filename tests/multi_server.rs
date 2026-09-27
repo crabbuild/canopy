@@ -20,6 +20,8 @@ mod compatibility;
 mod merge;
 #[path = "multi_server/partial_clone.rs"]
 mod partial_clone;
+#[path = "support/paused_blobs.rs"]
+mod paused_blobs;
 #[path = "multi_server/pulls.rs"]
 mod pulls;
 #[path = "multi_server/rebase.rs"]

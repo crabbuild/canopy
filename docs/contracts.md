@@ -1145,8 +1145,16 @@ group on Unix. Accepted push tasks drain before the node closes Cells.
 
 SSH fetch retains one ref snapshot and validates every initial v0 want or v2
 request group against certified Cell reachability before forwarding to native
-upload-pack. It currently hydrates the full cache before negotiation. SSH push
-uses the existing receive-pack ingestion and durable publication path; only the
+upload-pack. Initial hydration includes non-blob history and ref/tag targets.
+Exact `blob:none` requests hydrate explicit wants only; other requests finish
+full hydration before any wants reach Git. No-want discovery does not trigger
+full hydration. Native Git can traverse objects immediately while parsing wants,
+so request preparation must precede writing its packet group to stdin. This uses
+the same serialized object-cache hydration as HTTP; immutable files publish only
+after complete byte/hash verification. See Git's
+[upload-pack source](https://github.com/git/git/blob/v2.50.1/upload-pack.c).
+
+SSH push uses the existing receive-pack ingestion and durable publication path; only the
 HTTP service announcement is stripped from its advertisement. Stock send-pack
 closes its input after writing a pack; deletion-only pushes dispatch after the
 command flush without waiting for EOF. Git status is sent after durable completion,
@@ -1156,8 +1164,11 @@ The transport does not yet implement `git-lfs-authenticate`. Configure HTTPS LFS
 separately for SSH repository URLs. Local tests cover stock Git transfer/recovery,
 reused-connection revocation, ACL/scope enforcement, unreachable wants and command
 restrictions. Held-fetch tests prove shared HTTP admission and cancellation on
-channel close and node shutdown. Interrupted publication, provider and capacity
-qualification remain.
+channel close and node shutdown. Publication tests pause blob ingestion after
+native acceptance. Late ACL/policy changes yield per-ref rejections without
+generation changes. A disconnected accepted push finishes during shutdown and
+is recovered byte-for-byte from fresh local storage. Provider failures, owner
+loss at every publication boundary and capacity qualification remain.
 
 ### SSH key management
 

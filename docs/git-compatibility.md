@@ -35,8 +35,8 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Rejection reporting | Branch policy, unsupported names, command limits and late Cell refusals produce Git reports; clients declining reports receive HTTP 409, and infrastructure failures can still return HTTP 500 | Finish pre-publication resource/infrastructure reporting without mislabeling uncertain outcomes |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
-| Cold fetch | Exact `blob:none` hydrates non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
-| SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, fresh-disk recovery, shared HTTP admission and fetch cancellation tested | Interrupted push publication, real-provider and capacity qualification |
+| Cold fetch | HTTP and SSH exact `blob:none` hydrate non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
+| SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Rejected; object IDs and graph formats are SHA-1 throughout | Repository-level format identity, 32-byte graph/ref storage, negotiation, restore and mixed-format rejection |
@@ -80,10 +80,15 @@ incremental pull, deletion and fresh-disk mirror recovery. Wire-level probes
 check unreachable commit/tree/blob wants, command and environment restrictions,
 forwarding denial, key scope, repository ACLs and revocation on an authenticated
 connection. Held fetches consume HTTP account capacity, release it on channel
-close, and cancel during node shutdown. SSH still prepares a full server cache
-even when clients filter.
+close, and cancel during node shutdown.
 Stock OpenSSH authentication is tested with Ed25519, RSA and ECDSA P-256,
 P-384 and P-521 keys.
+`tests/multi_server/ssh_fetch.rs` verifies cold v0/v2 blobless clones, explicit
+lazy blob hydration, blob-tag advertisements and subsequent full clones.
+`tests/multi_server/ssh_publication.rs` pauses external ingestion after native
+acceptance: late ACL/policy refusals preserve both refs and generation, while an
+accepted push survives client disconnect and completes before shutdown releases
+Cells. Fresh-disk clones and strict fsck verify both outcomes.
 
 The baseline real-provider probe used Apple Git 2.50.1 and disposable RustFS
 `1.0.0-beta.8-glibc` at Canopy commit `48dfc21`; it confirmed the bulk, filter,

@@ -18,6 +18,8 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
 
+#[path = "support/paused_blobs.rs"]
+mod paused_blobs;
 mod support;
 
 #[path = "smart_http/cache_admission.rs"]
@@ -111,7 +113,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         repository
             .ensure_owner(support::identity()?, "canopy")
             .await?;
-        let paused_blobs = Arc::new(publication::PausedBlobs::default());
+        let paused_blobs = Arc::new(paused_blobs::PausedBlobs::default());
         let blob_store: Arc<dyn ObjectStore> = paused_blobs.clone();
         let disk_budget = DiskBudget::new(1 << 30);
         let gateway = Arc::new(GitGateway::new(

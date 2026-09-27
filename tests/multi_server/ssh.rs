@@ -1,3 +1,8 @@
+#[path = "ssh_fetch.rs"]
+mod fetch;
+#[path = "ssh_publication.rs"]
+mod publication;
+
 use super::*;
 use canopy_server::ssh::SshConfig;
 use std::time::Duration;
@@ -23,9 +28,14 @@ async fn key(root: &Path, name: &str) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-async fn register(address: std::net::SocketAddr, key: &Path, scope: &str) -> Result<String> {
+async fn register(
+    address: std::net::SocketAddr,
+    account: &str,
+    key: &Path,
+    scope: &str,
+) -> Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
-    reqwest::Client::new().post(format!("http://{address}/api/accounts/canopy/ssh-keys"))
+    reqwest::Client::new().post(format!("http://{address}/api/accounts/{account}/ssh-keys"))
         .bearer_auth(AUTH).json(&serde_json::json!({"id":id,"public_key":tokio::fs::read_to_string(key.with_extension("pub")).await?,"scope":scope}))
         .send().await?.error_for_status()?;
     Ok(id)
@@ -119,7 +129,7 @@ async fn stock_ssh_clone_push_fetch_filters_and_revocation_survive_disk_loss() -
     let known = workspace.path().join("known_hosts");
     known_host(&known, ssh_address, &host).await?;
     let key = key(workspace.path(), "client").await?;
-    let key_id = register(address, &key, "write").await?;
+    let key_id = register(address, "canopy", &key, "write").await?;
     let ssh = transport(&key, &known)?;
     create_repository(address, "ssh").await?;
     let url = format!("ssh://git@{ssh_address}/canopy/ssh.git");
@@ -388,7 +398,7 @@ async fn ssh_channels_enforce_scope_acl_and_revocation_after_login() -> Result {
     let ssh_address = server.ssh_addr().ok_or("SSH listener missing")?;
     create_repository(address, "private").await?;
     let read_key = key(workspace.path(), "reader").await?;
-    let id = register(address, &read_key, "read").await?;
+    let id = register(address, "canopy", &read_key, "read").await?;
     let reader = connect(ssh_address, &host, &read_key, "git", true).await?;
     let (code, output, _) = exec(&reader, "git-upload-pack 'canopy/private.git'").await?;
     assert_eq!(code, 0);
@@ -482,7 +492,7 @@ async fn ssh_rejects_shell_injection_environment_and_forwarding() -> Result {
     )
     .await?;
     let key = key(workspace.path(), "client").await?;
-    register(address, &key, "write").await?;
+    register(address, "canopy", &key, "write").await?;
     let session = connect(
         server.ssh_addr().ok_or("SSH listener missing")?,
         &host,
@@ -568,7 +578,7 @@ async fn ssh_fetches_share_http_admission_and_release_on_close_and_shutdown() ->
     .await?;
     let url = create_repository(address, "shared").await?;
     let key = key(workspace.path(), "client").await?;
-    register(address, &key, "write").await?;
+    register(address, "canopy", &key, "write").await?;
     let session = connect(
         server.ssh_addr().ok_or("SSH listener missing")?,
         &host,
@@ -680,7 +690,7 @@ async fn openssh_authenticates_registered_rsa_and_ecdsa_keys() -> Result {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        register(address, &path, "read").await?;
+        register(address, "canopy", &path, "read").await?;
         let ssh = transport(&path, &known)?;
         assert!(git(None, &ssh, &["ls-remote", &url]).await?.is_empty());
     }

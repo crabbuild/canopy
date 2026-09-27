@@ -3409,7 +3409,7 @@ recovered refs, bytes and strict fsck must agree. Wire-level tests cover revocat
 after login, read-only keys, repository ACLs, forbidden commands/environment and
 forwarding, and unreachable commit/tree/blob requests.
 
-Five SSH integration tests pass locally, including stock OpenSSH authentication
+Initial transport verification covered five SSH integration tests, including stock OpenSSH authentication
 with RSA and ECDSA P-256/P-384/P-521 keys. Held fetches fill the shared account
 quota and produce HTTP 503, then release admission on channel close. Node shutdown
 cancels the remaining waiting native workers within the test deadline. Both
@@ -3429,7 +3429,34 @@ bookkeeping retained by the dependency. Premature data is rejected before an
 unconsumed channel queue can block the session loop. Dependency sources were read
 for signature authentication, channel close ordering and stock send-pack EOF.
 
-SSH still prepares a full cache before negotiation. SSH LFS authentication,
-publication fault injection, provider/capacity qualification and hosted CI remain
-open. Push options, signed pushes, SHA-256 repository support and advanced LFS
-remain separate unfinished compatibility work.
+SSH LFS authentication, provider/capacity qualification and hosted CI remain open.
+Push options, signed pushes, SHA-256 repository support and advanced LFS remain
+separate unfinished compatibility work.
+
+### SSH publication and cold blobless fetch
+
+The SSH publication suite shares the HTTP external-ingestion pause fixture.
+After native Git accepts an atomic push, changing branch policy or downgrading
+the writer produces Git per-ref rejections and preserves both refs and generation.
+Fresh-disk recovery confirms the rejected outcome. Another probe disconnects
+after native acceptance, starts node shutdown, verifies that drain waits for the
+paused publication, then resumes ingestion. A fresh node clones the accepted
+commit and exact external blob bytes and passes strict/full fsck.
+
+SSH now starts upload-pack with non-blob history and advertised ref/tag targets.
+After validating wants, it hydrates explicit objects for exact `blob:none`, or
+completes full hydration for other fetches, before writing the request to native
+Git. The snapshot remains fixed for the channel. This removes the SSH-specific
+full-cache prerequisite without adding another cache or hydration policy.
+
+The new cold-fetch regression failed on the previous implementation because a
+v0 blobless clone hydrated omitted blobs. It now checks v0/v2 from separate fresh
+server directories: both 2 MiB blobs remain absent from server and client caches;
+reading one blob hydrates it without the other; a subsequent full clone restores
+both. An annotated blob tag exercises advertisement targets. Full fetches, other
+filters and non-blob history still need narrower reachable-object preparation.
+
+All eight SSH integration tests, the shared smart-HTTP publication suite and the
+HTTP partial-clone regression pass locally, along with all-target Clippy and
+formatting. These tests use an in-memory provider; hosted CI and real-provider
+fault/capacity qualification remain open.
