@@ -2202,4 +2202,4 @@ process termination and sink I/O failures may lose additional output.
 This is diagnostic output, including warnings/errors, not the durable audit
 ledger in SQLite. The queue bounds record count rather than total bytes, and
 formatting still executes on the calling thread. Process memory/resource ceilings
-remain required. No new configuration surface or runtime dependency pin is added.
+remain required. No new configuration surface is added; the Cellule revision is unchanged.

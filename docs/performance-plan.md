@@ -595,3 +595,25 @@ Logs may be dropped under pressure, so trace-join coverage and the available
 drop counter must accompany subsequent analysis. Durable audit data stays in
 SQLite. The existing Cellule pin, ownership checks and request deadlines remain
 unchanged.
+
+The real-process paused-pipe proof passed (`canopy-logging-pressure-12a0c96e3dc7`,
+optimized `ef7c968`). Consumption stopped for 12.053 seconds, exceeding the
+ten-second node lease. All 600 HTTP requests succeeded: readiness checks with
+every tenth request verifying repository metadata. Git v2 discovery and graceful
+shutdown also passed. The logger reported 806 dropped records, proving saturation.
+Combined service p50/p95/p99/max was 0.224/1.085/3.131/3.744 ms. This controlled
+one-Cell test proves isolation from the blocked pipe; it is not a thousand-Cell
+latency result or a metadata-only percentile.
+
+Repeat against a caller-owned disposable provider prefix with the existing test
+credentials in the environment and a fresh directory on the qualification volume:
+
+```sh
+python3 -B scripts/smoke_s3_logging.py \
+  --binary "$CARGO_TARGET_DIR/release/canopy" \
+  --storage-url s3://qualification-bucket/logging-proof \
+  --work-dir "$CARGO_TARGET_DIR/logging-pressure-run1"
+```
+
+The script owns and cleans up its server process. The caller owns provider-prefix
+cleanup. Reports and server logs remain in the chosen work directory.

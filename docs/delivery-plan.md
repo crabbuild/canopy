@@ -3004,4 +3004,11 @@ Clippy, optimized CLI build and formatting pass. `Cargo.lock` adds only
 versions and the Cellule pin are unchanged. The process pressure fixture
 `scripts/smoke_s3_logging.py` pauses pipe consumption beyond the node lease,
 checks HTTP/repository/Git progress, proves queue saturation and checks shutdown.
-Its process execution and the larger repeated latency schedule remain pending.
+Its optimized process proof (`canopy-logging-pressure-12a0c96e3dc7`, `ef7c968`)
+passed: pipe consumption paused for 12.053 seconds, all 600 scheduled HTTP reads
+succeeded, repository identity and Git v2 discovery remained correct, and graceful
+shutdown completed. The emitted counter reported 806 dropped records, proving
+queue saturation. The mix was readiness checks with every tenth request reading
+repository metadata; combined service p99 was 3.131 ms, not a metadata-only SLO.
+The provider fixture cleaned up. The larger repeated latency schedule remains
+required; this one-Cell pressure test does not qualify thousand-Cell capacity.
