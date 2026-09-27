@@ -161,16 +161,14 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         let mut other_id = repository_id;
         other_id[0] ^= 1;
         assert!(matches!(
-            RepositoryCell::new(&application_handle, target.clone(), other_id),
+            RepositoryCell::new(&application_handle, target.clone(), other_id, canopy_server::ObjectFormat::Sha1),
             Err(Error::Identity("repository UUID differs from Cell target"))
         ));
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
-        let repository = RepositoryCell::new(&application_handle, target.clone(), repository_id)?;
+        let repository = RepositoryCell::new(&application_handle, target.clone(), repository_id, canopy_server::ObjectFormat::Sha1)?;
         let empty = repository.refs_page("", None).await?.output;
         assert_eq!(empty.generation, 0);
         assert!(empty.refs.is_empty());
-        pages::exercise(&repository, &graph_sql).await?;
-        batches::exercise(&repository, &graph_sql).await?;
         let body = b"Canopy stores ordinary Git objects in a Cell";
         let now_ms = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
         let identity = |byte| MutationIdentity {
@@ -188,6 +186,8 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 "canopy",
             )
             .await?;
+        pages::exercise(&repository, &graph_sql).await?;
+        batches::exercise(&repository, &graph_sql).await?;
         issues::exercise(&repository).await?;
         default_branch::empty(&repository).await?;
         let committed = objects::put(&repository,
@@ -200,7 +200,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 body,
             )
             .await?;
-        assert_eq!(committed.output, object_id(ObjectKind::Blob, body));
+        assert_eq!(committed.output, object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, body));
         assert_eq!(
             repository
                 .object(committed.output, Some(committed.receipt))

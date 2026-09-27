@@ -89,6 +89,7 @@ async fn orphan_git_descendant_prevents_reclamation_until_it_exits() -> Result {
         workspace.path().into(),
         crab_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
+        crate::ObjectFormat::Sha1,
     )
     .await?;
     let data = workspace.path().join("directory.sqlite");

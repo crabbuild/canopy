@@ -23,7 +23,7 @@ use tower::ServiceExt;
 use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutation_identity};
 use crate::{
     CanopyApplication, ReadIdentity, RepositoryCell, RepositoryModule,
-    directory::{RepositoryEntry, RepositoryState, TokenScope},
+    directory::{RepositoryEntry, RepositoryState},
     git_gateway::GitGateway,
     http::GitHttpApi,
     repository_target,
@@ -295,12 +295,13 @@ impl RepositoryManager {
                 repository
                     .ensure_owner(mutation_identity()?, &entry.owner)
                     .await?;
-            } else if repository.access_level(&entry.owner, None).await?.output
-                != Some(TokenScope::Admin)
+            } else if !repository
+                .identity_matches(&entry.owner, None)
+                .await?
+                .output
             {
-                // Only the immutable owner has Admin; collaborator roles exclude it.
-                // Ready Cells must verify that identity without publishing a write
-                // on every restore or silently recreating missing ownership state.
+                // Ready Cells must verify immutable identity without publishing a
+                // write on every restore or recreating missing ownership state.
                 return Err(ServerError::Repository(
                     "repository owner differs from directory",
                 ));
@@ -467,6 +468,7 @@ impl RepositoryManager {
             &application,
             target,
             entry.repository_id,
+            entry.object_format,
         )?);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),

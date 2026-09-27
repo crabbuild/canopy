@@ -18,7 +18,7 @@ async fn git(path: &Path, args: &[&str]) -> TestResult<Vec<u8>> {
     Ok(output.stdout)
 }
 
-async fn oid(path: &Path, name: &str) -> TestResult<[u8; 20]> {
+async fn oid(path: &Path, name: &str) -> TestResult<crate::ObjectId> {
     let output = git(path, &["rev-parse", name]).await?;
     Ok(parse_oid(output.trim_ascii())?)
 }
@@ -39,9 +39,9 @@ async fn fixture() -> TestResult<tempfile::TempDir> {
 
 async fn collect(
     path: &Path,
-    included: Vec<[u8; 20]>,
-    excluded: Vec<[u8; 20]>,
-) -> TestResult<BTreeMap<[u8; 20], (ObjectKind, Vec<u8>)>> {
+    included: Vec<crate::ObjectId>,
+    excluded: Vec<crate::ObjectId>,
+) -> TestResult<BTreeMap<crate::ObjectId, (ObjectKind, Vec<u8>)>> {
     let mut objects = GitObjects::start(&path.join(".git"), included, excluded)?;
     let mut result = BTreeMap::new();
     while let Some(oid) = objects.next().await? {
@@ -115,7 +115,11 @@ async fn direct_tree_blob_and_tag_roots_recover_all_required_objects() -> TestRe
 #[tokio::test]
 async fn missing_walk_root_cannot_finish_successfully() -> TestResult {
     let directory = fixture().await?;
-    let mut objects = GitObjects::start(&directory.path().join(".git"), vec![[42; 20]], vec![])?;
+    let mut objects = GitObjects::start(
+        &directory.path().join(".git"),
+        vec![crate::ObjectId::Sha1([42; 20])],
+        vec![],
+    )?;
     assert_eq!(objects.next().await?, None);
     assert!(matches!(
         objects.finish().await,
@@ -126,7 +130,7 @@ async fn missing_walk_root_cannot_finish_successfully() -> TestResult {
 
 #[tokio::test]
 async fn malformed_and_oversized_batches_fail_before_publication() {
-    let oid = object_id(ObjectKind::Blob, b"abc");
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, b"abc");
     let hex = hex::encode(oid);
     for data in [
         format!("{hex} missing\n"),

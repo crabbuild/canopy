@@ -11,7 +11,7 @@ fn identity() -> Result<MutationIdentity> {
     })
 }
 
-pub async fn exercise(repository: &RepositoryCell, oid: [u8; 20]) -> Result {
+pub async fn exercise(repository: &RepositoryCell, oid: canopy_server::ObjectId) -> Result {
     let policy = || CheckContextEdit {
         expected_version: 0,
         reporter: "ci-agent",

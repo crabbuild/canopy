@@ -8,7 +8,7 @@ use crab_cell_runtime::{
 };
 use std::collections::{HashMap, hash_map::Entry};
 
-type Oid = [u8; 20];
+type Oid = crate::ObjectId;
 const PAGE: usize = 128;
 
 pub(crate) struct AncestryProof {
@@ -53,7 +53,7 @@ pub(crate) struct CertifyAncestry;
 impl Command for CertifyAncestry {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 7;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = AncestryProof;
     type Output = bool;
     fn execute(

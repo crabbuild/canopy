@@ -109,6 +109,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             &application_handle,
             target,
             repository_id,
+            canopy_server::ObjectFormat::Sha1,
         )?);
         repository
             .ensure_owner(support::identity()?, "canopy")
@@ -355,7 +356,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             ],
         )
         .await?;
-        let expected_oid: [u8; 20] = hex::decode(original)?
+        let expected_oid: canopy_server::ObjectId = hex::decode(original)?
             .try_into()
             .map_err(|_| "invalid commit ID")?;
         assert_eq!(

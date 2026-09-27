@@ -8,8 +8,8 @@ pub async fn put(
     identity: MutationIdentity,
     kind: ObjectKind,
     body: &[u8],
-) -> Result<Committed<[u8; 20]>, Box<dyn std::error::Error>> {
-    let oid = object_id(kind, body);
+) -> Result<Committed<canopy_server::ObjectId>, Box<dyn std::error::Error>> {
+    let oid = object_id(repository.object_format(), kind, body);
     let mut batch = ObjectBatch::default();
     batch
         .try_push(StoredObject {

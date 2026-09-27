@@ -9,7 +9,7 @@ use crab_cell_runtime::{
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-type Oid = [u8; 20];
+type Oid = canopy_server::ObjectId;
 pub(super) fn identity() -> Result<MutationIdentity> {
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
     Ok(MutationIdentity {

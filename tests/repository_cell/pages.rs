@@ -19,7 +19,7 @@ fn identity() -> Result<MutationIdentity> {
 
 fn inline(body: Vec<u8>) -> StoredObject {
     StoredObject {
-        oid: object_id(ObjectKind::Blob, &body),
+        oid: object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &body),
         kind: ObjectKind::Blob,
         storage: ObjectStorage::Inline(body),
     }
@@ -59,7 +59,9 @@ async fn clear(sql: &SqlCell<RepositoryModule>) -> Result {
     Ok(())
 }
 
-async fn scan(repository: &RepositoryCell) -> Result<BTreeMap<[u8; 20], StoredObject>> {
+async fn scan(
+    repository: &RepositoryCell,
+) -> Result<BTreeMap<canopy_server::ObjectId, StoredObject>> {
     let mut after = None;
     let mut objects = BTreeMap::new();
     for _ in 0..10 {
@@ -85,11 +87,15 @@ async fn scan(repository: &RepositoryCell) -> Result<BTreeMap<[u8; 20], StoredOb
     Err("object pagination did not finish".into())
 }
 
-fn before(mut oid: [u8; 20]) -> Option<[u8; 20]> {
-    for byte in oid.iter_mut().rev() {
+fn before(oid: canopy_server::ObjectId) -> Option<canopy_server::ObjectId> {
+    let mut bytes = match oid {
+        canopy_server::ObjectId::Sha1(bytes) => bytes.to_vec(),
+        canopy_server::ObjectId::Sha256(bytes) => bytes.to_vec(),
+    };
+    for byte in bytes.iter_mut().rev() {
         if *byte != 0 {
             *byte -= 1;
-            return Some(oid);
+            return canopy_server::ObjectId::try_from(bytes).ok();
         }
         *byte = u8::MAX;
     }
@@ -186,7 +192,11 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
     )
     .await?;
     let external = vec![16; INLINE_OBJECT_LIMIT + 1];
-    let external_oid = object_id(ObjectKind::Blob, &external);
+    let external_oid = object_id(
+        canopy_server::ObjectFormat::Sha1,
+        ObjectKind::Blob,
+        &external,
+    );
     let sha256: [u8; 32] = Sha256::digest(&external).into();
     put(
         repository,
@@ -223,7 +233,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
         matches!(descriptor.storage, ObjectStorage::External { size, blake3: digest, sha256: stored } if size == external.len() as u64 && digest == *blake3::hash(&external).as_bytes() && stored == sha256)
     );
 
-    let damaged = object_id(ObjectKind::Blob, &[14]);
+    let damaged = object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &[14]);
     for (statement, parameters) in [
         (
             "UPDATE objects SET digest = zeroblob(32) WHERE oid = ?1",

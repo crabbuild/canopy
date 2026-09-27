@@ -79,6 +79,8 @@ pub enum ServerError {
     Task(#[from] tokio::task::JoinError),
     #[error("system time cannot be represented")]
     Clock,
+    #[error("repository object format differs from the requested format")]
+    ObjectFormatConflict,
     #[error("repository startup failed: {0}")]
     Repository(&'static str),
     #[error("HTTP configuration is invalid: {0}")]
@@ -279,6 +281,7 @@ impl RepositoryManager {
     pub(crate) async fn create(
         self: &Arc<Self>,
         name: &str,
+        object_format: crate::ObjectFormat,
     ) -> Result<RepositoryEntry, ServerError> {
         let reserved = self
             .directory
@@ -287,9 +290,13 @@ impl RepositoryManager {
                 &self.owner,
                 name,
                 uuid::Uuid::new_v4().into_bytes(),
+                object_format,
             )
             .await?
             .output;
+        if reserved.object_format != object_format {
+            return Err(ServerError::ObjectFormatConflict);
+        }
         let _route = self.load((&self.owner).into(), reserved.clone()).await?;
         if reserved.state == RepositoryState::Ready {
             return Ok(reserved);

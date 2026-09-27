@@ -284,11 +284,12 @@ fn has_new_objects(mut bytes: &[u8]) -> Result<bool, InputError> {
             .ok_or(InputError::Commands)?;
         let packet = bytes.get(4..length).ok_or(InputError::Commands)?;
         if !packet.starts_with(b"shallow ") {
-            let oid = packet.get(41..81).ok_or(InputError::Commands)?;
-            if !oid.iter().all(u8::is_ascii_hexdigit) {
-                return Err(InputError::Commands);
-            }
-            has_new |= oid.iter().any(|c| *c != b'0');
+            let oid = packet
+                .split(|byte| *byte == b' ')
+                .nth(1)
+                .and_then(|value| crate::ObjectId::from_hex(value).ok())
+                .ok_or(InputError::Commands)?;
+            has_new |= !oid.is_zero();
         }
         bytes = bytes.get(length..).ok_or(InputError::Commands)?;
     }

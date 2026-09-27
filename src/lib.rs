@@ -10,7 +10,6 @@ use crab_cell_runtime::{
     primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
     primitives::sql::register_sql, registry::OperationDescriptor,
 };
-use sha1::{Digest as _, Sha1};
 
 mod access;
 mod admission;
@@ -25,6 +24,8 @@ pub mod deployment;
 pub mod directory;
 mod external;
 mod git_cache;
+mod git_format;
+pub use git_format::{ObjectFormat, ObjectId, ObjectIdError, object_id};
 pub mod git_gateway;
 pub mod git_http;
 pub mod git_input;
@@ -76,11 +77,11 @@ pub(crate) fn replica_limits(database: u64, capture: u64) -> crab_ltx::Limits {
 const SCHEMA: &str = include_str!("schema.sql");
 const COMMANDS: [OperationDescriptor; 9] = [
     operation(1),
-    operation_with_codec(3, 3),
-    operation_with_codec(4, 3),
-    operation_with_codec(5, 2),
-    operation(6),
-    operation(7),
+    operation_with_codec(3, 4),
+    operation_with_codec(4, 4),
+    operation_with_codec(5, 3),
+    operation_with_codec(6, 2),
+    operation_with_codec(7, 2),
     operation_with_codec(8, 2),
     operation_with_codec(9, 4),
     operation_with_codec(10, 2),
@@ -161,21 +162,9 @@ pub enum ObjectStorage {
 
 /// Immutable Git object returned by one bounded Repository Cell read.
 pub struct StoredObject {
-    pub oid: [u8; 20],
+    pub oid: crate::ObjectId,
     pub kind: ObjectKind,
     pub storage: ObjectStorage,
-}
-
-/// Computes the SHA-1 Git object ID from canonical type, length and bytes.
-#[must_use]
-pub fn object_id(kind: ObjectKind, body: &[u8]) -> [u8; 20] {
-    let mut sha = Sha1::new();
-    sha.update(kind.git_name().as_bytes());
-    sha.update(b" ");
-    sha.update(body.len().to_string().as_bytes());
-    sha.update([0]);
-    sha.update(body);
-    sha.finalize().into()
 }
 
 pub struct RepositoryModule;
@@ -197,6 +186,7 @@ impl CellModule for RepositoryModule {
             source_digest: {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
+                source.update(include_bytes!("git_format.rs"));
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph.rs"));
@@ -296,12 +286,17 @@ fn repository_cell_type() -> crab_cell_runtime::Result<CellType> {
 /// Product-owned capability for one repository's SQLite state.
 pub struct RepositoryCell {
     id: [u8; 16],
+    object_format: ObjectFormat,
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
 }
 
 impl RepositoryCell {
+    pub fn object_format(&self) -> ObjectFormat {
+        self.object_format
+    }
+
     pub fn repository_id(&self) -> [u8; 16] {
         self.id
     }
@@ -310,12 +305,14 @@ impl RepositoryCell {
         application: &ApplicationHandle<CanopyApplication>,
         target: CellTarget,
         id: [u8; 16],
+        object_format: ObjectFormat,
     ) -> crab_cell_runtime::Result<Self> {
         if target != repository_target(target.tenant(), target.application(), id)? {
             return Err(Error::Identity("repository UUID differs from Cell target"));
         }
         Ok(Self {
             id,
+            object_format,
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
@@ -337,7 +334,7 @@ impl RepositoryCell {
 
     pub async fn object(
         &self,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         minimum: Option<Receipt>,
     ) -> std::result::Result<
         Observed<Option<(ObjectKind, Vec<u8>)>>,
@@ -413,7 +410,9 @@ impl RepositoryCell {
                 ));
             }
         };
-        if object_id(kind, &body) != oid || blake3::hash(&body).as_bytes() != digest.as_slice() {
+        if object_id(oid.format(), kind, &body) != oid
+            || blake3::hash(&body).as_bytes() != digest.as_slice()
+        {
             return Err(crab_cell_runtime::InvocationError::NotStarted(
                 Error::Command("corrupt stored object"),
             ));

@@ -3700,3 +3700,21 @@ other new module owns durable LFS grants. These additions implement scoped
 credentials without exposing new public Rust APIs or general access tokens.
 Pure SSH LFS transfers, resumable/custom transfers, federation, advanced Git
 push features and SHA-256 Git remain open.
+
+
+## SHA-256 Git repository format
+
+Repository creation now accepts `object_format: "sha256"`; omission selects SHA-1.
+The Directory and Repository Cell persist immutable format identity. Object
+records, graph edges, refs, Git cache configuration, fetch wants, push commands
+and external blob verification carry 20- or 32-byte Git IDs. A name already
+reserved with another format returns HTTP 409. The storage layout is a hard
+cutover and requires a fresh prefix.
+
+A permanent multi-server regression exercises stock SHA-256 Git HTTP push,
+annotated tag, external blob, Git LFS pull, repository browse, filtered clone,
+incremental fetch, strict fsck and fresh-disk restore. An SSH regression covers
+stock SHA-256 push and clone. A conflicting create format returns HTTP 409;
+stock SHA-1 Git refuses to push into the SHA-256 repository. The SHA-1 Repository
+Cell test rejects mixed-format object publication. SHA-256 SSH recovery, PR/check
+workflows and real-provider qualification remain open.

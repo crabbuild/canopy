@@ -2,6 +2,7 @@ CREATE TABLE repositories (
     owner TEXT NOT NULL,
     name TEXT NOT NULL,
     repository_id BLOB NOT NULL UNIQUE CHECK(length(repository_id) = 16),
+    object_format TEXT NOT NULL CHECK(object_format IN ('sha1', 'sha256')),
     state TEXT NOT NULL CHECK(state IN ('pending', 'ready')),
     PRIMARY KEY(owner, name)
 ) WITHOUT ROWID;

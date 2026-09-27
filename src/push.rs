@@ -329,7 +329,7 @@ pub(crate) struct CompletePush;
 impl Command for CompletePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 4;
-    const CODEC_VERSION: u32 = 3;
+    const CODEC_VERSION: u32 = 4;
     type Input = CompletePushInput;
     type Output = bool;
 

@@ -88,7 +88,7 @@ impl GitGateway {
         cache: &Arc<GitCache>,
         object: StoredObject,
         stats: &mut Hydration,
-    ) -> Result<Option<[u8; 20]>, GatewayError> {
+    ) -> Result<Option<crate::ObjectId>, GatewayError> {
         let read = Instant::now();
         let body = match object.storage {
             ObjectStorage::Inline(body) => body,
@@ -126,7 +126,11 @@ impl GitGateway {
         stats.objects += 1;
         stats.bytes += body.len() as u64;
         let target = (object.kind == ObjectKind::Tag)
-            .then(|| crate::graph::tag_edge(&body).map(|(oid, _)| oid))
+            .then(|| {
+                crate::graph::tag_edge(&body)
+                    .map(|(oid, _)| oid)
+                    .filter(|target| target.format() == object.oid.format())
+            })
             .flatten();
         let written = Instant::now();
         cache.store_object(object.oid, object.kind, body).await?;

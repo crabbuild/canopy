@@ -296,7 +296,7 @@ async fn verify_preparation(
     repository: &Arc<RepositoryCell>,
     store: &Arc<PausedBlobs>,
     source: &Path,
-    current: [u8; 20],
+    current: canopy_server::ObjectId,
 ) -> Result {
     use sha1::{Digest as _, Sha1};
     let mut pack = b"PACK\0\0\0\x02\0\0\0\0".to_vec();

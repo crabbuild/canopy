@@ -11,7 +11,7 @@ CREATE TABLE object_chunks (
 
 CREATE TABLE objects (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    oid BLOB NOT NULL UNIQUE CHECK(length(oid) = 20),
+    oid BLOB NOT NULL UNIQUE CHECK(length(oid) IN (20, 32)),
     kind TEXT NOT NULL CHECK(kind IN ('blob', 'tree', 'commit', 'tag')),
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32),
@@ -38,12 +38,12 @@ CREATE TABLE object_edges (
 CREATE INDEX object_edges_by_child ON object_edges(child, parent);
 
 CREATE TABLE object_closure (
-    oid BLOB PRIMARY KEY REFERENCES objects(oid) CHECK(length(oid) = 20)
+    oid BLOB PRIMARY KEY REFERENCES objects(oid) CHECK(length(oid) IN (20, 32))
 ) WITHOUT ROWID;
 
 CREATE TABLE refs (
     name TEXT PRIMARY KEY,
-    oid BLOB CHECK(oid IS NULL OR length(oid) = 20),
+    oid BLOB CHECK(oid IS NULL OR length(oid) IN (20, 32)),
     version INTEGER NOT NULL CHECK(version > 0)
 ) WITHOUT ROWID;
 
@@ -72,6 +72,7 @@ CREATE TABLE lfs_locks (
 );
 
 CREATE TABLE repository_identity (
+    object_format TEXT NOT NULL CHECK(object_format IN ('sha1', 'sha256')),
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     repository_id BLOB NOT NULL CHECK(length(repository_id) = 16),
     owner TEXT NOT NULL
@@ -158,7 +159,7 @@ CREATE INDEX check_contexts_by_enabled ON check_contexts(enabled, name);
 CREATE TABLE check_runs (
     number INTEGER PRIMARY KEY AUTOINCREMENT,
     id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
-    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
+    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) IN (20, 32)),
     context TEXT NOT NULL REFERENCES check_contexts(name),
     context_version INTEGER NOT NULL CHECK(context_version > 0),
     reporter TEXT NOT NULL,
@@ -171,14 +172,14 @@ CREATE TABLE check_runs (
 CREATE INDEX check_runs_by_commit ON check_runs(oid, context, context_version, number);
 
 CREATE TABLE commit_parents (
-    child BLOB NOT NULL REFERENCES objects(oid) CHECK(length(child) = 20),
-    parent BLOB NOT NULL REFERENCES objects(oid) CHECK(length(parent) = 20),
+    child BLOB NOT NULL REFERENCES objects(oid) CHECK(length(child) IN (20, 32)),
+    parent BLOB NOT NULL REFERENCES objects(oid) CHECK(length(parent) IN (20, 32)),
     PRIMARY KEY(child, parent)
 ) WITHOUT ROWID;
 
 CREATE TABLE commit_ancestry (
-    ancestor BLOB NOT NULL REFERENCES objects(oid) CHECK(length(ancestor) = 20),
-    descendant BLOB NOT NULL REFERENCES objects(oid) CHECK(length(descendant) = 20),
+    ancestor BLOB NOT NULL REFERENCES objects(oid) CHECK(length(ancestor) IN (20, 32)),
+    descendant BLOB NOT NULL REFERENCES objects(oid) CHECK(length(descendant) IN (20, 32)),
     PRIMARY KEY(ancestor, descendant)
 ) WITHOUT ROWID;
 
@@ -210,8 +211,8 @@ CREATE TABLE pull_requests (
     version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
     source_ref TEXT NOT NULL REFERENCES refs(name),
     base_ref TEXT NOT NULL REFERENCES refs(name) CHECK(source_ref != base_ref),
-    initial_source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_source_oid) = 20),
-    initial_base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_base_oid) = 20),
+    initial_source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_source_oid) IN (20, 32)),
+    initial_base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(initial_base_oid) IN (20, 32)),
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
     updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
 );
@@ -227,9 +228,9 @@ CREATE TABLE pull_reviews (
     kind TEXT NOT NULL CHECK(kind IN ('comment', 'approve', 'request_changes')),
     body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
     pull_version INTEGER NOT NULL CHECK(pull_version > 0),
-    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) = 20),
+    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) IN (20, 32)),
     source_version INTEGER NOT NULL CHECK(source_version > 0),
-    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) = 20),
+    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) IN (20, 32)),
     base_version INTEGER NOT NULL CHECK(base_version > 0),
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
 );
@@ -246,12 +247,12 @@ CREATE TABLE pull_merges (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),
     binding BLOB NOT NULL CHECK(length(binding) = 32),
     pull_number INTEGER NOT NULL UNIQUE REFERENCES pull_requests(number),
-    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) = 20),
+    oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(oid) IN (20, 32)),
     merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0),
     pull_version INTEGER NOT NULL CHECK(pull_version > 0),
-    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) = 20),
+    source_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(source_oid) IN (20, 32)),
     source_version INTEGER NOT NULL CHECK(source_version > 0),
-    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) = 20),
+    base_oid BLOB NOT NULL REFERENCES objects(oid) CHECK(length(base_oid) IN (20, 32)),
     base_version INTEGER NOT NULL CHECK(base_version > 0)
 ) WITHOUT ROWID;
 

@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) struct ObjectHeaders {
-    pub(crate) objects: Observed<Vec<[u8; 20]>>,
+    pub(crate) objects: Observed<Vec<crate::ObjectId>>,
     pub(crate) through: i64,
 }
 
@@ -26,7 +26,7 @@ impl RepositoryCell {
     /// pages. Objects are immutable; a future collector must fence this read.
     pub async fn object_page(
         &self,
-        after: Option<[u8; 20]>,
+        after: Option<crate::ObjectId>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
         let headers = self.read_object_headers(None, SqlStatement {
             sql: "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
@@ -37,7 +37,7 @@ impl RepositoryCell {
 
     pub(crate) async fn selected_objects(
         &self,
-        ids: &[[u8; 20]],
+        ids: &[crate::ObjectId],
     ) -> Result<Vec<StoredObject>, InvocationError<Vec<SqlResultSet>>> {
         if ids.is_empty() || ids.len() > MAX_OBJECTS {
             return Err(InvocationError::NotStarted(Error::Command(
@@ -134,7 +134,7 @@ impl RepositoryCell {
 
     pub(crate) async fn object_records(
         &self,
-        headers: Observed<Vec<[u8; 20]>>,
+        headers: Observed<Vec<crate::ObjectId>>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
         // Callers may remove already cached IDs, but never add IDs: the header
         // query's size bound and receipt protect this body read's wire ceiling.
@@ -188,7 +188,9 @@ impl RepositoryCell {
     }
 }
 
-fn decode_headers(rows: &[Vec<SqlValue>]) -> crab_cell_runtime::Result<(Vec<[u8; 20]>, i64)> {
+fn decode_headers(
+    rows: &[Vec<SqlValue>],
+) -> crab_cell_runtime::Result<(Vec<crate::ObjectId>, i64)> {
     let mut ids = Vec::new();
     let mut bytes = 0;
     let mut through = 0;
@@ -239,7 +241,7 @@ fn decode_object(row: Vec<SqlValue>) -> crab_cell_runtime::Result<StoredObject> 
     else {
         return Err(Error::Command("invalid stored object row"));
     };
-    let oid: [u8; 20] = oid
+    let oid: crate::ObjectId = oid
         .try_into()
         .map_err(|_| Error::Command("invalid stored object ID"))?;
     let digest: [u8; 32] = digest
@@ -256,7 +258,7 @@ fn decode_object(row: Vec<SqlValue>) -> crab_cell_runtime::Result<StoredObject> 
         ("inline", SqlValue::Blob(body), SqlValue::Null, SqlValue::Null)
             if usize::try_from(size).ok() == Some(body.len())
                 && body.len() <= INLINE_OBJECT_LIMIT
-                && object_id(kind, &body) == oid
+                && object_id(oid.format(), kind, &body) == oid
                 && blake3::hash(&body).as_bytes() == &digest =>
         {
             ObjectStorage::Inline(body)

@@ -98,7 +98,7 @@ pub(crate) struct GitObjectWalk {
 impl GitObjectWalk {
     pub(crate) fn missing(
         git_dir: &Path,
-        included: Vec<[u8; 20]>,
+        included: Vec<crate::ObjectId>,
         filter: Option<&str>,
     ) -> Result<Self, ObjectReadError> {
         Self::start(git_dir, included, Vec::new(), true, filter)
@@ -106,8 +106,8 @@ impl GitObjectWalk {
 
     fn start(
         git_dir: &Path,
-        included: Vec<[u8; 20]>,
-        excluded: Vec<[u8; 20]>,
+        included: Vec<crate::ObjectId>,
+        excluded: Vec<crate::ObjectId>,
         missing_only: bool,
         filter: Option<&str>,
     ) -> Result<Self, ObjectReadError> {
@@ -138,7 +138,7 @@ impl GitObjectWalk {
         })
     }
 
-    pub(crate) async fn next(&mut self) -> Result<Option<[u8; 20]>, ObjectReadError> {
+    pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
         timeout(IO_TIMEOUT, async {
             while let Some(line) = header(&mut self.process.output).await? {
                 if self.missing_only {
@@ -175,8 +175,8 @@ pub(crate) struct GitObjects {
 impl GitObjects {
     pub(crate) fn start(
         git_dir: &Path,
-        included: Vec<[u8; 20]>,
-        excluded: Vec<[u8; 20]>,
+        included: Vec<crate::ObjectId>,
+        excluded: Vec<crate::ObjectId>,
     ) -> Result<Self, ObjectReadError> {
         let walk = GitObjectWalk::start(git_dir, included, excluded, false, None)?;
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
@@ -187,13 +187,13 @@ impl GitObjects {
         })
     }
 
-    pub(crate) async fn next(&mut self) -> Result<Option<[u8; 20]>, ObjectReadError> {
+    pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
         self.walk.next().await
     }
 
     pub(crate) async fn read(
         &mut self,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
     ) -> Result<GitObject<'_, BufReader<ChildStdout>>, ObjectReadError> {
         timeout(IO_TIMEOUT, async {
             self.requests
@@ -235,14 +235,12 @@ async fn header(reader: &mut (impl AsyncRead + Unpin)) -> Result<Option<Vec<u8>>
     Err(ObjectReadError::Malformed)
 }
 
-fn parse_oid(bytes: &[u8]) -> Result<[u8; 20], ObjectReadError> {
-    let mut oid = [0; 20];
-    hex::decode_to_slice(bytes, &mut oid).map_err(|_| ObjectReadError::Malformed)?;
-    Ok(oid)
+fn parse_oid(bytes: &[u8]) -> Result<crate::ObjectId, ObjectReadError> {
+    crate::ObjectId::from_hex(bytes).map_err(|_| ObjectReadError::Malformed)
 }
 
 pub(crate) struct GitObject<'a, R> {
-    pub(crate) oid: [u8; 20],
+    pub(crate) oid: crate::ObjectId,
     pub(crate) kind: ObjectKind,
     pub(crate) size: u64,
     pub(crate) reader: tokio::io::Take<&'a mut R>,
@@ -268,7 +266,7 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
             let expected = self.oid;
             self.finish().await?;
             tokio::task::spawn_blocking(move || {
-                if object_id(kind, &body) != expected {
+                if object_id(expected.format(), kind, &body) != expected {
                     return Err(ObjectReadError::Malformed);
                 }
                 Ok((kind, body))
@@ -297,7 +295,7 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
 
 async fn open_object<R: AsyncRead + Unpin>(
     reader: &mut R,
-    expected: [u8; 20],
+    expected: crate::ObjectId,
 ) -> Result<GitObject<'_, R>, ObjectReadError> {
     let line = header(reader).await?.ok_or(ObjectReadError::Malformed)?;
     let mut fields = line.split(|byte| *byte == b' ');

@@ -85,17 +85,15 @@ fn uuid(value: &str) -> Option<[u8; 16]> {
         .then(|| id.into_bytes())
 }
 
-fn oid(value: &str) -> Option<[u8; 20]> {
-    if value.len() != 40
+fn oid(value: &str) -> Option<crate::ObjectId> {
+    if !matches!(value.len(), 40 | 64)
         || !value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return None;
     }
-    let mut bytes = [0; 20];
-    hex::decode_to_slice(value, &mut bytes).ok()?;
-    Some(bytes)
+    crate::ObjectId::from_hex(value).ok()
 }
 
 fn identity(

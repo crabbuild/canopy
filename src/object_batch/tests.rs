@@ -2,7 +2,7 @@ use super::*;
 
 fn inline(size: usize) -> StoredObject {
     StoredObject {
-        oid: [0; 20],
+        oid: crate::ObjectId::Sha1([0; 20]),
         kind: ObjectKind::Blob,
         storage: ObjectStorage::Inline(vec![11; size]),
     }
@@ -15,7 +15,7 @@ fn maximum_batch_round_trips_below_the_operation_wire_limit() {
         assert!(
             batch
                 .try_push(StoredObject {
-                    oid: [1; 20],
+                    oid: crate::ObjectId::Sha1([1; 20]),
                     kind: ObjectKind::Blob,
                     storage: ObjectStorage::External {
                         size: 1_000_000,
@@ -85,7 +85,7 @@ fn decoding_enforces_aggregate_bytes_and_count_before_building_a_batch() {
 #[test]
 fn chunk_references_bound_total_verification_bytes_and_round_trip() {
     let chunked = |size| StoredObject {
-        oid: [1; 20],
+        oid: crate::ObjectId::Sha1([1; 20]),
         kind: ObjectKind::Commit,
         storage: ObjectStorage::Chunked {
             upload: [2; 16],

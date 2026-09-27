@@ -81,7 +81,7 @@ pub struct CommitCheck {
 /// Client-chosen attempt identity bound to a commit and context-policy version.
 pub struct NewCheck<'a> {
     pub id: [u8; 16],
-    pub oid: [u8; 20],
+    pub oid: crate::ObjectId,
     pub context: &'a str,
     pub context_version: i64,
 }
@@ -177,7 +177,7 @@ impl RepositoryCell {
     pub async fn commit_checks<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         after: Option<&str>,
     ) -> Result<Observed<Option<Vec<CommitCheck>>>, Invocation> {
         let actor = actor.into();
@@ -321,7 +321,7 @@ fn run(row: &[SqlValue]) -> crab_cell_runtime::Result<CheckRun> {
         .try_into()
         .map_err(|_| Error::Command("invalid check UUID"))?;
     validate_repository_id(id)?;
-    if oid.len() != 20 {
+    if !matches!(oid.len(), 20 | 32) {
         return Err(Error::Command("invalid check commit OID"));
     }
     Ok(CheckRun {

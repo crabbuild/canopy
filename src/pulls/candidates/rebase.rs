@@ -148,7 +148,8 @@ fn body(
         .map(Vec::as_slice)
     {
         Some([SqlValue::Blob(bytes)])
-            if crate::object_id(ObjectKind::Commit, bytes) == oid(commit)? =>
+            if crate::object_id(oid(commit)?.format(), ObjectKind::Commit, bytes)
+                == oid(commit)? =>
         {
             Ok(Some(bytes.clone()))
         }

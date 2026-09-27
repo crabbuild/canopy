@@ -202,6 +202,7 @@ impl GitGateway {
                 self.scratch_root.clone(),
                 self.disk_budget.clone(),
                 &head.output.reference,
+                self.repository.object_format(),
             )
             .await?;
             backend.stream(request, ()).await?
@@ -317,6 +318,7 @@ impl GitGateway {
                     self.scratch_root.clone(),
                     self.disk_budget.clone(),
                     &snapshot.head,
+                    self.repository.object_format(),
                 )
                 .await?,
                 through: 0,
@@ -341,6 +343,7 @@ impl GitGateway {
                 self.scratch_root.clone(),
                 self.disk_budget.clone(),
                 &snapshot.head,
+                self.repository.object_format(),
                 Some(Arc::clone(&shared.cache)),
             )
             .await?,
@@ -532,7 +535,7 @@ async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayErr
     Ok(output.stdout)
 }
 
-async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, [u8; 20]>, GatewayError> {
+async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
     let listing = git_output(
         git_dir,
         &["for-each-ref", "--format=%(refname)%00%(objectname)"],
@@ -557,7 +560,7 @@ async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, [u8; 20]>, GatewayE
 
 fn diff_refs(
     before: &BTreeMap<String, RefExpectation>,
-    after: &BTreeMap<String, [u8; 20]>,
+    after: &BTreeMap<String, crate::ObjectId>,
     actor: &str,
 ) -> PushPlan {
     let names: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
@@ -583,8 +586,8 @@ fn diff_refs(
     }
 }
 
-fn parse_oid(oid: &str) -> Result<[u8; 20], GatewayError> {
-    if oid.len() != 40 {
+fn parse_oid(oid: &str) -> Result<crate::ObjectId, GatewayError> {
+    if !matches!(oid.len(), 40 | 64) {
         return Err(GatewayError::MalformedCache);
     }
     hex::decode(oid)

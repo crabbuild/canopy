@@ -11,8 +11,8 @@ const LAST: &str = "refs/tags/snapshot-299";
 async fn pair(
     repository: &RepositoryCell,
     version: i64,
-    old: Option<[u8; 20]>,
-    new: Option<[u8; 20]>,
+    old: Option<canopy_server::ObjectId>,
+    new: Option<canopy_server::ObjectId>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     repository
         .finalize_push(support::identity()?, pair_plan(version, old, new))
@@ -20,7 +20,11 @@ async fn pair(
     Ok(())
 }
 
-fn pair_plan(version: i64, old: Option<[u8; 20]>, new: Option<[u8; 20]>) -> PushPlan {
+fn pair_plan(
+    version: i64,
+    old: Option<canopy_server::ObjectId>,
+    new: Option<canopy_server::ObjectId>,
+) -> PushPlan {
     PushPlan {
         actor: "canopy".into(),
         updates: [FIRST, LAST]
@@ -41,8 +45,16 @@ pub async fn verify(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let initial = repository.refs_page("", None).await?.output.generation;
     let mut batch = ObjectBatch::default();
-    let a = object_id(ObjectKind::Blob, b"snapshot a");
-    let b = object_id(ObjectKind::Blob, b"snapshot b");
+    let a = object_id(
+        canopy_server::ObjectFormat::Sha1,
+        ObjectKind::Blob,
+        b"snapshot a",
+    );
+    let b = object_id(
+        canopy_server::ObjectFormat::Sha1,
+        ObjectKind::Blob,
+        b"snapshot b",
+    );
     for (oid, body) in [(a, b"snapshot a"), (b, b"snapshot b")] {
         batch
             .try_push(StoredObject {

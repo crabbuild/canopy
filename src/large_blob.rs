@@ -2,9 +2,9 @@
 
 use std::{sync::Arc, time::Duration};
 
+use crate::git_format::ObjectHasher;
 use bytes::Bytes;
 use object_store::{ObjectStore, path::Path};
-use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -16,7 +16,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug)]
 pub struct LargeBlobReference {
-    pub oid: [u8; 20],
+    pub oid: crate::ObjectId,
     pub size: u64,
     pub blake3: [u8; 32],
     pub sha256: [u8; 32],
@@ -37,15 +37,14 @@ pub enum LargeBlobError {
 }
 
 struct Hashes {
-    oid: Sha1,
+    oid: ObjectHasher,
     sha256: Sha256,
     blake3: blake3::Hasher,
 }
 
 impl Hashes {
-    fn new(size: u64) -> Self {
-        let mut oid = Sha1::new();
-        oid.update(format!("blob {size}\0").as_bytes());
+    fn new(format: crate::ObjectFormat, size: u64) -> Self {
+        let oid = ObjectHasher::new(format, crate::ObjectKind::Blob, size);
         Self {
             oid,
             sha256: Sha256::new(),
@@ -65,7 +64,7 @@ impl Hashes {
 
     fn finish(self, size: u64) -> LargeBlobReference {
         LargeBlobReference {
-            oid: self.oid.finalize().into(),
+            oid: self.oid.finalize(),
             size,
             sha256: self.sha256.finalize().into(),
             blake3: *self.blake3.finalize().as_bytes(),
@@ -91,7 +90,7 @@ impl LargeBlobStore {
     /// The caller retains this future through cleanup; abrupt process loss may leave staging.
     pub async fn put(
         &self,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         size: u64,
         input: &mut (impl AsyncRead + Unpin),
     ) -> Result<LargeBlobReference, LargeBlobError> {
@@ -102,7 +101,7 @@ impl LargeBlobStore {
         ));
         let mut upload = crate::external::Upload::new(self.store.clone(), stage).await?;
         let result = async {
-            let mut hashes = Hashes::new(size);
+            let mut hashes = Hashes::new(oid.format(), size);
             let mut remaining = size;
             loop {
                 let length = remaining.min(CHUNK_BYTES as u64) as usize;

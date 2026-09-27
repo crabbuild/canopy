@@ -9,11 +9,11 @@ fn database() -> Result<Connection> {
     Ok(db)
 }
 
-fn insert(db: &Connection, body: &[u8]) -> Result<[u8; 20]> {
-    let oid = object_id(ObjectKind::Blob, body);
+fn insert(db: &Connection, body: &[u8]) -> Result<crate::ObjectId> {
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body);
     db.execute(
         "INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'blob', ?2, ?3, 'inline', ?4) ON CONFLICT(oid) DO NOTHING",
-        params![oid.as_slice(), body.len() as i64, blake3::hash(body).as_bytes().as_slice(), body],
+        params![oid.as_ref(), body.len() as i64, blake3::hash(body).as_bytes().as_slice(), body],
     )?;
     Ok(oid)
 }
@@ -26,7 +26,7 @@ fn high_water(db: &Connection) -> Result<i64> {
     )?)
 }
 
-fn page(db: &Connection, after: i64, high: i64) -> Result<(Vec<[u8; 20]>, i64)> {
+fn page(db: &Connection, after: i64, high: i64) -> Result<(Vec<crate::ObjectId>, i64)> {
     let mut statement = db.prepare(CHANGED_HEADERS)?;
     let rows = statement
         .query_map(params![after, high, MAX_OBJECTS as i64], |row| {
@@ -49,7 +49,9 @@ fn insertion_cursor_finds_lower_oids_and_excludes_later_publications() -> Result
     let mut bodies: Vec<_> = (0..260)
         .map(|n| format!("cursor-{n}").into_bytes())
         .collect();
-    bodies.sort_by_key(|body| std::cmp::Reverse(object_id(ObjectKind::Blob, body)));
+    bodies.sort_by_key(|body| {
+        std::cmp::Reverse(object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body))
+    });
     let mut expected = Vec::new();
     for body in &bodies[..259] {
         expected.push(insert(&db, body)?);
@@ -98,7 +100,7 @@ fn duplicate_rollback_and_deletion_do_not_hide_subsequent_inserts() -> Result {
     insert(&db, b"rolled back")?;
     db.execute_batch("ROLLBACK TO failed_batch; RELEASE failed_batch")?;
     assert_eq!(high_water(&db)?, after);
-    db.execute("DELETE FROM objects WHERE oid = ?1", [original.as_slice()])?;
+    db.execute("DELETE FROM objects WHERE oid = ?1", [original.as_ref()])?;
     // The product has no collector yet. Never reusing a committed cursor also
     // protects a future fenced collection from hiding newly inserted rows.
     let next = insert(&db, b"after deletion")?;
@@ -131,8 +133,8 @@ fn structure_page_skips_large_blob_history_with_indexed_work() -> Result {
     for n in 0..10_000 {
         insert(&db, format!("blob-{n}").as_bytes())?;
     }
-    let oid = object_id(ObjectKind::Tree, b"");
-    db.execute("INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'tree', 0, ?2, 'inline', X'')", params![oid.as_slice(), blake3::hash(b"").as_bytes().as_slice()])?;
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Tree, b"");
+    db.execute("INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'tree', 0, ?2, 'inline', X'')", params![oid.as_ref(), blake3::hash(b"").as_bytes().as_slice()])?;
     db.execute_batch("COMMIT")?;
     let mut query = db.prepare(STRUCTURE_HEADERS)?;
     let found: Vec<Vec<u8>> = query

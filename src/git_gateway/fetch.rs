@@ -6,7 +6,7 @@ use crab_cell_runtime::primitives::sql::{SqlBatch, SqlStatement, SqlValue};
 const REACHABLE_WANT: &str = "WITH RECURSIVE ancestors(oid) AS (VALUES (?1) UNION SELECT e.parent FROM object_edges e JOIN ancestors a ON e.child = a.oid) SELECT g.generation, EXISTS (SELECT 1 FROM ancestors a WHERE EXISTS (SELECT 1 FROM refs r WHERE r.oid = a.oid)) FROM ref_generation g WHERE g.singleton = 1";
 
 pub(super) struct FetchRequest {
-    pub(super) wants: BTreeSet<[u8; 20]>,
+    pub(super) wants: BTreeSet<crate::ObjectId>,
     pub(super) filter: Option<String>,
 }
 
@@ -55,11 +55,7 @@ impl FetchRequest {
                     .split(|byte| *byte == b' ')
                     .next()
                     .ok_or(InputError::Fetch)?;
-                if oid.len() != 40 || !oid.iter().all(u8::is_ascii_hexdigit) {
-                    return Err(InputError::Fetch);
-                }
-                let mut id = [0; 20];
-                hex::decode_to_slice(oid, &mut id).map_err(|_| InputError::Fetch)?;
+                let id = crate::ObjectId::from_hex(oid).map_err(|_| InputError::Fetch)?;
                 wants.insert(id);
             }
             if let Some(value) = payload.strip_prefix(b"filter ")
@@ -159,7 +155,7 @@ impl GitGateway {
 
     pub(super) async fn fetch_cache(
         &self,
-        wants: &BTreeSet<[u8; 20]>,
+        wants: &BTreeSet<crate::ObjectId>,
     ) -> Result<Arc<CachedRepository>, GatewayError> {
         if let Some(cached) = self.current_cache().await? {
             self.validate_wants(&cached.snapshot, wants).await?;
@@ -183,7 +179,7 @@ impl GitGateway {
     pub(super) async fn validate_wants(
         &self,
         snapshot: &RefSnapshot,
-        wants: &BTreeSet<[u8; 20]>,
+        wants: &BTreeSet<crate::ObjectId>,
     ) -> Result<(), GatewayError> {
         // Native reachable-want validation walks commits only. Reverse edges
         // certified by the Cell also fence trees and blobs, including cached
@@ -227,7 +223,7 @@ impl GitGateway {
     pub(super) async fn hydrate_selected(
         &self,
         cache: &Arc<GitCache>,
-        mut pending: BTreeSet<[u8; 20]>,
+        mut pending: BTreeSet<crate::ObjectId>,
     ) -> Result<(), GatewayError> {
         let mut visited = BTreeSet::new();
         let mut stats = Hydration::default();
@@ -274,7 +270,7 @@ impl GitGateway {
     async fn hydrate_objects(
         &self,
         cache: &Arc<GitCache>,
-        ids: Vec<[u8; 20]>,
+        ids: Vec<crate::ObjectId>,
         stats: &mut Hydration,
     ) -> Result<(), GatewayError> {
         let mut missing: BTreeSet<_> = cache.missing_objects(ids).await?.into_iter().collect();
@@ -382,7 +378,13 @@ mod tests {
             request.extend(packet(&format!("want {}\n", "34".repeat(20))));
             request.extend(packet("done\n"));
             let parsed = FetchRequest::parse(&request).unwrap();
-            assert_eq!(parsed.wants, BTreeSet::from([[0x12; 20], [0x34; 20]]));
+            assert_eq!(
+                parsed.wants,
+                BTreeSet::from([
+                    crate::ObjectId::Sha1([0x12; 20]),
+                    crate::ObjectId::Sha1([0x34; 20])
+                ])
+            );
             assert_eq!(parsed.filter.as_deref(), Some("blob:none"));
         }
         for input in [

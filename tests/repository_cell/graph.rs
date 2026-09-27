@@ -17,7 +17,7 @@ pub(super) fn identity() -> Result<MutationIdentity> {
     })
 }
 
-fn plan(name: &str, oid: [u8; 20]) -> PushPlan {
+fn plan(name: &str, oid: canopy_server::ObjectId) -> PushPlan {
     PushPlan {
         actor: "canopy".into(),
         updates: vec![RefUpdate {
@@ -28,18 +28,22 @@ fn plan(name: &str, oid: [u8; 20]) -> PushPlan {
     }
 }
 
-async fn put(repository: &RepositoryCell, kind: ObjectKind, body: &[u8]) -> Result<[u8; 20]> {
+async fn put(
+    repository: &RepositoryCell,
+    kind: ObjectKind,
+    body: &[u8],
+) -> Result<canopy_server::ObjectId> {
     Ok(super::objects::put(repository, identity()?, kind, body)
         .await?
         .output)
 }
 
-fn commit(tree: [u8; 20], parent: Option<[u8; 20]>) -> Vec<u8> {
+fn commit(tree: canopy_server::ObjectId, parent: Option<canopy_server::ObjectId>) -> Vec<u8> {
     let parent = parent.map_or_else(String::new, |oid| format!("parent {}\n", hex::encode(oid)));
     format!("tree {}\n{parent}author Canopy <test@example.invalid> 0 +0000\ncommitter Canopy <test@example.invalid> 0 +0000\n\nGraph test\n", hex::encode(tree)).into_bytes()
 }
 
-fn entry(mode: &str, name: &[u8], oid: [u8; 20]) -> Vec<u8> {
+fn entry(mode: &str, name: &[u8], oid: canopy_server::ObjectId) -> Vec<u8> {
     let mut body = format!("{mode} ").into_bytes();
     body.extend_from_slice(name);
     body.push(0);
@@ -74,9 +78,17 @@ pub async fn verify(
     target: &crab_cell_runtime::CellTarget,
 ) -> Result<()> {
     let blob_body = b"graph closure leaf";
-    let blob = object_id(ObjectKind::Blob, blob_body);
+    let blob = object_id(
+        canopy_server::ObjectFormat::Sha1,
+        ObjectKind::Blob,
+        blob_body,
+    );
     let tree_body = entry("100644", b"leaf", blob);
-    let tree = object_id(ObjectKind::Tree, &tree_body);
+    let tree = object_id(
+        canopy_server::ObjectFormat::Sha1,
+        ObjectKind::Tree,
+        &tree_body,
+    );
     let root = put(repository, ObjectKind::Commit, &commit(tree, None)).await?;
 
     let push = plan("refs/heads/graph", root);
@@ -105,7 +117,7 @@ pub async fn verify(
     for candidates in [
         vec![root, tree, blob],
         vec![blob, root],
-        vec![blob, tree, [71; 20]],
+        vec![blob, tree, canopy_server::ObjectId::Sha1([71; 20])],
     ] {
         assert!(matches!(
             application
@@ -159,7 +171,7 @@ pub async fn verify(
     let wrong_tree = entry("40000", b"directory", blob);
     let malformed_tree = b"100644 truncated\0short";
     let wrong_parent = commit(tree, Some(blob));
-    let missing_parent = commit(tree, Some([71; 20]));
+    let missing_parent = commit(tree, Some(canopy_server::ObjectId::Sha1([71; 20])));
     let wrong_tag = format!(
         "object {}\ntype commit\ntag wrong-kind\n\n",
         hex::encode(blob)
@@ -215,7 +227,10 @@ pub async fn verify(
     // A missing root must reject every ref even when another root is valid.
     // Certificate preparation is independent of ref publication.
     let independent = put(repository, ObjectKind::Blob, b"independent graph leaf").await?;
-    let mut mixed = plan("refs/tags/missing-root", [73; 20]);
+    let mut mixed = plan(
+        "refs/tags/missing-root",
+        canopy_server::ObjectId::Sha1([73; 20]),
+    );
     mixed
         .updates
         .extend(plan("refs/tags/independent", independent).updates);
@@ -234,7 +249,11 @@ pub async fn verify(
     // Gitlinks point outside this repository. Symlinks and non-UTF8 names
     // still point to local blobs; repeated edges can share a certified leaf.
     let mut linked_tree = entry("120000", b"link", blob);
-    linked_tree.extend(entry("160000", b"submodule", [74; 20]));
+    linked_tree.extend(entry(
+        "160000",
+        b"submodule",
+        canopy_server::ObjectId::Sha1([74; 20]),
+    ));
     linked_tree.extend(entry("100755", b"\xff", blob));
     let linked_tree = put(repository, ObjectKind::Tree, &linked_tree).await?;
     let linked_commit = put(
@@ -268,7 +287,10 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
     let mut leaves: Vec<_> = (0..270)
         .map(|index| {
             let body = format!("resumable leaf {index}").into_bytes();
-            (object_id(ObjectKind::Blob, &body), body)
+            (
+                object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &body),
+                body,
+            )
         })
         .collect();
     leaves.sort_by_key(|(oid, _)| *oid);
@@ -343,7 +365,7 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
 
 // A separately encoded client invokes the registered server command. Its local
 // handler cannot run, so these checks exercise the actual wire trust boundary.
-struct CertificateInput(Vec<[u8; 20]>);
+struct CertificateInput(Vec<canopy_server::ObjectId>);
 impl crab_cell_runtime::codec::WireValue for CertificateInput {
     fn encode(
         &self,

@@ -124,7 +124,13 @@ mod tests {
     use super::*;
     #[test]
     fn common_ancestor_selection_handles_merges_and_criss_cross() {
-        let (root, a, b, c, d) = ([1; 20], [2; 20], [3; 20], [4; 20], [5; 20]);
+        let (root, a, b, c, d) = (
+            Oid::Sha1([1; 20]),
+            Oid::Sha1([2; 20]),
+            Oid::Sha1([3; 20]),
+            Oid::Sha1([4; 20]),
+            Oid::Sha1([5; 20]),
+        );
         let graph = Graph::from([
             (root, vec![]),
             (a, vec![root]),

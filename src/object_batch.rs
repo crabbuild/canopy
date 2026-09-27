@@ -108,7 +108,8 @@ impl WireValue for ObjectBatch {
         }
         let mut batch = Self::default();
         for _ in 0..count {
-            let oid = fixed(decoder)?;
+            let oid = crate::ObjectId::try_from(decoder.read_bytes()?)
+                .map_err(|_| CodecError::Invalid("invalid Git object ID"))?;
             let kind = match decoder.read_u8()? {
                 0 => ObjectKind::Blob,
                 1 => ObjectKind::Tree,
@@ -158,7 +159,7 @@ pub(crate) struct PutObjects;
 impl Command for PutObjects {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 5;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = ObjectBatch;
     type Output = ();
 
@@ -166,10 +167,32 @@ impl Command for PutObjects {
         context: &mut CommandContext<'_, '_>,
         batch: Self::Input,
     ) -> crab_cell_runtime::Result<CommandResult<()>> {
+        let identity = context.sql(&SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "SELECT object_format FROM repository_identity WHERE singleton = 1".into(),
+                parameters: Vec::new(),
+            }],
+        })?;
+        let Some([SqlValue::Text(format)]) = identity
+            .first()
+            .and_then(|set| set.rows.first())
+            .map(Vec::as_slice)
+        else {
+            return Err(Error::Command("repository identity is absent"));
+        };
+        let format = crate::ObjectFormat::parse(format)
+            .ok_or(Error::Command("invalid repository object format"))?;
+        if batch
+            .objects
+            .iter()
+            .any(|object| object.oid.format() != format)
+        {
+            return Ok(CommandResult::Rejected(()));
+        }
         for object in batch.objects {
             let (size, digest, storage, body, sha256, chunk_id) = match object.storage {
                 ObjectStorage::Inline(body) => {
-                    if object_id(object.kind, &body) != object.oid {
+                    if object_id(object.oid.format(), object.kind, &body) != object.oid {
                         return Ok(CommandResult::Rejected(()));
                     }
                     (
@@ -271,8 +294,8 @@ impl RepositoryCell {
     /// Returns recorded IDs from a nonempty candidate list of at most 128 objects.
     pub async fn existing_objects(
         &self,
-        candidates: &[[u8; 20]],
-    ) -> Result<Observed<BTreeSet<[u8; 20]>>, InvocationError<Vec<SqlResultSet>>> {
+        candidates: &[crate::ObjectId],
+    ) -> Result<Observed<BTreeSet<crate::ObjectId>>, InvocationError<Vec<SqlResultSet>>> {
         if !(1..=MAX_OBJECTS).contains(&candidates.len()) {
             return Err(InvocationError::NotStarted(Error::Command(
                 "object lookup count is outside bounds",

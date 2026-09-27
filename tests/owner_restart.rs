@@ -97,6 +97,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         &app_handle,
         target.clone(),
         repository_id,
+        canopy_server::ObjectFormat::Sha1,
     )?);
     repository
         .ensure_owner(support::identity()?, "canopy")
@@ -293,7 +294,12 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         tenant,
         application_id,
     )?;
-    let repository = Arc::new(RepositoryCell::new(&app_handle, target, repository_id)?);
+    let repository = Arc::new(RepositoryCell::new(
+        &app_handle,
+        target,
+        repository_id,
+        canopy_server::ObjectFormat::Sha1,
+    )?);
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,
         refs_generation

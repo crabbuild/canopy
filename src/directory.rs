@@ -134,6 +134,7 @@ pub struct RepositoryEntry {
     pub name: String,
     pub repository_id: [u8; 16],
     pub state: RepositoryState,
+    pub object_format: crate::ObjectFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -377,16 +378,18 @@ impl DirectoryCell {
         owner: &str,
         name: &str,
         repository_id: [u8; 16],
+        object_format: crate::ObjectFormat,
     ) -> Result<Committed<RepositoryEntry>, InvocationError<Vec<SqlResultSet>>> {
         validate_name(owner, name).map_err(InvocationError::NotStarted)?;
         validate_repository_id(repository_id).map_err(InvocationError::NotStarted)?;
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "INSERT INTO repositories (owner, name, repository_id, state) VALUES (?1, ?2, ?3, 'pending') ON CONFLICT(owner, name) DO NOTHING".into(),
+                sql: "INSERT INTO repositories (owner, name, repository_id, state, object_format) VALUES (?1, ?2, ?3, 'pending', ?4) ON CONFLICT(owner, name) DO NOTHING".into(),
                 parameters: vec![
                     SqlValue::Text(owner.into()),
                     SqlValue::Text(name.into()),
                     SqlValue::Blob(repository_id.to_vec()),
+                    SqlValue::Text(object_format.as_str().into()),
                 ],
             }],
         }).await?;
@@ -450,7 +453,7 @@ impl DirectoryCell {
         validate_name(owner, name).map_err(InvocationError::NotStarted)?;
         let result = self.sql.query(minimum, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND name = ?2".into(),
+                sql: "SELECT owner, name, repository_id, state, object_format FROM repositories WHERE owner = ?1 AND name = ?2".into(),
                 parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(name.into())],
             }],
         }).await?;
@@ -481,7 +484,7 @@ impl DirectoryCell {
         validate_name(owner, name).map_err(InvocationError::NotStarted)?;
         let result = self.sql.query(None, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "SELECT owner, name, repository_id, state FROM repositories r WHERE owner = ?1 AND name = ?2 AND state = 'ready' AND (owner = ?3 OR EXISTS (SELECT 1 FROM repository_discovery d WHERE d.repository_id = r.repository_id AND d.account = ?3) OR EXISTS (SELECT 1 FROM public_repository_candidates p WHERE p.repository_id = r.repository_id))".into(),
+                sql: "SELECT owner, name, repository_id, state, object_format FROM repositories r WHERE owner = ?1 AND name = ?2 AND state = 'ready' AND (owner = ?3 OR EXISTS (SELECT 1 FROM repository_discovery d WHERE d.repository_id = r.repository_id AND d.account = ?3) OR EXISTS (SELECT 1 FROM public_repository_candidates p WHERE p.repository_id = r.repository_id))".into(),
                 parameters: vec![SqlValue::Text(owner.into()), SqlValue::Text(name.into()), account.parameter()],
             }],
         }).await?;
@@ -614,7 +617,7 @@ impl DirectoryCell {
             statements: vec![SqlStatement {
                 // Public candidates are hints. UNION removes duplicate grant/public
                 // entries; Repository Cell access remains authoritative.
-                sql: "SELECT owner, name, repository_id, state FROM repositories WHERE owner = ?1 AND state = 'ready' AND repository_id > ?2 UNION SELECT r.owner, r.name, d.repository_id, r.state FROM repository_discovery d JOIN repositories r ON r.repository_id = d.repository_id WHERE d.account = ?1 AND d.repository_id > ?2 AND r.state = 'ready' UNION SELECT r.owner, r.name, p.repository_id, r.state FROM public_repository_candidates p JOIN repositories r ON r.repository_id = p.repository_id WHERE p.repository_id > ?2 AND r.state = 'ready' ORDER BY repository_id LIMIT ?3".into(),
+                sql: "SELECT owner, name, repository_id, state, object_format FROM repositories WHERE owner = ?1 AND state = 'ready' AND repository_id > ?2 UNION SELECT r.owner, r.name, d.repository_id, r.state, r.object_format FROM repository_discovery d JOIN repositories r ON r.repository_id = d.repository_id WHERE d.account = ?1 AND d.repository_id > ?2 AND r.state = 'ready' UNION SELECT r.owner, r.name, p.repository_id, r.state, r.object_format FROM public_repository_candidates p JOIN repositories r ON r.repository_id = p.repository_id WHERE p.repository_id > ?2 AND r.state = 'ready' ORDER BY repository_id LIMIT ?3".into(),
                 parameters: vec![account.parameter(), SqlValue::Blob(after.map_or_else(Vec::new, |id| id.to_vec())), SqlValue::Integer(REPOSITORY_PAGE_SIZE as i64)],
             }],
         }).await?;
@@ -642,6 +645,7 @@ fn decode_entry(row: &[SqlValue]) -> crab_cell_runtime::Result<RepositoryEntry> 
         SqlValue::Text(name),
         SqlValue::Blob(id),
         SqlValue::Text(state),
+        SqlValue::Text(object_format),
     ] = row
     else {
         return Err(Error::Command("invalid directory row"));
@@ -662,6 +666,8 @@ fn decode_entry(row: &[SqlValue]) -> crab_cell_runtime::Result<RepositoryEntry> 
         name: name.clone(),
         repository_id,
         state,
+        object_format: crate::ObjectFormat::parse(object_format)
+            .ok_or(Error::Command("invalid repository object format"))?,
     })
 }
 

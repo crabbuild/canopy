@@ -43,7 +43,7 @@ pub(super) fn record(row: &[SqlValue]) -> crab_cell_runtime::Result<MergeRecord>
     else {
         return Err(Error::Command("invalid merge record"));
     };
-    if oid.len() != 20 || *number < 1 || *at < 0 {
+    if !matches!(oid.len(), 20 | 32) || *number < 1 || *at < 0 {
         return Err(Error::Command("invalid merge result"));
     }
     Ok(MergeRecord {
@@ -223,7 +223,7 @@ fn preparation(
         source: Box::new(error),
     })
 }
-pub(super) fn oid(text: &str) -> crab_cell_runtime::Result<[u8; 20]> {
+pub(super) fn oid(text: &str) -> crab_cell_runtime::Result<crate::ObjectId> {
     parse_oid(text)
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))

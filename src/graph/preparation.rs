@@ -153,7 +153,8 @@ impl RepositoryCell {
                 let Some((kind, body)) = self.object(oid, None).await?.output else {
                     return Ok(());
                 };
-                let Some(edges) = tokio::task::spawn_blocking(move || edges(kind, &body)).await?
+                let Some(edges) =
+                    tokio::task::spawn_blocking(move || edges(oid.format(), kind, &body)).await?
                 else {
                     return Ok(());
                 };

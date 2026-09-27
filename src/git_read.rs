@@ -20,7 +20,7 @@ use crab_cell_runtime::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
-type Oid = [u8; 20];
+type Oid = crate::ObjectId;
 const FILE_PAGE: usize = 32;
 const MAX_PATH: usize = 4096;
 const PREVIEW_BYTES: u64 = 256 * 1024;
@@ -341,7 +341,9 @@ impl Reader {
             .ok_or(ReadError::Malformed)?;
         let tree = line.strip_prefix(b"tree ").ok_or(ReadError::Malformed)?;
         let tree = std::str::from_utf8(tree).map_err(|_| ReadError::Malformed)?;
-        oid_from_bytes(tree).ok_or(ReadError::Malformed)
+        oid_from_bytes(tree)
+            .filter(|tree| tree.format() == oid.format())
+            .ok_or(ReadError::Malformed)
     }
 }
 fn oid_from_bytes(value: &str) -> Option<Oid> {

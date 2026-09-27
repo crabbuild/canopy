@@ -271,6 +271,8 @@ impl RepositoryHttp {
 #[serde(deny_unknown_fields)]
 struct CreateRepositoryRequest {
     name: String,
+    #[serde(default)]
+    object_format: crate::ObjectFormat,
 }
 
 #[derive(Deserialize)]
@@ -307,6 +309,7 @@ struct ListRepositoriesQuery {
 
 #[derive(Serialize)]
 struct RepositoryResponse {
+    object_format: crate::ObjectFormat,
     owner: String,
     name: String,
     repository_id: String,
@@ -315,6 +318,7 @@ struct RepositoryResponse {
 
 fn repository_response(manager: &RepositoryManager, entry: RepositoryEntry) -> RepositoryResponse {
     RepositoryResponse {
+        object_format: entry.object_format,
         owner: entry.owner.clone(),
         name: entry.name.clone(),
         repository_id: uuid::Uuid::from_bytes(entry.repository_id).to_string(),
@@ -425,11 +429,15 @@ async fn create_repository(
     if directory::validate_component(&input.name).is_err() {
         return plain(StatusCode::UNPROCESSABLE_ENTITY, "Invalid repository name");
     }
-    match state.manager.create(&input.name).await {
+    match state.manager.create(&input.name, input.object_format).await {
         Ok(entry) if (state.manager.ready)() => {
             json_response(StatusCode::OK, &repository_response(&state.manager, entry))
         }
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Err(ServerError::ObjectFormatConflict) => plain(
+            StatusCode::CONFLICT,
+            "Repository object format is immutable",
+        ),
         Err(error) => {
             tracing::error!(error = ?error, "repository creation failed");
             plain(
@@ -520,6 +528,7 @@ async fn get_repository(
                     "name": repository.name,
                     "repository_id": repository.repository_id,
                     "clone_url": repository.clone_url,
+                    "object_format": repository.object_format,
                     "role": details.role.as_str(),
                     "viewer": principal.principal().map(|principal| serde_json::json!({"account":principal.account,"token_scope":principal.scope.as_str()})),
                     "visibility": details.visibility.visibility,

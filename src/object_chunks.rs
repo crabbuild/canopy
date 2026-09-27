@@ -68,7 +68,7 @@ impl RepositoryCell {
                 .await?;
         }
         Ok(StoredObject {
-            oid: object_id(kind, body),
+            oid: object_id(self.object_format(), kind, body),
             kind,
             storage: ObjectStorage::Chunked {
                 upload,
@@ -80,7 +80,7 @@ impl RepositoryCell {
 
     pub(crate) async fn chunked_body(
         &self,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         kind: ObjectKind,
         upload: [u8; 16],
         size: u64,
@@ -102,7 +102,7 @@ impl RepositoryCell {
 /// The caller's command transaction binds verification and publication atomically.
 pub(crate) fn body(
     context: &CommandContext<'_, '_>,
-    oid: [u8; 20],
+    oid: crate::ObjectId,
     kind: ObjectKind,
     upload: [u8; 16],
     size: u64,
@@ -120,7 +120,7 @@ pub(crate) fn body(
 }
 
 struct Chunks {
-    oid: [u8; 20],
+    oid: crate::ObjectId,
     kind: ObjectKind,
     upload: [u8; 16],
     size: usize,
@@ -131,7 +131,7 @@ struct Chunks {
 
 impl Chunks {
     fn new(
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         kind: ObjectKind,
         upload: [u8; 16],
         size: u64,
@@ -183,7 +183,7 @@ impl Chunks {
     }
 
     fn finish(self) -> Option<Vec<u8>> {
-        (object_id(self.kind, &self.body) == self.oid
+        (object_id(self.oid.format(), self.kind, &self.body) == self.oid
             && blake3::hash(&self.body).as_bytes() == &self.digest)
             .then_some(self.body)
     }

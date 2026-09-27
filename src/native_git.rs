@@ -154,6 +154,7 @@ mod tests {
             ".".into(),
             crab_ltx::DiskBudget::new(1 << 20),
             "refs/heads/main",
+            crate::ObjectFormat::Sha1,
         )
         .await?;
         let git_dir = cache.git_dir();
@@ -183,7 +184,11 @@ mod tests {
         writer.stdin.take().ok_or("stdin")?.write_all(body).await?;
         let output = writer.wait_with_output().await?;
         assert!(output.status.success());
-        let oid = hex::encode(crate::object_id(crate::ObjectKind::Blob, body));
+        let oid = hex::encode(crate::object_id(
+            crate::ObjectFormat::Sha1,
+            crate::ObjectKind::Blob,
+            body,
+        ));
         assert_eq!(output.stdout, format!("{oid}\n").as_bytes());
         assert!(
             git_dir

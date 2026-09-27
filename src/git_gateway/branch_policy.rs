@@ -5,7 +5,6 @@ use crate::{
 };
 
 const PREFIX_LIMIT: usize = 40 * 1024 * 1024;
-const ZERO: &str = "0000000000000000000000000000000000000000";
 
 pub(super) enum PushCommands {
     OtherMedia,
@@ -78,6 +77,7 @@ impl GitGateway {
                 return Ok(());
             }
         };
+        let zero = hex::encode(self.repository.object_format().zero());
         let has_rules = self
             .repository
             .has_branch_rules()
@@ -113,10 +113,10 @@ impl GitGateway {
                     .expected
                     .as_ref()
                     .and_then(|old| old.oid)
-                    .map_or_else(|| ZERO.into(), hex::encode);
-                let new = update.new_oid.map_or_else(|| ZERO.into(), hex::encode);
+                    .map_or_else(|| zero.clone(), hex::encode);
+                let new = update.new_oid.map_or_else(|| zero.clone(), hex::encode);
                 let allowed = policy.allows(update, false);
-                let ancestry = policy.fast_forward_only && old != ZERO && new != ZERO;
+                let ancestry = policy.fast_forward_only && old != zero && new != zero;
                 if allowed && !ancestry {
                     continue;
                 }
@@ -208,38 +208,42 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
         if updates.len() == MAX_UPDATES {
             return Err(InputError::TooLarge);
         }
-        if payload.len() < 83 || payload[40] != b' ' || payload[81] != b' ' {
+        let mut fields = payload.splitn(3, |byte| *byte == b' ');
+        let old = fields
+            .next()
+            .and_then(parse_oid)
+            .ok_or(InputError::Commands)?;
+        let new = fields
+            .next()
+            .and_then(parse_oid)
+            .ok_or(InputError::Commands)?;
+        if old.format() != new.format() {
             return Err(InputError::Commands);
         }
-        let old = parse_oid(&payload[..40]).ok_or(InputError::Commands)?;
-        let new = parse_oid(&payload[41..81]).ok_or(InputError::Commands)?;
-        let name = std::str::from_utf8(&payload[82..]).map_err(|_| InputError::Commands)?;
+        let name = std::str::from_utf8(fields.next().ok_or(InputError::Commands)?)
+            .map_err(|_| InputError::Commands)?;
         if name.contains(['\0', '\n', '\r']) || !names.insert(name) {
             return Err(InputError::Commands);
         }
         updates.push(RefUpdate {
             name: name.into(),
-            expected: (old != [0; 20]).then_some(RefExpectation {
+            expected: (!old.is_zero()).then_some(RefExpectation {
                 oid: Some(old),
                 version: 1,
             }),
-            new_oid: (new != [0; 20]).then_some(new),
+            new_oid: (!new.is_zero()).then_some(new),
         });
     }
 }
 
-fn parse_oid(value: &[u8]) -> Option<[u8; 20]> {
-    if value.len() != 40 || !value.iter().all(u8::is_ascii_hexdigit) {
-        return None;
-    }
-    let mut oid = [0; 20];
-    hex::decode_to_slice(value, &mut oid).ok()?;
-    Some(oid)
+fn parse_oid(value: &[u8]) -> Option<crate::ObjectId> {
+    crate::ObjectId::from_hex(value).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const ZERO: &str = "0000000000000000000000000000000000000000";
     fn packet(body: &[u8]) -> Vec<u8> {
         [
             format!("{:04x}", body.len() + 4).into_bytes(),
@@ -268,7 +272,7 @@ mod tests {
         assert!(report_status && sideband);
         assert_eq!(plan[0].name, "refs/heads/a'b");
         assert_eq!(quote(&plan[0].name), "'refs/heads/a'\\''b'");
-        assert_eq!(plan[0].new_oid, Some([0x12; 20]));
+        assert_eq!(plan[0].new_oid, Some(crate::ObjectId::Sha1([0x12; 20])));
     }
     #[test]
     fn malformed_and_duplicate_commands_cannot_escape_the_hook() {

@@ -169,7 +169,13 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
     }
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(files.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        files.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
     command
         .args([
@@ -207,7 +213,13 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(files.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        files.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
     command.current_dir(files.path().join("missing"));
     assert!(matches!(

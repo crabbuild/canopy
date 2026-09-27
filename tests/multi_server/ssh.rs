@@ -113,6 +113,74 @@ async fn known_host(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn sha256_ssh_push_and_clone() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let host = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]).into(),
+        "canopy-test",
+    )?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        server_config(address, workspace.path().join("node"), &host)?,
+        Arc::clone(&store),
+    )
+    .await?;
+    reqwest::Client::new()
+        .post(format!("http://{address}/api/repositories"))
+        .bearer_auth(AUTH)
+        .json(&serde_json::json!({"name": "sha256-ssh", "object_format": "sha256"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let ssh_address = server.ssh_addr().ok_or("SSH listener missing")?;
+    let known = workspace.path().join("known_hosts");
+    known_host(&known, ssh_address, &host).await?;
+    let key = key(workspace.path(), "client").await?;
+    register(address, "canopy", &key, "write").await?;
+    let ssh = transport(&key, &known)?;
+    let url = format!("ssh://git@{ssh_address}/canopy/sha256-ssh.git");
+    let source = workspace.path().join("source");
+    git(
+        None,
+        &ssh,
+        &[
+            "init",
+            "--object-format=sha256",
+            "-b",
+            "main",
+            path_str(&source)?,
+        ],
+    )
+    .await?;
+    git(Some(&source), &ssh, &["config", "user.name", "Canopy Test"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["config", "user.email", "test@example.invalid"],
+    )
+    .await?;
+    tokio::fs::write(source.join("file"), b"sha256 over ssh\n").await?;
+    git(Some(&source), &ssh, &["add", "file"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "first"],
+    )
+    .await?;
+    git(Some(&source), &ssh, &["push", &url, "HEAD:refs/heads/main"]).await?;
+    let clone = workspace.path().join("clone");
+    git(None, &ssh, &["clone", &url, path_str(&clone)?]).await?;
+    assert_eq!(
+        git(Some(&clone), &ssh, &["rev-parse", "HEAD"]).await?,
+        git(Some(&source), &ssh, &["rev-parse", "HEAD"]).await?
+    );
+    git(Some(&clone), &ssh, &["fsck", "--full", "--strict"]).await?;
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stock_ssh_clone_push_fetch_filters_and_revocation_survive_disk_loss() -> Result {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

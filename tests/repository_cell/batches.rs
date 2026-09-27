@@ -22,7 +22,7 @@ fn identity() -> Result<MutationIdentity> {
 
 fn inline(body: Vec<u8>) -> StoredObject {
     StoredObject {
-        oid: object_id(ObjectKind::Blob, &body),
+        oid: object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &body),
         kind: ObjectKind::Blob,
         storage: ObjectStorage::Inline(body),
     }
@@ -37,6 +37,27 @@ fn batch(objects: impl IntoIterator<Item = StoredObject>) -> ObjectBatch {
 }
 
 pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>) -> Result {
+    let foreign = b"foreign hash format";
+    let foreign_id = object_id(
+        canopy_server::ObjectFormat::Sha256,
+        ObjectKind::Blob,
+        foreign,
+    );
+    assert!(matches!(
+        repository
+            .put_objects(
+                identity()?,
+                batch([StoredObject {
+                    oid: foreign_id,
+                    kind: ObjectKind::Blob,
+                    storage: ObjectStorage::Inline(foreign.to_vec()),
+                }]),
+            )
+            .await,
+        Err(InvocationError::Rejected(_))
+    ));
+    assert!(repository.object(foreign_id, None).await?.output.is_none());
+
     // Every inserted object becomes visible at the same publication receipt.
     let objects: Vec<_> = (0..128)
         .map(|n| inline(format!("batch-{n}").into_bytes()))
@@ -68,8 +89,8 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
     // Two bodies exactly fill the shared payload budget without exceeding the wire limit.
     let first = vec![17; INLINE_OBJECT_LIMIT / 2];
     let second = vec![18; INLINE_OBJECT_LIMIT / 2];
-    let first_id = object_id(ObjectKind::Blob, &first);
-    let second_id = object_id(ObjectKind::Blob, &second);
+    let first_id = object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &first);
+    let second_id = object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &second);
     let stored = repository
         .put_objects(
             identity()?,
@@ -95,7 +116,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
     let fresh = inline(b"must roll back with bad OID".to_vec());
     let fresh_id = fresh.oid;
     let mut wrong = inline(b"wrong object identity".to_vec());
-    wrong.oid = [13; 20];
+    wrong.oid = canopy_server::ObjectId::Sha1([13; 20]);
     assert!(matches!(
         repository
             .put_objects(identity()?, batch([fresh, wrong]))
@@ -142,7 +163,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
 
     // External bytes are uploaded by the caller; their identity record is immutable here.
     let external = |size| StoredObject {
-        oid: [27; 20],
+        oid: canopy_server::ObjectId::Sha1([27; 20]),
         kind: ObjectKind::Blob,
         storage: ObjectStorage::External {
             size,
@@ -170,7 +191,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
     );
     for object in [
         StoredObject {
-            oid: [31; 20],
+            oid: canopy_server::ObjectId::Sha1([31; 20]),
             kind: ObjectKind::Tree,
             storage: ObjectStorage::External {
                 size: 1,
@@ -188,7 +209,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
     assert!(repository.existing_objects(&[]).await.is_err());
     assert!(
         repository
-            .existing_objects(&vec![[0; 20]; 129])
+            .existing_objects(&vec![canopy_server::ObjectId::Sha1([0; 20]); 129])
             .await
             .is_err()
     );

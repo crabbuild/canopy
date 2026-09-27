@@ -124,43 +124,60 @@ impl RepositoryCell {
         validate_component(owner).map_err(InvocationError::NotStarted)?;
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "INSERT INTO repository_identity (singleton, owner, repository_id) VALUES (1, ?1, ?2) ON CONFLICT(singleton) DO NOTHING".into(),
-                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Blob(self.id.to_vec())],
+                sql: "INSERT INTO repository_identity (singleton, owner, repository_id, object_format) VALUES (1, ?1, ?2, ?3) ON CONFLICT(singleton) DO NOTHING".into(),
+                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Blob(self.id.to_vec()), SqlValue::Text(self.object_format.as_str().into())],
             }],
         }).await?;
         let observed = self
-            .sql
-            .query(
-                Some(committed.receipt),
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT owner, repository_id FROM repository_identity WHERE singleton = 1".into(),
-                        parameters: Vec::new(),
-                    }],
-                },
-            )
+            .identity_matches(owner, Some(committed.receipt))
             .await?;
-        if observed
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(Vec::as_slice)
-            != Some(
-                [
-                    SqlValue::Text(owner.into()),
-                    SqlValue::Blob(self.id.to_vec()),
-                ]
-                .as_slice(),
-            )
-        {
+        if !observed.output {
             return Err(InvocationError::InvalidPublishedResult {
                 receipt: committed.receipt,
-                source: Box::new(Error::Command("repository owner differs from directory")),
+                source: Box::new(Error::Command("repository identity differs from directory")),
             });
         }
         Ok(Committed {
             output: (),
             receipt: committed.receipt,
+        })
+    }
+
+    /// Verifies the restored Cell's immutable owner, UUID and Git object format.
+    pub async fn identity_matches(
+        &self,
+        owner: &str,
+        minimum: Option<Receipt>,
+    ) -> Result<Observed<bool>, InvocationError<Vec<SqlResultSet>>> {
+        validate_component(owner).map_err(InvocationError::NotStarted)?;
+        let observed = self
+            .sql
+            .query(
+                minimum,
+                SqlBatch {
+                    statements: vec![SqlStatement {
+                        sql: "SELECT owner, repository_id, object_format FROM repository_identity WHERE singleton = 1".into(),
+                        parameters: Vec::new(),
+                    }],
+                },
+            )
+            .await?;
+        let matches = observed
+            .output
+            .first()
+            .and_then(|set| set.rows.first())
+            .map(Vec::as_slice)
+            == Some(
+                [
+                    SqlValue::Text(owner.into()),
+                    SqlValue::Blob(self.id.to_vec()),
+                    SqlValue::Text(self.object_format.as_str().into()),
+                ]
+                .as_slice(),
+            );
+        Ok(Observed {
+            output: matches,
+            receipt: observed.receipt,
         })
     }
 

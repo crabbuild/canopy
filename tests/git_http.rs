@@ -8,6 +8,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
         root.path().to_path_buf(),
         crab_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
+        canopy_server::ObjectFormat::Sha1,
     )
     .await?;
     for (service, content_type) in [

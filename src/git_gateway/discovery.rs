@@ -60,6 +60,7 @@ impl GitGateway {
             self.scratch_root.clone(),
             self.disk_budget.clone(),
             &snapshot.head,
+            self.repository.object_format(),
         )
         .await?;
         let mut pending: BTreeSet<_> = snapshot

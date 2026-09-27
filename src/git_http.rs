@@ -90,9 +90,10 @@ impl GitHttpBackend {
         scratch_root: PathBuf,
         budget: DiskBudget,
         head: &str,
+        object_format: crate::ObjectFormat,
     ) -> Result<Self, GitHttpError> {
         Ok(Self {
-            cache: GitCache::create(scratch_root, budget, head).await?,
+            cache: GitCache::create(scratch_root, budget, head, object_format).await?,
         })
     }
 

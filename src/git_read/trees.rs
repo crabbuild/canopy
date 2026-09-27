@@ -8,7 +8,7 @@ impl Reader {
         let admission = Arc::clone(&self.admission);
         let entries = tokio::task::spawn_blocking(move || {
             let _admission = admission;
-            parse_tree(&body, remaining)
+            parse_tree(oid.format(), &body, remaining)
         })
         .await??;
         self.entries += entries.len();
@@ -127,7 +127,11 @@ pub(super) fn join(prefix: &[u8], name: &[u8]) -> Result<Vec<u8>, ReadError> {
     path.extend_from_slice(name);
     Ok(path)
 }
-fn parse_tree(mut body: &[u8], limit: usize) -> Result<BTreeMap<Vec<u8>, Node>, ReadError> {
+fn parse_tree(
+    format: crate::ObjectFormat,
+    mut body: &[u8],
+    limit: usize,
+) -> Result<BTreeMap<Vec<u8>, Node>, ReadError> {
     let mut entries = BTreeMap::new();
     while !body.is_empty() {
         if entries.len() == limit {
@@ -171,15 +175,15 @@ fn parse_tree(mut body: &[u8], limit: usize) -> Result<BTreeMap<Vec<u8>, Node>, 
         if name.len() > MAX_PATH {
             return Err(ReadError::TooLarge);
         }
-        let oid = rest
-            .get(nul + 1..nul + 21)
+        let oid: Oid = rest
+            .get(nul + 1..nul + 1 + format.bytes())
             .ok_or(ReadError::Malformed)?
             .try_into()
             .map_err(|_| ReadError::Malformed)?;
-        if oid == [0; 20] || entries.insert(name.to_vec(), Node { mode, oid }).is_some() {
+        if oid.is_zero() || entries.insert(name.to_vec(), Node { mode, oid }).is_some() {
             return Err(ReadError::Malformed);
         }
-        body = &rest[nul + 21..];
+        body = &rest[nul + 1 + format.bytes()..];
     }
     Ok(entries)
 }
@@ -198,7 +202,7 @@ mod tests {
             let mut bytes = format!("{stored} entry\0").into_bytes();
             bytes.extend_from_slice(&[1; 20]);
             assert_eq!(
-                parse_tree(&bytes, 1).unwrap()[b"entry".as_slice()].mode,
+                parse_tree(crate::ObjectFormat::Sha1, &bytes, 1).unwrap()[b"entry".as_slice()].mode,
                 expected
             );
         }
@@ -208,12 +212,18 @@ mod tests {
         let mut bytes = b"100644 \xff\0".to_vec();
         bytes.extend_from_slice(&[1; 20]);
         assert!(
-            parse_tree(&bytes, 1)
+            parse_tree(crate::ObjectFormat::Sha1, &bytes, 1)
                 .unwrap()
                 .contains_key(b"\xff".as_slice())
         );
-        assert!(matches!(parse_tree(&bytes, 0), Err(ReadError::TooLarge)));
+        assert!(matches!(
+            parse_tree(crate::ObjectFormat::Sha1, &bytes, 0),
+            Err(ReadError::TooLarge)
+        ));
         bytes.extend(bytes.clone());
-        assert!(matches!(parse_tree(&bytes, 2), Err(ReadError::Malformed)));
+        assert!(matches!(
+            parse_tree(crate::ObjectFormat::Sha1, &bytes, 2),
+            Err(ReadError::Malformed)
+        ));
     }
 }

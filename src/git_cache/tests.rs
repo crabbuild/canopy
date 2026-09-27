@@ -5,14 +5,19 @@ async fn hydrated_files_remain_charged_until_the_last_reader_releases_them()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache =
-        GitCache::create(root.path().into(), budget.clone(), "refs/heads/stable/next").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/stable/next",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     assert_eq!(
         fs::read(cache.git_dir().join("HEAD"))?,
         b"ref: refs/heads/stable/next\n"
     );
     let body = b"cache bytes are disposable, object identity is not\n";
-    let oid = object_id(ObjectKind::Blob, body);
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body);
     cache
         .store_object(oid, ObjectKind::Blob, body.to_vec())
         .await?;
@@ -53,19 +58,25 @@ async fn hydration_stops_before_writing_unadmitted_bytes() -> Result<(), Box<dyn
 {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let initial = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - initial - 1)?;
     let body = b"cannot fit in one byte".to_vec();
     let result = cache
         .store_object(
-            object_id(ObjectKind::Blob, &body),
+            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
             ObjectKind::Blob,
             body.clone(),
         )
         .await;
     assert!(result.is_err_and(|error| error.is_admission()));
-    let oid = object_id(ObjectKind::Blob, &body);
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
     assert_eq!(cache.missing_objects(vec![oid]).await?, vec![oid]);
     assert_eq!(tree_bytes(cache.root())?, initial);
     drop(cache);
@@ -84,9 +95,15 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
         .prefix("cache path with spaces ")
         .tempdir()?;
     let budget = DiskBudget::new(1 << 20);
-    let objects = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let objects = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let body = b"verified durable object";
-    let oid = object_id(ObjectKind::Blob, body);
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body);
     objects
         .store_object(oid, ObjectKind::Blob, body.to_vec())
         .await?;
@@ -97,6 +114,7 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
             root.path().into(),
             budget.clone(),
             "refs/heads/main",
+            crate::ObjectFormat::Sha1,
             Some(Arc::clone(&objects)),
         )
         .await?;
@@ -135,7 +153,7 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
         .write_all(pending)
         .await?;
     assert!(child.wait_with_output().await?.status.success());
-    let pending_oid = object_id(ObjectKind::Blob, pending);
+    let pending_oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, pending);
     assert_eq!(
         objects.missing_objects(vec![oid, pending_oid]).await?,
         vec![pending_oid]
@@ -155,11 +173,18 @@ async fn a_fenced_generation_retains_its_borrowed_objects() -> Result<(), Box<dy
 {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let objects = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let objects = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let generation = GitCache::create_with_objects(
         root.path().into(),
         budget.clone(),
         "refs/heads/main",
+        crate::ObjectFormat::Sha1,
         Some(Arc::clone(&objects)),
     )
     .await?;
@@ -183,7 +208,13 @@ async fn native_writes_require_admission_before_reconciliation_succeeds()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let initial = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - initial)?;
     fs::write(cache.git_dir().join("native-pack"), [0; 256])?;
@@ -208,7 +239,13 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1024);
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let charged = budget.used();
     let git_dir = cache.git_dir();
     fs::set_permissions(&git_dir, fs::Permissions::from_mode(0o500))?;
@@ -228,7 +265,13 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let blobs = crate::large_blob::LargeBlobStore::new(
         Arc::new(object_store::memory::InMemory::new()),
         [7; 16],
@@ -236,7 +279,7 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
     let body = vec![17; 9 * 1024 * 1024];
     let reference = blobs
         .put(
-            object_id(ObjectKind::Blob, &body),
+            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
             body.len() as u64,
             &mut body.as_slice(),
         )
@@ -254,7 +297,13 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
     drop(cache);
     assert_eq!(budget.used(), 0);
 
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let occupied = budget.try_reserve(budget.capacity() - budget.used())?;
     assert!(
         cache
@@ -273,13 +322,19 @@ async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn
     use object_store::ObjectStoreExt;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(root.path().into(), budget.clone(), "refs/heads/main").await?;
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
     let store = Arc::new(object_store::memory::InMemory::new());
     let blobs = crate::large_blob::LargeBlobStore::new(store.clone(), [9; 16]);
     let mut body = vec![23; 9 * 1024 * 1024];
     let reference = blobs
         .put(
-            object_id(ObjectKind::Blob, &body),
+            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
             body.len() as u64,
             &mut body.as_slice(),
         )

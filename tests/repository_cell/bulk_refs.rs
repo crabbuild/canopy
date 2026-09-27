@@ -7,7 +7,7 @@ pub async fn verify(repository: &RepositoryCell) -> Result<(), Box<dyn std::erro
         let mut objects = ObjectBatch::default();
         for index in start..(start + 128).min(1001) {
             let body = format!("bulk ref object {index}").into_bytes();
-            let oid = object_id(ObjectKind::Blob, &body);
+            let oid = object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &body);
             objects
                 .try_push(StoredObject {
                     oid,

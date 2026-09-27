@@ -35,7 +35,7 @@ pub enum RefReadError {
 /// Expected ref version and optional tip; a missing tip is a retained deletion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefExpectation {
-    pub oid: Option<[u8; 20]>,
+    pub oid: Option<crate::ObjectId>,
     pub version: i64,
 }
 
@@ -44,7 +44,7 @@ pub struct RefExpectation {
 pub struct RefUpdate {
     pub name: String,
     pub expected: Option<RefExpectation>,
-    pub new_oid: Option<[u8; 20]>,
+    pub new_oid: Option<crate::ObjectId>,
 }
 
 /// Complete ref plan; all updates commit in one Repository Cell transaction.
@@ -223,11 +223,11 @@ impl WireValue for PushPlan {
     }
 }
 
-fn read_oid(decoder: &mut BoundedDecoder<'_>) -> Result<[u8; 20], CodecError> {
+fn read_oid(decoder: &mut BoundedDecoder<'_>) -> Result<crate::ObjectId, CodecError> {
     decoder
         .read_bytes()?
         .try_into()
-        .map_err(|_| CodecError::Invalid("Git object ID is not 20 bytes"))
+        .map_err(|_| CodecError::Invalid("Git object ID must be 20 or 32 bytes"))
 }
 
 /// Checks prepared graph certificates and expected versions, publishing all ref changes in one command.
@@ -236,7 +236,7 @@ pub struct FinalizePush;
 impl Command for FinalizePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 3;
-    const CODEC_VERSION: u32 = 3;
+    const CODEC_VERSION: u32 = 4;
     type Input = PushPlan;
     type Output = bool;
 
@@ -268,6 +268,31 @@ pub(crate) fn apply_refs(
         })?)?
         .is_some_and(|level| level >= TokenScope::Write)
     {
+        return Ok(false);
+    }
+    let identity = context.sql(&SqlBatch {
+        statements: vec![SqlStatement {
+            sql: "SELECT object_format FROM repository_identity WHERE singleton = 1".into(),
+            parameters: Vec::new(),
+        }],
+    })?;
+    let Some([SqlValue::Text(format)]) = identity
+        .first()
+        .and_then(|set| set.rows.first())
+        .map(Vec::as_slice)
+    else {
+        return Err(Error::Command("repository identity is absent"));
+    };
+    let format = crate::ObjectFormat::parse(format)
+        .ok_or(Error::Command("invalid repository object format"))?;
+    if plan.updates.iter().any(|update| {
+        update.new_oid.is_some_and(|oid| oid.format() != format)
+            || update
+                .expected
+                .as_ref()
+                .and_then(|old| old.oid)
+                .is_some_and(|oid| oid.format() != format)
+    }) {
         return Ok(false);
     }
     let updates: BTreeMap<_, _> = plan

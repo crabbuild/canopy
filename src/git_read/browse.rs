@@ -121,7 +121,7 @@ impl Reader {
         };
         let oid = match value {
             SqlValue::Null => None,
-            SqlValue::Blob(bytes) if bytes.len() == 20 => Some(hex::encode(bytes)),
+            SqlValue::Blob(bytes) if matches!(bytes.len(), 20 | 32) => Some(hex::encode(bytes)),
             _ => return Err(ReadError::Malformed),
         };
         let version = match version {
@@ -320,6 +320,7 @@ fn parse_commit(id: Oid, body: &[u8]) -> Result<Commit, ReadError> {
         .and_then(|line| line.strip_prefix(b"tree "))
         .and_then(|value| std::str::from_utf8(value).ok())
         .and_then(oid_from_bytes)
+        .filter(|oid| oid.format() == id.format())
         .ok_or(ReadError::Malformed)?;
     let mut parents = Vec::new();
     // Git recognizes parent edges only immediately after the first tree line.
@@ -332,6 +333,7 @@ fn parse_commit(id: Oid, body: &[u8]) -> Result<Commit, ReadError> {
             std::str::from_utf8(value)
                 .ok()
                 .and_then(oid_from_bytes)
+                .filter(|parent| parent.format() == id.format())
                 .ok_or(ReadError::Malformed)?,
         ));
         lines.next();
@@ -377,7 +379,7 @@ mod tests {
         let body = format!(
             "tree {tree}\nparent {parent}\nauthor First <a@b> 1 +0000\nauthor Later <c@d> 2 +0000\nparent {later}\ntree {later}\ngpgsig signed\n parent {later}\ncommitter First <a@b> 1 +0000\n\nparent {later}\n"
         );
-        let commit = parse_commit([4; 20], body.as_bytes()).unwrap();
+        let commit = parse_commit(crate::ObjectId::Sha1([4; 20]), body.as_bytes()).unwrap();
         assert_eq!((commit.tree_oid, commit.parents), (tree, vec![parent]));
         assert_eq!(
             URL_SAFE_NO_PAD

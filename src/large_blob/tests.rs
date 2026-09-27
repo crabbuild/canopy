@@ -9,12 +9,15 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 async fn streamed_objects_verify_all_hashes_without_consuming_the_next_frame() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let blobs = LargeBlobStore::new(store.clone(), [1; 16]);
-    for size in [0, 1, CHUNK_BYTES, CHUNK_BYTES + 1] {
+    for (format, size) in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256]
+        .into_iter()
+        .flat_map(|format| [0, 1, CHUNK_BYTES, CHUNK_BYTES + 1].map(move |size| (format, size)))
+    {
         let body = vec![21; size];
         let mut input = body.clone();
         input.extend_from_slice(b"\nnext frame");
         let mut input = input.as_slice();
-        let oid = object_id(ObjectKind::Blob, &body);
+        let oid = object_id(format, ObjectKind::Blob, &body);
         let reference = blobs.put(oid, size as u64, &mut input).await?;
         assert_eq!(input, b"\nnext frame");
         let replay = blobs.put(oid, size as u64, &mut body.as_slice()).await?;
@@ -40,10 +43,14 @@ async fn bad_input_does_not_publish_and_existing_corruption_is_not_overwritten()
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let blobs = LargeBlobStore::new(store.clone(), [2; 16]);
     let body = b"immutable blob";
-    let oid = object_id(ObjectKind::Blob, body);
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body);
     assert!(matches!(
         blobs
-            .put([0; 20], body.len() as u64, &mut body.as_slice())
+            .put(
+                crate::ObjectId::Sha1([0; 20]),
+                body.len() as u64,
+                &mut body.as_slice()
+            )
             .await,
         Err(LargeBlobError::Corrupt)
     ));
@@ -85,7 +92,7 @@ async fn metadata_hash_corruption_withholds_the_final_range() -> Result {
     let body = vec![42; CHUNK_BYTES + 17];
     let reference = blobs
         .put(
-            object_id(ObjectKind::Blob, &body),
+            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
             body.len() as u64,
             &mut body.as_slice(),
         )
@@ -109,7 +116,7 @@ async fn metadata_hash_corruption_withholds_the_final_range() -> Result {
             ..reference
         },
         LargeBlobReference {
-            oid: [0; 20],
+            oid: crate::ObjectId::Sha1([0; 20]),
             ..reference
         },
         LargeBlobReference {
@@ -134,7 +141,7 @@ async fn replacement_between_ranges_invalidates_the_reader() -> Result {
     let body = vec![42; CHUNK_BYTES + 17];
     let reference = blobs
         .put(
-            object_id(ObjectKind::Blob, &body),
+            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
             body.len() as u64,
             &mut body.as_slice(),
         )

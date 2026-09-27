@@ -156,7 +156,7 @@ pub enum PullChange {
 }
 
 pub(crate) fn parse_oid(value: &str) -> Option<Vec<u8>> {
-    if value.len() != 40
+    if !matches!(value.len(), 40 | 64)
         || !value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -405,7 +405,7 @@ fn summary(row: &[SqlValue]) -> crab_cell_runtime::Result<PullSummary> {
 fn optional_oid(value: &SqlValue) -> crab_cell_runtime::Result<Option<String>> {
     match value {
         SqlValue::Null => Ok(None),
-        SqlValue::Blob(oid) if oid.len() == 20 => Ok(Some(hex::encode(oid))),
+        SqlValue::Blob(oid) if matches!(oid.len(), 20 | 32) => Ok(Some(hex::encode(oid))),
         _ => Err(Error::Command("invalid pull tip")),
     }
 }
@@ -472,8 +472,8 @@ fn stored_revision(row: &[SqlValue]) -> crab_cell_runtime::Result<PullRevision> 
     if *pull_version < 1
         || *source_version < 1
         || *base_version < 1
-        || source_oid.len() != 20
-        || base_oid.len() != 20
+        || !matches!(source_oid.len(), 20 | 32)
+        || !matches!(base_oid.len(), 20 | 32)
     {
         return Err(Error::Command("invalid stored pull revision fields"));
     }

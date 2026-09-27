@@ -11,7 +11,7 @@ dependency.
 ## Current implementation
 
 See [Git compatibility](docs/git-compatibility.md) for verified operations,
-current limits and the remaining transport and object-format work.
+current limits and remaining transport and object-format qualification.
 
 This repository is an implementation under construction. The `canopy` binary
 starts one leased Crab Cell node and serves repositories created through its API.

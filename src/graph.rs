@@ -12,7 +12,7 @@ use crab_cell_runtime::{
 
 mod preparation;
 
-type Oid = [u8; 20];
+type Oid = crate::ObjectId;
 type Edge = (Oid, Option<ObjectKind>);
 const MAX_CERTIFICATES: usize = 128;
 
@@ -106,7 +106,7 @@ pub(crate) struct CertifyObjects;
 impl Command for CertifyObjects {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CertificateBatch;
     type Output = bool;
 
@@ -237,10 +237,12 @@ fn object_edges(
     };
     let edges = match (storage.as_str(), body, upload) {
         ("inline", SqlValue::Blob(body), SqlValue::Null) => {
-            if object_id(kind, body) != oid || blake3::hash(body).as_bytes() != digest.as_slice() {
+            if object_id(oid.format(), kind, body) != oid
+                || blake3::hash(body).as_bytes() != digest.as_slice()
+            {
                 return Err(Error::Command("corrupt stored graph object"));
             }
-            let Some(edges) = edges(kind, body) else {
+            let Some(edges) = edges(oid.format(), kind, body) else {
                 return Ok(None);
             };
             edges
@@ -259,7 +261,7 @@ fn object_edges(
                 digest.as_slice().try_into().map_err(|_| invalid())?,
             )?
             .ok_or_else(invalid)?;
-            let Some(edges) = edges(kind, &body) else {
+            let Some(edges) = edges(oid.format(), kind, &body) else {
                 return Ok(None);
             };
             edges
@@ -269,10 +271,10 @@ fn object_edges(
     Ok(Some(edges))
 }
 
-fn edges(kind: ObjectKind, mut body: &[u8]) -> Option<Vec<Edge>> {
+fn edges(format: crate::ObjectFormat, kind: ObjectKind, mut body: &[u8]) -> Option<Vec<Edge>> {
     let mut edges = match kind {
         ObjectKind::Blob => Some(Vec::new()),
-        ObjectKind::Tree => tree_edges(body),
+        ObjectKind::Tree => tree_edges(format, body),
         ObjectKind::Commit => {
             let tree = hex_oid(line(&mut body)?.strip_prefix(b"tree ")?)?;
             let mut edges = vec![(tree, Some(ObjectKind::Tree))];
@@ -286,6 +288,9 @@ fn edges(kind: ObjectKind, mut body: &[u8]) -> Option<Vec<Edge>> {
         }
         ObjectKind::Tag => Some(vec![tag_edge(body)?]),
     }?;
+    if edges.iter().any(|(oid, _)| oid.format() != format) {
+        return None;
+    }
     // Repeated files can share one Git object. A typed dependency needs one proof.
     edges.sort_unstable();
     edges.dedup();
@@ -306,7 +311,7 @@ fn line<'a>(body: &mut &'a [u8]) -> Option<&'a [u8]> {
     Some(line)
 }
 
-fn tree_edges(mut body: &[u8]) -> Option<Vec<Edge>> {
+fn tree_edges(format: crate::ObjectFormat, mut body: &[u8]) -> Option<Vec<Edge>> {
     let mut edges = Vec::new();
     while !body.is_empty() {
         let space = body.iter().position(|byte| *byte == b' ')?;
@@ -329,8 +334,11 @@ fn tree_edges(mut body: &[u8]) -> Option<Vec<Edge>> {
         if name.is_empty() || name.contains(&b'/') || name == b"." || name == b".." {
             return None;
         }
-        let oid: Oid = path.get(nul + 1..nul + 21)?.try_into().ok()?;
-        if oid == [0; 20] {
+        let oid: Oid = path
+            .get(nul + 1..nul + 1 + format.bytes())?
+            .try_into()
+            .ok()?;
+        if oid.is_zero() {
             return None;
         }
         let kind = match mode & 0o170000 {
@@ -343,15 +351,14 @@ fn tree_edges(mut body: &[u8]) -> Option<Vec<Edge>> {
         if let Some(kind) = kind {
             edges.push((oid, Some(kind)));
         }
-        body = &path[nul + 21..];
+        body = &path[nul + 1 + format.bytes()..];
     }
     Some(edges)
 }
 
 fn hex_oid(text: &[u8]) -> Option<Oid> {
-    let mut oid = [0; 20];
-    hex::decode_to_slice(text, &mut oid).ok()?;
-    (oid != [0; 20]).then_some(oid)
+    let oid = Oid::from_hex(text).ok()?;
+    (!oid.is_zero()).then_some(oid)
 }
 
 fn parse_kind(kind: &[u8]) -> Option<ObjectKind> {

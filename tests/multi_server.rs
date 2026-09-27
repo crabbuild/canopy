@@ -26,6 +26,8 @@ mod paused_blobs;
 mod pulls;
 #[path = "multi_server/rebase.rs"]
 mod rebase;
+#[path = "multi_server/sha256.rs"]
+mod sha256;
 #[path = "multi_server/size.rs"]
 mod size;
 #[path = "multi_server/ssh.rs"]

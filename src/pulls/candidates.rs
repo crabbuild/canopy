@@ -199,7 +199,7 @@ pub(crate) fn publication_oid(
     context: &CommandContext<'_, '_>,
     number: i64,
     request: &merge::MergeRequest,
-) -> crab_cell_runtime::Result<Option<[u8; 20]>> {
+) -> crab_cell_runtime::Result<Option<crate::ObjectId>> {
     let Some(id) = request.candidate_id.as_deref() else {
         return Ok(None);
     };
@@ -237,7 +237,7 @@ fn certified(
     // verifies exact parent order, author, timestamp, message and graph closure.
     let body = commit_body(candidate, tree);
     let commit = oid(commit)?;
-    if crate::object_id(ObjectKind::Commit, &body) != commit {
+    if crate::object_id(commit.format(), ObjectKind::Commit, &body) != commit {
         return Ok(false);
     }
     let rows=context.sql(&SqlBatch {statements:vec![SqlStatement {

@@ -125,7 +125,8 @@ pub async fn verify(
             .windows(b"ok refs/heads/quota".len())
             .any(|part| part == b"ok refs/heads/quota")
     );
-    let expected: [u8; 20] = hex::decode(commit)?.try_into().map_err(|_| "invalid OID")?;
+    let expected: canopy_server::ObjectId =
+        hex::decode(commit)?.try_into().map_err(|_| "invalid OID")?;
     assert_eq!(
         repository
             .ref_state("refs/heads/quota", None)

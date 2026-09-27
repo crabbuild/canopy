@@ -91,7 +91,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
             1 => Some(SqlStatement { sql: "UPDATE object_chunks SET body = zeroblob(length(body)) WHERE upload_id = ?1 AND part = 0".into(), parameters: vec![SqlValue::Blob(upload.to_vec())] }),
             2 => Some(SqlStatement { sql: "INSERT INTO object_chunks (upload_id, part, body) VALUES (?1, 2, ?2)".into(), parameters: vec![SqlValue::Blob(upload.to_vec()), SqlValue::Blob(vec![1])] }),
             3 => { blake3[0] ^= 1; None },
-            4 => { object.oid[0] ^= 1; None },
+            4 => { object.oid = match object.oid { canopy_server::ObjectId::Sha1(mut bytes) => { bytes[0] ^= 1; canopy_server::ObjectId::Sha1(bytes) }, canopy_server::ObjectId::Sha256(mut bytes) => { bytes[0] ^= 1; canopy_server::ObjectId::Sha256(bytes) } }; None },
             5 => { object.kind = ObjectKind::Blob; None },
             _ => { *size -= 1; None },
         };
@@ -105,7 +105,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
             .await?;
         }
         let first = format!("rolled back with invalid chunks {case}").into_bytes();
-        let first_id = object_id(ObjectKind::Blob, &first);
+        let first_id = object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &first);
         let first = StoredObject {
             oid: first_id,
             kind: ObjectKind::Blob,

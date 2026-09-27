@@ -47,6 +47,7 @@ pub(crate) enum ReceiveHook {
 }
 
 pub(crate) struct GitCache {
+    object_format: crate::ObjectFormat,
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
     objects: Option<Arc<GitCache>>,
@@ -57,14 +58,16 @@ impl GitCache {
         root: PathBuf,
         budget: DiskBudget,
         head: &str,
+        object_format: crate::ObjectFormat,
     ) -> Result<Arc<Self>, CacheError> {
-        Self::create_with_objects(root, budget, head, None).await
+        Self::create_with_objects(root, budget, head, object_format, None).await
     }
 
     pub(crate) async fn create_with_objects(
         root: PathBuf,
         budget: DiskBudget,
         head: &str,
+        object_format: crate::ObjectFormat,
         objects: Option<Arc<GitCache>>,
     ) -> Result<Arc<Self>, CacheError> {
         if !crate::default_branch::valid_default_branch(head) {
@@ -73,6 +76,7 @@ impl GitCache {
         let head = format!("ref: {head}\n");
         tokio::task::spawn_blocking(move || {
             let cache = Arc::new(Self {
+                object_format,
                 // Native workers change cwd to this cache; their paths must stay
                 // absolute even when the node's data directory is relative.
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
@@ -85,9 +89,11 @@ impl GitCache {
             // Build an unpublished bare cache directly, without template hooks or
             // unaccounted init subprocess writes. Git remains the wire implementation.
             cache.write_file("HEAD", head.as_bytes())?;
-            cache.write_file("config", b"[core]\nrepositoryformatversion = 0\nbare = true\nlogallrefupdates = false\n[receive]\nautogc = false\n[gc]\nauto = 0\n")?;
+            let version = u8::from(object_format == crate::ObjectFormat::Sha256);
+            let extension = if version == 1 { "[extensions]\nobjectformat = sha256\n" } else { "" };
+            cache.write_file("config", format!("[core]\nrepositoryformatversion = {version}\nbare = true\nlogallrefupdates = false\n[receive]\nautogc = false\n[gc]\nauto = 0\n{extension}").as_bytes())?;
             if let Some(objects) = &cache.objects {
-                if objects.objects.is_some() || objects.root().parent() != cache.root().parent() {
+                if objects.object_format != object_format || objects.objects.is_some() || objects.root().parent() != cache.root().parent() {
                     return Err(io::Error::new(io::ErrorKind::InvalidInput, "object cache must be a direct sibling").into());
                 }
                 let name = objects.root().file_name().and_then(|name| name.to_str())
@@ -135,8 +141,8 @@ impl GitCache {
 
     pub(crate) async fn missing_objects(
         self: &Arc<Self>,
-        ids: Vec<[u8; 20]>,
-    ) -> Result<Vec<[u8; 20]>, CacheError> {
+        ids: Vec<crate::ObjectId>,
+    ) -> Result<Vec<crate::ObjectId>, CacheError> {
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let mut missing = Vec::new();
@@ -159,7 +165,7 @@ impl GitCache {
         .await?
     }
 
-    fn object_path(&self, oid: [u8; 20]) -> PathBuf {
+    fn object_path(&self, oid: crate::ObjectId) -> PathBuf {
         let hex = hex::encode(oid);
         self.git_dir()
             .join("objects")
@@ -169,7 +175,7 @@ impl GitCache {
 
     fn object_writer(
         self: &Arc<Self>,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
     ) -> io::Result<(ZlibEncoder<CacheWriter>, tempfile::TempPath, PathBuf)> {
         let destination = self.object_path(oid);
         let parent = destination
@@ -215,13 +221,13 @@ impl GitCache {
 
     pub(crate) async fn store_object(
         self: &Arc<Self>,
-        oid: [u8; 20],
+        oid: crate::ObjectId,
         kind: ObjectKind,
         body: Vec<u8>,
     ) -> Result<(), CacheError> {
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            if object_id(kind, &body) != oid {
+            if oid.format() != cache.object_format || object_id(oid.format(), kind, &body) != oid {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Git OID mismatch").into());
             }
             let (mut encoder, temporary, destination) = cache.object_writer(oid)?;
@@ -243,6 +249,13 @@ impl GitCache {
         let reference = reader.reference();
         let cache = Arc::clone(self);
         let (mut encoder, temporary, destination) = tokio::task::spawn_blocking(move || {
+            if reference.oid.format() != cache.object_format {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Git object format mismatch",
+                )
+                .into());
+            }
             let (mut encoder, temporary, destination) = cache.object_writer(reference.oid)?;
             encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
             Ok::<_, CacheError>((encoder, temporary, destination))

@@ -25,10 +25,10 @@ impl LargeBlobRead {
             meta,
             reference,
             offset: 0,
-            hashes: Some(Hashes::new(reference.size)),
+            hashes: Some(Hashes::new(reference.oid.format(), reference.size)),
         };
         if reference.size == 0 {
-            read.check(Hashes::new(0))?;
+            read.check(Hashes::new(reference.oid.format(), 0))?;
         }
         Ok(read)
     }

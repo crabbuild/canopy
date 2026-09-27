@@ -104,15 +104,33 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         Some(("bob".into(), TokenScope::Read))
     );
     let reserved = directory
-        .reserve(identity(1)?, "alice", "alpha", first_id)
+        .reserve(
+            identity(1)?,
+            "alice",
+            "alpha",
+            first_id,
+            canopy_server::ObjectFormat::Sha1,
+        )
         .await?;
     assert_eq!(reserved.output.state, RepositoryState::Pending);
     let retried = directory
-        .reserve(identity(2)?, "alice", "alpha", second_id)
+        .reserve(
+            identity(2)?,
+            "alice",
+            "alpha",
+            second_id,
+            canopy_server::ObjectFormat::Sha1,
+        )
         .await?;
     assert_eq!(retried.output.repository_id, first_id);
     let second = directory
-        .reserve(identity(3)?, "alice", "beta", second_id)
+        .reserve(
+            identity(3)?,
+            "alice",
+            "beta",
+            second_id,
+            canopy_server::ObjectFormat::Sha1,
+        )
         .await?
         .output;
     assert!(
@@ -147,6 +165,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         )?,
         first_target.clone(),
         first_id,
+        canopy_server::ObjectFormat::Sha1,
     )?;
     let second_repository = RepositoryCell::new(
         &app_handle(
@@ -166,7 +185,14 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         )?,
         second_target.clone(),
         second_id,
+        canopy_server::ObjectFormat::Sha1,
     )?;
+    first_repository
+        .ensure_owner(random_identity()?, "alice")
+        .await?;
+    second_repository
+        .ensure_owner(random_identity()?, "alice")
+        .await?;
     let first = directory
         .activate(identity(4)?, &reserved.output)
         .await?
@@ -260,7 +286,10 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
     let oid = objects::put(&first_repository, identity(6)?, ObjectKind::Blob, body)
         .await?
         .output;
-    assert_eq!(oid, object_id(ObjectKind::Blob, body));
+    assert_eq!(
+        oid,
+        object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, body)
+    );
     assert!(
         second_repository
             .existing_objects(&[oid])
@@ -332,6 +361,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         )?,
         first_target,
         first_id,
+        canopy_server::ObjectFormat::Sha1,
     )?;
     let beta = RepositoryCell::new(
         &app_handle(
@@ -351,6 +381,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         )?,
         second_target,
         second_id,
+        canopy_server::ObjectFormat::Sha1,
     )?;
     assert_eq!(
         alpha.object(oid, None).await?.output,
