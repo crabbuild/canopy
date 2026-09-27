@@ -81,9 +81,10 @@ permits it.
   Thirty-two supervised cold/remote transitions may execute or wait; excess
   admission receives 503. Ready local routes bypass that queue. These are
   qualification limits, not measured production capacity.
-- Ready local routes now pin under a short registry lock. Ownership transitions
-  are separately serialized; a paused cold admission or release cannot hold
-  the registry lock and block another ready local repository.
+- Ready local routes pin under a short registry lock. Ownership transitions
+  serialize per repository; unrelated cold admissions may execute concurrently.
+  Slots cover in-flight activation as well as loaded entries, and eviction
+  transfers a slot only after confirmed owner release and local cleanup.
 - Ready repository activation verifies its immutable owner using a read-only
   query; only pending repositories publish owner initialization. This avoids a
   redundant durable command on restore or remote binding. The initial density
@@ -181,11 +182,13 @@ headroom. The setting enables those measurements; a larger configured count alon
 is not evidence of sustainable capacity. Do not simply replace three with ten thousand. Account for native Git
 and outgoing streams separately from SQL connection caches.
 
-Replace the serialized cold-transition queue with per-repository activation
-coordination only after slots can be reserved atomically. Bound restore
-concurrency and queued work at node and account boundaries. Concurrent waiters
-share one activation result; canceled clients cannot abandon acquired ownership.
-Eviction candidates become unavailable atomically with request pin checks.
+Per-repository activation guards and atomic slot reservations are implemented.
+Successful same-repository activation is reused by waiting callers; failures
+remain retryable through the existing lifecycle states. The node admits at most
+32 supervised transitions, including queued waiters. Canceled clients cannot
+abandon acquired ownership. Eviction claims a candidate guard without waiting
+and makes it unavailable under the request-pin lock. Per-account fairness and
+resource-derived restore concurrency still require implementation/qualification.
 
 Acceptance: runs with 100, 500 and 1,000 active repositories within the same
 10,000-repository corpus publish their measured limits. A cold storm and a hot
@@ -829,3 +832,70 @@ merge-candidate tests passed. All-target Clippy with warnings denied, formatting
 and the optimized build passed. `scripts/smoke_s3_cache.py` now asserts the three
 scanned headers as well as body reuse; enable `canopy_server::git_gateway=debug`
 for the required diagnostic evidence. Broader capacity and pack reuse remain open.
+
+
+## Concurrent repository activation
+
+Cold activation and eviction now coordinate per repository. A semaphore reserves
+capacity before ownership/storage I/O; its permit stays with the loaded gateway
+or in-flight activation. Eviction transfers the permit only after confirmed
+runtime release and local cleanup. Candidate guards are acquired without waiting
+while the requesting repository holds its own guard, avoiding lock cycles.
+Successful same-repository activation is reused. The existing 32-operation
+admission remains held by supervised work through HTTP cancellation.
+
+The paused-cold-lookup test fails with the former global transition lock and
+passes with independent repository guards. The cancellation regression pins two
+resident slots, pauses restoration into the third, disconnects that request and
+proves another cold admission returns 503. All 13 residency tests, two peer tests
+and eight lifecycle tests passed; residency was rerun after moving gateway/cache
+destruction outside the registry lock. All-target Clippy with warnings denied,
+formatting and the optimized build passed. No dependency or durability boundary
+changed. Production Rust grew by 57 lines to make capacity reservations and
+candidate transition ownership explicit.
+
+The real-process proof `canopy-parallel-activation-0f1f8583e3a6` uses macOS arm64
+and colocated RustFS `1.0.0-beta.8-glibc`, with provider limits of two CPUs and
+4 GiB. The Canopy process is not resource-contained in this probe. Base revision
+is `abd1a29` plus the archived source patch; executable SHA-256:
+`9db2d202c85134554307a007bfd7eaf47e30c3fb39ab81c8173bd616f8421ee5`.
+The corpus contains 64 SQL-only repository Cells, three with one-commit Git
+samples. After SIGKILL and lease expiry, a new local workspace receives one
+identity read per repository through eight concurrent clients, without retries.
+
+| Cold recovery observation | Result |
+| --- | ---: |
+| Correct identities | 64 / 64 |
+| Elapsed workload time | 45.915 s |
+| Request p50 | 5,134.735 ms |
+| Request p95 | 9,798.317 ms |
+| Request p99 / maximum | 10,588.930 ms |
+
+All identities were independently rechecked afterward. Stock Git v0/v2 clones,
+exact commit/file hashes and strict fsck passed for all three populated samples.
+Graceful shutdown exited zero; provider cleanup passed. Both server logs contain
+zero warnings/errors. The report retains every request outcome and latency.
+
+This is a closed-loop functional recovery probe, not a scheduled-arrival SLO or
+maximum-throughput qualification. Cold latency remains high. Correlated server
+records place median transition time at 4.986 s and median Cell acquisition at
+4.926 s; median transition-guard wait was approximately 0.005 ms, maximum
+473.153 ms. This localizes most observed transition time to acquisition but does
+not identify its underlying bottleneck or prove a latency improvement against a
+matched baseline. Resource-derived restoration concurrency, account fairness,
+retained SQLite caches and realistic mixed primitive workloads remain open.
+
+Repeat with fixture credentials, a disposable S3 prefix and a new directory on
+the qualification volume:
+
+```sh
+python3 -B scripts/smoke_s3_activation.py \
+  --binary "$CARGO_TARGET_DIR/release/canopy" \
+  --storage-url s3://qualification-bucket/activation-proof \
+  --work-dir "$CARGO_TARGET_DIR/activation-proof-run1"
+```
+
+Set `CANOPY_GIT_TOKEN=local-test-token`, the node signing key and provider
+credentials through the environment, as for the other S3 process fixtures.
+Enable `canopy_server::server::residency=debug` to capture transition timings.
+The script cleans its Canopy processes; the caller owns provider-prefix cleanup.

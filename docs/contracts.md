@@ -267,16 +267,19 @@ The Directory Cell has one owner for authentication and routing; other gateways
 use its typed peer client.
 
 Ready local routes pin their entry under a short registry lock. Activation,
-owner refresh, release and local cleanup use a separate serialized transition
-guard; none holds the registry lock across storage or runtime awaits. Existing
-local repositories therefore remain routable while another repository waits on
-cold ownership lookup, restoration or release. A candidate is marked releasing
+owner refresh, release and local cleanup take a per-repository transition guard.
+Different repositories can progress concurrently; successful same-repository
+activation is reused by queued callers. No registry lock spans storage or runtime
+I/O. Existing local repositories remain routable while another repository waits
+on cold ownership lookup, restoration or release. A candidate is marked releasing
 under the same registry lock that creates request pins before runtime transfer
 starts. Requests for that candidate wait for the transition and recheck its
 serving state. Initialization must succeed before the ready route is exposed.
 Remote routes retain authoritative owner checks on the transition path.
 
 At most 32 transition operations may be executing or waiting on that path.
+Transition locks are held only by admitted work; weak map entries are pruned on
+lookup, so repository history does not accumulate permanent mutexes.
 Admission uses a nonwaiting semaphore before spawning supervised work; a full
 queue returns a capacity error (HTTP 503). The task owns its permit through
 completion or failure, including after the HTTP client disconnects. Ready local
@@ -289,8 +292,12 @@ from available parallelism, with one worker when discovery fails and a maximum
 of sixteen. Each Cell remains assigned to one owning SQL worker. Active-Cell
 admission is `max_active_repositories + 1`, including Directory. The required
 node setting accepts 1–9,999 and is checked before workspace or storage startup;
-Canopy's gateway count uses the same limit. Remote entries conservatively consume
-gateway slots even though their SQL Cell is owned elsewhere. The runtime's
+Canopy reserves a slot before activation I/O, including while no loaded entry
+exists. That slot moves into the loaded entry, remains reserved through release
+and local cleanup, then transfers directly to its replacement activation. Failed
+release or cleanup retains the entry and its slot. Refreshing a handle shares the
+same reservation; it never acquires a second slot. Remote entries conservatively
+consume gateway slots even though their SQL Cell is owned elsewhere. The runtime's
 10,000-Cell ceiling includes Directory. More SQL workers do not raise residency
 or establish throughput. Count admission does not bound total RSS or cache bytes;
 operator resource budgets and deployment containment remain necessary. Debug residency logs report
@@ -355,7 +362,10 @@ remain open.
 ### Residency release
 
 When all repository slots are occupied, the manager selects the least recently
-used unpinned repository among Cellule's settled transfer candidates. It calls
+used unpinned repository among Cellule's settled transfer candidates. It also
+claims the candidate's transition guard without waiting, excluding concurrent
+initialization, routing and eviction. This prevents lock cycles between two
+admissions replacing different repositories. It calls
 `release_idle_cell` with the exact Cell generation and current node session.
 Cellule rechecks obligations and admission, closes SQLite and confirms durable
 owner release before returning success. Only then does Canopy drop its cached

@@ -530,3 +530,92 @@ async fn cold_admission_stays_bounded_after_clients_disconnect() -> Result {
     fixture.server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn paused_cold_repository_does_not_serialize_other_cold_activations() -> Result {
+    let fixture = Fixture::new().await?;
+    create(&fixture.client, fixture.address, "fourth").await?;
+    assert!(!fixture.repository_dir.exists());
+    *fixture.store.paused_read.lock().unwrap() = Some(
+        fixture
+            .layout
+            .control_path(fixture.target.cell_id().as_bytes()),
+    );
+    let request = fixture
+        .client
+        .get(format!(
+            "http://{}/api/repositories/original",
+            fixture.address
+        ))
+        .bearer_auth("local-test-token");
+    let pending = tokio::spawn(async move { request.send().await });
+    fixture.store.wait().await?;
+    // Both requests need cold admission in a full node. Pausing one authority
+    // lookup must not prevent another repository from releasing a different slot.
+    let independent = timeout(
+        Duration::from_secs(2),
+        create(&fixture.client, fixture.address, "independent"),
+    )
+    .await;
+    fixture.store.proceed.notify_one();
+    pending.await??.error_for_status()?;
+    independent??;
+    fixture.clone_original(fixture.address).await?;
+    fixture.server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_cold_activation_retains_its_reserved_slot() -> Result {
+    let fixture = Fixture::new().await?;
+    create(&fixture.client, fixture.address, "fourth").await?;
+    assert!(!fixture.repository_dir.exists());
+    let mut uploads = Vec::new();
+    let oid = hex::encode(Sha256::digest(b"x"));
+    for name in ["third", "fourth"] {
+        let mut stream = TcpStream::connect(fixture.address).await?;
+        stream.write_all(format!(
+            "PUT /canopy/{name}.git/info/lfs/objects/{oid} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer local-test-token\r\nContent-Length: 1\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n", fixture.address
+        ).as_bytes()).await?;
+        let mut response = vec![0; b"HTTP/1.1 100 Continue\r\n\r\n".len()];
+        timeout(Duration::from_secs(5), stream.read_exact(&mut response)).await??;
+        assert_eq!(response, b"HTTP/1.1 100 Continue\r\n\r\n");
+        uploads.push(stream);
+    }
+    *fixture.store.paused_read.lock().unwrap() = Some(
+        fixture
+            .layout
+            .control_path(fixture.target.cell_id().as_bytes()),
+    );
+    let request = fixture
+        .client
+        .get(format!(
+            "http://{}/api/repositories/original",
+            fixture.address
+        ))
+        .bearer_auth("local-test-token");
+    let pending = tokio::spawn(async move { request.send().await });
+    fixture.store.wait().await?;
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    // Two slots are pinned by uploads. The third has left its previous resident
+    // and belongs to the paused restore, even after its HTTP client disconnects.
+    let denied = timeout(
+        Duration::from_secs(2),
+        fixture
+            .client
+            .get(format!(
+                "http://{}/api/repositories/second",
+                fixture.address
+            ))
+            .bearer_auth("local-test-token")
+            .send(),
+    )
+    .await;
+    fixture.store.proceed.notify_one();
+    assert_eq!(denied??.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    fixture.clone_original(fixture.address).await?;
+    drop(uploads);
+    fixture.server.shutdown().await?;
+    Ok(())
+}

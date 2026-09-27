@@ -3058,3 +3058,37 @@ local recovery and shutdown passed. Cursor/index tests, Repository Cell tests,
 stock Git pressure/concurrency tests and native merge candidates passed, along
 with Clippy, formatting and the optimized build. This establishes incremental
 cache refresh, not production throughput or full primitive capacity.
+
+
+## Concurrent repository activation
+
+Cold activation, ownership refresh and eviction now serialize per repository.
+A reserved slot covers each in-flight activation as well as each loaded gateway.
+Eviction claims an unpinned candidate's transition guard without waiting, retains
+its slot through confirmed runtime release and filesystem cleanup, then transfers
+the reservation directly to the replacement. Weak transition-lock entries are
+pruned, and the existing 32-operation admission remains held by supervised tasks
+through client cancellation. Git cache destruction occurs outside the registry
+lock. Cellule still decides whether work is settled and a generation can release.
+
+The paused-cold-lookup regression fails with the old global transition guard and
+passes with per-repository coordination. A separate cancellation case pins two
+repositories, pauses the replacement for the third slot, disconnects its client
+and proves another cold request receives 503 until the admitted work completes.
+The slot is never made available simply because a loaded entry was removed.
+
+The real-store fixture `scripts/smoke_s3_activation.py` creates 64 repositories
+with three stock Git samples, kills their owner, starts a fresh local workspace
+and reads every identity with eight clients and no retries. It then checks Git
+v0/v2 clone, exact hashes, strict fsck and graceful shutdown. This is a bounded
+recovery workload; production density and full primitive integration remain open.
+
+
+The optimized process run `canopy-parallel-activation-0f1f8583e3a6` passed all
+64 cold identity reads without retries, the three Git v0/v2 recovery samples,
+strict fsck, graceful shutdown and provider cleanup. All 13 residency, two peer
+and eight lifecycle tests passed, along with Clippy, formatting and the release
+build. Cold request p50/p99 was 5.135/10.589 seconds; low cold latency remains
+unmet. Server timings place most transition time inside Cell acquisition.
+See [the concurrent activation evidence](performance-plan.md#concurrent-repository-activation)
+for the workload, binary identity, limits and repeat command.

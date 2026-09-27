@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -172,8 +172,8 @@ pub(crate) struct RepositoryManager {
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
-    residency_change: Mutex<()>,
-    max_active_repositories: usize,
+    residency_transitions: Mutex<HashMap<[u8; 16], Weak<Mutex<()>>>>,
+    residency_slots: Arc<Semaphore>,
     residency_admission: Arc<Semaphore>,
     tasks: TaskTracker,
 }
@@ -536,8 +536,8 @@ impl RunningServer {
                 public_url: config.public_url,
                 ready,
                 loaded: Mutex::new(HashMap::new()),
-                residency_change: Mutex::new(()),
-                max_active_repositories: config.max_active_repositories,
+                residency_transitions: Mutex::new(HashMap::new()),
+                residency_slots: Arc::new(Semaphore::new(config.max_active_repositories)),
                 residency_admission: Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES)),
                 tasks: tasks.clone(),
             });

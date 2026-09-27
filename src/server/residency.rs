@@ -1,6 +1,7 @@
 //! Bounded repository residency with request pins and confirmed Cell release.
 
 use std::{
+    collections::HashMap,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -12,8 +13,9 @@ use axum::{
     body::{Body, Bytes, HttpBody},
     http::{Request, Response},
 };
-use cellule_runtime::{CatalogRole, CellClient, CellModule, CellTarget, Error};
+use cellule_runtime::{CatalogRole, CellClient, CellId, CellModule, CellTarget, Error};
 use http_body::{Frame, SizeHint};
+use tokio::sync::{Mutex, OwnedSemaphorePermit};
 use tower::ServiceExt;
 
 use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutation_identity};
@@ -35,6 +37,13 @@ pub(super) struct LoadedRepository {
     initialized: bool,
     local: bool,
     state: ResidencyState,
+    slot: Arc<OwnedSemaphorePermit>,
+}
+
+enum EvictionAction {
+    DropRemote,
+    Cleanup,
+    Release { cell: CellId, generation: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -121,7 +130,8 @@ impl RepositoryManager {
                 // Retain queue capacity through cancellation and transition cleanup.
                 // Releasing it with the HTTP waiter would allow unbounded detached work.
                 let _admission = admission;
-                let _change = manager.residency_change.lock().await;
+                let transition = manager.transition_lock(entry.repository_id).await;
+                let _change = transition.lock().await;
                 let queue_seconds = queued.elapsed().as_secs_f64();
                 let started = Instant::now();
                 let result = manager.load_repository(&entry).await;
@@ -152,8 +162,21 @@ impl RepositoryManager {
         self.route(entry, repository).map(Some)
     }
 
-    // The transition guard serializes slot admission and ownership changes.
-    // The registry lock only protects memory and request pins, never storage I/O.
+    async fn transition_lock(&self, id: [u8; 16]) -> Arc<Mutex<()>> {
+        let mut transitions = self.residency_transitions.lock().await;
+        // Only admitted tasks retain locks. Weak entries avoid accumulating one
+        // mutex per historical repository; live entries are bounded by admission.
+        transitions.retain(|_, lock| lock.strong_count() != 0);
+        if let Some(lock) = transitions.get(&id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        transitions.insert(id, Arc::downgrade(&lock));
+        lock
+    }
+
+    // The repository guard serializes its own ownership changes. Slots are
+    // reserved before storage I/O, including while an activation is in flight.
     async fn load_repository(
         &self,
         entry: &RepositoryEntry,
@@ -162,6 +185,7 @@ impl RepositoryManager {
             return Ok(route);
         }
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
+        let mut reclaimed = None;
         let remote_route = self
             .loaded
             .lock()
@@ -171,7 +195,8 @@ impl RepositoryManager {
         if remote_route && !self.peer.remote_owner(&target).await? {
             // Remote cache ownership is disposable. Reacquire idle/expired Cell
             // authority locally before binding a new route after owner loss.
-            self.loaded.lock().await.remove(&entry.repository_id);
+            let removed = self.loaded.lock().await.remove(&entry.repository_id);
+            reclaimed = removed.map(|repository| repository.slot);
         }
         let state = self
             .loaded
@@ -181,7 +206,7 @@ impl RepositoryManager {
             .map(|repository| repository.state);
         match state {
             Some(ResidencyState::Released) => {
-                self.cleanup_released(entry.repository_id).await?;
+                reclaimed = Some(self.cleanup_released(entry.repository_id).await?);
             }
             Some(ResidencyState::RefreshHandle) => {
                 let target = repository_target(self.tenant, self.application, entry.repository_id)?;
@@ -195,29 +220,37 @@ impl RepositoryManager {
                     .ok_or(ServerError::Repository(
                         "Cell release failed; restart the node to recover",
                     ))?;
-                self.loaded.lock().await.insert(
+                let mut loaded = self.loaded.lock().await;
+                let slot = Arc::clone(
+                    &loaded
+                        .get(&entry.repository_id)
+                        .ok_or(ServerError::Repository("loaded repository is absent"))?
+                        .slot,
+                );
+                let previous = loaded.insert(
                     entry.repository_id,
                     self.bind_repository(
                         entry,
                         target,
                         CellClient::local(self.node.application().registry(), handle),
                         true,
+                        slot,
                     )?,
                 );
+                drop(loaded);
+                drop(previous);
             }
             _ => {}
         }
-        let (present, full) = {
-            let loaded = self.loaded.lock().await;
-            (
-                loaded.contains_key(&entry.repository_id),
-                loaded.len() >= self.max_active_repositories,
-            )
-        };
+        let present = self.loaded.lock().await.contains_key(&entry.repository_id);
         if !present {
-            if full {
-                self.evict_repository().await?;
-            }
+            let slot = match reclaimed {
+                Some(slot) => slot,
+                None => match Arc::clone(&self.residency_slots).try_acquire_owned() {
+                    Ok(slot) => Arc::new(slot),
+                    Err(_) => self.evict_repository().await?,
+                },
+            };
             let remote = self.peer.remote_owner(&target).await?;
             let client = if remote {
                 self.peer.client()
@@ -245,7 +278,7 @@ impl RepositoryManager {
             };
             self.loaded.lock().await.insert(
                 entry.repository_id,
-                self.bind_repository(entry, target, client, !remote)?,
+                self.bind_repository(entry, target, client, !remote, slot)?,
             );
         }
         let initialize = self
@@ -299,56 +332,69 @@ impl RepositoryManager {
         })
     }
 
-    async fn evict_repository(&self) -> Result<(), ServerError> {
-        let released = self
-            .loaded
-            .lock()
-            .await
-            .iter()
-            .find_map(|(id, repository)| {
-                (repository.state == ResidencyState::Released).then_some(*id)
-            });
-        if let Some(id) = released {
-            return self.cleanup_released(id).await;
-        }
-        {
-            let mut loaded = self.loaded.lock().await;
-            if let Some(id) = loaded.iter().find_map(|(id, repository)| {
-                (!repository.local && Arc::strong_count(&repository.pin) == 1).then_some(*id)
-            }) {
-                loaded.remove(&id);
-                return Ok(());
-            }
-        }
-        let candidates = self.node.idle_transfer_candidates().await?;
-        let (id, cell, generation) = {
+    async fn evict_repository(&self) -> Result<Arc<OwnedSemaphorePermit>, ServerError> {
+        let candidates: HashMap<_, _> = self
+            .node
+            .idle_transfer_candidates()
+            .await?
+            .into_iter()
+            .map(|(cell, generation, _, _)| (cell, generation))
+            .collect();
+        let (id, action, _transition) = {
             let mut loaded = self.loaded.lock().await;
             let mut eligible = Vec::new();
             for (id, repository) in loaded.iter() {
                 if Arc::strong_count(&repository.pin) != 1 {
                     continue;
                 }
-                let target = repository_target(self.tenant, self.application, *id)?;
-                if let Some((cell, generation, _, _)) = candidates
-                    .iter()
-                    .find(|(cell, ..)| *cell == target.cell_id())
-                {
-                    eligible.push((repository.last_used, *id, *cell, *generation));
-                }
+                let (priority, action) = match (repository.state, repository.local) {
+                    (ResidencyState::Released, _) => (0, EvictionAction::Cleanup),
+                    (ResidencyState::Serving, false) => (1, EvictionAction::DropRemote),
+                    (ResidencyState::Serving | ResidencyState::RefreshHandle, true) => {
+                        let target = repository_target(self.tenant, self.application, *id)?;
+                        let Some(generation) = candidates.get(&target.cell_id()) else {
+                            continue;
+                        };
+                        (
+                            2,
+                            EvictionAction::Release {
+                                cell: target.cell_id(),
+                                generation: *generation,
+                            },
+                        )
+                    }
+                    _ => continue,
+                };
+                eligible.push((priority, repository.last_used, *id, action));
             }
-            eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1));
-            let Some((_, id, cell, generation)) = eligible.first().copied() else {
-                return Err(ServerError::Runtime(Error::Capacity(
-                    "repository residency",
-                )));
-            };
-            // Claim the candidate under the same lock used to pin warm requests.
-            // No new request may acquire this handle once release can start.
-            loaded
-                .get_mut(&id)
-                .ok_or(ServerError::Repository("eviction candidate is absent"))?
-                .state = ResidencyState::Releasing;
-            (id, cell, generation)
+            eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1, candidate.2));
+            let mut chosen = None;
+            for (_, _, id, action) in eligible {
+                // Never wait for another repository while holding our own guard.
+                // This excludes in-flight initialization and competing evictions.
+                let Ok(transition) = self.transition_lock(id).await.try_lock_owned() else {
+                    continue;
+                };
+                if matches!(action, EvictionAction::Release { .. }) {
+                    loaded
+                        .get_mut(&id)
+                        .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                        .state = ResidencyState::Releasing;
+                }
+                chosen = Some((id, action, transition));
+                break;
+            }
+            chosen.ok_or(Error::Capacity("repository residency"))?
+        };
+        let (cell, generation) = match action {
+            EvictionAction::DropRemote => {
+                let removed = self.loaded.lock().await.remove(&id);
+                return removed
+                    .map(|repository| repository.slot)
+                    .ok_or(ServerError::Repository("eviction candidate is absent"));
+            }
+            EvictionAction::Cleanup => return self.cleanup_released(id).await,
+            EvictionAction::Release { cell, generation } => (cell, generation),
         };
         let mut result = self
             .node
@@ -378,12 +424,15 @@ impl RepositoryManager {
         result?;
         // Only a confirmed release permits dropping handles and deleting local
         // SQLite artifacts. Failed or ambiguous releases retain the local state.
-        self.cleanup_released(id).await?;
+        let slot = self.cleanup_released(id).await?;
         tracing::debug!(repository = %hex::encode(id), "released idle repository Cell");
-        Ok(())
+        Ok(slot)
     }
 
-    async fn cleanup_released(&self, id: [u8; 16]) -> Result<(), ServerError> {
+    async fn cleanup_released(
+        &self,
+        id: [u8; 16],
+    ) -> Result<Arc<OwnedSemaphorePermit>, ServerError> {
         // Keep the released entry until deletion completes. A failed cleanup must
         // be retried before restore, whose destination must not already exist.
         match tokio::fs::remove_dir_all(self.local.path().join(hex::encode(id))).await {
@@ -391,8 +440,14 @@ impl RepositoryManager {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        self.loaded.lock().await.remove(&id);
-        Ok(())
+        // Transfer the still-reserved slot directly to the new activation.
+        // Another cold request cannot steal it between release and restore.
+        let removed = self.loaded.lock().await.remove(&id);
+        // Dropping a gateway may delete its Git cache. The registry lock must
+        // already be released before that filesystem cleanup runs.
+        removed
+            .map(|repository| repository.slot)
+            .ok_or(ServerError::Repository("released repository is absent"))
     }
 
     fn bind_repository(
@@ -401,6 +456,7 @@ impl RepositoryManager {
         target: CellTarget,
         client: CellClient,
         local: bool,
+        slot: Arc<OwnedSemaphorePermit>,
     ) -> Result<LoadedRepository, ServerError> {
         let application = self.node.application_handle::<CanopyApplication>(
             client,
@@ -425,6 +481,7 @@ impl RepositoryManager {
             initialized: false,
             local,
             state: ResidencyState::Serving,
+            slot,
         })
     }
 
