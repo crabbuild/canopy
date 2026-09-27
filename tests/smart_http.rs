@@ -23,6 +23,8 @@ mod support;
 mod cache_admission;
 #[path = "smart_http/encoded_input.rs"]
 mod encoded_input;
+#[path = "smart_http/native_resources.rs"]
+mod native_resources;
 #[path = "smart_http/ref_snapshots.rs"]
 mod ref_snapshots;
 
@@ -474,6 +476,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         )
         .await?;
         assert!(tokio::fs::read(clone.join("tracked.lfs")).await? == lfs_body);
+        native_resources::verify(scratch.path(), &url).await?;
         let _ = stop_tx.send(());
         server.await??;
         Ok(())

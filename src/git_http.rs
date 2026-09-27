@@ -144,6 +144,11 @@ impl GitHttpBackend {
                 "receive.denyDeleteCurrent=ignore",
                 "-c",
                 "receive.autogc=false",
+                // Stream large blobs and skip expensive delta search for them.
+                // Scope this to transport: the threshold also changes text merge
+                // behavior, so merge-tree must retain its ordinary Git semantics.
+                "-c",
+                "core.bigFileThreshold=8m",
             ])
             .arg("-c")
             .arg(format!(

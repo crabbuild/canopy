@@ -70,7 +70,8 @@ async fn native_candidates_are_fetchable_checked_and_recover_before_atomic_merge
         )
         .await?;
         file(&local, "old.txt", b"rename content\n", "Rename source").await?;
-        let middle = "unchanged line\n".repeat(60000);
+        // Exceed the transport streaming threshold while retaining text merges.
+        let middle = "unchanged line\n".repeat(600000);
         file(
             &local,
             "large.txt",

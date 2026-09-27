@@ -634,6 +634,33 @@ and the HTTP backend's
 Git may add its own child environment, including its resolved executable path;
 host values are removed before that initialization.
 
+### Native pack resource policy
+
+Every native command receives internal Git budgets: two pack/index workers,
+32 MiB of delta-search window per worker, a 32 MiB pack delta cache, a 16 MiB
+base-object cache per worker, 16 MiB pack mapping windows and a 64 MiB mapping
+budget. See [Git configuration](https://git-scm.com/docs/git-config) for their
+individual semantics. These settings are process-local policies, not a sum that
+can be presented as a total memory limit.
+
+Only smart HTTP adds `core.bigFileThreshold=8m`: Git streams eligible large
+blobs during receive and pack generation, and skips new delta search above that
+size. Incoming deltified objects remain supported; reconstructing their bases
+and results can still allocate more memory. Smaller objects retain ordinary
+delta compression. Larger similar revisions may consume more wire bytes.
+
+The threshold also affects text/binary decisions. Candidate `merge-tree` and
+`commit-tree` commands therefore use the common cache/worker budgets without
+the transport threshold. The same large text file can stream during transfer
+and still merge using ordinary Git text semantics.
+
+Git 2.50.1's [pack writer](https://github.com/git/git/blob/v2.50.1/builtin/pack-objects.c),
+[indexer](https://github.com/git/git/blob/v2.50.1/builtin/index-pack.c), and
+[unpacker](https://github.com/git/git/blob/v2.50.1/builtin/unpack-objects.c) consume
+these policies. Object metadata, graph traversal, delta reconstruction and merge
+working sets remain outside these cache budgets. Aggregate native RAM, CPU and
+filesystem enforcement remain release gates; no filesystem quota is implied.
+
 ### Local runtime recovery
 
 `data_dir/.canopy-owner.lock` prevents concurrent nodes from using one local

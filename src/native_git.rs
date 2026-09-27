@@ -86,7 +86,24 @@ pub(crate) fn command(git_dir: &Path) -> io::Result<Command> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
         .arg("--no-replace-objects")
-        .args(["-c", "protocol.allow=never"]);
+        .args(["-c", "protocol.allow=never"])
+        // Each admitted transfer has its own Git process tree. Keep pack search,
+        // delta caches and mappings from scaling with the host's CPU/RAM size.
+        // These budgets do not bound object traversal or total process memory.
+        .args([
+            "-c",
+            "pack.threads=2",
+            "-c",
+            "pack.windowMemory=32m",
+            "-c",
+            "pack.deltaCacheSize=32m",
+            "-c",
+            "core.deltaBaseCacheLimit=16m",
+            "-c",
+            "core.packedGitWindowSize=16m",
+            "-c",
+            "core.packedGitLimit=64m",
+        ]);
     Ok(command)
 }
 

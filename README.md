@@ -647,6 +647,11 @@ Exhaustion returns 507. Native Git's peak scratch usage is not yet hard bounded.
 All native Git workers use an isolated environment: host Git configuration,
 object paths, tracing and provider credentials are removed. Home and temporary
 paths point into the disposable cache; Git is selected through the host `PATH`.
+Pack/index work uses two workers with explicit delta/cache/mapping budgets.
+Smart HTTP streams eligible blobs above 8 MiB and skips delta search for them;
+smaller files retain delta compression. Merge operations retain ordinary text
+semantics. These are resource policies, not hard process or filesystem limits.
+See [native pack policy](docs/contracts.md#native-pack-resource-policy).
 The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors

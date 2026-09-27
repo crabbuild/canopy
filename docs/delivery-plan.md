@@ -41,7 +41,9 @@ separate product decisions.
    when no entry is safe to evict. The resident limit is not a production capacity target.
    Hydration and retained caches now use shared disk admission; native Git's
    completed writes are measured before publication, but its peak usage remains
-   unbounded. All native workers now discard host configuration, object paths,
+   unbounded. Native pack workers, delta caches and mappings now have explicit
+   budgets; HTTP streams eligible blobs above 8 MiB while merge operations retain
+   their text semantics. All native workers discard host configuration, object paths,
    tracing and provider credentials, with temporary paths inside their cache.
    Enforce the remaining byte ceiling with filesystem quotas or a proven bound
    on every native write; periodic sampling and per-file limits alone cannot
@@ -2514,3 +2516,55 @@ This proves the exercised streaming/recovery paths, not full-limit capacity,
 provider power-loss behavior, or provider temporary-file retention. The runtime
 heartbeat error also hides the original failed storage update after its retries;
 upstream diagnostic preservation remains follow-up work.
+
+## Native pack worker and cache budgets
+
+On 2026-09-26, the shared native command boundary gained explicit pack/index
+worker, delta-window, delta-cache and mapping budgets. Smart HTTP additionally
+sets an 8 MiB large-file threshold. This reduces eligible blob buffering and
+large-object delta-search work without changing the Git wire protocol or stored
+SQLite identities. Candidate generation deliberately retains Git's ordinary
+large-text merge semantics. No user configuration, schema or dependency changes
+are introduced.
+
+Verification:
+
+- Real smart HTTP push/clone: related blobs above 8 MiB arrive as whole pack
+  entries; related ordinary-sized blobs still arrive as deltas. Checkout bytes,
+  object IDs and strict/full fsck pass. Existing authorization, push replay,
+  cache admission, reference snapshot and LFS checks in that integration pass.
+- Native merge and squash candidate qualification now uses a
+  9 MB text file. Independent first/last-line edits combine byte-identically;
+  fetched candidates, checks, atomic publication and recovery pass.
+- All-target Clippy with warnings denied and the release build pass.
+
+These settings do not close the native resource gate. Delta reconstruction,
+object/graph metadata and merge working sets still need aggregate memory and CPU
+admission. Native scratch peak usage requires filesystem enforcement or a proven
+bound on every write; per-file limits and sampling are insufficient.
+
+A targeted release process fixture on RustFS `1.0.0-beta.8-glibc` with a dedicated
+Docker volume passed a stock push of two 80 MiB random blobs, clean owner
+shutdown, fresh-local-state recovery and protocol v0/v2 clones. Both received
+167,823,813-byte packs with matching file hashes and full fsck. The fixture used
+the existing `seed_large_repository` and `verify_large_clone` actions from
+`scripts/smoke_s3_process.py`; it did not repeat the unrelated account/fleet
+matrix. The container and its volume were removed afterward.
+
+| Observation | Value |
+| --- | --- |
+| Push, two 80 MiB random blobs | 14.24 seconds |
+| Cold cache hydration, 167,772,702 raw bytes | 4.40 seconds |
+| v0 clone, including file hashes and fsck | 11.79 seconds |
+| Warm-cache v2 clone, including file hashes and fsck | 6.61 seconds |
+| Peak aggregate Canopy RSS observed | 35.1 MiB |
+| Peak Canopy plus descendant RSS observed | 129.8 MiB |
+
+The RSS probe sampled with `ps` at a requested 0.2-second interval; it collected
+177 samples while Canopy was active during a 45.4-second fixture. Client Git,
+Docker/RustFS and the OS page cache are excluded. Short peaks can be missed.
+Provider storage and host load differ from the earlier streaming milestone, so
+these observations are not a controlled before/after speedup or capacity bound.
+RustFS logged internal BrokenPipe diagnostics while operating on staging data;
+all client operations and final integrity/recovery checks passed. This does not
+qualify every provider failure or establish error-free provider behavior.
