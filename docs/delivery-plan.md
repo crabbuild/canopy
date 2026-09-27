@@ -2968,3 +2968,22 @@ other processes and kernel charges. The earlier 47 dropped warm arrivals and
 unattributed portions of the latency stalls remain open. All-primitive Cell
 integration, production Linux density, resource enforcement and idle ownership
 request-cost qualification are still required.
+
+
+## Correlated latency diagnosis
+
+The HTTP boundary now records a debug request span with a canonical correlation
+UUID and matched route pattern, plus handler start/completion, status and elapsed
+time. The scheduled benchmark sends and records that UUID for every attempted
+arrival. Nested Directory and repository stage events inherit the same span.
+This measures middleware-through-response-creation time; socket admission and
+streamed response delivery remain outside that duration.
+
+The router test proves nested correlation, invalid-header isolation and exclusion
+of credentials, raw names and query strings. The real HTTP benchmark test proves
+request IDs match attempts without hidden retries or missing arrivals. All-target
+Clippy, optimized CLI build and formatting pass. A real process read during setup
+of `canopy-request-trace-9b929b9401af` returned the expected repository identity
+and produced all five correlated handler/authentication/lookup/metadata events
+without private request fields. The full thousand-Cell diagnostic schedule is
+still running; instrumentation alone is not a latency improvement.
