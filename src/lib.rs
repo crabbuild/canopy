@@ -2,12 +2,13 @@
 
 use std::sync::OnceLock;
 
-use cellule_app::{ApplicationBuilder, ApplicationHandle, CellApplication, CellType};
-use cellule_runtime::{
-    ApplicationId, BuildDescriptor, CatalogRole, CellModule, CellTarget, Committed, Digest, Error,
-    MigrationDescriptor, ModuleDescriptor, NamespaceDescriptor, NamespaceId, Observed,
-    OperationDescriptor, Receipt, RegistryBuilder, SqlBatch, SqlCell, SqlModule, SqlStatement,
-    SqlValue, TenantId, register_sql,
+use crab_cell_app::{ApplicationBuilder, ApplicationHandle, CellApplication, CellType};
+use crab_cell_runtime::{
+    ApplicationId, BuildDescriptor, CellModule, CellTarget, Committed, Digest, Error,
+    MigrationDescriptor, ModuleDescriptor, NamespaceDescriptor, NamespaceId, Observed, Receipt,
+    RegistryBuilder, SqlCell, SqlModule, TenantId, cell::catalog::CatalogRole,
+    primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    primitives::sql::register_sql, registry::OperationDescriptor,
 };
 use sha1::{Digest as _, Sha1};
 
@@ -85,17 +86,22 @@ const fn operation_with_codec(id: u32, codec_version: u32) -> OperationDescripto
     }
 }
 
-/// The repository UUID is the complete partition key of one Repository Cell.
+/// Derives one Repository Cell target from its canonical repository UUID.
 pub fn repository_target(
     tenant: TenantId,
     application: ApplicationId,
     repository: [u8; 16],
-) -> cellule_runtime::Result<CellTarget> {
+) -> crab_cell_runtime::Result<CellTarget> {
     validate_repository_id(repository)?;
-    CellTarget::new(tenant, application, REPOSITORIES, &repository)
+    CellTarget::new(
+        tenant,
+        application,
+        REPOSITORIES,
+        &repository_cell_type()?.entity_partition(&repository)?,
+    )
 }
 
-pub(crate) fn validate_repository_id(repository: [u8; 16]) -> cellule_runtime::Result<()> {
+pub(crate) fn validate_repository_id(repository: [u8; 16]) -> crab_cell_runtime::Result<()> {
     if !(1..=8).contains(&(repository[6] >> 4)) || repository[8] >> 6 != 2 {
         return Err(Error::Identity("repository UUID is not canonical"));
     }
@@ -229,7 +235,7 @@ impl CellModule for RepositoryModule {
         })
     }
 
-    fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    fn register(self, registry: &mut RegistryBuilder) -> crab_cell_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<FinalizePush>()?;
         registry.bind_command::<push::CompletePush>()?;
@@ -247,19 +253,29 @@ pub struct CanopyApplication;
 impl CellApplication for CanopyApplication {
     const NAME: &'static str = "canopy";
 
-    fn register(builder: &mut ApplicationBuilder) -> cellule_runtime::Result<()> {
+    fn register(builder: &mut ApplicationBuilder) -> crab_cell_runtime::Result<()> {
         builder.register(directory::DirectoryModule)?;
         builder.register(RepositoryModule)?;
         builder.cell_type(directory::cell_type()?)?;
-        builder.cell_type(
-            CellType::entity_uuid(RepositoryModule::NAME, "repository", REPOSITORIES)?
-                .with_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024)?,
-        )
+        builder.cell_type(repository_cell_type()?)
     }
+}
+
+fn repository_cell_type() -> crab_cell_runtime::Result<CellType> {
+    CellType::new(
+        RepositoryModule::NAME,
+        "repository",
+        REPOSITORIES,
+        CatalogRole::Sql,
+        1,
+    )?
+    .with_entity_partitions()?
+    .with_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024)
 }
 
 /// Product-owned capability for one repository's SQLite state.
 pub struct RepositoryCell {
+    id: [u8; 16],
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
@@ -267,16 +283,19 @@ pub struct RepositoryCell {
 
 impl RepositoryCell {
     pub fn repository_id(&self) -> [u8; 16] {
-        let mut id = [0; 16];
-        id.copy_from_slice(self.target.partition());
-        id
+        self.id
     }
 
     pub fn new(
         application: &ApplicationHandle<CanopyApplication>,
         target: CellTarget,
-    ) -> cellule_runtime::Result<Self> {
+        id: [u8; 16],
+    ) -> crab_cell_runtime::Result<Self> {
+        if target != repository_target(target.tenant(), target.application(), id)? {
+            return Err(Error::Identity("repository UUID differs from Cell target"));
+        }
         Ok(Self {
+            id,
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
@@ -286,9 +305,9 @@ impl RepositoryCell {
     /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.
     pub async fn finalize_push(
         &self,
-        identity: cellule_runtime::MutationIdentity,
+        identity: crab_cell_runtime::MutationIdentity,
         plan: PushPlan,
-    ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
+    ) -> std::result::Result<Committed<bool>, crab_cell_runtime::InvocationError<bool>> {
         self.prepare_graph(&plan).await?;
         self.prepare_branch_proofs(&plan).await?;
         self.application
@@ -302,7 +321,7 @@ impl RepositoryCell {
         minimum: Option<Receipt>,
     ) -> std::result::Result<
         Observed<Option<(ObjectKind, Vec<u8>)>>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::SqlResultSet>>,
+        crab_cell_runtime::InvocationError<Vec<crab_cell_runtime::primitives::sql::SqlResultSet>>,
     > {
         let result = self
             .sql
@@ -332,7 +351,7 @@ impl RepositoryCell {
             upload,
         ] = row.as_slice()
         else {
-            return Err(cellule_runtime::InvocationError::NotStarted(
+            return Err(crab_cell_runtime::InvocationError::NotStarted(
                 Error::Command("invalid stored object row"),
             ));
         };
@@ -342,7 +361,7 @@ impl RepositoryCell {
             "commit" => ObjectKind::Commit,
             "tag" => ObjectKind::Tag,
             _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
+                return Err(crab_cell_runtime::InvocationError::NotStarted(
                     Error::Command("invalid stored object kind"),
                 ));
             }
@@ -355,7 +374,7 @@ impl RepositoryCell {
             }
             (SqlValue::Null, SqlValue::Blob(upload)) => {
                 let invalid = || {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
+                    crab_cell_runtime::InvocationError::NotStarted(Error::Command(
                         "invalid object chunk reference",
                     ))
                 };
@@ -369,13 +388,13 @@ impl RepositoryCell {
                 .await?
             }
             _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
+                return Err(crab_cell_runtime::InvocationError::NotStarted(
                     Error::Command("invalid stored object body"),
                 ));
             }
         };
         if object_id(kind, &body) != oid || blake3::hash(&body).as_bytes() != digest.as_slice() {
-            return Err(cellule_runtime::InvocationError::NotStarted(
+            return Err(crab_cell_runtime::InvocationError::NotStarted(
                 Error::Command("corrupt stored object"),
             ));
         }

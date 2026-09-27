@@ -3,9 +3,11 @@
 use std::collections::BTreeMap;
 
 use crate::{MAX_SQLITE_OBJECT_BYTES, ObjectKind, PushPlan, RepositoryModule, object_id};
-use cellule_runtime::{
-    BoundedDecoder, BoundedEncoder, CellModule, CodecError, Command, CommandContext, CommandResult,
-    Error, SqlBatch, SqlResultSet, SqlStatement, SqlValue, WireValue,
+use crab_cell_runtime::{
+    CellModule, Command, Error, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
+    codec::WireValue, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
+    primitives::sql::SqlStatement, primitives::sql::SqlValue, registry::CommandContext,
+    registry::CommandResult,
 };
 
 mod preparation;
@@ -68,7 +70,7 @@ fn status_query(oids: &[Oid]) -> SqlBatch {
     }
 }
 
-fn statuses(results: &[SqlResultSet]) -> cellule_runtime::Result<BTreeMap<Oid, Status>> {
+fn statuses(results: &[SqlResultSet]) -> crab_cell_runtime::Result<BTreeMap<Oid, Status>> {
     let mut states = BTreeMap::new();
     for row in &results
         .first()
@@ -114,7 +116,7 @@ impl Command for CertifyObjects {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         batch: CertificateBatch,
-    ) -> cellule_runtime::Result<CommandResult<bool>> {
+    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
         let mut verified = 0;
         for oid in batch.0 {
             let states = statuses(&context.sql(&status_query(&[oid]))?)?;
@@ -171,7 +173,7 @@ impl Command for CertifyObjects {
 pub(crate) fn certified_roots(
     context: &CommandContext<'_, '_>,
     plan: &PushPlan,
-) -> cellule_runtime::Result<bool> {
+) -> crab_cell_runtime::Result<bool> {
     let oids: Vec<_> = plan
         .updates
         .iter()
@@ -195,7 +197,7 @@ fn object_edges(
     context: &CommandContext<'_, '_>,
     oid: Oid,
     kind: ObjectKind,
-) -> cellule_runtime::Result<Option<Vec<Edge>>> {
+) -> crab_cell_runtime::Result<Option<Vec<Edge>>> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "SELECT storage, body, digest, size, chunk_id FROM objects WHERE oid = ?1".into(),

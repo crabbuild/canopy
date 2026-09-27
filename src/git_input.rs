@@ -13,7 +13,7 @@ use std::{
 
 use crate::AdmissionPermit;
 use axum::body::Body;
-use cellule_ltx::{DiskBudget, DiskReservation};
+use crab_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
 
@@ -36,7 +36,7 @@ pub enum InputError {
     #[error("Git request spool I/O failed")]
     Io(#[from] std::io::Error),
     #[error("Git request disk admission failed")]
-    Budget(#[from] cellule_ltx::LtxError),
+    Budget(#[from] crab_ltx::CrabError),
     #[error("Git request spool task failed")]
     Task(#[from] tokio::task::JoinError),
 }

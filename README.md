@@ -1,7 +1,7 @@
 # Canopy
 
-Canopy is an independent Git hosting service built on Cellule. The dedicated
-`canopy-server` crate owns its product schema, Git gateway and HTTP API. A
+Canopy is an independent Git hosting service built on `crab-cell-runtime`,
+`crab-cell-app` and `crab-cell-host`. The dedicated `canopy-server` crate owns its product schema, Git gateway and HTTP API. A
 Directory Cell maps an owner and repository name to a stable UUID. Each UUID
 identifies its own SQLite Repository Cell. Ordinary Git objects, refs and LFS
 metadata live in that Cell; large Git blob and LFS bytes use immutable
@@ -11,7 +11,7 @@ dependency.
 ## Current implementation
 
 This repository is an implementation under construction. The `canopy` binary
-starts one leased Cellule node and serves repositories created through its API.
+starts one leased Crab Cell node and serves repositories created through its API.
 It probes the object store's fencing capabilities, publishes and renews a signed node
 advertisement, and restores the repository Cell from object storage when its
 local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
@@ -698,7 +698,7 @@ accepts 1–9,999; the SQL pool receives that limit plus the Directory slot.
 descriptor and disk budgets; this count is not an aggregate resource ceiling.
 Stored repository count can exceed the active limit. Additional repositories evict an inactive
 gateway; local Cell ownership is released before its slot is reused. On a temporary
-Cellule movement-rate denial, admission waits one second before a single retry.
+Runtime movement-rate denial, admission waits one second before a single retry.
 Requests and streamed responses pin their repository; admission returns 503 when
 no repository can be safely released. Cold/remote routing admits at most 32
 transition operations, executing concurrently across different repositories or
@@ -719,8 +719,16 @@ A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
-`Cargo.toml` pins Cellule to a specific Git revision, so a fresh Canopy checkout
-builds without a local Cellule checkout.
+`Cargo.toml` pins the Crab Cell crates and their storage/LTX dependencies to
+Crab `main` revision `311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`. Canopy remains a
+separate product crate and builds without a local Crab checkout. There are no
+Cellule, Crab CLI/server or Xet dependencies.
+
+Use a **fresh storage prefix** for this build. Crab derives a 33-byte entity
+partition from the repository UUID; the UUID is also persisted in repository
+SQLite for backup recovery. Previous Cellule prefixes/backups are not migrated;
+release admission rejects a different compiled release. See the
+[runtime integration contract](docs/contracts.md#crab-cell-integration).
 
 Before ref publication, bounded certificate batches verify the durable Git
 graph: commit trees and parents, tree entries and tag targets must exist with

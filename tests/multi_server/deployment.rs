@@ -1,8 +1,10 @@
 use super::*;
 use canopy_server::{CanopyApplication, build_descriptor, deployment::Deployment};
-use cellule_app::CellApplication;
-use cellule_runtime::{ApplicationIdentity, ReleaseState, RequestId};
-use cellule_store::Store;
+use crab_cell_app::CellApplication;
+use crab_cell_runtime::{
+    cell::application::ApplicationIdentity, identity::RequestId, recovery::release::ReleaseState,
+};
+use crab_storage::Store;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;

@@ -30,7 +30,7 @@ async fn disable_rechecks_exact_admin_credential_inside_the_directory_transactio
     )
     .await?;
     let cell = DirectoryCell::new(
-        &app_handle(&application, tenant, application_id, handle),
+        &app_handle(&application, tenant, application_id, handle)?,
         target,
     )?;
     let initial = random_identity()?;
@@ -223,7 +223,7 @@ async fn audit_append_failure_rolls_back_the_credential_change()
     )
     .await?;
     let cell = DirectoryCell::new(
-        &app_handle(&application, tenant, application_id, handle),
+        &app_handle(&application, tenant, application_id, handle)?,
         target,
     )?;
     cell.create_account(random_identity()?, "owner", [1; 32], TokenScope::Admin)

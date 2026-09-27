@@ -4,7 +4,7 @@ use crate::{
     default_branch::valid_default_branch,
     server::mutation_identity,
 };
-use cellule_runtime::InvocationError;
+use crab_cell_runtime::InvocationError;
 use std::time::Duration;
 
 #[derive(Deserialize)]

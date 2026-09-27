@@ -67,7 +67,7 @@ impl DirectoryCell {
                             enabled: *enabled == 1,
                         })
                     })
-                    .collect::<cellule_runtime::Result<Vec<_>>>()
+                    .collect::<crab_cell_runtime::Result<Vec<_>>>()
                     .map_err(InvocationError::NotStarted)?,
             )
         } else {

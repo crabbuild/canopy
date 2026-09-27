@@ -2,10 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use cellule_runtime::{
-    BoundedDecoder, BoundedEncoder, CellModule, CodecError, Command, CommandContext, CommandResult,
-    Committed, Error, InvocationError, MutationIdentity, Observed, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue, WireValue,
+use crab_cell_runtime::{
+    CellModule, Command, Committed, Error, InvocationError, MutationIdentity, Observed,
+    codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError, codec::WireValue,
+    primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
+    primitives::sql::SqlValue, registry::CommandContext, registry::CommandResult,
 };
 
 use crate::{
@@ -161,7 +162,7 @@ impl Command for PutObjects {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         batch: Self::Input,
-    ) -> cellule_runtime::Result<CommandResult<()>> {
+    ) -> crab_cell_runtime::Result<CommandResult<()>> {
         for object in batch.objects {
             let (size, digest, storage, body, sha256, chunk_id) = match object.storage {
                 ObjectStorage::Inline(body) => {

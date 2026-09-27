@@ -4,9 +4,9 @@ use crate::ReadIdentity;
 
 mod mutations;
 
-use cellule_runtime::{
-    Committed, Error, InvocationError, MutationIdentity, Observed, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -121,7 +121,7 @@ pub(crate) fn valid_body(body: &str) -> bool {
 
 fn actor_parameters<'a>(
     actor: impl Into<ReadIdentity<'a>>,
-) -> cellule_runtime::Result<Vec<SqlValue>> {
+) -> crab_cell_runtime::Result<Vec<SqlValue>> {
     let actor = actor.into();
     actor.validate()?;
     Ok(vec![actor.parameter()])
@@ -289,7 +289,7 @@ impl RepositoryCell {
     }
 }
 
-fn summary(row: &[SqlValue]) -> cellule_runtime::Result<IssueSummary> {
+fn summary(row: &[SqlValue]) -> crab_cell_runtime::Result<IssueSummary> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
@@ -320,7 +320,7 @@ fn summary(row: &[SqlValue]) -> cellule_runtime::Result<IssueSummary> {
     })
 }
 
-fn comment(row: &[SqlValue]) -> cellule_runtime::Result<IssueComment> {
+fn comment(row: &[SqlValue]) -> crab_cell_runtime::Result<IssueComment> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
@@ -344,7 +344,7 @@ fn comment(row: &[SqlValue]) -> cellule_runtime::Result<IssueComment> {
     })
 }
 
-fn record_id(bytes: &[u8]) -> cellule_runtime::Result<String> {
+fn record_id(bytes: &[u8]) -> crab_cell_runtime::Result<String> {
     let id = bytes
         .try_into()
         .map_err(|_| Error::Command("invalid issue identity"))?;

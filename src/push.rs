@@ -5,10 +5,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use cellule_runtime::{
-    BoundedDecoder, BoundedEncoder, CellModule, CodecError, Command, CommandContext, CommandResult,
-    Error, InvocationError, MutationIdentity, RequestId, SqlBatch, SqlStatement, SqlValue,
-    WireValue,
+use crab_cell_runtime::{
+    CellModule, Command, Error, InvocationError, MutationIdentity, codec::BoundedDecoder,
+    codec::BoundedEncoder, codec::CodecError, codec::WireValue, identity::RequestId,
+    primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    registry::CommandContext, registry::CommandResult,
 };
 
 use crate::{
@@ -228,7 +229,7 @@ impl RepositoryCell {
     pub(crate) async fn complete_push(
         &self,
         input: PushCompletion,
-    ) -> Result<cellule_runtime::Committed<bool>, InvocationError<bool>> {
+    ) -> Result<crab_cell_runtime::Committed<bool>, InvocationError<bool>> {
         if let Some(plan) = &input.plan {
             self.prepare_graph(plan).await?;
             self.prepare_branch_proofs(plan).await?;
@@ -296,7 +297,7 @@ impl Command for CompletePush {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
-    ) -> cellule_runtime::Result<CommandResult<bool>> {
+    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
         let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
             sql: "SELECT response_id FROM pushes WHERE id = ?1 AND actor = ?2 AND request_digest = ?3".into(),
             parameters: vec![SqlValue::Blob(input.id.to_vec()), SqlValue::Text(input.actor.clone()), SqlValue::Blob(input.digest.to_vec())],

@@ -13,7 +13,10 @@ use crate::{
     pulls::{PullRevision, parse_oid},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use cellule_runtime::{InvocationError, SqlBatch, SqlResultSet, SqlStatement, SqlValue};
+use crab_cell_runtime::{
+    InvocationError, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
+    primitives::sql::SqlStatement, primitives::sql::SqlValue,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 

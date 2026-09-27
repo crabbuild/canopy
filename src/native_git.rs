@@ -152,7 +152,7 @@ mod tests {
         // an already resolved cache path against itself.
         let cache = crate::git_cache::GitCache::create(
             ".".into(),
-            cellule_ltx::DiskBudget::new(1 << 20),
+            crab_ltx::DiskBudget::new(1 << 20),
             "refs/heads/main",
         )
         .await?;

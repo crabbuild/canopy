@@ -19,14 +19,16 @@ use canopy_server::{
     },
     object_id, repository_target,
 };
-use cellule_app::{ApplicationHandle, CellApplication};
-use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
-use cellule_runtime::{
-    ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellHandle,
-    CellModule, CellRuntime, CellStorageLayout, IncarnationId, MutationIdentity, Owner, Registry,
-    RequestId, SessionId, SqlWorkerPool, TenantId,
+use crab_cell_app::{ApplicationHandle, CellApplication};
+use crab_cell_runtime::{
+    ApplicationId, CellClient, CellModule, CellRuntime, MutationIdentity, Registry, SessionId,
+    TenantId, cell::actor::CellHandle, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
+    cell::catalog::CellCatalog, cell::worker::SqlWorkerPool, control::Owner,
+    control::authority::CellAuthority, identity::IncarnationId, identity::RequestId,
+    ltx::CellStorageLayout,
 };
-use cellule_store::Store;
+use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
+use crab_storage::Store;
 use object_store::{memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 
@@ -65,7 +67,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
     )
     .await?;
     let directory = DirectoryCell::new(
-        &app_handle(&application, tenant, application_id, directory_handle),
+        &app_handle(&application, tenant, application_id, directory_handle)?,
         directory_target.clone(),
     )?;
     let admin_digest: [u8; 32] = Sha256::digest(b"admin-test-token").into();
@@ -140,8 +142,9 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &files.path().join("first-alpha.sqlite"),
             )
             .await?,
-        ),
+        )?,
         first_target.clone(),
+        first_id,
     )?;
     let second_repository = RepositoryCell::new(
         &app_handle(
@@ -158,8 +161,9 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &files.path().join("first-beta.sqlite"),
             )
             .await?,
-        ),
+        )?,
         second_target.clone(),
+        second_id,
     )?;
     let first = directory
         .activate(identity(4)?, &reserved.output)
@@ -277,7 +281,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
     )
     .await?;
     let directory = DirectoryCell::new(
-        &app_handle(&application, tenant, application_id, restored_directory),
+        &app_handle(&application, tenant, application_id, restored_directory)?,
         directory_target,
     )?;
     assert_eq!(
@@ -323,8 +327,9 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &files.path().join("second-alpha.sqlite"),
             )
             .await?,
-        ),
+        )?,
         first_target,
+        first_id,
     )?;
     let beta = RepositoryCell::new(
         &app_handle(
@@ -341,8 +346,9 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &files.path().join("second-beta.sqlite"),
             )
             .await?,
-        ),
+        )?,
         second_target,
+        second_id,
     )?;
     assert_eq!(
         alpha.object(oid, None).await?.output,
@@ -363,7 +369,7 @@ fn random_identity() -> Result<MutationIdentity, Box<dyn std::error::Error>> {
     })
 }
 
-fn runtime(session: SessionId) -> cellule_runtime::Result<CellRuntime> {
+fn runtime(session: SessionId) -> crab_cell_runtime::Result<CellRuntime> {
     CellRuntime::new_with_replica_host(
         SqlWorkerPool::new(1, 4)?,
         64 * 1024 * 1024,
@@ -373,11 +379,11 @@ fn runtime(session: SessionId) -> cellule_runtime::Result<CellRuntime> {
 }
 
 fn app_handle(
-    application: &Arc<cellule_app::CompiledApplication>,
+    application: &Arc<crab_cell_app::CompiledApplication>,
     tenant: TenantId,
     application_id: ApplicationId,
     handle: CellHandle,
-) -> ApplicationHandle<CanopyApplication> {
+) -> crab_cell_runtime::Result<ApplicationHandle<CanopyApplication>> {
     ApplicationHandle::new(
         CellClient::local(application.registry(), handle),
         Arc::clone(application),
@@ -390,7 +396,7 @@ async fn bootstrap(
     runtime: &CellRuntime,
     registry: &Registry,
     layout: &CellStorageLayout,
-    target: &cellule_runtime::CellTarget,
+    target: &crab_cell_runtime::CellTarget,
     module_schema: (&str, &'static str),
     session: SessionId,
     destination: &Path,
@@ -436,7 +442,7 @@ async fn restore(
     runtime: &CellRuntime,
     registry: &Registry,
     layout: &CellStorageLayout,
-    target: &cellule_runtime::CellTarget,
+    target: &crab_cell_runtime::CellTarget,
     module: &str,
     session: SessionId,
     destination: &Path,

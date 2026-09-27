@@ -5,9 +5,9 @@ use crate::ReadIdentity;
 mod mutations;
 
 use crate::{RepositoryCell, directory::validate_component, validate_repository_id};
-use cellule_runtime::{
-    Committed, Error, InvocationError, MutationIdentity, Observed, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -271,7 +271,7 @@ fn cursor_parameters<'a>(
     ])
 }
 
-fn context(row: &[SqlValue]) -> cellule_runtime::Result<CheckContext> {
+fn context(row: &[SqlValue]) -> crab_cell_runtime::Result<CheckContext> {
     let [
         SqlValue::Text(name),
         SqlValue::Text(reporter),
@@ -292,7 +292,7 @@ fn context(row: &[SqlValue]) -> cellule_runtime::Result<CheckContext> {
     })
 }
 
-fn run(row: &[SqlValue]) -> cellule_runtime::Result<CheckRun> {
+fn run(row: &[SqlValue]) -> crab_cell_runtime::Result<CheckRun> {
     let [
         SqlValue::Blob(id),
         SqlValue::Blob(oid),

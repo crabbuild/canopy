@@ -38,7 +38,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
     )
     .await?;
     let cell = DirectoryCell::new(
-        &app_handle(&application, tenant, application_id, handle.clone()),
+        &app_handle(&application, tenant, application_id, handle.clone())?,
         target,
     )?;
     let initial = random_identity()?;
@@ -73,7 +73,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
                 let _ = entered.send(());
                 released
                     .recv_timeout(std::time::Duration::from_secs(4))
-                    .map_err(|source| cellule_runtime::Error::Facility {
+                    .map_err(|source| crab_cell_runtime::Error::Facility {
                         name: "test release",
                         source: Box::new(source),
                     })?;
@@ -180,7 +180,9 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
 #[tokio::test(flavor = "multi_thread")]
 async fn issuance_window_and_expiry_release_capacity_without_deleting_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    use cellule_runtime::{SqlBatch, SqlStatement, SqlValue};
+    use crab_cell_runtime::{
+        primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    };
     let application = Arc::new(CanopyApplication::compile(build_descriptor(
         include_bytes!("../../Cargo.lock"),
         "credential-window-test",
@@ -206,7 +208,7 @@ async fn issuance_window_and_expiry_release_capacity_without_deleting_history()
         &files.path().join("directory.sqlite"),
     )
     .await?;
-    let app = app_handle(&application, tenant, application_id, handle);
+    let app = app_handle(&application, tenant, application_id, handle)?;
     let cell = DirectoryCell::new(&app, target.clone())?;
     cell.create_account(random_identity()?, "owner", [1; 32], TokenScope::Admin)
         .await?;

@@ -7,9 +7,10 @@ use axum::{
     http::StatusCode,
     response::Response,
 };
-use cellule_runtime::{
-    CellHandle, MAX_PEER_REQUEST_BYTES, PeerAuthorizer, PeerCellResolver, PeerDispatcher,
-    PeerPrincipal, PeerRoundTrip, PeerSigner, PeerVerifier, VerifiedPeerRequest,
+use crab_cell_runtime::{
+    cell::actor::CellHandle, peer::MAX_PEER_REQUEST_BYTES, peer::PeerAuthorizer,
+    peer::PeerCellResolver, peer::PeerDispatcher, peer::PeerPrincipal, peer::PeerRoundTrip,
+    peer::PeerSigner, peer::PeerVerifier, peer::VerifiedPeerRequest,
 };
 use std::{future::Future, pin::Pin};
 use tokio::sync::Semaphore;
@@ -172,7 +173,6 @@ impl NodePeer {
                         target: &peer.0.target,
                         module: DirectoryModule::NAME,
                         schema: directory::SCHEMA,
-                        max_database_bytes: 64 * 1024 * 1024,
                         destination: peer.0.local.path().join("directory.sqlite"),
                     },
                     peer.0.session,
@@ -184,9 +184,10 @@ impl NodePeer {
             .await?
     }
 
-    async fn verify(&self, bytes: &[u8]) -> cellule_runtime::Result<VerifiedPeerRequest> {
+    async fn verify(&self, bytes: &[u8]) -> crab_cell_runtime::Result<VerifiedPeerRequest> {
         let now = unix_now_ms().map_err(|e| transport_error(e, false))?;
-        let session = cellule_runtime::claimed_peer_session(bytes)?;
+        let decoded = crab_cell_runtime::peer::UnverifiedPeerRequest::decode(bytes)?;
+        let session = decoded.session();
         let enrolled = self
             .0
             .directory
@@ -198,7 +199,7 @@ impl NodePeer {
             self.0.node.application().registry().release_digest(),
             enrolled.advertisement().verifying_key()?,
         )
-        .verify(bytes, now)
+        .verify_decoded(decoded, now)
     }
 
     async fn exchange(
@@ -206,7 +207,7 @@ impl NodePeer {
         target: CellTarget,
         request: Vec<u8>,
         remaining_ms: u32,
-    ) -> cellule_runtime::Result<Vec<u8>> {
+    ) -> crab_cell_runtime::Result<Vec<u8>> {
         let resident = self
             .0
             .node
@@ -249,7 +250,7 @@ impl NodePeer {
         let owner = owner.ok_or(Error::Fenced)?;
         let url = endpoint(owner.endpoint()).map_err(|e| transport_error(e, false))?;
         // Never retry a delivered mutation automatically. Transport failures and
-        // invalid responses preserve uncertainty for Cellule's identity resolver.
+        // invalid responses preserve uncertainty for Crab's identity resolver.
         let mut response = self
             .0
             .client
@@ -291,7 +292,7 @@ impl PeerRoundTrip for NodePeer {
         target: CellTarget,
         request: Vec<u8>,
         remaining_ms: u32,
-    ) -> Pin<Box<dyn Future<Output = cellule_runtime::Result<Vec<u8>>> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = crab_cell_runtime::Result<Vec<u8>>> + Send + 'static>> {
         let peer = self.clone();
         Box::pin(async move { peer.exchange(target, request, remaining_ms).await })
     }
@@ -306,7 +307,7 @@ impl Resolver {
     async fn local_handle(
         &self,
         target: &CellTarget,
-    ) -> cellule_runtime::Result<Option<CellHandle>> {
+    ) -> crab_cell_runtime::Result<Option<CellHandle>> {
         let runtime = self.node.runtime();
         if let Some(handle) = runtime.resident_handle(target, CatalogRole::Sql).await? {
             return Ok(Some(handle));
@@ -332,7 +333,7 @@ impl PeerCellResolver for Resolver {
     fn resolve(
         &self,
         target: CellTarget,
-    ) -> Pin<Box<dyn Future<Output = cellule_runtime::Result<CellHandle>> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = crab_cell_runtime::Result<CellHandle>> + Send + 'static>> {
         let resolver = self.clone();
         Box::pin(async move { resolver.local_handle(&target).await?.ok_or(Error::Fenced) })
     }
@@ -343,7 +344,7 @@ struct Authorization {
     application: ApplicationId,
 }
 impl PeerAuthorizer for Authorization {
-    fn authorize(&self, request: &VerifiedPeerRequest) -> cellule_runtime::Result<()> {
+    fn authorize(&self, request: &VerifiedPeerRequest) -> crab_cell_runtime::Result<()> {
         let target = request.target();
         if target.tenant() != self.tenant
             || target.application() != self.application

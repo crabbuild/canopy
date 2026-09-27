@@ -37,7 +37,7 @@ pub enum TokenChange {
 const AUTHORIZED: &str = "EXISTS (SELECT 1 FROM access_tokens actor JOIN accounts a ON a.name = actor.account WHERE actor.digest = ?2 AND actor.enabled = 1 AND (actor.expires_ms IS NULL OR actor.expires_ms > ?1) AND actor.scope = 'admin' AND a.enabled = 1 AND (actor.account = ?3 OR actor.account = ?4)) AND EXISTS (SELECT 1 FROM accounts WHERE name = ?4 AND enabled = 1)";
 
 impl TokenAuthority<'_> {
-    fn parameters(&self) -> cellule_runtime::Result<Vec<SqlValue>> {
+    fn parameters(&self) -> crab_cell_runtime::Result<Vec<SqlValue>> {
         validate_component(self.site_owner)?;
         validate_component(self.account)?;
         Ok(vec![
@@ -89,7 +89,7 @@ impl DirectoryCell {
                 rows.rows
                     .iter()
                     .map(|row| token_info(row))
-                    .collect::<cellule_runtime::Result<Vec<_>>>()
+                    .collect::<crab_cell_runtime::Result<Vec<_>>>()
                     .map_err(InvocationError::NotStarted)?,
             )
         } else {
@@ -205,7 +205,7 @@ fn changed(
     })
 }
 
-fn token_info(row: &[SqlValue]) -> cellule_runtime::Result<TokenInfo> {
+fn token_info(row: &[SqlValue]) -> crab_cell_runtime::Result<TokenInfo> {
     let [
         SqlValue::Blob(id),
         SqlValue::Text(scope),

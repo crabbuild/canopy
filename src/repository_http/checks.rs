@@ -6,7 +6,9 @@ use crate::{
     },
     server::{RepositoryRoute, mutation_identity},
 };
-use cellule_runtime::{Committed, InvocationError, MutationIdentity, SqlResultSet};
+use crab_cell_runtime::{
+    Committed, InvocationError, MutationIdentity, primitives::sql::SqlResultSet,
+};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 

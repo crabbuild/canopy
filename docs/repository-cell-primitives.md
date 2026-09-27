@@ -21,29 +21,31 @@ in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Cellule revision is `56b35ab376ff93ec85d502c70bb436c918463958`.
+The pinned Crab revision is `311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`.
 Read-only inspection establishes the following constraints in that source:
 
 | Surface | Existing contract | Required change |
 | --- | --- | --- |
-| `cellule-runtime/src/catalog.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
-| `cellule-runtime/src/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
-| `cellule-runtime/src/queue/api.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
-| `cellule-runtime/src/workflow/api.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
-| `cellule-runtime/src/registry.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
-| `cellule-runtime/src/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
-| `cellule-runtime/src/registry.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
+| `crab-cell-runtime/src/cell/catalog.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
+| `crab-cell-runtime/src/primitives/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
+| `crab-cell-runtime/src/primitives/queue/api.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
+| `crab-cell-runtime/src/primitives/workflow/api.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
+| `crab-cell-runtime/src/registry/schemas/validation.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
+| `crab-cell-runtime/src/primitives/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
+| `crab-cell-runtime/src/registry/handlers.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
 
 Registering a queue command against the existing SQL namespace is insufficient:
 registry validation rejects it, and role-based work inspection would omit live
 queue/workflow obligations. Schema additions alone cannot establish safe Cell
-release or durable background execution. The local Cellule checkout is at the
-same revision.
+release or durable background execution. The newer runtime provides entity
+partitioning and due-work discovery, but Canopy has not yet integrated a composed
+repository capability set or its runners. Switching dependencies alone does not
+close these gates.
 
 ## Proposed dependency work
 
 1. **Capability metadata and identity.** Introduce a validated set of primitive
-   capabilities in the namespace/catalog contract. Preserve repository UUID
+   capabilities in the namespace/catalog contract. Preserve repository UUID-derived entity
    partitioning and one Cell identity. Cover descriptor hashing, signing,
    catalog proof, release validation, peer resolution and restore admission.
    Determine the format/version transition from shipped contract evidence;
@@ -75,10 +77,10 @@ same revision.
    Measure what can sleep, what must stay owned, and what prevents transfer;
    do not infer that all waiting workflows are safely evictable.
 
-No dependency patch, override, vendor change or revision bump has been made by
-this proposal. Repository `AGENTS.md` requires explicit approval for dependency
-patches. Implementation must use an isolated Cellule checkout and its own Cargo
-target directory, preserving other active work.
+The user-authorized migration replaces Cellule with the current Crab runtime,
+app, host, LTX and storage crates. It does not patch upstream behavior or add a
+vendor override. Future runtime implementation work belongs in an isolated Crab
+checkout with its own Cargo target directory, preserving other active work.
 
 ## Canopy integration after the runtime contract is ready
 

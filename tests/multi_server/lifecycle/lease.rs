@@ -3,8 +3,8 @@ use super::*;
 #[tokio::test(flavor = "multi_thread")]
 async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Result {
     use canopy_server::{CanopyApplication, build_descriptor};
-    use cellule_app::CellApplication;
-    use cellule_runtime::{CellStorageLayout, NodeDirectory};
+    use crab_cell_app::CellApplication;
+    use crab_cell_runtime::{ltx::CellStorageLayout, node::NodeDirectory};
 
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
@@ -17,7 +17,7 @@ async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Resu
     ))?;
     let directory = NodeDirectory::new(
         CellStorageLayout::new(
-            cellule_store::Store::new(store.clone()),
+            crab_storage::Store::new(store.clone()),
             settings.store_prefix.clone(),
             *settings.application.as_bytes(),
         ),
@@ -60,8 +60,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     let store = Arc::new(PausedStore::default());
     let address = available_address().await?;
     let settings = config(address, files.path().join("node"));
-    let layout = cellule_runtime::CellStorageLayout::new(
-        cellule_store::Store::new(store.clone()),
+    let layout = crab_cell_runtime::ltx::CellStorageLayout::new(
+        crab_storage::Store::new(store.clone()),
         settings.store_prefix.clone(),
         *settings.application.as_bytes(),
     );

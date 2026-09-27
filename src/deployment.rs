@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
-use cellule_runtime::{
-    ApplicationIdentity, ApplicationIdentityStore, CellAuthority, CellCatalog, CellStorageLayout,
-    ControlState, Digest, Error, NodeDirectory, Registry, ReleaseRecord, ReleaseState,
-    ReleaseStore, RequestId, Result,
+use crab_cell_runtime::{
+    Digest, Error, Registry, Result, cell::application::ApplicationIdentity,
+    cell::application::ApplicationIdentityStore, cell::catalog::CellCatalog, control::ControlState,
+    control::authority::CellAuthority, identity::RequestId, ltx::CellStorageLayout,
+    node::NodeDirectory, recovery::release::ReleaseRecord, recovery::release::ReleaseState,
+    recovery::release::ReleaseStore,
 };
-use cellule_store::Store;
+use crab_storage::Store;
 use object_store::path::Path;
 use serde::Serialize;
 
@@ -281,7 +283,7 @@ impl Deployment {
     }
 }
 
-fn settled(control: &cellule_runtime::Control) -> bool {
+fn settled(control: &crab_cell_runtime::control::Control) -> bool {
     control.owner.is_none()
         && (control.state == ControlState::Tombstoned
             || control.state == ControlState::Idle && control.root.is_some())

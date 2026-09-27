@@ -54,6 +54,7 @@ CREATE TABLE lfs_objects (
 
 CREATE TABLE repository_identity (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    repository_id BLOB NOT NULL CHECK(length(repository_id) = 16),
     owner TEXT NOT NULL
 ) WITHOUT ROWID;
 

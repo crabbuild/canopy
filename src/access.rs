@@ -1,8 +1,9 @@
 //! Repository-local ownership and collaborator roles.
 
-use cellule_runtime::{
-    Committed, Error, InvocationError, MutationIdentity, Observed, Receipt, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Committed, Error, InvocationError, MutationIdentity, Observed, Receipt,
+    primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
+    primitives::sql::SqlValue,
 };
 
 use crate::{
@@ -32,7 +33,7 @@ impl<'a> From<&'a String> for ReadIdentity<'a> {
     }
 }
 impl ReadIdentity<'_> {
-    pub(crate) fn validate(self) -> cellule_runtime::Result<()> {
+    pub(crate) fn validate(self) -> crab_cell_runtime::Result<()> {
         match self {
             Self::Anonymous => Ok(()),
             Self::Account(account) => validate_component(account),
@@ -104,7 +105,7 @@ impl RepositoryCell {
                         role,
                     })
                 })
-                .collect::<cellule_runtime::Result<Vec<_>>>()
+                .collect::<crab_cell_runtime::Result<Vec<_>>>()
                 .map_err(InvocationError::NotStarted)?;
             Some(members)
         };
@@ -123,8 +124,8 @@ impl RepositoryCell {
         validate_component(owner).map_err(InvocationError::NotStarted)?;
         let committed = self.sql.batch(identity, SqlBatch {
             statements: vec![SqlStatement {
-                sql: "INSERT INTO repository_identity (singleton, owner) VALUES (1, ?1) ON CONFLICT(singleton) DO NOTHING".into(),
-                parameters: vec![SqlValue::Text(owner.into())],
+                sql: "INSERT INTO repository_identity (singleton, owner, repository_id) VALUES (1, ?1, ?2) ON CONFLICT(singleton) DO NOTHING".into(),
+                parameters: vec![SqlValue::Text(owner.into()), SqlValue::Blob(self.id.to_vec())],
             }],
         }).await?;
         let observed = self
@@ -133,7 +134,7 @@ impl RepositoryCell {
                 Some(committed.receipt),
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT owner FROM repository_identity WHERE singleton = 1".into(),
+                        sql: "SELECT owner, repository_id FROM repository_identity WHERE singleton = 1".into(),
                         parameters: Vec::new(),
                     }],
                 },
@@ -144,7 +145,13 @@ impl RepositoryCell {
             .first()
             .and_then(|set| set.rows.first())
             .map(Vec::as_slice)
-            != Some([SqlValue::Text(owner.into())].as_slice())
+            != Some(
+                [
+                    SqlValue::Text(owner.into()),
+                    SqlValue::Blob(self.id.to_vec()),
+                ]
+                .as_slice(),
+            )
         {
             return Err(InvocationError::InvalidPublishedResult {
                 receipt: committed.receipt,
@@ -277,7 +284,9 @@ pub(crate) fn access_statement<'a>(account: impl Into<ReadIdentity<'a>>) -> SqlS
     }
 }
 
-pub(crate) fn decode_access(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<TokenScope>> {
+pub(crate) fn decode_access(
+    sets: &[SqlResultSet],
+) -> crab_cell_runtime::Result<Option<TokenScope>> {
     let Some(row) = sets.first().and_then(|set| set.rows.first()) else {
         return Err(Error::Command("repository access query returned no result"));
     };

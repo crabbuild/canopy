@@ -1,9 +1,9 @@
 //! Versioned repository visibility in the same authority as refs and access grants.
 
 use crate::{RepositoryCell, directory::validate_component};
-use cellule_runtime::{
-    Committed, Error, InvocationError, MutationIdentity, Observed, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 use serde::{Deserialize, Serialize};
 

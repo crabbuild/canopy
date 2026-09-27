@@ -17,9 +17,9 @@ before admitting persistent customer repositories.
 | Repository discovery | retained `(account, repository UUID)` candidates recorded before grants; current Repository Cell ACL filters results | Directory candidate index and repository manager |
 | Issues and comments | repository-local numbers, immutable creation UUID/binding, text, author, optimistic version and timestamps | Repository Cell |
 | Commit checks | owner-defined reporter/context version, queued attempts, immutable terminal results and newest-created selection | Repository Cell |
-| Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
-| Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
-| Local residency | a reserved Directory SQL slot and at most `max_active_repositories` repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Cellule transfer preflight |
+| Repository partition | 33-byte entity partition derived from a canonical 16-byte UUID (versions 1–8, RFC variant) | `repository_target`, `CellType::entity_partition` |
+| Repository Cell | one SQL Cell per repository UUID | Crab catalog and authority |
+| Local residency | a reserved Directory SQL slot and at most `max_active_repositories` repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Crab transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB and at most 64 MiB | `object_chunks`, verified before object publication |
@@ -301,7 +301,7 @@ routes bypass this queue. Remote routes need authoritative ownership checks and
 consume the same admission. Directory query admission and the eight Git/LFS
 transfer permits remain independent bounds; a burst can be rejected there first.
 
-The node uses Cellule's `SqlWorkerPool::for_system`, which derives a fixed pool
+The node uses Crab's `SqlWorkerPool::for_system`, which derives a fixed pool
 from available parallelism, with one worker when discovery fails and a maximum
 of sixteen. Each Cell remains assigned to one owning SQL worker. Active-Cell
 admission is `max_active_repositories + 1`, including Directory. The required
@@ -325,7 +325,7 @@ with scheduled arrivals, whose elapsed times still use the monotonic clock.
 
 ### Peer routing
 
-`server::peer::NodePeer` uses Cellule's signed `PeerSigner`, `PeerVerifier`,
+`server::peer::NodePeer` uses Crab's signed `PeerSigner`, `PeerVerifier`,
 `PeerDispatcher` and `CellClient::peer` protocol. Both Directory and Repository
 Cells use the same existing commands and queries. The HTTP adapter accepts only
 enrolled, live sessions in the configured fleet/image/release. Its authorizer
@@ -338,7 +338,7 @@ signed advertisement. The endpoint must match the Cell owner and use HTTPS.
 TLS verifies the server certificate and hostname; an optional private CA adds a
 trust root. Redirects, environment proxies and HTTP retries are disabled. HTTP
 failure after sending, oversized responses and response-body errors preserve an
-unknown mutation outcome. Cellule retains the original identity for resolution;
+unknown mutation outcome. Crab retains the original identity for resolution;
 the transport does not issue a replacement mutation.
 
 TLS ingress forwards `/internal/cell` to the node listener. Sender authentication
@@ -346,7 +346,7 @@ uses signed requests verified against live enrollment; this adapter does not use
 the runtime's separate mTLS certificate-verification helper. The object store,
 TLS terminator and enrolled signing keys are trusted fleet infrastructure. A
 compromised enrolled node has internal Cell authority, not an end-user role.
-Peer ingress admits 32 concurrent requests, bounds bodies and replies by Cellule's
+Peer ingress admits 32 concurrent requests, bounds bodies and replies by Crab's
 `MAX_PEER_REQUEST_BYTES`, and applies a 30-second body deadline. These are initial
 limits, not measured production capacity.
 
@@ -376,19 +376,19 @@ remain open.
 ### Residency release
 
 When all repository slots are occupied, the manager selects the least recently
-used unpinned repository among Cellule's settled transfer candidates. It also
+used unpinned repository among Crab's settled transfer candidates. It also
 claims the candidate's transition guard without waiting, excluding concurrent
 initialization, routing and eviction. This prevents lock cycles between two
 admissions replacing different repositories. It calls
 `release_idle_cell` with the exact Cell generation and current node session.
-Cellule rechecks obligations and admission, closes SQLite and confirms durable
+Crab rechecks obligations and admission, closes SQLite and confirms durable
 owner release before returning success. Only then does Canopy drop its cached
 handles and remove that repository's local SQLite directory. Existing Git
 subprocesses separately retain their cache generation until their work ends.
 External objects and durable Cell state remain intact. Later access acquires
 the idle Cell from its published root and rebuilds the disposable Git cache.
 
-Cellule's pinned `ReleaseIdleCell` handler returns
+Crab's pinned `ReleaseIdleCell` handler returns
 `Error::Capacity("movement budget")` before transfer preflight when its two-per-second
 movement admission is exhausted. Canopy waits one second and retries that exact
 release once; the runtime rechecks the generation, node lease and settled work.
@@ -398,7 +398,7 @@ and tracked task, while ready local routes remain available. It does not retry a
 Git or Cell mutation.
 Other release errors retain the existing recovery path. An exhausted retry or
 fully pinned residency still returns 503 without evicting active work. Failed
-release retains local state and invalidates the manager's cached handles. Cellule transfer preflight may replace
+release retains local state and invalidates the manager's cached handles. Crab transfer preflight may replace
 the old capability even when release is refused. A later request binds fresh
 handles only if the runtime confirms a serving resident owner. Otherwise it
 returns 503, including a repeated create request for that repository; a terminal
@@ -413,7 +413,7 @@ deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
 the Cell node. Lease renewal is owned by Canopy's process supervisor, outside
-Cellule's task group (which is cancelled before runtime drain). Initial lease
+Crab's task group (which is cancelled before runtime drain). Initial lease
 issuance follows storage probing, deployment validation and local runtime setup;
 preflight delay must not consume the node's advertised serving lifetime. The
 monotonic guard starts immediately before advertisement creation, so publication
@@ -580,7 +580,7 @@ decoder enforces these bounds before publication. One typed Cell command publish
 It recomputes inline Git OIDs and BLAKE3 digests, then compares every inserted
 or existing row with the complete expected record. A mismatch rejects the
 command and rolls back all inserts in that batch. Repeating the same mutation
-identity and payload returns the recorded result through Cellule deduplication.
+identity and payload returns the recorded result through Crab deduplication.
 
 Trees, commits and tags larger than 768 KiB are staged in `object_uploads` and
 `object_chunks`; their bodies stay in SQLite. Each part is at most 512 KiB and
@@ -598,7 +598,7 @@ Repeated identical objects converge on the existing record; unused duplicate
 uploads remain staged until a collector can prove they are unreferenced.
 
 Hydration and direct SQLite object reads use the same chunk count, length and
-hash checks. Every SQL result contains at most one chunk, fitting Cellule's
+hash checks. Every SQL result contains at most one chunk, fitting Crab's
 1 MiB result limit. Reads reconstruct a bounded whole object in memory. Graph
 certification reconstructs chunked objects before applying the same typed edge
 checks as inline objects; chunking does not certify missing edges. Part data is
@@ -894,7 +894,7 @@ but cancelling the wait leaves that same supervisor running. The Tokio runtime
 must stay alive for cleanup to finish. This does not make runtime destruction,
 process death or panics graceful.
 
-Shutdown stops ingress, waits for tracked request work, drains Cellule, then
+Shutdown stops ingress, waits for tracked request work, drains Crab, then
 withdraws the advertisement. If node drain returns an error, Canopy retains its
 workspace lock for the rest of the process lifetime: worker closure is unproven.
 The same rule applies to rollback after a failed startup. Before the first SQL
@@ -938,9 +938,9 @@ and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
-persistent preview. The current build pins an immutable public Cellule
-revision; its UUID partition contract is proposed in
-[Cellule PR #5](https://github.com/crabbuild/cellule/pull/5).
+persistent preview. The current build pins Crab main revision
+`311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`; the runtime integration below also
+requires a fresh prefix because the entity partition format changed.
 
 ### Account disablement
 
@@ -1092,9 +1092,9 @@ storage quotas still need their own policies.
 
 Directory credential command 3 and query 4 bind parameter 1 to one execution
 timestamp for the entire SQL operation. They use the greater of owner wall time
-and Cellule admission time. The pinned runtime captures context time before
+and Crab admission time. The pinned runtime captures context time before
 queuing, so the handler samples the clock again after queued work. Commands
-still persist their replay outcome through Cellule; replay does not rerun a
+still persist their replay outcome through Crab; replay does not rerun a
 successful mutation or reactivate an expired record. Normal SQL operations 1/2
 remain for Directory operations that do not make credential-time decisions.
 
@@ -1596,7 +1596,7 @@ There is no persistent diff cache; every request computes from verified objects.
 Repository-local `pull_threads` and `pull_thread_comments` store immutable text,
 creation UUID bindings, anchors and resolution state. They use the existing
 registered SQL batch command: membership/eligibility decision, guarded write and
-result number share a transaction. The pinned Cellule SQL implementation executes
+result number share a transaction. The pinned Crab SQL implementation executes
 statements inside the caller's command transaction and delegates rollback of any
 failure to its application savepoint. No runtime operation or codec is added.
 The unreleased schema 1 adds these tables; use a fresh development prefix.
@@ -1744,7 +1744,7 @@ still required. Exact runtime receipt replay keeps the runtime's original
 success/rejection semantics. New IDs after a successful merge conflict. Racing
 pulls against the same base revision can publish at most one winner.
 
-The runtime transaction contract is verified in the pinned Cellule executor:
+The runtime transaction contract is verified in the pinned Crab executor:
 application writes are under its savepoint; rejected handlers roll them back
 before recording the rejection, and handler errors abort the enclosing SQLite
 transaction. A direct-Cell test injects a unique-parent constraint failure after
@@ -2067,7 +2067,7 @@ not supported. Production upgrade migration remains a delivery gate.
 
 ## Deployment release enrollment and maintenance
 
-`Deployment` uses the pinned Cellule `ApplicationIdentityStore` and `ReleaseStore`.
+`Deployment` uses the pinned Crab `ApplicationIdentityStore` and `ReleaseStore`.
 The authoritative prefix binds tenant/application IDs before nodes enroll. On a
 fresh catalog, the selected descriptor is the registry's exact canonical release
 bytes, addressed by its BLAKE3 digest. Initial Prepared → Activating → Ready
@@ -2109,16 +2109,16 @@ Session enumeration is bounded at 4,096 and fails closed on overflow. Maintenanc
 end requires the exact operation and drain proof, then uses the upstream release
 CAS. Retrying completed end returns its unchanged Ready record.
 
-The upstream contracts are implemented in pinned Cellule revision
-`56b35ab376ff93ec85d502c70bb436c918463958`, specifically `application.rs`,
-`release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
+The upstream contracts are implemented in pinned Crab revision
+`311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`, specifically runtime
+`cell/application.rs`, `recovery/release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
 admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
 there is no fallback to an unregistered release.
 
 This does not implement an upgrade controller or force resume. A node killed
 before releasing its Cells remains unfinished until fenced recovery completes.
-Cellule `BackupPinStore::create` validates a Ready release and requires participation
+Crab `BackupPinStore::create` validates a Ready release and requires participation
 in maintenance drain, while its restore covers only runtime objects. Canopy's
 enrolled backup worker supplies capture, external body verification/copy and
 destination fencing as described below. Maintenance alone is not a backup copy.
@@ -2144,7 +2144,7 @@ A bounded scan of the catalog then skips already settled controls. Each remainin
 entry must match a known Canopy namespace and the current registry descriptor.
 Missing controls bootstrap from the published catalog proof. Unpublished owners
 use `takeover_unpublished`; published owners use `takeover_restored`, which verifies
-the authority-pinned root and materializes attached recovery through Cellule.
+the authority-pinned root and materializes attached recovery through Crab.
 The same acquisition implementation serves normal node startup and maintenance;
 only normal acquisition provisions new catalog entries through release admission.
 Recovery consumes existing catalog proofs and does not bypass a Ready gate to
@@ -2170,7 +2170,7 @@ lease failures and production-store power loss remain part of the fault matrix.
 
 ## Independent backup copies and isolated restore
 
-The backup worker uses the pinned Cellule `BackupPinStore` API for immutable
+The backup worker uses the pinned Crab `BackupPinStore` API for immutable
 runtime graphs. It enrolls a signed, renewable ten-second node lease before
 capture and withdraws only after copying/verifying has settled. Caller cancellation
 does not cancel that supervised task. Maintenance closes its renewal admission;
@@ -2330,4 +2330,46 @@ process termination and sink I/O failures may lose additional output.
 This is diagnostic output, including warnings/errors, not the durable audit
 ledger in SQLite. The queue bounds record count rather than total bytes, and
 formatting still executes on the calling thread. Process memory/resource ceilings
-remain required. No new configuration surface is added; the Cellule revision is unchanged.
+remain required. No new configuration surface is added; the Crab revision is unchanged.
+
+
+## Crab Cell integration
+
+Canopy directly uses `crab-cell-app`, `crab-cell-host`, `crab-cell-runtime`,
+`crab-ltx` and `crab-storage`, pinned to Crab `main` commit
+`311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`. `crab-types` is transitive. The lockfile
+contains no Cellule packages, Crab product/server crates or Xet dependencies.
+Historical qualification runs in the delivery/performance logs retain their
+original Cellule revision; they are not performance evidence for this build.
+
+The application declares one entity-partitioned SQL Cell type for repositories.
+`repository_target` validates the canonical UUID, then calls the app crate's
+`CellType::entity_partition`: a prefix byte plus a domain-separated 32-byte
+BLAKE3 digest of namespace and UUID scope. `RepositoryCell::new` verifies the
+supplied UUID derives exactly the supplied target. `ApplicationHandle::new`
+is fallible and validates the application name and registry digest; errors
+propagate at every binding site. Serving, idle acquisition and takeover read
+both database and capture limits directly from the compiled Cell type. Directory
+uses 64 MiB/16 MiB and Repository uses 512 MiB/64 MiB; the host rejects a replica
+whose limits differ.
+
+The repository UUID is stored with its immutable owner in
+`repository_identity`. External Git/LFS paths continue to use that UUID.
+Backup restores the authority-pinned SQLite root, reads the UUID, and verifies
+its derived target against the catalog partition and control Cell ID before
+copying referenced bodies. A provisioned repository before owner initialization
+may have no identity only when it has no external bodies.
+
+This changes unshipped partition and schema formats. Use a fresh development
+prefix. Existing selected-release validation rejects the old compiled release;
+there is no Cellule reader, mixed-version rolling upgrade, or backup conversion.
+
+`server::storage::probe` runs before serving-node or maintenance-worker enrollment.
+It verifies conditional creation, ETag advancement, rejection of stale updates,
+read-after-write bytes and ranges, then deletes its unique probe object. Failure
+prevents enrollment. These checks belong to Canopy because this Crab revision
+does not provide Cellule's storage-probe/host-capability API.
+
+Peer ingress uses `UnverifiedPeerRequest::decode` to locate the enrolled signer,
+then `PeerVerifier::verify_decoded` before dispatch. An unverified session is only
+a key lookup hint. Release, signature, expiry and principal checks still apply.

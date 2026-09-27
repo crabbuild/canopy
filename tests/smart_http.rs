@@ -5,14 +5,15 @@ use canopy_server::{
     directory::TokenScope, git_gateway::GitGateway, http::GitHttpApi, lfs::LfsError,
     repository_target,
 };
-use cellule_app::{ApplicationHandle, CellApplication};
-use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
-use cellule_runtime::{
-    ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellRuntime, CellStorageLayout, Error, IncarnationId, Owner, SessionId, SqlWorkerPool,
-    TenantId,
+use crab_cell_app::{ApplicationHandle, CellApplication};
+use crab_cell_runtime::{
+    ApplicationId, CellClient, CellModule, CellRuntime, Error, SessionId, TenantId,
+    cell::catalog::CatalogEntry, cell::catalog::CatalogRole, cell::catalog::CellCatalog,
+    cell::worker::SqlWorkerPool, control::Owner, control::authority::CellAuthority,
+    identity::IncarnationId, ltx::CellStorageLayout,
 };
-use cellule_store::Store;
+use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
+use crab_storage::Store;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
@@ -99,8 +100,12 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             application,
             tenant,
             application_id,
-        );
-        let repository = Arc::new(RepositoryCell::new(&application_handle, target)?);
+        )?;
+        let repository = Arc::new(RepositoryCell::new(
+            &application_handle,
+            target,
+            repository_id,
+        )?);
         repository
             .ensure_owner(support::identity()?, "canopy")
             .await?;

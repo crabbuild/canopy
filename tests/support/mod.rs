@@ -14,7 +14,7 @@ use canopy_server::{
     directory::{Principal, TokenScope},
     http::{GitHttpApi, Viewer},
 };
-use cellule_runtime::{MutationIdentity, RequestId};
+use crab_cell_runtime::{MutationIdentity, identity::RequestId};
 
 pub fn git_router(api: Arc<GitHttpApi>) -> Router {
     api.router().layer(middleware::from_fn(test_identity))

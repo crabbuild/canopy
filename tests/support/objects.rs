@@ -1,7 +1,7 @@
 use canopy_server::{
     ObjectBatch, ObjectKind, ObjectStorage, RepositoryCell, StoredObject, object_id,
 };
-use cellule_runtime::{Committed, MutationIdentity};
+use crab_cell_runtime::{Committed, MutationIdentity};
 
 pub async fn put(
     repository: &RepositoryCell,

@@ -2,21 +2,20 @@
 
 use super::*;
 use crate::{
-    CanopyApplication, REPOSITORIES, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryModule,
-    build_descriptor,
+    CanopyApplication, REPOSITORIES, RepositoryModule, build_descriptor,
     directory::{self, DirectoryModule},
     server::{
         LEASE_MS, RENEW_INTERVAL, ServerError, SqlCellSpec, acquire_provisioned_sql_cell,
         renew_node_lease, unix_now_ms, workspace,
     },
 };
-use cellule_app::CellApplication;
-use cellule_host::CellNodeBuilder;
-use cellule_ltx::{DiskBudget, Host};
-use cellule_runtime::{
-    CellModule, CellTarget, NodeAdvertisement, NodeCapacity, NodeFailureDomain, NodeId,
-    NodeLeaseGuard, SessionId, SqlWorkerPool,
+use crab_cell_app::CellApplication;
+use crab_cell_host::CellNodeBuilder;
+use crab_cell_runtime::{
+    CellModule, CellTarget, NodeLeaseGuard, SessionId, cell::worker::SqlWorkerPool,
+    identity::NodeId, node::NodeAdvertisement, node::NodeCapacity, node::NodeFailureDomain,
 };
+use crab_ltx::{DiskBudget, Host};
 use ed25519_dalek::SigningKey;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
@@ -61,10 +60,9 @@ impl Deployment {
         let data_dir = config.data_dir;
         let local =
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??;
-        let probe = cellule_store::probe_storage(
+        crate::server::storage::probe(
             self.layout.store(),
             &self.layout.application_prefix().join("canopy-probe"),
-            unix_now_ms()?,
         )
         .await?;
         let application = Arc::new(CanopyApplication::compile(build_descriptor(
@@ -83,7 +81,6 @@ impl Deployment {
             )
             .with_session(session)
             .build()?;
-        node.require_storage_capabilities(&probe)?;
         let stop = CancellationToken::new();
         let tasks = node.install_task_group(stop.clone(), stop.clone())?;
         let now = unix_now_ms()?;
@@ -168,16 +165,10 @@ impl Deployment {
                         {
                             continue;
                         }
-                        let (module, schema, max_database_bytes) = if entry.namespace()
-                            == directory::DIRECTORY
-                        {
-                            (DirectoryModule::NAME, directory::SCHEMA, 64 * 1024 * 1024)
+                        let (module, schema) = if entry.namespace() == directory::DIRECTORY {
+                            (DirectoryModule::NAME, directory::SCHEMA)
                         } else if entry.namespace() == REPOSITORIES {
-                            (
-                                RepositoryModule::NAME,
-                                include_str!("../schema.sql"),
-                                REPOSITORY_DATABASE_LIMIT_BYTES,
-                            )
+                            (RepositoryModule::NAME, include_str!("../schema.sql"))
                         } else {
                             return Err(Error::Release("unknown maintenance Cell namespace").into());
                         };
@@ -207,7 +198,6 @@ impl Deployment {
                                 target: &target,
                                 module,
                                 schema,
-                                max_database_bytes,
                                 destination: directory.join("cell.sqlite"),
                             },
                             session,

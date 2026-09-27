@@ -1,7 +1,8 @@
-use cellule_runtime::{
-    BoundedDecoder, BoundedEncoder, CellModule, CodecError, Command, CommandContext, CommandResult,
-    Error, InvocationError, Observed, Receipt, SqlBatch, SqlResultSet, SqlStatement, SqlValue,
-    WireValue,
+use crab_cell_runtime::{
+    CellModule, Command, Error, InvocationError, Observed, Receipt, codec::BoundedDecoder,
+    codec::BoundedEncoder, codec::CodecError, codec::WireValue, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    registry::CommandContext, registry::CommandResult,
 };
 
 use crate::{
@@ -240,7 +241,7 @@ impl Command for FinalizePush {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         plan: Self::Input,
-    ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
+    ) -> crab_cell_runtime::Result<CommandResult<Self::Output>> {
         Ok(if apply_refs(context, &plan, None)? {
             CommandResult::Success(true)
         } else {
@@ -253,7 +254,7 @@ pub(crate) fn apply_refs(
     context: &mut CommandContext<'_, '_>,
     plan: &PushPlan,
     merge: Option<&crate::pulls::merge::ReviewedMerge>,
-) -> cellule_runtime::Result<bool> {
+) -> crab_cell_runtime::Result<bool> {
     if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
         return Ok(false);
     }
@@ -343,7 +344,9 @@ pub(crate) fn server_owned_ref(name: &str) -> bool {
     name == "refs/canopy" || name.starts_with("refs/canopy/")
 }
 
-pub(crate) fn advance_generation(context: &CommandContext<'_, '_>) -> cellule_runtime::Result<()> {
+pub(crate) fn advance_generation(
+    context: &CommandContext<'_, '_>,
+) -> crab_cell_runtime::Result<()> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "UPDATE ref_generation SET generation = generation + 1 WHERE singleton = 1 AND generation < 9223372036854775807".into(),
@@ -359,7 +362,7 @@ pub(crate) fn advance_generation(context: &CommandContext<'_, '_>) -> cellule_ru
 fn current_ref(
     context: &CommandContext<'_, '_>,
     name: &str,
-) -> cellule_runtime::Result<Option<RefExpectation>> {
+) -> crab_cell_runtime::Result<Option<RefExpectation>> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "SELECT oid, version FROM refs WHERE name = ?1".into(),
@@ -372,7 +375,7 @@ fn current_ref(
     Ok(Some(decode_ref_row(row)?))
 }
 
-fn decode_ref_row(row: &[SqlValue]) -> cellule_runtime::Result<RefExpectation> {
+fn decode_ref_row(row: &[SqlValue]) -> crab_cell_runtime::Result<RefExpectation> {
     let [oid, SqlValue::Integer(version)] = row else {
         return Err(Error::Command("invalid stored ref"));
     };
@@ -398,7 +401,7 @@ fn existing_namespace_conflict(
     context: &CommandContext<'_, '_>,
     plan: &PushPlan,
     name: &str,
-) -> cellule_runtime::Result<bool> {
+) -> crab_cell_runtime::Result<bool> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "SELECT name FROM refs WHERE oid IS NOT NULL AND name != ?1 AND (substr(name, 1, length(?2)) = ?2 OR substr(?1, 1, length(name) + 1) = name || '/') LIMIT 65".into(),

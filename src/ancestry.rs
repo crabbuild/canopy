@@ -1,9 +1,10 @@
 //! Bounded certificates over parent links extracted from verified commit objects.
 
 use crate::{RepositoryCell, RepositoryModule, server::mutation_identity};
-use cellule_runtime::{
-    BoundedDecoder, BoundedEncoder, CellModule, CodecError, Command, CommandContext, CommandResult,
-    Error, InvocationError, SqlBatch, SqlStatement, SqlValue, WireValue,
+use crab_cell_runtime::{
+    CellModule, Command, Error, InvocationError, codec::BoundedDecoder, codec::BoundedEncoder,
+    codec::CodecError, codec::WireValue, primitives::sql::SqlBatch, primitives::sql::SqlStatement,
+    primitives::sql::SqlValue, registry::CommandContext, registry::CommandResult,
 };
 use std::collections::{HashMap, hash_map::Entry};
 
@@ -58,7 +59,7 @@ impl Command for CertifyAncestry {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         proof: AncestryProof,
-    ) -> cellule_runtime::Result<CommandResult<bool>> {
+    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
         for (child, parent) in proof.steps {
             let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
                 sql: "SELECT EXISTS (SELECT 1 FROM commit_parents WHERE child = ?1 AND parent = ?2) AND (?2 = ?3 OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?3 AND descendant = ?2))".into(),

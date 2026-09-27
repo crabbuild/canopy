@@ -1,7 +1,7 @@
 use super::*;
 use crate::server::{LEASE_MS, RENEW_INTERVAL, renew_node_lease, workspace};
-use cellule_runtime::{
-    NodeAdvertisement, NodeCapacity, NodeFailureDomain, NodeLeaseGuard, SessionId,
+use crab_cell_runtime::{
+    NodeLeaseGuard, SessionId, node::NodeAdvertisement, node::NodeCapacity, node::NodeFailureDomain,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;

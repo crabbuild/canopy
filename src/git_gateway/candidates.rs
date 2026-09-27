@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use cellule_runtime::InvocationError;
+use crab_cell_runtime::InvocationError;
 use std::process::{ExitStatus, Stdio};
 use tokio::io::AsyncWriteExt;
 

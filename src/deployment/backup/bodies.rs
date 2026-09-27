@@ -3,8 +3,8 @@ use crate::{
     large_blob::{LargeBlobReference, LargeBlobStore, blob_path},
     lfs::{LfsObject, lfs_path, verify_lfs_object},
 };
-use cellule_ltx::rusqlite::{Connection, OpenFlags, params};
-use cellule_runtime::{CatalogRole, NodeLeaseGuard};
+use crab_cell_runtime::{NodeLeaseGuard, cell::catalog::CatalogRole};
+use crab_ltx::rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use object_store::{ObjectStore, prefix::PrefixStore};
 
 #[derive(Clone, Copy)]
@@ -62,10 +62,6 @@ impl Deployment {
             {
                 return Err(BackupError::Invalid("backup repository schema differs"));
             }
-            let repository_id: [u8; 16] = entry
-                .partition()
-                .try_into()
-                .map_err(|_| BackupError::Invalid("repository partition is invalid"))?;
             let Some(root) = control.ltx_root() else {
                 continue;
             };
@@ -87,6 +83,19 @@ impl Deployment {
                 u64::from(verified.page_size()) * u64::from(verified.database_pages());
             let _disk = host.local_disk_budget().try_reserve(database_bytes)?;
             verified.restore(&database).await?;
+            let repository_id = read_identity(database.clone()).await?;
+            if let Some(id) = repository_id {
+                let target = crate::repository_target(
+                    self.identity.tenant(),
+                    self.identity.application(),
+                    id,
+                )?;
+                if target.cell_id() != control.cell || target.partition() != entry.partition() {
+                    return Err(BackupError::Invalid(
+                        "repository UUID differs from backup Cell",
+                    ));
+                }
+            }
             for kind in [BodyKind::Git, BodyKind::Lfs] {
                 let mut cursor = Vec::new();
                 loop {
@@ -99,6 +108,11 @@ impl Deployment {
                         Reference::Lfs(value) => value.sha256.to_vec(),
                     };
                     for reference in page {
+                        // A crash may leave a provisioned Cell before owner initialization.
+                        // That Cell can be empty, but external bytes require a durable UUID.
+                        let repository_id = repository_id.ok_or(BackupError::Invalid(
+                            "external body has no repository identity",
+                        ))?;
                         guard.check()?;
                         let path = match &reference {
                             Reference::Git(value) => blob_path(repository_id, &value.sha256),
@@ -130,6 +144,28 @@ impl Deployment {
         }
         Ok(count)
     }
+}
+
+async fn read_identity(database: PathBuf) -> BackupResult<Option<[u8; 16]>> {
+    tokio::task::spawn_blocking(move || {
+        let connection = Connection::open_with_flags(
+            database,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let id: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT repository_id FROM repository_identity WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|id| {
+            id.try_into()
+                .map_err(|_| BackupError::Invalid("invalid repository UUID"))
+        })
+        .transpose()
+    })
+    .await?
 }
 
 async fn verify(

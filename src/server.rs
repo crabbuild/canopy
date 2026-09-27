@@ -7,18 +7,21 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use cellule_app::CellApplication;
-use cellule_host::{CellNode, CellNodeBuilder};
-use cellule_ltx::{CellReplica, DiskBudget, Host, Limits, LtxError};
-use cellule_runtime::{
-    ApplicationId, ApplicationIdentity, CatalogEntry, CatalogRole, CellAuthority, CellCatalog,
-    CellClient, CellModule, CellStorageLayout, CellTarget, ControlState, Digest, Error,
-    IncarnationId, InvocationError, MutationIdentity, NodeAdvertisement, NodeCapacity,
-    NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard, Owner, RecoveryManifestStore,
-    ReleaseStore, RequestId, SessionId, SqlResultSet, SqlWorkerPool, TenantId,
-    VersionedNodeAdvertisement,
+use crab_cell_app::CellApplication;
+use crab_cell_host::{CellNode, CellNodeBuilder};
+use crab_cell_runtime::{
+    ApplicationId, CellClient, CellModule, CellTarget, Digest, Error, InvocationError,
+    MutationIdentity, NodeLeaseGuard, SessionId, TenantId, cell::application::ApplicationIdentity,
+    cell::catalog::CatalogEntry, cell::catalog::CatalogRole, cell::catalog::CellCatalog,
+    cell::worker::SqlWorkerPool, control::ControlState, control::Owner,
+    control::authority::CellAuthority, identity::IncarnationId, identity::NodeId,
+    identity::RequestId, ltx::CellStorageLayout, node::NodeAdvertisement, node::NodeCapacity,
+    node::NodeDirectory, node::NodeFailureDomain, node::VersionedNodeAdvertisement,
+    primitives::sql::SqlResultSet, recovery::manifest::RecoveryManifestStore,
+    recovery::release::ReleaseStore,
 };
-use cellule_store::{StorageError, Store, probe_storage};
+use crab_ltx::{CellReplica, CrabError, DiskBudget, Host, Limits};
+use crab_storage::{StorageError, Store};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
 use sha2::{Digest as _, Sha256};
@@ -48,6 +51,7 @@ mod lifecycle;
 pub(crate) mod peer;
 mod request_trace;
 mod residency;
+pub(crate) mod storage;
 mod tokens;
 pub(crate) mod workspace;
 
@@ -61,10 +65,10 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
-    #[error("Cellule runtime failed")]
+    #[error("Crab runtime failed")]
     Runtime(#[from] Error),
-    #[error("Cellule LTX failed")]
-    Ltx(#[from] LtxError),
+    #[error("Crab LTX failed")]
+    Ltx(#[from] CrabError),
     #[error("object storage failed")]
     Storage(#[from] StorageError),
     #[error("server I/O failed")]
@@ -364,7 +368,7 @@ impl RunningServer {
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
-        // Cellule permits 10,000 active Cells; reserve one for Directory takeover.
+        // Crab permits 10,000 active Cells; reserve one for Directory takeover.
         if !(1..10_000).contains(&config.max_active_repositories) {
             return Err(ServerError::Http(
                 "max_active_repositories must be between 1 and 9999",
@@ -381,18 +385,7 @@ impl RunningServer {
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
         );
         let store = Store::new(Arc::clone(&raw_store));
-        let probe = probe_storage(
-            &store,
-            &config.store_prefix.clone().join("canopy-probe"),
-            unix_now_ms()?,
-        )
-        .await?;
-        if !probe.passed() {
-            tracing::error!(failed = ?probe.failed_checks(), "storage capability probe failed");
-            return Err(ServerError::Repository(
-                "storage does not support Cell fencing",
-            ));
-        }
+        storage::probe(&store, &config.store_prefix.clone().join("canopy-probe")).await?;
         let application = Arc::new(CanopyApplication::compile(build_descriptor(
             include_bytes!("../Cargo.lock"),
             env!("CARGO_PKG_VERSION"),
@@ -448,7 +441,6 @@ impl RunningServer {
         );
         let stop = CancellationToken::new();
         node.install_task_group(CancellationToken::new(), release_stop.clone())?;
-        node.require_storage_capabilities(&probe)?;
         // Preflight may outlast a lease. Start its lifetime only when enrollment
         // begins, so slow probing cannot publish an already-expired advertisement.
         let now_ms = unix_now_ms()?;
@@ -496,7 +488,7 @@ impl RunningServer {
                 peer.client(),
                 config.tenant,
                 config.application,
-            );
+            )?;
             let directory_cell = DirectoryCell::new(&directory_application, directory_target)?;
             let external_store: Arc<dyn ObjectStore> =
                 Arc::new(PrefixStore::new(raw_store, config.store_prefix));
@@ -656,7 +648,6 @@ pub(crate) struct SqlCellSpec<'a> {
     pub(crate) target: &'a CellTarget,
     pub(crate) module: &'static str,
     pub(crate) schema: &'static str,
-    pub(crate) max_database_bytes: u64,
     pub(crate) destination: PathBuf,
 }
 
@@ -667,7 +658,7 @@ async fn acquire_sql_cell(
     spec: SqlCellSpec<'_>,
     session: SessionId,
     endpoint: &str,
-) -> Result<cellule_runtime::CellHandle, ServerError> {
+) -> Result<crab_cell_runtime::cell::actor::CellHandle, ServerError> {
     let target = spec.target;
     let registry = node.application().registry();
     let code = registry
@@ -695,13 +686,12 @@ pub(crate) async fn acquire_provisioned_sql_cell(
     spec: SqlCellSpec<'_>,
     session: SessionId,
     endpoint: &str,
-    proof: cellule_runtime::CatalogProof,
-) -> Result<cellule_runtime::CellHandle, ServerError> {
+    proof: crab_cell_runtime::cell::catalog::CatalogProof,
+) -> Result<crab_cell_runtime::cell::actor::CellHandle, ServerError> {
     let SqlCellSpec {
         target,
         module: _,
         schema,
-        max_database_bytes,
         destination,
     } = spec;
     let authority = CellAuthority::new(layout.clone());
@@ -721,8 +711,19 @@ pub(crate) async fn acquire_provisioned_sql_cell(
                 .await?
         }
     };
+    let cell_type = node
+        .application()
+        .cell_types()
+        .iter()
+        .find(|cell_type| cell_type.namespace() == target.namespace())
+        .ok_or(Error::Control(
+            "Cell namespace is not declared by application",
+        ))?;
+    // Acquisition and takeover must use the exact limits validated by the host.
+    // Reading the declaration avoids separate serving/recovery limit policies.
     let limits = Limits {
-        max_database_bytes,
+        max_database_bytes: cell_type.database_limit_bytes(),
+        max_capture_bytes: cell_type.capture_limit_bytes(),
         ..Limits::default()
     };
     let replica = CellReplica::new(

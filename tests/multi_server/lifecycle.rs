@@ -1,5 +1,5 @@
 use super::*;
-use cellule_runtime::{Control, ControlState};
+use crab_cell_runtime::{control::Control, control::ControlState};
 use futures_core::Stream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStoreExt,
@@ -31,6 +31,7 @@ struct PausedStore {
     entered: Notify,
     proceed: Notify,
     deny: AtomicBool,
+    ignore_conditions: AtomicBool,
 }
 
 impl PausedStore {
@@ -56,8 +57,11 @@ impl ObjectStore for PausedStore {
         &self,
         path: &StorePath,
         payload: PutPayload,
-        options: PutOptions,
+        mut options: PutOptions,
     ) -> object_store::Result<PutResult> {
+        if self.ignore_conditions.load(Ordering::SeqCst) {
+            options.mode = object_store::PutMode::Overwrite;
+        }
         let bytes: Vec<_> = payload
             .iter()
             .flat_map(|bytes| bytes.iter().copied())
@@ -348,8 +352,8 @@ fn runtime_destruction_cannot_release_an_unconfirmed_sql_workspace() -> Result {
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_waits_for_confirmed_cell_release() -> Result {
     use canopy_server::{CanopyApplication, build_descriptor, deployment::Deployment};
-    use cellule_app::CellApplication;
-    use cellule_runtime::{ApplicationIdentity, RequestId};
+    use crab_cell_app::CellApplication;
+    use crab_cell_runtime::{cell::application::ApplicationIdentity, identity::RequestId};
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
     let address = available_address().await?;
@@ -359,7 +363,7 @@ async fn maintenance_waits_for_confirmed_cell_release() -> Result {
         env!("CARGO_PKG_VERSION"),
     ))?;
     let deployment = Deployment::new(
-        cellule_store::Store::new(store.clone()),
+        crab_storage::Store::new(store.clone()),
         settings.store_prefix.clone(),
         ApplicationIdentity::new(settings.tenant, settings.application),
         settings.fleet,
@@ -396,10 +400,11 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         deployment::{Deployment, WorkerConfig},
         repository_target,
     };
-    use cellule_app::CellApplication;
-    use cellule_runtime::{
-        ApplicationIdentity, CatalogEntry, CatalogRole, CellCatalog, CellModule, CellStorageLayout,
-        RequestId,
+    use crab_cell_app::CellApplication;
+    use crab_cell_runtime::{
+        CellModule, cell::application::ApplicationIdentity, cell::catalog::CatalogEntry,
+        cell::catalog::CatalogRole, cell::catalog::CellCatalog, identity::RequestId,
+        ltx::CellStorageLayout,
     };
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
@@ -409,7 +414,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         env!("CARGO_PKG_VERSION"),
     ))?;
     let deployment = Deployment::new(
-        cellule_store::Store::new(store.clone()),
+        crab_storage::Store::new(store.clone()),
         settings.store_prefix.clone(),
         ApplicationIdentity::new(settings.tenant, settings.application),
         settings.fleet,
@@ -417,7 +422,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         application.registry(),
     )?;
     let layout = CellStorageLayout::new(
-        cellule_store::Store::new(store.clone()),
+        crab_storage::Store::new(store.clone()),
         settings.store_prefix.clone(),
         *settings.application.as_bytes(),
     );
@@ -485,9 +490,10 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
         CanopyApplication, build_descriptor,
         deployment::{Deployment, WorkerConfig},
     };
-    use cellule_app::CellApplication;
-    use cellule_runtime::{
-        ApplicationIdentity, CellAuthority, CellStorageLayout, RequestId, Transition,
+    use crab_cell_app::CellApplication;
+    use crab_cell_runtime::{
+        cell::application::ApplicationIdentity, control::Transition,
+        control::authority::CellAuthority, identity::RequestId, ltx::CellStorageLayout,
     };
     let store = Arc::new(PausedStore::default());
     let files = tempfile::TempDir::new()?;
@@ -497,7 +503,7 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
         env!("CARGO_PKG_VERSION"),
     ))?;
     let layout = CellStorageLayout::new(
-        cellule_store::Store::new(store.clone()),
+        crab_storage::Store::new(store.clone()),
         settings.store_prefix.clone(),
         *settings.application.as_bytes(),
     );
@@ -556,3 +562,20 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
 
 #[path = "lifecycle/lease.rs"]
 mod lease;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_rejects_ignored_conditional_writes_before_enrollment() -> Result {
+    let store = Arc::new(PausedStore::default());
+    store.ignore_conditions.store(true, Ordering::SeqCst);
+    let files = tempfile::TempDir::new()?;
+    let settings = config(available_address().await?, files.path().join("server"));
+    assert!(matches!(
+        CanopyServer::start(settings, store.clone()).await,
+        Err(canopy_server::server::ServerError::Repository(
+            "storage conditional create failed"
+        ))
+    ));
+    let remaining = store.list_with_delimiter(None).await?;
+    assert!(remaining.objects.is_empty() && remaining.common_prefixes.is_empty());
+    Ok(())
+}

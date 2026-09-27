@@ -1,6 +1,8 @@
 use super::*;
 use canopy_server::{INLINE_OBJECT_LIMIT, ObjectBatch, ObjectStorage, StoredObject};
-use cellule_runtime::{SqlBatch, SqlCell, SqlStatement, SqlValue};
+use crab_cell_runtime::{
+    SqlCell, primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 

@@ -10,12 +10,14 @@ pub use tokens::{TOKEN_PAGE_SIZE, TokenAuthority, TokenChange, TokenInfo};
 
 use std::sync::OnceLock;
 
-use cellule_app::{ApplicationHandle, CellType};
-use cellule_runtime::{
-    ApplicationId, CatalogRole, CellModule, CellTarget, Committed, Digest, Error, InvocationError,
+use crab_cell_app::{ApplicationHandle, CellType};
+use crab_cell_runtime::{
+    ApplicationId, CellModule, CellTarget, Committed, Digest, Error, InvocationError,
     MigrationDescriptor, ModuleDescriptor, MutationIdentity, NamespaceDescriptor, NamespaceId,
-    Observed, OperationDescriptor, Receipt, RegistryBuilder, SqlBatch, SqlCell, SqlModule,
-    SqlResultSet, SqlStatement, SqlValue, TenantId, partition_for_shard, register_sql,
+    Observed, Receipt, RegistryBuilder, SqlCell, SqlModule, TenantId, cell::catalog::CatalogRole,
+    partition_for_shard, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
+    primitives::sql::SqlStatement, primitives::sql::SqlValue, primitives::sql::register_sql,
+    registry::OperationDescriptor,
 };
 
 use crate::{CanopyApplication, ReadIdentity, validate_repository_id};
@@ -89,14 +91,14 @@ impl CellModule for DirectoryModule {
         })
     }
 
-    fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    fn register(self, registry: &mut RegistryBuilder) -> crab_cell_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<timed_sql::CredentialCommand>()?;
         registry.bind_query::<timed_sql::CredentialQuery>()
     }
 }
 
-pub fn cell_type() -> cellule_runtime::Result<CellType> {
+pub fn cell_type() -> crab_cell_runtime::Result<CellType> {
     CellType::new(
         DirectoryModule::NAME,
         "directory",
@@ -109,7 +111,7 @@ pub fn cell_type() -> cellule_runtime::Result<CellType> {
 pub fn directory_target(
     tenant: TenantId,
     application: ApplicationId,
-) -> cellule_runtime::Result<CellTarget> {
+) -> crab_cell_runtime::Result<CellTarget> {
     CellTarget::new(tenant, application, DIRECTORY, &partition_for_shard(0))
 }
 
@@ -184,7 +186,7 @@ impl DirectoryCell {
     pub fn new(
         application: &ApplicationHandle<CanopyApplication>,
         target: CellTarget,
-    ) -> cellule_runtime::Result<Self> {
+    ) -> crab_cell_runtime::Result<Self> {
         Ok(Self {
             sql: application.sql::<DirectoryModule>(target.clone())?,
             application: application.clone(),
@@ -618,7 +620,7 @@ impl DirectoryCell {
             .rows
             .iter()
             .map(|row| decode_entry(row))
-            .collect::<cellule_runtime::Result<Vec<_>>>()
+            .collect::<crab_cell_runtime::Result<Vec<_>>>()
             .map_err(InvocationError::NotStarted)?;
         Ok(Observed {
             output: entries,
@@ -627,7 +629,7 @@ impl DirectoryCell {
     }
 }
 
-fn decode_entry(row: &[SqlValue]) -> cellule_runtime::Result<RepositoryEntry> {
+fn decode_entry(row: &[SqlValue]) -> crab_cell_runtime::Result<RepositoryEntry> {
     let [
         SqlValue::Text(owner),
         SqlValue::Text(name),
@@ -656,12 +658,12 @@ fn decode_entry(row: &[SqlValue]) -> cellule_runtime::Result<RepositoryEntry> {
     })
 }
 
-fn validate_name(owner: &str, name: &str) -> cellule_runtime::Result<()> {
+fn validate_name(owner: &str, name: &str) -> crab_cell_runtime::Result<()> {
     validate_component(owner)?;
     validate_component(name)
 }
 
-pub(crate) fn validate_component(value: &str) -> cellule_runtime::Result<()> {
+pub(crate) fn validate_component(value: &str) -> crab_cell_runtime::Result<()> {
     if value.is_empty()
         || value.len() > 64
         || value.starts_with('.')

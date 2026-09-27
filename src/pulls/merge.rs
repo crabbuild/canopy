@@ -32,7 +32,7 @@ pub struct MergeRecord {
     pub merged_at_ms: i64,
     pub revision: PullRevision,
 }
-pub(super) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
+pub(super) fn record(row: &[SqlValue]) -> crab_cell_runtime::Result<MergeRecord> {
     let [
         SqlValue::Blob(id),
         SqlValue::Integer(number),
@@ -223,7 +223,7 @@ fn preparation(
         source: Box::new(error),
     })
 }
-pub(super) fn oid(text: &str) -> cellule_runtime::Result<[u8; 20]> {
+pub(super) fn oid(text: &str) -> crab_cell_runtime::Result<[u8; 20]> {
     parse_oid(text)
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))
@@ -242,7 +242,9 @@ pub(super) fn policy_statement<'a>(
         parameters: vec![actor.parameter(), SqlValue::Integer(number)],
     }
 }
-pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<ReviewState>> {
+pub(super) fn policy_state(
+    sets: &[SqlResultSet],
+) -> crab_cell_runtime::Result<Option<ReviewState>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing review policy result"))?;

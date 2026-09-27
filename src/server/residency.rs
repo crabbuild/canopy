@@ -13,15 +13,16 @@ use axum::{
     body::{Body, Bytes, HttpBody},
     http::{Request, Response},
 };
-use cellule_runtime::{CatalogRole, CellClient, CellId, CellModule, CellTarget, Error};
+use crab_cell_runtime::{
+    CellClient, CellId, CellModule, CellTarget, Error, cell::catalog::CatalogRole,
+};
 use http_body::{Frame, SizeHint};
 use tokio::sync::{Mutex, OwnedSemaphorePermit};
 use tower::ServiceExt;
 
 use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutation_identity};
 use crate::{
-    CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, ReadIdentity, RepositoryCell,
-    RepositoryModule,
+    CanopyApplication, ReadIdentity, RepositoryCell, RepositoryModule,
     directory::{RepositoryEntry, RepositoryState, TokenScope},
     git_gateway::GitGateway,
     http::GitHttpApi,
@@ -266,7 +267,6 @@ impl RepositoryManager {
                         target: &target,
                         module: RepositoryModule::NAME,
                         schema: include_str!("../schema.sql"),
-                        max_database_bytes: REPOSITORY_DATABASE_LIMIT_BYTES,
                         destination: directory.join("repository.sqlite"),
                     },
                     self.session,
@@ -400,7 +400,7 @@ impl RepositoryManager {
             .node
             .release_idle_cell(cell, self.session, generation)
             .await;
-        // Cellule rejects this exact capacity error before transfer preflight.
+        // Crab rejects this exact capacity error before transfer preflight.
         // Wait one rate window; the retry rechecks generation and settled work.
         // Other failures can follow release and must retain the recovery path.
         if matches!(&result, Err(Error::Capacity("movement budget"))) {
@@ -462,8 +462,12 @@ impl RepositoryManager {
             client,
             self.tenant,
             self.application,
-        );
-        let repository = Arc::new(RepositoryCell::new(&application, target)?);
+        )?;
+        let repository = Arc::new(RepositoryCell::new(
+            &application,
+            target,
+            entry.repository_id,
+        )?);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
             self.local.path().to_path_buf(),

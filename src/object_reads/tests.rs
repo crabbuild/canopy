@@ -1,5 +1,5 @@
 use super::*;
-use cellule_ltx::rusqlite::{Connection, StatementStatus, params};
+use crab_ltx::rusqlite::{Connection, StatementStatus, params};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 

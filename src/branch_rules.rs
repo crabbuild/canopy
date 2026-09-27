@@ -9,9 +9,9 @@ use crate::{
     default_branch::valid_default_branch,
     directory::{TokenScope, validate_component},
 };
-use cellule_runtime::{
-    Committed, Error, InvocationError, MutationIdentity, Observed, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -132,7 +132,7 @@ impl RepositoryCell {
                     rows.rows
                         .iter()
                         .map(|row| decode_rule(row))
-                        .collect::<cellule_runtime::Result<Vec<_>>>()
+                        .collect::<crab_cell_runtime::Result<Vec<_>>>()
                         .map_err(InvocationError::NotStarted)?,
                 )
             }
@@ -243,10 +243,10 @@ impl Policy {
 }
 
 pub(crate) fn policies_allow(
-    context: &cellule_runtime::CommandContext<'_, '_>,
+    context: &crab_cell_runtime::registry::CommandContext<'_, '_>,
     plan: &PushPlan,
     merge: Option<&crate::pulls::merge::ReviewedMerge>,
-) -> cellule_runtime::Result<bool> {
+) -> crab_cell_runtime::Result<bool> {
     for update in &plan.updates {
         if decode_policy(&context.sql(&policy_query(update))?)?.is_some_and(|policy| {
             !policy.allows_ref(update, true)
@@ -266,7 +266,7 @@ fn policy_query(update: &RefUpdate) -> SqlBatch {
         parameters: vec![SqlValue::Text(update.name.clone()), old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())), update.new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec()))],
     }] }
 }
-fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy>> {
+fn decode_policy(sets: &[SqlResultSet]) -> crab_cell_runtime::Result<Option<Policy>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing branch policy result"))?;
@@ -291,7 +291,7 @@ fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy
         require_pull_request: *pull == 1,
     }))
 }
-fn decode_rule(row: &[SqlValue]) -> cellule_runtime::Result<BranchRule> {
+fn decode_rule(row: &[SqlValue]) -> crab_cell_runtime::Result<BranchRule> {
     let [
         SqlValue::Text(reference),
         SqlValue::Integer(version),

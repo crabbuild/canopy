@@ -34,14 +34,16 @@ use canopy_server::{
     CanopyApplication, ObjectKind, PushPlan, RefExpectation, RefUpdate, RepositoryCell,
     RepositoryModule, build_descriptor, directory::TokenScope, object_id, repository_target,
 };
-use cellule_app::{ApplicationHandle, CellApplication};
-use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
-use cellule_runtime::{
-    ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellRuntime, CellStorageLayout, CellTarget, Error, IncarnationId, InvocationError,
-    MutationIdentity, NamespaceId, Owner, RequestId, SessionId, SqlWorkerPool, TenantId,
+use crab_cell_app::{ApplicationHandle, CellApplication};
+use crab_cell_runtime::{
+    ApplicationId, CellClient, CellModule, CellRuntime, CellTarget, Error, InvocationError,
+    MutationIdentity, NamespaceId, SessionId, TenantId, cell::catalog::CatalogEntry,
+    cell::catalog::CatalogRole, cell::catalog::CellCatalog, cell::worker::SqlWorkerPool,
+    control::Owner, control::authority::CellAuthority, identity::IncarnationId,
+    identity::RequestId, ltx::CellStorageLayout,
 };
-use cellule_store::Store;
+use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
+use crab_storage::Store;
 use object_store::{memory::InMemory, path::Path};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -113,7 +115,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
             application,
             tenant,
             application_id,
-        );
+        )?;
         assert!(
             application_handle
                 .sql::<RepositoryModule>(CellTarget::new(
@@ -154,8 +156,14 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 )?)
                 .is_err()
         );
+        let mut other_id = repository_id;
+        other_id[0] ^= 1;
+        assert!(matches!(
+            RepositoryCell::new(&application_handle, target.clone(), other_id),
+            Err(Error::Identity("repository UUID differs from Cell target"))
+        ));
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
-        let repository = RepositoryCell::new(&application_handle, target.clone())?;
+        let repository = RepositoryCell::new(&application_handle, target.clone(), repository_id)?;
         let empty = repository.refs_page("", None).await?.output;
         assert_eq!(empty.generation, 0);
         assert!(empty.refs.is_empty());

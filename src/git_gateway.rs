@@ -12,8 +12,8 @@ use std::{
 
 use crate::AdmissionPermit;
 use axum::body::Body;
-use cellule_ltx::DiskBudget;
-use cellule_runtime::{MutationIdentity, RequestId};
+use crab_cell_runtime::{MutationIdentity, identity::RequestId};
+use crab_ltx::DiskBudget;
 use object_store::ObjectStore;
 use tokio::sync::Mutex;
 
@@ -346,7 +346,7 @@ impl GitGateway {
             })
             .await
             .map_err(|error| match error {
-                cellule_runtime::InvocationError::Rejected(_) => GatewayError::RefConflict,
+                crab_cell_runtime::InvocationError::Rejected(_) => GatewayError::RefConflict,
                 other => GatewayError::Cell(Box::new(other)),
             })?;
         if !result.output {

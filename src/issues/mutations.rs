@@ -208,7 +208,7 @@ fn binding(fields: &[&str]) -> Vec<u8> {
     hash.finalize().as_bytes().to_vec()
 }
 
-fn decode_change(sets: &[SqlResultSet]) -> cellule_runtime::Result<IssueChange> {
+fn decode_change(sets: &[SqlResultSet]) -> crab_cell_runtime::Result<IssueChange> {
     match sets
         .first()
         .and_then(|set| set.rows.first())

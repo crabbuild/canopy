@@ -5,7 +5,9 @@ use canopy_server::pulls::{
     candidates::{CandidateRequest, CandidateResult},
     merge::{MergeOutcome, MergeRequest, MergeStrategy},
 };
-use cellule_runtime::{SqlBatch, SqlCell, SqlStatement, SqlValue};
+use crab_cell_runtime::{
+    SqlCell, primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+};
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub async fn verify(repo: &RepositoryCell, sql: &SqlCell<RepositoryModule>) -> Result {

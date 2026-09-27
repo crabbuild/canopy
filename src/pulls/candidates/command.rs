@@ -4,7 +4,7 @@ use crate::{
     access::{access_statement, decode_access},
     directory::TokenScope,
 };
-use cellule_runtime::{CellModule, Command, CommandResult};
+use crab_cell_runtime::{CellModule, Command, registry::CommandResult};
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
@@ -73,7 +73,7 @@ impl Command for PrepareCandidate {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         action: CandidateAction,
-    ) -> cellule_runtime::Result<CommandResult<CandidateOutcome>> {
+    ) -> crab_cell_runtime::Result<CommandResult<CandidateOutcome>> {
         let actor = match &action {
             CandidateAction::Reserve { actor, .. } | CandidateAction::Finish { actor, .. } => actor,
         };

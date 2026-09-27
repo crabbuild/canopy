@@ -87,7 +87,7 @@ async fn orphan_git_descendant_prevents_reclamation_until_it_exits() -> Result {
     let workspace = Workspace::open(directory.path())?;
     let cache = crate::git_cache::GitCache::create(
         workspace.path().into(),
-        cellule_ltx::DiskBudget::new(1 << 20),
+        crab_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
     )
     .await?;

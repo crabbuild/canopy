@@ -1,8 +1,9 @@
 //! Staged SQLite chunks, verified before an immutable object record is published.
 
-use cellule_runtime::{
-    CommandContext, Error, InvocationError, MutationIdentity, RequestId, SqlBatch, SqlResultSet,
-    SqlStatement, SqlValue,
+use crab_cell_runtime::{
+    Error, InvocationError, MutationIdentity, identity::RequestId, primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    registry::CommandContext,
 };
 
 use crate::{
@@ -106,7 +107,7 @@ pub(crate) fn body(
     upload: [u8; 16],
     size: u64,
     digest: [u8; 32],
-) -> cellule_runtime::Result<Option<Vec<u8>>> {
+) -> crab_cell_runtime::Result<Option<Vec<u8>>> {
     let Some(mut chunks) = Chunks::new(oid, kind, upload, size, digest) else {
         return Ok(None);
     };

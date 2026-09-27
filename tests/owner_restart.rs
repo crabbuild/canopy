@@ -8,16 +8,18 @@ use canopy_server::{
     CanopyApplication, PushPlan, RefUpdate, RepositoryCell, RepositoryModule, build_descriptor,
     git_gateway::GitGateway, http::GitHttpApi, repository_target,
 };
-use cellule_app::{CellApplication, CompiledApplication};
-use cellule_host::{CellNode, CellNodeBuilder};
-use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
-use cellule_runtime::{
-    ApplicationId, CatalogEntry, CatalogRole, CellAuthority, CellCatalog, CellClient, CellModule,
-    CellStorageLayout, ControlState, Digest, Error, IncarnationId, InvocationError,
-    NodeAdvertisement, NodeCapacity, NodeDirectory, NodeFailureDomain, NodeId, NodeLeaseGuard,
-    Owner, SessionId, SqlWorkerPool, TenantId, VersionedNodeAdvertisement,
+use crab_cell_app::{CellApplication, CompiledApplication};
+use crab_cell_host::{CellNode, CellNodeBuilder};
+use crab_cell_runtime::{
+    ApplicationId, CellClient, CellModule, Digest, Error, InvocationError, NodeLeaseGuard,
+    SessionId, TenantId, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
+    cell::catalog::CellCatalog, cell::worker::SqlWorkerPool, control::ControlState, control::Owner,
+    control::authority::CellAuthority, identity::IncarnationId, identity::NodeId,
+    ltx::CellStorageLayout, node::NodeAdvertisement, node::NodeCapacity, node::NodeDirectory,
+    node::NodeFailureDomain, node::VersionedNodeAdvertisement,
 };
-use cellule_store::Store;
+use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
+use crab_storage::Store;
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
@@ -85,8 +87,12 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         CellClient::local(Arc::clone(&registry), first_handle),
         tenant,
         application_id,
-    );
-    let repository = Arc::new(RepositoryCell::new(&app_handle, target.clone())?);
+    )?;
+    let repository = Arc::new(RepositoryCell::new(
+        &app_handle,
+        target.clone(),
+        repository_id,
+    )?);
     repository
         .ensure_owner(support::identity()?, "canopy")
         .await?;
@@ -276,8 +282,8 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         CellClient::local(registry, second_handle),
         tenant,
         application_id,
-    );
-    let repository = Arc::new(RepositoryCell::new(&app_handle, target)?);
+    )?;
+    let repository = Arc::new(RepositoryCell::new(&app_handle, target, repository_id)?);
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,
         refs_generation
@@ -504,7 +510,7 @@ fn unix_now_ms() -> Result<i64, Box<dyn std::error::Error>> {
 
 fn replica(
     layout: &CellStorageLayout,
-    target: &cellule_runtime::CellTarget,
+    target: &crab_cell_runtime::CellTarget,
     incarnation: [u8; 16],
 ) -> Result<CellReplica, Box<dyn std::error::Error>> {
     Ok(CellReplica::new(

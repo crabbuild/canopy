@@ -7,7 +7,7 @@ Do not infer completion from compilation or a disposable cache test.
 
 | Gate | Deliverable | Acceptance proof | State |
 | --- | --- | --- | --- |
-| 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
+| 0 Independent build | Pin an immutable Crab Cell revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration and atomic account audit history implemented; account deletion and broader audit coverage remain |
 | 3 Git object path | Bounded pack ingest, SQLite object chunks, verified external large blobs, quotas | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: disk-accounted 512 MiB pushes, incremental Git reads, bounded atomic object batches and SQLite chunks for large trees/commits/tags work; external blobs stream up to 5 GiB; a Linux cgroup/tmpfs deployment adds native resource ceilings; quotas, non-blob buffers/64 MiB ceilings and the complete resource fault matrix remain |
@@ -32,10 +32,9 @@ separate product decisions.
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The pinned Cellule revision currently lives on a public
-   branch; [Cellule PR #5](https://github.com/crabbuild/cellule/pull/5)
-   proposes the UUID partition contract. The storage capability probe also
-   needs to land upstream before Canopy can pin a revision on `main`.
+   a Canopy remote. The current build pins Crab `main` revision `311105eb` and
+   owns the startup storage probe in Canopy. Historical Cellule qualification
+   runs below remain evidence for their recorded revisions only.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
@@ -3246,3 +3245,58 @@ the bounded wait absorbs bursts without increasing active transfer capacity. See
 A lone account is limited to four transfers even on an idle node. This is an
 isolation policy, not proof of optimal throughput, scheduling fairness under
 combined-account saturation, or thousands of fully active repository Cells.
+
+
+## Crab runtime migration
+
+Canopy now pins `crab-cell-runtime`, `crab-cell-app`, `crab-cell-host`, `crab-ltx`
+and `crab-storage` to Crab `main` revision
+`311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`. The lockfile replaces exactly six
+Cellule packages with six Crab library packages (including transitive
+`crab-types`). Other package versions are unchanged. There are no local path
+dependencies, aliases, vendor patches, Crab product/server crates or Xet crates.
+
+Contract changes integrated:
+
+- Repository UUIDs derive the app crate's canonical entity partition. Handles
+  check UUID/target agreement. SQLite persists the UUID beside the owner so
+  backup recovery can locate external Git/LFS bytes and validate their Cell.
+- Fallible application handles propagate registry/application mismatch errors.
+  Peer ingress decodes the unverified session only to locate its enrolled key,
+  then verifies the signed request before dispatch.
+- Serving and maintenance acquisition take database/capture limits from the
+  compiled Cell type. A first backup test exposed the Directory's previous
+  16 MiB declared / 64 MiB supplied capture mismatch; the canonical declaration
+  now governs both limits on every acquisition and takeover path.
+- Canopy owns a narrow storage preflight because the pinned Crab host/storage
+  API has no Cellule capability-probe helper. Conditional creation, ETag CAS,
+  read-after-write and ranges remain required before enrollment. A fault test
+  rejects a provider that ignores conditional writes and proves probe cleanup.
+
+New code pays for the persisted identity/recovery checks and product-owned
+storage preflight. Most other source changes are explicit imports from the
+runtime's subsystem modules. The old acquisition limit field was removed.
+
+Focused proof: Directory, repository, stock Git smart HTTP, owner restart,
+10 deployment tests, both signed multi-node peer tests, maintenance drain,
+conditional-write rejection and isolated Git/LFS/collaboration backup restore
+pass. All-target Clippy with warnings denied, formatting and the locked release
+build pass. Full hosted CI and production-provider qualification remain open.
+
+Use a fresh development prefix: the entity partition and repository schema
+changed. Existing compiled releases/backups are not upgraded by this change.
+Historical Cellule density/latency measurements above retain their original
+revisions. The dependency switch does not complete the full repository
+primitive integration or establish a thousands-of-repositories capacity claim.
+
+
+Real-store process proof: `canopy-crab-runtime-backup-d00a763338b4`, using the
+release binary with SHA-256
+`1e4ee1cbb7ab7a079468ce07b54236f2056dae665a19bc376a38483157f65aca`, passed against
+a disposable RustFS `1.0.0-beta.8-glibc` fixture on the macOS development host.
+Stock Git/LFS transferred an 80 MiB Git blob, an 80 MiB LFS object and empty LFS
+bytes. The backup CLI copied SQLite and external bodies, rejected corruption,
+then verified and restored after all original source objects were deleted.
+Stock clone/LFS recovered exact bytes and the collaboration issue. The driver
+removed its container and volume. This is compatibility/recovery evidence,
+not a production performance or provider durability claim.

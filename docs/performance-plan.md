@@ -1,5 +1,9 @@
 # Repository density and latency
 
+Current dependencies: Crab Cell crates at `311105eb`. Earlier Cellule runs below
+retain their original pins and do not establish this build’s density or latency.
+
+
 ## Required outcome
 
 A node must serve thousands of repository identities, each with its own
@@ -436,7 +440,7 @@ prevent a controlled performance comparison with the initial 1,000-identity run.
 
 ## Diagnosing metadata latency
 
-Enable `RUST_LOG=warn,canopy_server::server=debug,cellule_runtime::actor=debug`
+Enable `RUST_LOG=warn,canopy_server::server=debug,crab_cell_runtime::actor=debug`
 for an isolated qualification run. Canopy emits `repository request stage completed`
 with `stage`, `elapsed_seconds` and `succeeded` for Directory authentication,
 Directory repository lookup and repository metadata. The metadata stage includes

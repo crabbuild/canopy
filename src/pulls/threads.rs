@@ -327,7 +327,7 @@ impl RepositoryCell {
             SqlStatement { sql: "SELECT number FROM pull_thread_comments WHERE id = ?1".into(), parameters: vec![SqlValue::Blob(input.id.to_vec())] }]).await
     }
 }
-fn thread(row: &[SqlValue]) -> cellule_runtime::Result<Thread> {
+fn thread(row: &[SqlValue]) -> crab_cell_runtime::Result<Thread> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
@@ -375,7 +375,7 @@ fn thread(row: &[SqlValue]) -> cellule_runtime::Result<Thread> {
         },
     })
 }
-fn comment(row: &[SqlValue]) -> cellule_runtime::Result<Comment> {
+fn comment(row: &[SqlValue]) -> crab_cell_runtime::Result<Comment> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
