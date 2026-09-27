@@ -1600,6 +1600,10 @@ Native receive-pack advertises push options over HTTP and SSH. Canopy accepts up
 to 16 ordered `canopy.note=<text>` options, each at most 1,024 printable ASCII
 bytes with a nonempty note. It rejects unknown, malformed or oversized options
 through a durable Git report before native pack processing or ref publication.
+If a client frames a push certificate, its signed `push-option` headers must
+match the separate option group exactly, and certificate commands cannot be
+mixed with ordinary commands. A mismatch gets the same durable Git rejection.
+Push certificates are not advertised or trusted yet.
 Completed notes are stored in the same `CompletePush` transaction as the Git
 response and refs. `GET /api/repositories/<name>/pushes/<UUID>` returns the push
 author and notes to the current repository owner or the author while they retain

@@ -16,6 +16,7 @@ pub(super) enum PushCommands {
         sideband: bool,
         options_requested: bool,
         options: Vec<String>,
+        certificate_options: Option<Vec<String>>,
         options_error: Option<&'static str>,
     },
 }
@@ -68,16 +69,24 @@ impl PushCommands {
     pub(super) fn option_error(&self) -> Option<&'static str> {
         let Self::Parsed {
             options,
+            certificate_options,
             options_error,
             ..
         } = self
         else {
             return None;
         };
-        options_error.or_else(|| {
-            (!crate::push::valid_options(options))
-                .then_some("Canopy supports only canopy.note=<text> push options")
-        })
+        options_error
+            .or_else(|| {
+                certificate_options
+                    .as_ref()
+                    .filter(|signed| *signed != options)
+                    .map(|_| "Canopy signed push options do not match the request")
+            })
+            .or_else(|| {
+                (!crate::push::valid_options(options))
+                    .then_some("Canopy supports only canopy.note=<text> push options")
+            })
     }
 
     pub(super) fn rejection(&self, reason: &str) -> Result<Option<GitHttpResponse>, PushError> {
@@ -211,6 +220,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
     let mut updates = Vec::new();
     let mut names = BTreeSet::new();
     let mut certificate = None;
+    let mut certificate_options: Option<Vec<String>> = None;
     loop {
         let header = bytes.get(..4).ok_or(InputError::Commands)?;
         if !header.iter().all(u8::is_ascii_hexdigit) {
@@ -230,6 +240,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
                 sideband,
                 options_requested,
                 options: Vec::new(),
+                certificate_options,
                 options_error: None,
             });
         }
@@ -243,6 +254,17 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             // parser does not verify a signature or authorize publication.
             match state {
                 Certificate::Headers if payload == b"\n" => *state = Certificate::Updates,
+                Certificate::Headers
+                    if payload.starts_with(b"push-option ") && payload.ends_with(b"\n") =>
+                {
+                    let option =
+                        std::str::from_utf8(&payload[b"push-option ".len()..payload.len() - 1])
+                            .map_err(|_| InputError::Commands)?;
+                    certificate_options
+                        .as_mut()
+                        .ok_or(InputError::Commands)?
+                        .push(option.into());
+                }
                 Certificate::Headers if payload.ends_with(b"\n") => {}
                 Certificate::Updates if payload.starts_with(b"-----BEGIN ") => {
                     *state = Certificate::Signature;
@@ -280,7 +302,11 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             payload
         };
         if payload == b"push-cert" {
+            if !updates.is_empty() {
+                return Err(InputError::Commands);
+            }
             certificate = Some(Certificate::Headers);
+            certificate_options = Some(Vec::new());
             continue;
         }
         parse_update(payload, &mut updates, &mut names)?;
@@ -478,6 +504,38 @@ mod tests {
         ));
         input.extend_from_slice(b"0000");
         assert!(matches!(commands(&input), Err(InputError::Commands)));
+
+        let mut ordinary = packet(format!("{ZERO} {} refs/heads/main", "12".repeat(20)).as_bytes());
+        ordinary.extend(packet(b"push-cert"));
+        ordinary.extend_from_slice(b"0000");
+        assert!(matches!(commands(&ordinary), Err(InputError::Commands)));
+    }
+
+    #[test]
+    fn signed_options_must_match_the_separate_push_option_group() -> Result<(), InputError> {
+        let mut input = packet(b"push-cert\0report-status push-options");
+        for line in [
+            "certificate version 0.1\n".to_owned(),
+            "push-option canopy.note=signed\n".to_owned(),
+            "\n".to_owned(),
+            format!("{ZERO} {} refs/heads/main\n", "12".repeat(20)),
+            "-----BEGIN SSH SIGNATURE-----\n".to_owned(),
+            "-----END SSH SIGNATURE-----\n".to_owned(),
+            "push-cert-end\n".to_owned(),
+        ] {
+            input.extend(packet(line.as_bytes()));
+        }
+        input.extend_from_slice(b"0000");
+        let mut parsed = commands(&input)?;
+        assert_eq!(
+            parsed.option_error(),
+            Some("Canopy signed push options do not match the request")
+        );
+        if let PushCommands::Parsed { options, .. } = &mut parsed {
+            options.push("canopy.note=signed".into());
+        }
+        assert_eq!(parsed.option_error(), None);
+        Ok(())
     }
     #[test]
     fn malformed_and_duplicate_commands_cannot_escape_the_hook() {

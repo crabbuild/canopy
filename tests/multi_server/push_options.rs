@@ -5,6 +5,70 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const AUTH: &str = "http.extraHeader=Authorization: Bearer local-test-token";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn mismatched_signed_push_options_return_a_durable_git_rejection() -> Result {
+    let workspace = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        config(address, workspace.path().join("server")),
+        Arc::new(InMemory::new()),
+    )
+    .await?;
+    let url = create_repository(address, "signed-options").await?;
+    let packet = |line: &str| format!("{:04x}{line}", line.len() + 4);
+    let mut body = packet("push-cert\0report-status push-options\n");
+    for line in [
+        "certificate version 0.1\n".to_owned(),
+        "push-option canopy.note=signed\n".to_owned(),
+        "\n".to_owned(),
+        format!("{} {} refs/heads/main\n", "0".repeat(40), "1".repeat(40)),
+        "-----BEGIN SSH SIGNATURE-----\n".to_owned(),
+        "-----END SSH SIGNATURE-----\n".to_owned(),
+        "push-cert-end\n".to_owned(),
+    ] {
+        body.push_str(&packet(&line));
+    }
+    body.push_str("0000");
+    body.push_str(&packet("canopy.note=outside"));
+    body.push_str("0000");
+    let id = uuid::Uuid::new_v4().to_string();
+    let client = reqwest::Client::new();
+    let send = || {
+        client
+            .post(format!("{url}/git-receive-pack"))
+            .bearer_auth("local-test-token")
+            .header("Content-Type", "application/x-git-receive-pack-request")
+            .header("Idempotency-Key", &id)
+            .body(body.clone())
+    };
+    let first = send().send().await?;
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    let report = first.bytes().await?;
+    assert!(
+        String::from_utf8_lossy(&report)
+            .contains("ng refs/heads/main Canopy signed push options do not match the request")
+    );
+    assert_eq!(send().send().await?.bytes().await?, report);
+    let record: Value = client
+        .get(format!(
+            "http://{address}/api/repositories/signed-options/pushes/{id}"
+        ))
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(record["push"]["options"], serde_json::json!([]));
+    assert!(
+        run_git(None, &["-c", AUTH, "ls-remote", &url, "refs/heads/main"])
+            .await?
+            .is_empty()
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_options_are_validated_recorded_and_recovered() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
