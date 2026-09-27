@@ -396,3 +396,40 @@ otherwise unrelated repositories, investigate the shared Directory path and its
 worker/storage waits. Timing correlation alone does not establish the cause of
 a runtime fence. Preserve errors and publication evidence before changing
 scheduling, deadlines or cache policy.
+
+
+## Initial 1,000-active-Cell read results
+
+The optimized `58eb0b5` run, artifact `canopy-active1000-119a2ac48d4f`, configured
+1,000 repository slots and 4 GiB of local disk admission. It seeded 1,000
+identities (997 empty and three one-commit samples) against RustFS on the same
+shared macOS host. Runtime publication/compaction timing traces were enabled.
+All 550 scheduled read requests succeeded without retries or driver drops:
+
+| Workload | Rate / duration | Scheduled p50 / p95 / p99 |
+| --- | --- | --- |
+| Metadata, three prewarmed repositories | 20 requests/s / 15 s | 6.471 / 11.550 / 25.857 ms |
+| Git v2 discovery, same resident set | 10 requests/s / 10 s | 50.386 / 104.543 / 235.143 ms |
+| Metadata, uniform choices over the 1,000 resident identities | 10 requests/s / 15 s | 11.070 / 782.653 / 1382.356 ms |
+
+Uniform arrivals 18–31 waited 174–1,469 ms in HTTP service while dispatch delay
+remained near 10 ms. Their completion pattern points to a shared wait, but the
+specific stage is unproven. The p95/p99 target is not met across this working set.
+Git discovery again started without explicit Git-cache prewarming. The read
+schedule sampled the corpus; it did not visit every identity.
+
+A parent-process sample during uniform reads observed 8,052 numeric file
+descriptors and `vmmap` physical footprint of `457.4M` (reported peak `457.6M`).
+These are macOS process observations, not aggregate node budgets: child Git,
+provider/client memory and kernel charges are excluded. They demonstrate why
+SQL's page-cache reservation alone cannot size the node.
+
+Pinned runtime inspection identifies a candidate for further diagnosis:
+`coordination.rs` marks a Cell busy during quiet compaction, blocking new SQL;
+`actor.rs` considers compaction after 250 ms of quiet. A long compaction can
+therefore add query queue time. The current log events do not identify the Cell,
+and timing correlation has not proved this caused the measured spike. Worker
+queue/page-I/O contention is another candidate. The new Canopy request-stage
+traces and UTC benchmark anchor must be exercised before choosing a fix. This
+run predates those traces. Owner recovery is qualified separately after the
+running verification completes.
