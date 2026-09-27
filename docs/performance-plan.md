@@ -110,6 +110,34 @@ These facts come from `src/server.rs`, `src/server/residency.rs`,
 `src/git_gateway.rs`, `src/git_cache.rs`, `src/repository_http.rs`,
 `deploy/compose.yaml`, and the pinned Cellule runtime/worker and LTX/db sources.
 
+## Idle ownership cost
+
+The pinned runtime also has a density cost independent of user traffic.
+`cellule-runtime/src/publication.rs` schedules each idle active publisher for
+renewal three seconds after its previous successful renewal or publication.
+`CellPublisher::renew` advances Cell control progress through
+`CellAuthority::transition`, which performs a conditional object-store update.
+`actor.rs::start_due_renewals` bounds concurrent renewals at 32; it still scans
+and renews individual active Cells. Coordination pauses new SQL for that Cell
+while renewal is in progress.
+
+For 1,000 otherwise idle active Cells with short provider latency, this implies
+approximately 333 control updates per second; 10,000 would imply approximately
+3,333. These are scheduling estimates, not measured provider request counts.
+Runtime scheduling, provider latency, writes, compaction and retries change the
+actual rate. The Directory and node advertisement add their own work. Shared
+SQL workers therefore do not, by themselves, establish cheap idle residency.
+
+Add a no-traffic interval at 100, 500 and 1,000 active Cells. Measure conditional
+updates, reads, bytes, CPU and renewals in flight, then compare with released
+Cells retaining only validated disk cache. Count failures and retries separately.
+Before optimizing, audit whether existing node-session fencing can safely replace
+redundant per-Cell liveness writes while preserving Cell epochs and root CAS.
+Canopy's takeover already requires an expired-session takeover proof, but every
+runtime recovery, routing, maintenance and standalone caller must satisfy the
+same contract before changing renewal policy. This is dependency design work,
+requires approval, and cannot be implemented by simply increasing a timeout.
+
 ## Implementation order and acceptance
 
 ### 1. Baseline and request isolation
