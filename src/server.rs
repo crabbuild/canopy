@@ -50,7 +50,6 @@ pub(crate) mod workspace;
 use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
 
-const RESIDENT_REPOSITORIES: usize = 3;
 const MAX_PENDING_REPOSITORIES: usize = 32;
 pub(crate) const LEASE_MS: i64 = 10_000;
 pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
@@ -94,6 +93,7 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,
     pub store_prefix: StorePath,
     pub local_disk_limit_bytes: u64,
+    pub max_active_repositories: usize,
 }
 
 struct AdvertisementIdentity {
@@ -168,6 +168,7 @@ pub(crate) struct RepositoryManager {
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
     loaded: Mutex<HashMap<[u8; 16], LoadedRepository>>,
     residency_change: Mutex<()>,
+    max_active_repositories: usize,
     residency_admission: Arc<Semaphore>,
     tasks: TaskTracker,
 }
@@ -352,6 +353,12 @@ impl RunningServer {
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
+        // Cellule permits 10,000 active Cells; reserve one for Directory takeover.
+        if !(1..10_000).contains(&config.max_active_repositories) {
+            return Err(ServerError::Http(
+                "max_active_repositories must be between 1 and 9999",
+            ));
+        }
         directory::validate_component(&config.owner)
             .map_err(|_| ServerError::Http("invalid repository owner"))?;
         if config.token.is_empty() {
@@ -422,7 +429,7 @@ impl RunningServer {
         let node = Arc::new(
             CellNodeBuilder::new(Arc::clone(&application))
                 .with_runtime(
-                    SqlWorkerPool::for_system(RESIDENT_REPOSITORIES + 1)?,
+                    SqlWorkerPool::for_system(config.max_active_repositories + 1)?,
                     64 * 1024 * 1024,
                 )
                 .with_replica_host(Host::default().with_local_disk_budget(disk_budget.clone()))
@@ -518,6 +525,7 @@ impl RunningServer {
                 ready,
                 loaded: Mutex::new(HashMap::new()),
                 residency_change: Mutex::new(()),
+                max_active_repositories: config.max_active_repositories,
                 residency_admission: Arc::new(Semaphore::new(MAX_PENDING_REPOSITORIES)),
                 tasks: tasks.clone(),
             });

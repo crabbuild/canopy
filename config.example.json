@@ -10,5 +10,6 @@
   "peer_endpoint": "https://node.example.invalid",
   "listen": "127.0.0.1:8080",
   "data_dir": "/var/lib/canopy",
-  "local_disk_limit_bytes": 10737418240
+  "local_disk_limit_bytes": 10737418240,
+  "max_active_repositories": 100
 }

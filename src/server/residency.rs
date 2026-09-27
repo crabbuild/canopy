@@ -16,10 +16,7 @@ use cellule_runtime::{CatalogRole, CellClient, CellModule, CellTarget, Error};
 use http_body::{Frame, SizeHint};
 use tower::ServiceExt;
 
-use super::{
-    RESIDENT_REPOSITORIES, RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell,
-    mutation_identity,
-};
+use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutation_identity};
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
     directory::{RepositoryEntry, RepositoryState, TokenScope},
@@ -214,7 +211,7 @@ impl RepositoryManager {
             let loaded = self.loaded.lock().await;
             (
                 loaded.contains_key(&entry.repository_id),
-                loaded.len() >= RESIDENT_REPOSITORIES,
+                loaded.len() >= self.max_active_repositories,
             )
         };
         if !present {

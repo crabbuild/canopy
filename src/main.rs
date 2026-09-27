@@ -29,6 +29,7 @@ struct FileConfig {
     listen: String,
     data_dir: PathBuf,
     local_disk_limit_bytes: u64,
+    max_active_repositories: usize,
 }
 
 #[derive(Debug, Error)]
@@ -143,6 +144,7 @@ async fn main() -> Result<(), StartupError> {
         data_dir: file.data_dir,
         store_prefix: provider.prefix().clone(),
         local_disk_limit_bytes: file.local_disk_limit_bytes,
+        max_active_repositories: file.max_active_repositories,
     };
     let server = CanopyServer::start(config, provider.store_arc()).await?;
     tracing::info!(address = %server.local_addr(), "Canopy is ready");

@@ -19,7 +19,7 @@ before admitting persistent customer repositories.
 | Commit checks | owner-defined reporter/context version, queued attempts, immutable terminal results and newest-created selection | Repository Cell |
 | Repository partition | canonical 16-byte UUID, versions 1–8, RFC 4122 variant | `repository_target`, `CellType::entity_uuid` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
-| Local residency | a reserved Directory SQL slot and at most three repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Cellule transfer preflight |
+| Local residency | a reserved Directory SQL slot and at most `max_active_repositories` repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Cellule transfer preflight |
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB and at most 64 MiB | `object_chunks`, verified before object publication |
@@ -287,8 +287,13 @@ transfer permits remain independent bounds; a burst can be rejected there first.
 The node uses Cellule's `SqlWorkerPool::for_system`, which derives a fixed pool
 from available parallelism, with one worker when discovery fails and a maximum
 of sixteen. Each Cell remains assigned to one owning SQL worker. Active-Cell
-admission remains four (Directory plus three repositories); more SQL workers do
-not raise residency or establish throughput. Debug residency logs report
+admission is `max_active_repositories + 1`, including Directory. The required
+node setting accepts 1–9,999 and is checked before workspace or storage startup;
+Canopy's gateway count uses the same limit. Remote entries conservatively consume
+gateway slots even though their SQL Cell is owned elsewhere. The runtime's
+10,000-Cell ceiling includes Directory. More SQL workers do not raise residency
+or establish throughput. Count admission does not bound total RSS or cache bytes;
+operator resource budgets and deployment containment remain necessary. Debug residency logs report
 `queue_seconds`, `transition_seconds` and success separately for each supervised
 transition, in addition to existing acquisition and Git hydration timings.
 

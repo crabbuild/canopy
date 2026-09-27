@@ -238,3 +238,69 @@ async fn create(
         .into_bytes(),
     ))
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn configured_residency_admits_a_larger_working_set_and_stays_bounded() -> Result {
+    let workspace = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut settings = config(address, workspace.path().join("server"));
+    settings.max_active_repositories = 100;
+    let tenant = settings.tenant;
+    let application = settings.application;
+    let authority = CellAuthority::new(CellStorageLayout::new(
+        Store::new(Arc::clone(&store)),
+        settings.store_prefix.clone(),
+        *application.as_bytes(),
+    ));
+    let server = CanopyServer::start(settings, store).await?;
+    let client = reqwest::Client::new();
+    let mut targets = Vec::new();
+    for index in 0..100 {
+        let (_, id) = create(&client, address, &format!("working-set-{index}")).await?;
+        targets.push(repository_target(tenant, application, id)?);
+    }
+    for target in &targets {
+        let control = authority
+            .load(target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
+        assert_eq!(control.value().state, ControlState::Serving);
+    }
+    let (_, id) = create(&client, address, "overflow").await?;
+    targets.push(repository_target(tenant, application, id)?);
+    let mut serving = 0;
+    for target in &targets {
+        let control = authority
+            .load(target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
+        serving += usize::from(control.value().state == ControlState::Serving);
+    }
+    assert_eq!(serving, 100);
+    client
+        .get(format!("http://{address}/api/repositories/working-set-0"))
+        .bearer_auth("local-test-token")
+        .send()
+        .await?
+        .error_for_status()?;
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_residency_limits_fail_before_creating_local_state() -> Result {
+    let workspace = tempfile::TempDir::new()?;
+    for limit in [0, 10_000, usize::MAX] {
+        let path = workspace.path().join(format!("limit-{limit}"));
+        let mut settings = config(available_address().await?, path.clone());
+        settings.max_active_repositories = limit;
+        let result = CanopyServer::start(settings, Arc::new(InMemory::new())).await;
+        assert!(matches!(
+            result,
+            Err(canopy_server::server::ServerError::Http(_))
+        ));
+        assert!(!path.exists());
+    }
+    Ok(())
+}

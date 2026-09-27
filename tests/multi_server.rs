@@ -602,6 +602,7 @@ fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> Server
         data_dir,
         store_prefix: StorePath::from("single-server-test"),
         local_disk_limit_bytes: 1 << 30,
+        max_active_repositories: 3,
     }
 }
 

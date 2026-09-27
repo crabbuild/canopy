@@ -61,9 +61,15 @@ public/peer URLs for this deployment. Set these container-specific values:
 {
   "listen": "0.0.0.0:8080",
   "data_dir": "/var/lib/canopy",
-  "local_disk_limit_bytes": 1610612736
+  "local_disk_limit_bytes": 1610612736,
+  "max_active_repositories": 3
 }
 ```
+
+The three-repository active limit preserves this profile's existing qualification
+scope. Larger active sets need their own memory, descriptor and disk measurements;
+raise `max_active_repositories` only within that measured deployment envelope.
+Stored repository count can exceed this limit through eviction and restore.
 
 The 1.5 GiB application admission limit leaves filesystem headroom for native
 writes; the 2 GiB filesystem, including transient native writes, is the final

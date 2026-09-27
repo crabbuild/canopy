@@ -691,8 +691,12 @@ runtime before confirmed drain retains the workspace lock until process restart.
 Keep the runtime alive until shutdown finishes for graceful cleanup.
 
 Local recovery currently admits a 512 MiB SQLite database. The node reserves a
-SQL slot for Directory ownership and caches up to three repository gateways,
-each bound to a local or remote Cell. Additional repositories evict an inactive
+SQL slot for Directory ownership and admits `max_active_repositories` repository
+gateways, each bound to a local or remote Cell. This required configuration field
+accepts 1–9,999; the SQL pool receives that limit plus the Directory slot.
+`config.example.json` uses 100. Choose a limit from the node's measured memory,
+descriptor and disk budgets; this count is not an aggregate resource ceiling.
+Stored repository count can exceed the active limit. Additional repositories evict an inactive
 gateway; local Cell ownership is released before its slot is reused. On a temporary
 Cellule movement-rate denial, admission waits one second before a single retry.
 Requests and streamed responses pin their repository; admission returns 503 when

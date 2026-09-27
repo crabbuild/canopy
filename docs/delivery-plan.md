@@ -39,7 +39,9 @@ separate product decisions.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
-   three repository gateway entries, backed by local or remote Cells. Inactive
+   `max_active_repositories` gateway entries, backed by local or remote Cells.
+   The initial density baseline used three; the node limit is now explicit.
+   Inactive
    local repositories release their Cell and reload on demand; unpinned remote
    entries can be dropped without releasing their owner. Admission returns 503
    when no entry is safe to evict. The resident limit is not a production capacity target.
@@ -2840,3 +2842,35 @@ checks that initial remote binding also leaves that root unchanged. Existing
 release denial, lost replies, cancellation, cleanup and warm-read isolation
 faults still pass. The earlier 1,000-repository measurements used the preceding
 binary; no measured latency improvement is attributed to this change yet.
+
+
+## Explicit node residency capacity
+
+`max_active_repositories` is a required node JSON/`ServerConfig` field, accepting
+1–9,999. The manager uses it for gateway admission; Cellule receives the same
+value plus one Directory slot. Validation rejects invalid values before workspace
+or object-store startup, including integer values that would overflow on adding
+Directory. Remote gateway entries conservatively consume the same admission.
+The runtime still owns active-Cell, worker and primitive-job reservations.
+
+The initial uniform-access run failed with the fixed three-entry limit. Node
+hardware and workloads vary, so a single replacement constant cannot establish
+a useful production limit. This explicit capacity setting permits the planned
+100/500/1,000 active-set measurements. It does not promise any such count will
+fit a given node: memory, descriptors, cache disk, native workers and lifecycle
+headroom still need measurement and enforcement. Pending activation remains
+bounded at 32, with serialized transitions and safe eviction unchanged.
+
+The root example uses 100; existing fault and bounded-container qualification
+fixtures explicitly use three. Existing preview configuration files must add
+the required field. There is no implicit old limit or environment override.
+Current production-capacity evidence remains insufficient.
+
+Eleven focused residency integration tests pass. The added working-set test
+creates 100 repositories through HTTP and verifies that every Cell remains
+Serving, admits one more, checks exactly 100 remain Serving, and reads the evicted
+repository again. Invalid limits fail before creating local state. Existing
+Git/LFS restoration, pin, cancellation and release-fault tests remain green.
+All-target Clippy, the CLI development build, Rust formatting, changed Python/JSON
+syntax and whitespace checks pass. The isolated RustFS process qualification is
+recorded separately when its recovery checks finish.

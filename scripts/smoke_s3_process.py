@@ -564,6 +564,7 @@ def main():
         "owner": "canopy",
         "peer_endpoint": "https://smoke.example.invalid",
         "local_disk_limit_bytes": 1 << 30,
+        "max_active_repositories": 3,
     }
     with tempfile.TemporaryDirectory(prefix="canopy-process-", dir=args.work_parent) as temp:
         directory = Path(temp)

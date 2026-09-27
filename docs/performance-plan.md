@@ -74,8 +74,10 @@ permits it.
 
 ## Current evidence and constraints
 
-- The manager admits three repository entries plus one reserved Directory SQL
-  slot. The runtime uses its CPU-sized SQL worker pool, capped at sixteen.
+- The required `max_active_repositories` setting admits 1–9,999 repository
+  entries plus one reserved Directory SQL slot. The example uses 100; the initial
+  density run and fault fixtures use three. The runtime uses its CPU-sized SQL
+  worker pool, capped at sixteen.
   Thirty-two supervised cold/remote transitions may execute or wait; excess
   admission receives 503. Ready local routes bypass that queue. These are
   qualification limits, not measured production capacity.
@@ -138,9 +140,12 @@ resource metrics and independent load-generator deployment remain open.
 
 ### 2. Measured active-Cell admission
 
-The CPU-sized bounded SQL worker pool is implemented. Select the active-Cell allowance from
+The CPU-sized bounded SQL worker pool and explicit node residency limit are
+implemented. Set `max_active_repositories` to 100, 500 or 1,000 for each qualification
+run; use a separate node workspace for each. Select the active-Cell allowance from
 measured memory, descriptor and disk budgets, retaining Directory and lifecycle
-headroom. Do not simply replace three with ten thousand. Account for native Git
+headroom. The setting enables those measurements; a larger configured count alone
+is not evidence of sustainable capacity. Do not simply replace three with ten thousand. Account for native Git
 and outgoing streams separately from SQL connection caches.
 
 Replace the serialized cold-transition queue with per-repository activation
@@ -325,7 +330,7 @@ Setup used a thirty-second socket timeout. Slow creation is measured behavior,
 not evidence of an optimized write path.
 
 Conclusion: warm metadata is fast at the tested modest rate, while broad cold
-access fails the service target under the current three-Cell limit and serialized
+access fails the service target under the tested three-Cell limit and serialized
 transitions. Prioritize measured active admission, bounded concurrent activation
 and retained validated local state. Larger realistic corpora, sustained load,
 independent clients, resource accounting and all-primitive workloads remain
