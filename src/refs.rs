@@ -252,6 +252,8 @@ impl Command for FinalizePush {
     }
 }
 
+// A false decision must precede every write: HTTP completion records its
+// rejection report in the same transaction without relying on rollback.
 pub(crate) fn apply_refs(
     context: &mut CommandContext<'_, '_>,
     plan: &PushPlan,

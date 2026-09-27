@@ -33,7 +33,7 @@ before admitting persistent customer repositories.
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
-| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer atomically with accepted refs | `CompletePush`, codec 2 |
+| HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer and rejection decision atomically with accepted refs | `CompletePush`, codec 3 |
 | Graph certificates | at most 128 candidate objects and 64 MiB SQLite object bytes per command; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
 | Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
@@ -187,16 +187,31 @@ changing to gzip under a completed request UUID produces a conflict.
 
 A reservation binds the ID before running Git. Response metadata and 512 KiB
 body chunks are durable before finalization. `CompletePush` checks the binding,
-chunk completeness and current write role, then applies the ref plan and
-publishes the response pointer in one Cell transaction. A completed ID returns
-its existing outcome. Only a published pointer can expose a staged response;
-replay verifies the stored body length and BLAKE3 digest. The HTTP boundary
+chunk completeness, then applies the ref plan under current ACL, policy and CAS
+checks. It publishes the response pointer and a rejection decision in one Cell
+transaction. `apply_refs` returns false only before any ref writes; SQL errors
+roll back completion. A completed ID returns its existing outcome. Only a
+published pointer can expose a staged response; replay verifies the stored body
+length and BLAKE3 digest before applying the saved decision. The HTTP boundary
 checks current token scope and repository access even for completed requests.
 
 No-op, rejected and non-200 Git backend responses are also terminal outcomes.
-Infrastructure or ref-CAS failures before publication leave the ID pending;
-an exact retry can rerun against current refs. A lost reply after publication
-returns the original report without changing refs, even when later operations
+Late ACL, policy and ref-CAS refusals are terminal rejected outcomes. Native
+`ok` report lines become `ng` with a publication rejection reason; existing
+native `ng` reasons and sideband progress remain intact. Plain report-status and
+sideband report-status-v2 use the same decision. Clients that decline reports
+receive HTTP 409 instead of an empty success reply. See Git's
+[report-status contract](https://git-scm.com/docs/gitprotocol-pack#_report_status)
+and [native report generation](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L2286).
+The native response is stored once; rejection rendering is deterministic from
+that body and the durable decision, without querying current refs or policy.
+Only the completion reader can expose a stored response. No-op/native-rejected
+requests mutate no refs and may record their outcome after write revocation.
+
+Infrastructure failures before publication leave the ID pending; an exact retry
+can rerun against current refs. An uncertain Cell outcome is not relabeled as a
+ref rejection: the mutation may already have committed. A lost reply after
+publication returns the original report without changing refs, even when later operations
 have changed them. Retrying a new Git invocation is not necessarily an exact
 HTTP replay: its body can differ and then the reused ID conflicts. A distinct
 ID permits identical bytes to represent a new operation. There is no expiry or
@@ -644,9 +659,11 @@ CGI headers and stderr are each bounded at 64 KiB. The existing 120-second
 subprocess deadline includes output backpressure. Once headers are sent, a
 process failure or timeout produces an HTTP body error rather than successful
 EOF; before headers it fails the request. Dropping the response cancels its
-worker. Unix subprocesses use a dedicated process group so cancellation also
-kills upload-pack/pack-objects descendants; other platforms currently use
-Tokio's direct-child kill-on-drop behavior and still need lifecycle qualification.
+worker. The spawn helper consumes and drops the parent command before waiting for
+headers, including on spawn failure, so its pre-exec closure cannot retain a
+worker fence after the child exits. Unix subprocesses use a dedicated process
+group so cancellation also kills upload-pack/pack-objects descendants; other
+platforms currently use Tokio's direct-child kill-on-drop behavior and still need lifecycle qualification.
 
 Git protocol v2's initial upload-pack capability advertisement uses a temporary
 empty bare cache with the repository's published default branch. Authorization,
@@ -1387,8 +1404,9 @@ snapshot policy and runs `git merge-base --is-ancestor` where required. Ordinary
 mixed pushes retain accepted refs; atomic pushes use native Git's group behavior.
 The gateway buffers the report and persists objects before authoritative Cell
 publication. A rule/check change after preflight that invalidates an accepted
-update rejects the entire proposed publication with HTTP 409; the buffered
-success report is discarded. A completed push replay returns its original report
+update rejects the entire proposed publication. Its durable outcome rewrites
+buffered `ok` statuses to `ng`; no accepted ref or generation change is published.
+A completed push replay returns its original report
 without reapplying refs, even if current rules changed. Already rejected refs
 stay rejected if policy becomes permissive during that request; retry normally.
 

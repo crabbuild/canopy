@@ -3357,3 +3357,36 @@ hydration. Indexed query work is checked with 10,000 stored objects. Ordinary
 smart HTTP and Repository Cell publication/rollback regressions pass. These tests
 use the in-memory provider; hosted CI and real-provider filter qualification
 remain outstanding.
+
+
+## Durable late push refusals
+
+`CompletePush` codec 3 now publishes a rejection decision together with the
+native response pointer when the final ACL, policy or ref-CAS check refuses a
+push. The check returns false before any ref writes. Native `ok` statuses then
+render as `ng`; existing rejection reasons and sideband progress are retained.
+Rendering uses the saved body and decision, so retries do not reevaluate current
+policy. Successful pushes still stage only one response. Clients declining
+report-status receive HTTP 409 on a late refusal. Infrastructure/uncertain Cell
+outcomes remain errors, never fabricated definite rejections.
+
+The new schema requires the existing fresh-prefix hard cutover. The direct
+`FinalizePush` and pull-merge paths retain their typed rejection semantics through
+the same ref checks. Permanent tests pause external blob ingestion after native
+acceptance, inject ref/policy/access changes, and check rejected status, unchanged
+sibling refs/generation and replay from a new gateway after policy/access repair.
+
+Verification also exposed a parent command retaining its inherited worker fence
+until HTTP headers were polled. A deterministic test reproduced the cache charge
+leak. The shared spawn helper now consumes the command and drops that parent
+handle before any worker cleanup, including failed spawn. Stream and native merge
+workers share this ownership rule; real child/orphan fences remain intact.
+The HTTP fixture also waits for actual service-owner release: Axum 0.8 signals
+connection closure before dropping its service. Its zero-disk-charge assertion
+is unchanged and runs after synchronous destruction of the final gateway owner.
+
+Focused proof passes: stock Git smart HTTP and the injected late-publication
+races; owner restart and lost-reply replay; cross-node competing pushes; native
+candidate graph/path semantics; seven stream lifecycle tests; fragmented and
+malformed report tests; all-target Clippy and formatting. Hosted CI and
+real-provider qualification of this change remain pending.

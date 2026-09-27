@@ -32,7 +32,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Surface | Current behavior | Acceptance gate |
 | --- | --- | --- |
 | Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete and atomic generation qualified | Full-capacity and real-provider scale qualification remain |
-| Rejection reporting | Branch policy, unsupported ref names and command limits use native Git reports; late Cell conflicts still return HTTP 409 and infrastructure failures can return HTTP 500 | Resource/policy refusals produce clear Git reports without reporting uncommitted refs as accepted |
+| Rejection reporting | Branch policy, unsupported names, command limits and late Cell refusals produce Git reports; clients declining reports receive HTTP 409, and infrastructure failures can still return HTTP 500 | Finish pre-publication resource/infrastructure reporting without mislabeling uncertain outcomes |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
 | Cold fetch | Exact `blob:none` hydrates non-blob history, ref/tag targets and explicit wants; other filters and full fetch still hydrate all stored objects | Bound preparation to the requested reachable object set and measure bytes/time for cold and warm requests |
@@ -67,6 +67,11 @@ and atomic rejection, bulk deletion and command-limit rejection/replay.
 bytes, fresh-disk blob omission and rejected unreachable wants before and after
 full cache hydration. SQL work-bound tests cover indexed structural reads and
 reachability short-circuiting with 10,000 stored objects.
+`tests/smart_http/publication.rs` pauses large-blob ingestion after native Git
+acceptance, then changes refs, policy or write permission. It verifies Git
+rejection, no sibling/generation publication and exact replay from a new gateway
+after restoring policy/permission. The fragmented-report unit test covers 4,096
+Unicode refs and preserves existing native rejections.
 Hosted CI has not been run for these changes.
 
 The baseline real-provider probe used Apple Git 2.50.1 and disposable RustFS
@@ -80,8 +85,8 @@ Tests using the in-memory provider do not qualify provider outages or performanc
 
 Implementation order:
 
-1. Qualify staged bulk publication at scale and finish late Git rejection
-   reporting. Bounded plan chunks now feed one final Cell transaction; no
+1. Qualify staged bulk publication at scale and finish resource/infrastructure
+   error reporting. Bounded plan chunks now feed one final Cell transaction; no
    independently committed ref batches or old inline HTTP completion remain.
 2. Add positive and negative CI gates alongside each capability, including a
    real-provider process/restart suite and cross-platform cache qualification.

@@ -245,11 +245,11 @@ impl Stream for GitBody {
 }
 
 async fn start_stream<T: Send + 'static>(
-    mut command: Command,
+    command: Command,
     keep_alive: T,
     deadline: Duration,
 ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
-    let mut process = GitProcess::spawn(&mut command, keep_alive)?;
+    let mut process = GitProcess::spawn(command, keep_alive)?;
     let stdout = process
         .child
         .stdout
@@ -348,10 +348,15 @@ pub(crate) struct GitProcess<T> {
 }
 
 impl<T> GitProcess<T> {
-    pub(crate) fn spawn(command: &mut Command, keep_alive: T) -> Result<Self, GitHttpError> {
+    pub(crate) fn spawn(mut command: Command, keep_alive: T) -> Result<Self, GitHttpError> {
         #[cfg(unix)]
         command.process_group(0);
-        let child = command.kill_on_drop(true).spawn()?;
+        let child = command.kill_on_drop(true).spawn();
+        // The pre-exec closure owns a parent copy of the worker fence. Release
+        // it before cleanup can drop the cache, including on spawn failure;
+        // only the running child and its descendants should retain that lock.
+        drop(command);
+        let child = child?;
         #[cfg(unix)]
         let group = Some(
             i32::try_from(child.id().ok_or(GitHttpError::Interrupted)?)

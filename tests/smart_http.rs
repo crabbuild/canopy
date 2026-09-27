@@ -28,6 +28,8 @@ mod cache_reuse;
 mod encoded_input;
 #[path = "smart_http/native_resources.rs"]
 mod native_resources;
+#[path = "smart_http/publication.rs"]
+mod publication;
 #[path = "smart_http/ref_snapshots.rs"]
 mod ref_snapshots;
 
@@ -109,7 +111,8 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         repository
             .ensure_owner(support::identity()?, "canopy")
             .await?;
-        let blob_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let paused_blobs = Arc::new(publication::PausedBlobs::default());
+        let blob_store: Arc<dyn ObjectStore> = paused_blobs.clone();
         let disk_budget = DiskBudget::new(1 << 30);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
@@ -174,6 +177,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         assert!(repository.lfs_object(revoked_oid).await?.output.is_none());
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
+        let teardown_gateway = Arc::clone(&gateway);
         let api = Arc::new(GitHttpApi::new(
             gateway,
             "canopy".into(),
@@ -427,6 +431,16 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         ref_snapshots::verify(&repository, &client, &url).await?;
         let _ = stop_tx.send(());
         server.await??;
+        // Axum 0.8 signals connection closure before dropping its service.
+        // Retain the final owner and wait for those service clones, then drop
+        // the gateway synchronously before checking complete cache teardown.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while Arc::strong_count(&teardown_gateway) > 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        drop(teardown_gateway);
         assert_eq!(
             disk_budget.used(),
             0,
@@ -491,6 +505,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         assert!(tokio::fs::read(clone.join("tracked.lfs")).await? == lfs_body);
         native_resources::verify(scratch.path(), &url).await?;
         cache_reuse::verify(scratch.path(), &local, &url).await?;
+        publication::verify(scratch.path(), &repository, &paused_blobs, &url).await?;
         let _ = stop_tx.send(());
         server.await??;
         Ok(())

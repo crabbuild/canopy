@@ -64,8 +64,6 @@ pub enum GatewayError {
     MalformedCache,
     #[error("Git object ingestion failed")]
     Objects(#[from] ObjectReadError),
-    #[error("ref publication conflicted with current Cell state")]
-    RefConflict,
     #[error("repository refs kept changing during snapshot acquisition")]
     RefSnapshotBusy,
     #[error("requested Git object is not reachable from a current repository ref")]
@@ -170,9 +168,9 @@ impl GitGateway {
             let request = self.receive(request, MAX_PUSH_BYTES, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
             let digest = request_digest(&request).await?;
-            if let Some(response) = self.repository.begin_push(id, actor, digest).await? {
+            if self.repository.begin_push(id, actor, digest).await? {
                 return Ok(http_body(with_push_id(
-                    self.repository.push_response(response).await?,
+                    self.repository.completed_response(id).await?,
                     id,
                 )));
             }
@@ -365,12 +363,9 @@ impl GitGateway {
                 plan,
             })
             .await
-            .map_err(|error| match error {
-                crab_cell_runtime::InvocationError::Rejected(_) => GatewayError::RefConflict,
-                other => GatewayError::Cell(Box::new(other)),
-            })?;
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
         if !result.output {
-            return Err(GatewayError::RefConflict);
+            return Err(PushError::InvalidResponse.into());
         }
         Ok(with_push_id(
             self.repository.completed_response(id).await?,

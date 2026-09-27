@@ -13,14 +13,11 @@ use crab_cell_runtime::{
 };
 
 use crate::{
-    PushPlan, RepositoryCell, RepositoryModule,
-    access::{access_statement, decode_access},
-    directory::TokenScope,
-    git_http::GitHttpResponse,
-    refs::apply_refs,
+    PushPlan, RepositoryCell, RepositoryModule, git_http::GitHttpResponse, refs::apply_refs,
 };
 
 mod plan;
+mod report;
 use plan::StagedPlan;
 
 const CHUNK_BYTES: usize = 512 * 1024;
@@ -57,14 +54,14 @@ impl RepositoryCell {
                 None,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT response_id FROM pushes WHERE id = ?1".into(),
+                        sql: "SELECT response_id, rejected FROM pushes WHERE id = ?1".into(),
                         parameters: vec![SqlValue::Blob(push_id.to_vec())],
                     }],
                 },
             )
             .await
             .map_err(cell)?;
-        let Some([SqlValue::Blob(id)]) = result
+        let Some([SqlValue::Blob(id), SqlValue::Integer(rejected)]) = result
             .output
             .first()
             .and_then(|set| set.rows.first())
@@ -72,12 +69,18 @@ impl RepositoryCell {
         else {
             return Err(PushError::InvalidResponse);
         };
-        self.push_response(
-            id.as_slice()
-                .try_into()
-                .map_err(|_| PushError::InvalidResponse)?,
-        )
-        .await
+        let response = self
+            .push_response(
+                id.as_slice()
+                    .try_into()
+                    .map_err(|_| PushError::InvalidResponse)?,
+            )
+            .await?;
+        match rejected {
+            0 => Ok(response),
+            1 => report::rejected_report(&response),
+            _ => Err(PushError::InvalidResponse),
+        }
     }
 
     pub(crate) async fn begin_push(
@@ -85,7 +88,7 @@ impl RepositoryCell {
         id: [u8; 16],
         actor: &str,
         digest: [u8; 32],
-    ) -> Result<Option<[u8; 16]>, PushError> {
+    ) -> Result<bool, PushError> {
         let result = self.sql.batch(identity()?, SqlBatch { statements: vec![
             SqlStatement {
                 sql: "INSERT INTO pushes (id, actor, request_digest) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING".into(),
@@ -113,12 +116,8 @@ impl RepositoryCell {
             return Err(PushError::Conflict);
         }
         match response {
-            SqlValue::Null => Ok(None),
-            SqlValue::Blob(id) => Ok(Some(
-                id.as_slice()
-                    .try_into()
-                    .map_err(|_| PushError::InvalidResponse)?,
-            )),
+            SqlValue::Null => Ok(false),
+            SqlValue::Blob(id) if id.len() == 16 => Ok(true),
             _ => Err(PushError::InvalidResponse),
         }
     }
@@ -170,7 +169,7 @@ impl RepositoryCell {
         Ok(id)
     }
 
-    pub(crate) async fn push_response(&self, id: [u8; 16]) -> Result<GitHttpResponse, PushError> {
+    async fn push_response(&self, id: [u8; 16]) -> Result<GitHttpResponse, PushError> {
         let result =
             self.sql
                 .query(
@@ -330,7 +329,7 @@ pub(crate) struct CompletePush;
 impl Command for CompletePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 4;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = CompletePushInput;
     type Output = bool;
 
@@ -351,52 +350,30 @@ impl Command for CompletePush {
             Some([SqlValue::Null]) => {}
             _ => return Ok(CommandResult::Rejected(false)),
         }
-        let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
-            sql: "SELECT r.size, count(c.part), coalesce(sum(length(c.body)), 0), coalesce(min(c.part), 0), coalesce(max(c.part), -1) FROM push_responses r LEFT JOIN push_response_chunks c ON c.response_id = r.id WHERE r.id = ?1 AND r.push_id = ?2 GROUP BY r.id".into(),
-            parameters: vec![SqlValue::Blob(input.response_id.to_vec()), SqlValue::Blob(input.id.to_vec())],
-        }]})?;
-        let Some(
-            [
-                SqlValue::Integer(size),
-                SqlValue::Integer(count),
-                SqlValue::Integer(total),
-                SqlValue::Integer(first),
-                SqlValue::Integer(last),
-            ],
-        ) = result
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(Vec::as_slice)
-        else {
-            return Ok(CommandResult::Rejected(false));
-        };
-        let expected_count = (*size + CHUNK_BYTES as i64 - 1) / CHUNK_BYTES as i64;
-        if *count != expected_count || size != total || *first != 0 || *last != expected_count - 1 {
+        if !response_complete(context, input.id, input.response_id)? {
             return Ok(CommandResult::Rejected(false));
         }
-        let allowed = match &input.plan {
-            Some(plan) => apply_refs(
-                context,
-                &plan.load(context, input.response_id, &input.actor)?,
-                None,
-            )?,
-            None => decode_access(&context.sql(&SqlBatch {
-                statements: vec![access_statement(&input.actor)],
-            })?)?
-            .is_some_and(|role| role >= TokenScope::Write),
+        let rejected = if let Some(plan) = &input.plan {
+            let plan = plan.load(context, input.response_id, &input.actor)?;
+            // apply_refs returns false only before any writes. A policy/CAS/ACL
+            // refusal records rejection without publishing refs; SQL failures
+            // still roll back the whole completion transaction.
+            !apply_refs(context, &plan, None)?
+        } else {
+            // Native errors and no-op pushes mutate no refs. Record their
+            // bound outcome even if write permission was revoked after admission.
+            false
         };
-        if !allowed {
-            return Ok(CommandResult::Rejected(false));
-        }
         // Publishing the response in the ref transaction makes a lost HTTP reply replayable.
         // Staged chunks from interrupted attempts are never returned as completed outcomes.
         context.sql(&SqlBatch {
             statements: vec![SqlStatement {
-                sql: "UPDATE pushes SET response_id = ?1 WHERE id = ?2 AND response_id IS NULL"
+                sql: "UPDATE pushes SET response_id = ?1, rejected = ?3 WHERE id = ?2 AND response_id IS NULL"
                     .into(),
                 parameters: vec![
                     SqlValue::Blob(input.response_id.to_vec()),
                     SqlValue::Blob(input.id.to_vec()),
+                    SqlValue::Integer(i64::from(rejected)),
                 ],
             }],
         })?;
@@ -410,6 +387,34 @@ impl Command for CompletePush {
         })?;
         Ok(CommandResult::Success(true))
     }
+}
+
+fn response_complete(
+    context: &CommandContext<'_, '_>,
+    push_id: [u8; 16],
+    response_id: [u8; 16],
+) -> crab_cell_runtime::Result<bool> {
+    let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
+        sql: "SELECT r.size, count(c.part), coalesce(sum(length(c.body)), 0), coalesce(min(c.part), 0), coalesce(max(c.part), -1) FROM push_responses r LEFT JOIN push_response_chunks c ON c.response_id = r.id WHERE r.id = ?1 AND r.push_id = ?2 GROUP BY r.id".into(),
+        parameters: vec![SqlValue::Blob(response_id.to_vec()), SqlValue::Blob(push_id.to_vec())],
+    }]})?;
+    let Some(
+        [
+            SqlValue::Integer(size),
+            SqlValue::Integer(count),
+            SqlValue::Integer(total),
+            SqlValue::Integer(first),
+            SqlValue::Integer(last),
+        ],
+    ) = result
+        .first()
+        .and_then(|set| set.rows.first())
+        .map(Vec::as_slice)
+    else {
+        return Ok(false);
+    };
+    let expected = (*size + CHUNK_BYTES as i64 - 1) / CHUNK_BYTES as i64;
+    Ok(*count == expected && size == total && *first == 0 && *last == expected - 1)
 }
 
 fn identity() -> Result<MutationIdentity, PushError> {

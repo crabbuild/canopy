@@ -151,3 +151,69 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
     .await??;
     Ok(())
 }
+
+#[tokio::test]
+async fn completed_worker_releases_cache_before_headers_are_polled()
+-> Result<(), Box<dyn std::error::Error>> {
+    struct Owner {
+        cache: Option<Arc<GitCache>>,
+        finished: Option<oneshot::Sender<()>>,
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            drop(self.cache.take());
+            if let Some(finished) = self.finished.take() {
+                let _ = finished.send(());
+            }
+        }
+    }
+    let files = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(files.path().into(), budget.clone(), "refs/heads/main").await?;
+    let mut command = crate::native_git::command(&cache.git_dir())?;
+    command
+        .args([
+            "-c",
+            "alias.probe=!printf 'Content-Type: text/plain\\r\\n\\r\\nok'",
+            "probe",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (finished, wait) = oneshot::channel();
+    let owner = Owner {
+        cache: Some(cache),
+        finished: Some(finished),
+    };
+    let mut request = Box::pin(start_stream(command, owner, Duration::from_secs(5)));
+    // On this single-thread executor the spawned worker cannot run before
+    // the first header await. Leave the caller unpolled until worker cleanup.
+    poll_fn(|cx| {
+        assert!(request.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), wait).await??;
+    assert_eq!(budget.used(), 0);
+    let mut response = request.await?;
+    while let Some(part) = chunk(&mut response.body).await {
+        part?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let files = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(files.path().into(), budget.clone(), "refs/heads/main").await?;
+    let mut command = crate::native_git::command(&cache.git_dir())?;
+    command.current_dir(files.path().join("missing"));
+    assert!(matches!(
+        GitProcess::spawn(command, cache),
+        Err(GitHttpError::Io(_))
+    ));
+    assert_eq!(budget.used(), 0);
+    Ok(())
+}

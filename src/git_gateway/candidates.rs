@@ -249,7 +249,7 @@ async fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut process = GitProcess::spawn(&mut command, Arc::clone(&backend.cache))?;
+    let mut process = GitProcess::spawn(command, Arc::clone(&backend.cache))?;
     let mut stdin = process
         .child
         .stdin

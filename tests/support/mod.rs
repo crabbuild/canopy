@@ -21,19 +21,23 @@ pub fn git_router(api: Arc<GitHttpApi>) -> Router {
 }
 
 async fn test_identity(mut request: Request<Body>, next: Next) -> Response {
-    let authorized = request
+    let account = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == "Bearer local-test-token");
-    if !authorized {
+        .and_then(|value| match value {
+            "Bearer local-test-token" => Some("canopy"),
+            "Bearer late-writer-token" => Some("late-writer"),
+            _ => None,
+        });
+    let Some(account) = account else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     request
         .extensions_mut()
         .insert(Viewer::Authenticated(Principal {
             token_id: [1; 16],
-            account: "canopy".into(),
+            account: account.into(),
             scope: TokenScope::Admin,
         }));
     next.run(request).await

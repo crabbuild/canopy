@@ -597,7 +597,7 @@ async fn moving_repositories_preserve_history_and_serialize_cross_gateway_pushes
     };
     let rejection = String::from_utf8_lossy(&rejected.stderr);
     assert!(
-        rejection.contains("409") || rejection.contains("[remote rejected]"),
+        rejection.contains("[remote rejected]"),
         "expected a ref rejection, not transport or admission failure: {rejection}"
     );
     let winner = if left_result.status.success() {

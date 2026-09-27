@@ -581,9 +581,6 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::INSUFFICIENT_STORAGE,
             "Git upload disk budget exhausted",
         ),
-        Err(GatewayError::RefConflict) => {
-            plain(StatusCode::CONFLICT, "Repository changed during push")
-        }
         Err(GatewayError::RefSnapshotBusy) => plain(
             StatusCode::SERVICE_UNAVAILABLE,
             "Repository refs are changing; retry the request",

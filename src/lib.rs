@@ -61,7 +61,7 @@ const SCHEMA: &str = include_str!("schema.sql");
 const COMMANDS: [OperationDescriptor; 9] = [
     operation(1),
     operation_with_codec(3, 3),
-    operation_with_codec(4, 2),
+    operation_with_codec(4, 3),
     operation_with_codec(5, 2),
     operation(6),
     operation(7),
@@ -194,6 +194,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("large_blob.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("push/plan.rs"));
+                source.update(include_bytes!("push/report.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("visibility.rs"));
                 source.update(include_bytes!("checks.rs"));
