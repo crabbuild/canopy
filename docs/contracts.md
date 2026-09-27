@@ -2188,3 +2188,18 @@ The browser offers Rebase alongside merge and squash, disables replacement
 message input while selected, explains authors/signatures, and displays terminal
 unavailability and conflict results. A ready result follows the existing inspect,
 fetch, check and explicit publish workflow.
+
+
+## Diagnostic output
+
+CLI tracing uses one background writer with a queue capped at 256 records.
+Emission never waits for a full queue or slow stderr; excess records are dropped.
+The logging guard lives through application shutdown and attempts to flush queued
+records on exit. A best-effort exit warning reports the enqueue-drop counter;
+that warning can itself be lost if the destination remains saturated. Abrupt
+process termination and sink I/O failures may lose additional output.
+
+This is diagnostic output, including warnings/errors, not the durable audit
+ledger in SQLite. The queue bounds record count rather than total bytes, and
+formatting still executes on the calling thread. Process memory/resource ceilings
+remain required. No new configuration surface or runtime dependency pin is added.

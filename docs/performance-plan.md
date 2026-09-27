@@ -567,3 +567,31 @@ Uniform p99 remains a failed performance target, and the earlier traced warm
 read failure remains relevant. The twelve-second paused-release regression
 and this process run together qualify the corrected renewal lifetime for the
 tested SQL-only workload.
+
+
+## Synchronous logging stall confirmed
+
+The correlated `2a96b43` run (`canopy-request-trace-9b929b9401af`) completed
+seeding 1,000 identities in 742.122 seconds. Warm metadata had 273 successes
+and 27 driver drops; Git discovery had 100 successes. The two-minute uniform
+schedule had 1,162 successes, 20 driver drops, 11 HTTP 503 responses and seven
+transport failures. Graceful shutdown and fixture cleanup passed; the overall
+read qualification failed. All failed outcomes remain in the reports.
+
+A warm metadata request took 845.281 ms in the HTTP handler while its three
+data stages totaled 3.886 ms. Correlated timestamps place the remaining time
+between successive log events. A thirty-second macOS stack sample during uniform
+reads shows HTTP task stacks in tracing's synchronous `Stderr::write_all`, both
+waiting for its mutex and writing to the destination. This confirms that the
+diagnostic sink can block service execution. It does not establish logging as
+the only source of Directory stalls or explain every 503. Sampling perturbed
+part of the uniform schedule; the shared host and longer setup also prevent a
+controlled throughput comparison with prior runs.
+
+The implementation moves diagnostic writes off HTTP/runtime threads through
+`tracing-appender`'s bounded lossy writer, retaining its drain guard until the
+application exits. The queue has 256 records; it is not a byte-memory ceiling.
+Logs may be dropped under pressure, so trace-join coverage and the available
+drop counter must accompany subsequent analysis. Durable audit data stays in
+SQLite. The existing Cellule pin, ownership checks and request deadlines remain
+unchanged.

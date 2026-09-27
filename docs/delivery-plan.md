@@ -2987,3 +2987,21 @@ of `canopy-request-trace-9b929b9401af` returned the expected repository identity
 and produced all five correlated handler/authentication/lookup/metadata events
 without private request fields. The full thousand-Cell diagnostic schedule is
 still running; instrumentation alone is not a latency improvement.
+
+
+## Logging isolated from service execution
+
+The thousand-Cell correlated trace confirmed HTTP stacks blocked in synchronous
+stderr output. CLI diagnostics now use a 256-record nonblocking queue and one
+background writer. Saturation drops diagnostics instead of blocking request or
+lease tasks. The guard survives application drain; an exit warning reports
+dropped enqueues on a best-effort basis. Durable SQLite audit records are separate.
+
+The stalled-destination regression passes and rejects a blocking-writer negative
+control with a timeout; restored nonblocking behavior passes again. All-target
+Clippy, optimized CLI build and formatting pass. `Cargo.lock` adds only
+`tracing-appender`, `crossbeam-channel`, `crossbeam-utils` and `symlink`; existing
+versions and the Cellule pin are unchanged. The process pressure fixture
+`scripts/smoke_s3_logging.py` pauses pipe consumption beyond the node lease,
+checks HTTP/repository/Git progress, proves queue saturation and checks shutdown.
+Its process execution and the larger repeated latency schedule remain pending.

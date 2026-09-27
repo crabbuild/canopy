@@ -66,10 +66,39 @@ enum StartupError {
 
 #[tokio::main]
 async fn main() -> Result<(), StartupError> {
+    let (writer, _log_guard) = log_writer(std::io::stderr());
+    let dropped = writer.error_counter();
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(writer)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    let result = run().await;
+    let dropped_lines = dropped.dropped_lines();
+    if dropped_lines != 0 {
+        tracing::warn!(
+            dropped_lines,
+            "diagnostic logging dropped lines under backpressure"
+        );
+    }
+    result
+}
+
+fn log_writer(
+    destination: impl std::io::Write + Send + 'static,
+) -> (
+    tracing_appender::non_blocking::NonBlocking,
+    tracing_appender::non_blocking::WorkerGuard,
+) {
+    // Slow stderr must not hold HTTP or Cell lease tasks. Diagnostics may drop
+    // at capacity; durable audit history is committed separately in SQLite.
+    tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .buffered_lines_limit(256)
+        .lossy(true)
+        .thread_name("canopy-logs")
+        .finish(destination)
+}
+
+async fn run() -> Result<(), StartupError> {
     let mut args = std::env::args_os();
     let _ = args.next();
     let Some(first) = args.next() else {
@@ -273,4 +302,71 @@ fn storage(value: &str) -> Result<UrlObjectStore, StorageError> {
         }
     })?;
     Ok(UrlObjectStore::new(std::sync::Arc::from(store), prefix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Write, sync::mpsc, time::Duration};
+
+    struct PausedWriter {
+        entered: Option<mpsc::Sender<()>>,
+        release: mpsc::Receiver<()>,
+        file: std::fs::File,
+    }
+
+    impl Write for PausedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if let Some(entered) = self.entered.take() {
+                entered.send(()).map_err(std::io::Error::other)?;
+                self.release.recv().map_err(std::io::Error::other)?;
+            }
+            self.file.write(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    #[test]
+    fn stalled_log_sink_does_not_block_event_producers() -> Result<(), Box<dyn std::error::Error>> {
+        let log = tempfile::NamedTempFile::new()?;
+        let (entered, observed) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let (mut writer, guard) = log_writer(PausedWriter {
+            entered: Some(entered),
+            release: resume,
+            file: log.reopen()?,
+        });
+        let dropped = writer.error_counter();
+        writer.write_all(b"first record\n")?;
+        observed.recv_timeout(Duration::from_secs(2))?;
+        let (done, completed) = mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(writer)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_ansi(false)
+                .without_time()
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                for sequence in 0..1024 {
+                    tracing::debug!(sequence, "logging workload");
+                }
+            });
+            let _ = done.send(());
+        });
+        let progress = completed.recv_timeout(Duration::from_secs(2));
+        // Release the worker even when the progress assertion fails.
+        release.send(())?;
+        producer.join().map_err(|_| "log producer panicked")?;
+        progress?;
+        assert!(dropped.dropped_lines() > 0);
+        drop(guard);
+        let output = std::fs::read_to_string(log.path())?;
+        assert!(output.starts_with("first record\n"));
+        assert!(output.contains("logging workload"));
+        Ok(())
+    }
 }
