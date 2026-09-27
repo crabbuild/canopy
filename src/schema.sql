@@ -63,6 +63,14 @@ CREATE TABLE lfs_objects (
     digest BLOB NOT NULL CHECK(length(digest) = 32)
 ) WITHOUT ROWID;
 
+CREATE TABLE lfs_locks (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL UNIQUE,
+    locked_at TEXT NOT NULL,
+    owner TEXT NOT NULL
+);
+
 CREATE TABLE repository_identity (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     repository_id BLOB NOT NULL CHECK(length(repository_id) = 16),

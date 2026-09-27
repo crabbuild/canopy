@@ -54,6 +54,8 @@ mod discovery;
 mod issues;
 #[path = "multi_server/large_objects.rs"]
 mod large_objects;
+#[path = "multi_server/lfs_locks.rs"]
+mod lfs_locks;
 #[path = "multi_server/lifecycle.rs"]
 mod lifecycle;
 #[path = "multi_server/peers.rs"]

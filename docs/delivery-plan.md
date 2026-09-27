@@ -3460,3 +3460,31 @@ All eight SSH integration tests, the shared smart-HTTP publication suite and the
 HTTP partial-clone regression pass locally, along with all-target Clippy and
 formatting. These tests use an in-memory provider; hosted CI and real-provider
 fault/capacity qualification remain open.
+
+## Git LFS locking slice
+
+Implemented the standard HTTP create/list/verify/unlock API in the existing LFS
+service. Repository Cell SQLite owns exclusive paths, UUIDs, account ownership
+and second-precision UTC timestamps. Mutation transactions recheck current write
+access; unlock requires the owner or an explicit force by another writer.
+List/verify pages are bounded and continue by insertion sequence. No separate
+lock server, dependency or compatibility layer is added.
+
+Permanent multi-server tests cover simultaneous conflicting creation across ref
+hints, repository isolation, pagination and owner partitions, read-token denial,
+collaborator downgrade, public listing and fresh-disk persistence. Stock Git LFS
+creates/lists locks, blocks a conflicting push before refs change, force-unlocks,
+retries the push and verifies the cloned LFS bytes. Normal owner unlock is also
+exercised. The existing Verify workflow includes these tests through the
+multi_server integration target.
+
+Locks are advisory through Git LFS pre-push verification; server-side ref
+publication does not reject clients that bypass that check. SSH LFS
+credential/transfer integration, resumable/custom transfers, selected advanced
+push capabilities, SHA-256 Git and the outstanding provider/scale gates remain
+open. This schema change requires a fresh development prefix.
+
+Local proof: both locking integration tests and the existing smart-HTTP Git/LFS
+publication suite pass; all-target Clippy, formatting and diff checks pass.
+The tests use an in-memory provider. Hosted CI and real-provider locking fault
+qualification have not run.

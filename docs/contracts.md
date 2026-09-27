@@ -26,6 +26,7 @@ before admitting persistent customer repositories.
 | Object publication | at most 128 records, 768 KiB inline payload and 64 MiB SQLite verification bytes per atomic command | `PutObjects`, operation 5, codec 2 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
+| LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
 | External byte ceiling | 5 GiB per Git blob or LFS object | Conditional S3 copy uses a single part |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout and 30-minute transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
@@ -2565,3 +2566,36 @@ does not provide Cellule's storage-probe/host-capability API.
 Peer ingress uses `UnverifiedPeerRequest::decode` to locate the enrolled signer,
 then `PeerVerifier::verify_decoded` before dispatch. An unverified session is only
 a key lookup hint. Release, signature, expiry and principal checks still apply.
+
+## Git LFS locking
+
+The [Git LFS locking API](https://github.com/git-lfs/git-lfs/blob/main/docs/api/locking.md)
+is served beneath each repository's `/info/lfs` endpoint: create/list at
+`/locks`, verification at `/locks/verify`, deletion at `/locks/<id>/unlock`.
+Repository ACLs apply to all refs, so optional ref hints do not partition locks.
+The lock owner is the authenticated account, not the client's Git author name.
+Creation and unlock recheck write access in the same Cell SQL transaction as
+mutation. A path conflict returns 409 with the existing lock. Unlock requires
+ownership unless an authorized writer explicitly supplies `force: true`.
+An absent lock returns 404; lack of write access returns 403.
+
+List reads require current repository read access, including anonymous public
+reads; verification requires write access. Verification partitions each page
+into `ours` and `theirs`. Both operations check Cell access again in the SQL
+batch. Pages default to 100 entries and clamp requested limits to 1–100.
+Cursors use the last returned insertion sequence; deletion does not invalidate
+them, and replacement locks get a new sequence and UUID. Pages are live
+observations, not one multi-request snapshot. Optional path and ID filters use
+exact matching. Paths are canonical repository-relative UTF-8 strings, at most
+4096 bytes, without empty, dot or parent segments or NUL. Mutation bodies are
+bounded to 32 KiB and 120 seconds.
+
+`lfs_locks` is included in the Repository Cell SQLite state and its backup;
+there are no separate lock bodies to collect. This changes the unreleased
+schema/source identity; older development prefixes are not upgrade-compatible.
+Use a fresh prefix. No dependency or lockfile change is required.
+
+The standard lock verification API supports stock Git LFS pre-push enforcement.
+It does not prevent clients from bypassing that hook, and is not an additional
+server-side ref publication policy. SSH LFS authentication, resumable/custom
+transfers and external-server federation remain outside the implemented slice.

@@ -14,6 +14,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use url::Url;
 
+mod lfs_locks;
+
 use crate::{
     ReadIdentity,
     directory::{Principal, TokenScope, validate_component},
@@ -78,10 +80,17 @@ impl GitHttpApi {
         let git_path = format!("{}/{{*path}}", self.repository_path);
         let lfs_batch_path = format!("{}/info/lfs/objects/batch", self.repository_path);
         let lfs_object_path = format!("{}/info/lfs/objects/{{oid}}", self.repository_path);
+        let locks_path = format!("{}/info/lfs/locks", self.repository_path);
         Router::new()
             .route(&git_path, any(git_request))
             .route(&lfs_batch_path, post(lfs_batch))
             .route(&lfs_object_path, get(lfs_get).put(lfs_put))
+            .route(&locks_path, get(lfs_locks::handle).post(lfs_locks::handle))
+            .route(&format!("{locks_path}/verify"), post(lfs_locks::handle))
+            .route(
+                &format!("{locks_path}/{{id}}/unlock"),
+                post(lfs_locks::handle),
+            )
             .with_state(self)
             .layer(axum::middleware::map_response(
                 |mut response: Response<Body>| async {

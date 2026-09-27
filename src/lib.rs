@@ -210,6 +210,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("issues.rs"));
                 source.update(include_bytes!("issues/mutations.rs"));
                 source.update(include_bytes!("lfs.rs"));
+                source.update(include_bytes!("lfs/locks.rs"));
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
             },

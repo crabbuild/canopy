@@ -133,6 +133,22 @@ Presigned direct-to-storage transfers are not implemented. Git LFS also supports
 using `lfs.url`; that server manages its own access and backups. Canopy does not
 proxy external LFS servers or include their bodies in its backup.
 
+### Git LFS locks
+
+`git lfs lock`, `git lfs locks` and `git lfs unlock` use repository-scoped
+SQLite locks. The standard `/info/lfs/locks/verify` endpoint lets stock Git LFS
+pre-push checks reject changes to another account's locked paths. Locks apply
+across branches. Listing requires read access; creation, verification and
+unlocking require write access. A writer can explicitly use `--force` to remove
+another account's lock. Locks survive node restart and fresh-disk recovery.
+
+Locking is advisory: a client can bypass Git LFS verification. It is not a
+server-side branch protection rule. Use HTTP LFS credentials; SSH LFS
+authentication and transfer commands remain unimplemented. Lock pages contain
+at most 100 entries, with continuation cursors; paths are canonical relative
+UTF-8 strings up to 4096 bytes. This adds an unreleased SQLite table and requires
+a fresh development storage prefix when switching from older builds.
+
 ### Public repositories
 
 Repositories start private. An owner with an admin-scoped token can use **Change

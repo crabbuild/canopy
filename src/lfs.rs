@@ -21,6 +21,7 @@ use crate::{
     directory::{TokenScope, validate_component},
 };
 
+pub(crate) mod locks;
 mod read;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,8 @@ pub enum LfsError {
     NotFound,
     #[error("LFS write access denied")]
     Forbidden,
+    #[error("invalid LFS lock request: {0}")]
+    InvalidLock(&'static str),
     #[error("LFS object exceeds the configured byte ceiling")]
     TooLarge,
     #[error("LFS object identity or stored bytes are corrupt")]

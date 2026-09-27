@@ -19,6 +19,7 @@ also persist the accepted objects and refs before returning success.
 | Mirror clone and mirror push | Exact refs/tags/notes in a second repository; 4,096 long refs published in one generation and recovered after fresh-disk restart |
 | Force-with-lease, mixed rejection and atomic push | Existing owner-race and protected-branch integration tests |
 | Git LFS basic upload/download | Stock `git-lfs`, SQLite metadata, immutable object-store bodies and restart/backup tests |
+| Git LFS locking | Stock lock/list/unlock, forced unlock, pre-push conflict checks, paginated verification, ACLs and fresh-disk recovery |
 | Recovery without original local disk | Rebuild from durable Cell state, compare every live ref/OID and run strict full fsck |
 
 Local operations such as commit, diff, merge, rebase, stash and cherry-pick run
@@ -40,7 +41,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Push options | Not advertised; `git push -o` fails | Define supported option semantics, validate before publication and persist outcomes |
 | Signed pushes | Push certificates are not advertised; `git push --signed=true` fails | Certificate verification, signer identity, nonce/replay handling and durable audit record |
 | SHA-256 Git repositories | Rejected; object IDs and graph formats are SHA-1 throughout | Repository-level format identity, 32-byte graph/ref storage, negotiation, restore and mixed-format rejection |
-| Advanced LFS | Basic transfer only; no lock API, resumable/custom transfer or external-LFS federation | Define scope; stock-client locking and conflict tests, recovery and ACL coverage for each added endpoint |
+| Advanced LFS | HTTP basic transfers and advisory lock API; no SSH LFS authentication/transfer, resumable/custom transfer or external-LFS federation | Complete selected transfer capabilities and real-provider qualification |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
 Signed commits and signed tags are ordinary stored Git objects; **signed push
@@ -73,6 +74,13 @@ rejection, no sibling/generation publication and exact replay from a new gateway
 after restoring policy/permission. The fragmented-report unit test covers 4,096
 Unicode refs and preserves existing native rejections.
 Hosted CI has not been run for these changes.
+
+`tests/multi_server/lfs_locks.rs` uses stock Git LFS to create/list locks,
+reject a conflicting push before refs change, force-unlock and retry, then clone
+and verify the resulting bytes. API coverage includes concurrent lock creation,
+repository isolation, branch-independent exclusivity, list/verify pagination,
+owner partitions, token scope, ACL downgrade, public reads and fresh-disk restore.
+These locks are advisory: clients can bypass pre-push verification.
 
 `tests/multi_server/ssh.rs` exercises stock Git SSH mirror push, protocol v0/v2
 clone (v1 requests fall back to v0), shallow/unshallow, filtered lazy fetch,
