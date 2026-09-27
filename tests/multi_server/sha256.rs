@@ -245,3 +245,210 @@ async fn sha256_repository_push_clone_fetch_and_restore() -> Result {
     second.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sha256_checks_reviews_and_merge_survive_restore() -> Result {
+    use super::merge::{AUTH, OWNER, current, new_pull, oid, revision, value};
+    use reqwest::{Client, StatusCode};
+    use serde_json::json;
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        config(address, workspace.path().join("first")),
+        Arc::clone(&store),
+    )
+    .await?;
+    let client = Client::new();
+    let created = value(
+        client
+            .post(format!("http://{address}/api/repositories"))
+            .bearer_auth(OWNER)
+            .json(&json!({"name":"sha256-review","object_format":"sha256"})),
+    )
+    .await?;
+    let repository = &created["repository_id"];
+    let url = created["clone_url"].as_str().ok_or("clone URL missing")?;
+    let repo = format!("http://{address}/api/repositories/sha256-review");
+    let source_dir = workspace.path().join("source");
+    run_git(
+        None,
+        &[
+            "init",
+            "--object-format=sha256",
+            "-b",
+            "main",
+            path_str(&source_dir)?,
+        ],
+    )
+    .await?;
+    run_git(Some(&source_dir), &["config", "user.name", "Canopy Test"]).await?;
+    run_git(
+        Some(&source_dir),
+        &["config", "user.email", "test@example.invalid"],
+    )
+    .await?;
+    run_git(
+        Some(&source_dir),
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Base",
+        ],
+    )
+    .await?;
+    let base = oid(&source_dir, "HEAD").await?;
+    run_git(
+        Some(&source_dir),
+        &["-c", AUTH, "push", url, "HEAD:refs/heads/main"],
+    )
+    .await?;
+    tokio::fs::write(
+        source_dir.join("reviewed.txt"),
+        b"SHA-256 reviewed change\n",
+    )
+    .await?;
+    run_git(Some(&source_dir), &["add", "reviewed.txt"]).await?;
+    run_git(
+        Some(&source_dir),
+        &["-c", "commit.gpgsign=false", "commit", "-m", "Feature"],
+    )
+    .await?;
+    let source = oid(&source_dir, "HEAD").await?;
+    assert_eq!(source.len(), 64);
+    run_git(
+        Some(&source_dir),
+        &["-c", AUTH, "push", url, "HEAD:refs/heads/feature"],
+    )
+    .await?;
+
+    let api = new_pull(
+        &client,
+        &repo,
+        repository,
+        "refs/heads/feature",
+        &source,
+        &base,
+    )
+    .await?;
+    let reviewer = format!("cnp_{}", "81".repeat(32));
+    value(
+        client
+            .post(format!("http://{address}/api/accounts"))
+            .bearer_auth(OWNER)
+            .json(&json!({"name":"reviewer","token":reviewer,"scope":"write"})),
+    )
+    .await?;
+    value(
+        client
+            .put(format!("{repo}/collaborators/reviewer"))
+            .bearer_auth(OWNER)
+            .json(&json!({"role":"write"})),
+    )
+    .await?;
+    let response = client
+        .put(format!("{repo}/check-contexts/unit"))
+        .bearer_auth(OWNER)
+        .json(&json!({"repository_id":repository,"expected_version":0,"enabled":true,"reporter":"canopy"}))
+        .send()
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        response.text().await?
+    );
+    let rule = json!({"repository_id":repository,"rule":{"reference":"refs/heads/main","expected_version":0,"enabled":true,"deny_deletions":false,"fast_forward_only":true,"required_checks":["unit"],"require_pull_request":true,"required_approvals":1}});
+    let response = client
+        .put(format!("{repo}/branch-rules"))
+        .bearer_auth(OWNER)
+        .json(&rule)
+        .send()
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        response.text().await?
+    );
+    let intent = json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":revision(&current(&client,&api).await?),"strategy":"fast_forward"});
+    let merge_api = format!("{api}/merge");
+    let response = client
+        .post(&merge_api)
+        .bearer_auth(OWNER)
+        .json(&intent)
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let check_id = uuid::Uuid::new_v4().to_string();
+    value(client.post(format!("{repo}/commits/{source}/checks")).bearer_auth(OWNER).json(&json!({"repository_id":repository,"id":check_id,"context":"unit","context_version":1}))).await?;
+    let response = client.put(format!("{repo}/checks/{check_id}")).bearer_auth(OWNER).json(&json!({"repository_id":repository,"expected_version":1,"state":"success","summary":"Passed"})).send().await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        response.text().await?
+    );
+    let checks = value(
+        client
+            .get(format!("{repo}/commits/{source}/checks"))
+            .bearer_auth(OWNER),
+    )
+    .await?;
+    assert_eq!(checks["checks"][0]["run"]["state"], "success");
+    let response = client
+        .post(&merge_api)
+        .bearer_auth(OWNER)
+        .json(&intent)
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    value(client.post(format!("{api}/reviews")).bearer_auth(&reviewer).json(&json!({"repository_id":repository,"id":uuid::Uuid::new_v4().to_string(),"revision":revision(&current(&client,&api).await?),"kind":"approve","body":"Approved"}))).await?;
+    let merged = value(client.post(&merge_api).bearer_auth(OWNER).json(&intent)).await?;
+    assert_eq!(merged["merge"]["oid"], source);
+    server.shutdown().await?;
+
+    let restored_address = available_address().await?;
+    let restored = CanopyServer::start(
+        config(restored_address, workspace.path().join("restored")),
+        store,
+    )
+    .await?;
+    let restored_repo = format!("http://{restored_address}/api/repositories/sha256-review");
+    let restored_api = format!("{restored_repo}/pulls/1");
+    assert_eq!(
+        current(&client, &restored_api).await?["merge"],
+        merged["merge"]
+    );
+    let checks = value(
+        client
+            .get(format!("{restored_repo}/commits/{source}/checks"))
+            .bearer_auth(OWNER),
+    )
+    .await?;
+    assert_eq!(checks["checks"][0]["run"]["state"], "success");
+    let clone = workspace.path().join("clone");
+    run_git(
+        None,
+        &[
+            "-c",
+            AUTH,
+            "clone",
+            &format!("http://{restored_address}/canopy/sha256-review.git"),
+            path_str(&clone)?,
+        ],
+    )
+    .await?;
+    assert_eq!(oid(&clone, "HEAD").await?, source);
+    assert_eq!(
+        tokio::fs::read(clone.join("reviewed.txt")).await?,
+        b"SHA-256 reviewed change\n"
+    );
+    run_git(Some(&clone), &["fsck", "--full", "--strict"]).await?;
+    restored.shutdown().await?;
+    Ok(())
+}
