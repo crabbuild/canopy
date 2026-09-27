@@ -36,6 +36,9 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
         first_config.store_prefix.clone(),
         *first_config.application.as_bytes(),
     );
+    let authority = cellule_runtime::CellAuthority::new(layout.clone());
+    let tenant = first_config.tenant;
+    let application_id = first_config.application;
     let directory = cellule_runtime::NodeDirectory::new(
         layout,
         first_config.fleet,
@@ -95,7 +98,26 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
     let mut repositories = Vec::new();
-    for (name, ingress) in [("left", b), ("right", a)] {
+    for (name, ingress, owner) in [("left", b, a), ("right", a, b)] {
+        let local: serde_json::Value = client
+            .get(format!("http://{owner}/api/repositories/{name}"))
+            .bearer_auth("local-test-token")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let repository_id = uuid::Uuid::parse_str(
+            local["repository_id"]
+                .as_str()
+                .ok_or("missing repository ID")?,
+        )?;
+        let repository_target =
+            canopy_server::repository_target(tenant, application_id, *repository_id.as_bytes())?;
+        let before = authority
+            .load(repository_target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
         let detail: serde_json::Value = client
             .get(format!("http://{ingress}/api/repositories/{name}"))
             .bearer_auth("local-test-token")
@@ -109,6 +131,16 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
                 .as_str()
                 .ok_or("missing repository ID")?,
         )?;
+        assert_eq!(id, repository_id);
+        let after = authority
+            .load(repository_target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
+        assert_eq!(
+            after.value().root,
+            before.value().root,
+            "remote read published a new root"
+        );
         repositories.push((name, id));
         let source = files.path().join(name);
         run_git(None, &["init", "-b", "main", path_str(&source)?]).await?;

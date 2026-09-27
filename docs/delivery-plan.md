@@ -2815,3 +2815,28 @@ remaining density/corpus/resource qualification. The expanded requirement for
 all primitives in each repository Cell has a separate
 [contract proposal](repository-cell-primitives.md) and remains gate 10. These
 SQL-only changes do not complete that requirement.
+
+
+## Read-only activation of ready repositories
+
+Ready directory entries now verify the immutable repository owner through the
+existing read-only access query. Admin is exclusive to the owner: collaborator
+rows permit only read/write. Pending entries still publish `ensure_owner` before
+Directory activation, preserving creation and interrupted-creation recovery.
+A missing or mismatched owner on a ready entry fails closed instead of inserting
+ownership during a read. Both local restoration and remote binding use this
+same decision.
+
+The previous path published a new SQL command/request-ledger entry on every
+activation, even when the insert changed no owner row. Removing that command
+avoids a redundant durable publication and ledger growth. It does not remove
+runtime acquisition, authoritative owner checks or fencing. No schema, dependency,
+configuration or public API changes are needed.
+
+Nine residency integration tests pass, including exact Git/LFS recovery across
+six repositories and a new assertion that every restored clone/pull preserves
+the pre-read authoritative root. Both live-peer tests pass; a new assertion
+checks that initial remote binding also leaves that root unchanged. Existing
+release denial, lost replies, cancellation, cleanup and warm-read isolation
+faults still pass. The earlier 1,000-repository measurements used the preceding
+binary; no measured latency improvement is attributed to this change yet.

@@ -84,7 +84,13 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
     }
     // Reading in creation order forces another eviction and exact-root restore
     // for each repository while the same node lease remains alive.
-    for (index, (url, _, body, oid)) in repositories.iter().enumerate() {
+    for (index, (url, id, body, oid)) in repositories.iter().enumerate() {
+        let target = repository_target(tenant, application, *id)?;
+        let before = authority
+            .load(target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
+        let root = before.value().root.clone();
         let clone = workspace.path().join(format!("clone-{index}"));
         run_git(
             None,
@@ -115,6 +121,15 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
         assert!(tokio::fs::read(clone.join("asset.lfs")).await? == lfs_body);
         assert_eq!(&run_git(Some(&clone), &["rev-parse", "HEAD"]).await?, oid);
         run_git(Some(&clone), &["fsck", "--full"]).await?;
+        let after = authority
+            .load(target.cell_id())
+            .await?
+            .ok_or("Cell missing")?;
+        assert_eq!(
+            after.value().root,
+            root,
+            "read-only restoration published a new root"
+        );
     }
     server.shutdown().await?;
     Ok(())

@@ -22,7 +22,10 @@ use super::{
 };
 use crate::{
     CanopyApplication, REPOSITORY_DATABASE_LIMIT_BYTES, RepositoryCell, RepositoryModule,
-    directory::RepositoryEntry, git_gateway::GitGateway, http::GitHttpApi, repository_target,
+    directory::{RepositoryEntry, RepositoryState, TokenScope},
+    git_gateway::GitGateway,
+    http::GitHttpApi,
+    repository_target,
 };
 
 pub(super) struct LoadedRepository {
@@ -258,9 +261,20 @@ impl RepositoryManager {
         if let Some(repository) = initialize {
             // Keep the acquired Cell through an uncertain initialization result.
             // A later request retries setup before any fast-path route is exposed.
-            repository
-                .ensure_owner(mutation_identity()?, &entry.owner)
-                .await?;
+            if entry.state == RepositoryState::Pending {
+                repository
+                    .ensure_owner(mutation_identity()?, &entry.owner)
+                    .await?;
+            } else if repository.access_level(&entry.owner, None).await?.output
+                != Some(TokenScope::Admin)
+            {
+                // Only the immutable owner has Admin; collaborator roles exclude it.
+                // Ready Cells must verify that identity without publishing a write
+                // on every restore or silently recreating missing ownership state.
+                return Err(ServerError::Repository(
+                    "repository owner differs from directory",
+                ));
+            }
         }
         let mut loaded = self.loaded.lock().await;
         let existing = loaded

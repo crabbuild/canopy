@@ -378,8 +378,14 @@ directory already satisfies cleanup. Local cleanup never authorizes release or
 deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
-the Cell node. Owner initialization retains an acquired entry on failure and
-retries its idempotent setup on later access. The residency bound does not
+the Cell node. Pending directory entries durably initialize the immutable
+repository owner before becoming ready. Ready entries verify the expected owner
+through the read-only access query: only that owner can have Admin, and the
+collaborator schema permits only read/write. Local restore and remote binding
+therefore do not publish a command merely to repeat owner initialization.
+Missing or mismatched ownership fails closed; a ready entry never repairs it
+by inserting an owner. Failed initialization/verification retains the acquired
+entry and retries on later access. The residency bound does not
 establish throughput for a larger concurrent hot set. Disposable Git files use
 the same shared disk admission described below.
 

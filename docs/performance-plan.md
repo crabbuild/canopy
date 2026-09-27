@@ -82,6 +82,10 @@ permits it.
 - Ready local routes now pin under a short registry lock. Ownership transitions
   are separately serialized; a paused cold admission or release cannot hold
   the registry lock and block another ready local repository.
+- Ready repository activation verifies its immutable owner using a read-only
+  query; only pending repositories publish owner initialization. This avoids a
+  redundant durable command on restore or remote binding. The initial density
+  measurements below predate this optimization.
 - Remote routes still verify authoritative ownership. Authentication and name
   lookup still execute in the Directory Cell; local residency does not bypass
   those authorization boundaries.
