@@ -2872,5 +2872,14 @@ Serving, admits one more, checks exactly 100 remain Serving, and reads the evict
 repository again. Invalid limits fail before creating local state. Existing
 Git/LFS restoration, pin, cancellation and release-fault tests remain green.
 All-target Clippy, the CLI development build, Rust formatting, changed Python/JSON
-syntax and whitespace checks pass. The isolated RustFS process qualification is
-recorded separately when its recovery checks finish.
+syntax and whitespace checks pass.
+
+An isolated development-build RustFS attempt (`canopy-active100-ae60201c6168`)
+completed 30 repository creations, then returned HTTP 503 with a pending Directory
+command during the next creation. Its elapsed time was approximately five seconds,
+consistent with the pinned runtime's SQL wall deadline; the underlying delay is
+not yet established. The runtime maps an uncertain command deadline to pending
+evidence and fences admission. The fixture failed, preserved its logs and removed
+its processes/container/volume. This is not a successful 100-repository process
+qualification. A repeat with runtime publication timings is being investigated;
+no larger-set process or latency claim follows from the integration test.
