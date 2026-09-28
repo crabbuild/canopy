@@ -120,12 +120,17 @@ async fn repository_discovery_filters_current_acl_and_pages_past_revoked_grants_
             .await?
             .error_for_status()?;
     }
-    for path in ["/api/repositories", "/api/repositories/missing"] {
-        assert_eq!(
-            client.get(format!("{base}{path}")).send().await?.status(),
-            StatusCode::UNAUTHORIZED
-        );
-    }
+    let anonymous = send(client.get(format!("{base}/api/repositories"))).await?;
+    assert_eq!(anonymous.status(), StatusCode::OK);
+    assert_eq!(anonymous.json::<Value>().await?["repositories"], json!([]));
+    assert_eq!(
+        client
+            .get(format!("{base}/api/repositories/missing"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     for cursor in ["name", "", "00000000-0000-0000-0000-000000000000"] {
         assert_eq!(
             client
