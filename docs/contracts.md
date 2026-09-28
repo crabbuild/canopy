@@ -880,9 +880,9 @@ The limit of eight is an initial operational policy, not a throughput claim.
 ### Disposable Git cache admission
 
 Cache construction reserves logical file bytes before writing its bare config,
-HEAD, compressed loose objects and loose refs. The layout follows Git's
-[repository format](https://git-scm.com/docs/gitrepository-layout). Construction
-does not invoke `git init` or copy template hooks. Each cache generation owns
+HEAD, compressed loose objects and a sorted packed-ref snapshot. The layout
+follows Git's [repository format](https://git-scm.com/docs/gitrepository-layout).
+Construction does not invoke `git init` or copy template hooks. Each cache generation owns
 its directory and reservation; the shared verified-object cache has its own
 reservation and remains charged between requests.
 Replacing a generation releases an unused old cache before building the next;

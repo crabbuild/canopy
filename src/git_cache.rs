@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, BufWriter, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -300,8 +300,13 @@ impl GitCache {
             .iter()
             .filter_map(|(name, state)| state.oid.map(|oid| (name.clone(), oid)))
             .collect();
+        if refs.is_empty() {
+            return Ok(());
+        }
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
+            let mut packed = BufWriter::new(cache.writer(Path::new("packed-refs"))?);
+            packed.write_all(b"# pack-refs with: sorted\n")?;
             for (name, oid) in refs {
                 if !valid_ref_name(&name) {
                     return Err(io::Error::new(
@@ -310,8 +315,9 @@ impl GitCache {
                     )
                     .into());
                 }
-                cache.write_file(&name, format!("{}\n", hex::encode(oid)).as_bytes())?;
+                writeln!(packed, "{} {name}", hex::encode(oid))?;
             }
+            packed.flush()?;
             Ok(())
         })
         .await?
