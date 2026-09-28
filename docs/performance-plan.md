@@ -1,6 +1,6 @@
 # Repository density and latency
 
-Current dependencies: Cellule crates at `8e5ad2903a7861705156a44e271eaec3fa36b0da`.
+Current dependencies: Cellule crates at `cfcc00a7144414e0437d490ad94b5beb9152f6a3`.
 Earlier runs below retain their original pins and do not establish this build’s
 density or latency.
 

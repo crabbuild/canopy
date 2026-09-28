@@ -811,7 +811,7 @@ that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
 `Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to revision
-`8e5ad2903a7861705156a44e271eaec3fa36b0da`. Canopy remains a separate
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. Canopy remains a separate
 product crate and builds without a local Cellule checkout. There are no Crab
 product/server or Xet dependencies.
 

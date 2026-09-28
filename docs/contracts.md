@@ -1064,7 +1064,7 @@ require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins Cellule revision
-`8e5ad2903a7861705156a44e271eaec3fa36b0da`; the runtime integration below also
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`; the runtime integration below also
 requires a fresh prefix because the entity partition format changed.
 
 ### Account disablement
@@ -2395,7 +2395,7 @@ end requires the exact operation and drain proof, then uses the upstream release
 CAS. Retrying completed end returns its unchanged Ready record.
 
 The upstream contracts are implemented in pinned Cellule revision
-`8e5ad2903a7861705156a44e271eaec3fa36b0da`, specifically runtime
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`, specifically runtime
 `cell/application.rs`, `recovery/release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
 admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
@@ -2630,7 +2630,7 @@ remain required. No new configuration surface was added for diagnostic output.
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
 `cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`8e5ad2903a7861705156a44e271eaec3fa36b0da`. `cellule-types` is transitive.
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. `cellule-types` is transitive.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.
