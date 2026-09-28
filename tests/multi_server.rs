@@ -39,7 +39,7 @@ mod ssh_keys;
 use std::{path::Path, sync::Arc};
 
 use canopy_server::server::{CanopyServer, ServerConfig};
-use crab_cell_runtime::{ApplicationId, Digest, TenantId, identity::NodeId};
+use cellule_runtime::{ApplicationId, Digest, TenantId, identity::NodeId};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command};

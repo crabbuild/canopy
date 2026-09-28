@@ -14,7 +14,7 @@ use crate::{
     issues::{valid_body, valid_issue_text},
     validate_repository_id,
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
     primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
@@ -353,7 +353,7 @@ impl RepositoryCell {
 fn invalid(message: &'static str) -> Invocation {
     Invocation::NotStarted(Error::Command(message))
 }
-fn summary(row: &[SqlValue]) -> crab_cell_runtime::Result<PullSummary> {
+fn summary(row: &[SqlValue]) -> cellule_runtime::Result<PullSummary> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
@@ -402,21 +402,21 @@ fn summary(row: &[SqlValue]) -> crab_cell_runtime::Result<PullSummary> {
         updated_at_ms: *updated,
     })
 }
-fn optional_oid(value: &SqlValue) -> crab_cell_runtime::Result<Option<String>> {
+fn optional_oid(value: &SqlValue) -> cellule_runtime::Result<Option<String>> {
     match value {
         SqlValue::Null => Ok(None),
         SqlValue::Blob(oid) if matches!(oid.len(), 20 | 32) => Ok(Some(hex::encode(oid))),
         _ => Err(Error::Command("invalid pull tip")),
     }
 }
-fn record_id(value: &[u8]) -> crab_cell_runtime::Result<String> {
+fn record_id(value: &[u8]) -> cellule_runtime::Result<String> {
     let bytes = value
         .try_into()
         .map_err(|_| Error::Command("invalid pull record UUID"))?;
     validate_repository_id(bytes)?;
     Ok(uuid::Uuid::from_bytes(bytes).to_string())
 }
-fn review(row: &[SqlValue]) -> crab_cell_runtime::Result<PullReview> {
+fn review(row: &[SqlValue]) -> cellule_runtime::Result<PullReview> {
     let [
         SqlValue::Integer(number),
         SqlValue::Blob(id),
@@ -458,7 +458,7 @@ fn review(row: &[SqlValue]) -> crab_cell_runtime::Result<PullReview> {
     })
 }
 
-fn stored_revision(row: &[SqlValue]) -> crab_cell_runtime::Result<PullRevision> {
+fn stored_revision(row: &[SqlValue]) -> cellule_runtime::Result<PullRevision> {
     let [
         SqlValue::Integer(pull_version),
         SqlValue::Blob(source_oid),

@@ -1,5 +1,5 @@
 use super::*;
-use crab_cell_runtime::primitives::sql::{SqlBatch, SqlStatement, SqlValue};
+use cellule_runtime::primitives::sql::{SqlBatch, SqlStatement, SqlValue};
 
 // Correlate each ancestor lookup so SQLite can stop at the first live ref,
 // without materializing the entire reverse graph or scanning all refs.
@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn reachability_stops_at_live_refs_without_scanning_other_history()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crab_ltx::rusqlite::{Connection, StatementStatus, params};
+        use cellule_ltx::rusqlite::{Connection, StatementStatus, params};
         let db = Connection::open_in_memory()?;
         db.execute_batch(crate::SCHEMA)?;
         let oid = |n: u32| {

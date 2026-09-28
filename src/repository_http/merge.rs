@@ -3,7 +3,7 @@ use crate::pulls::{
     PullRevision,
     merge::{MergeOutcome, MergeRequest, MergeStrategy, valid_request},
 };
-use crab_cell_runtime::InvocationError;
+use cellule_runtime::InvocationError;
 use std::time::Duration;
 
 const WORK_TIMEOUT_MS: u32 = 120_000;

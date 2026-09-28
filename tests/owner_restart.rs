@@ -8,10 +8,11 @@ use canopy_server::{
     CanopyApplication, PushPlan, RefUpdate, RepositoryCell, RepositoryModule, build_descriptor,
     git_gateway::GitGateway, http::GitHttpApi, repository_target,
 };
-use crab_cell_app::{CellApplication, CompiledApplication};
-use crab_cell_host::{CellNode, CellNodeBuilder};
-use crab_cell_runtime::primitives::sql::{SqlBatch, SqlCell, SqlStatement, SqlValue};
-use crab_cell_runtime::{
+use cellule_app::{CellApplication, CompiledApplication};
+use cellule_host::{CellNode, CellNodeBuilder};
+use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
+use cellule_runtime::primitives::sql::{SqlBatch, SqlCell, SqlStatement, SqlValue};
+use cellule_runtime::{
     ApplicationId, CellClient, CellModule, Digest, Error, InvocationError, NodeLeaseGuard,
     SessionId, TenantId, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
     cell::catalog::CellCatalog, cell::worker::SqlWorkerPool, control::ControlState, control::Owner,
@@ -19,8 +20,7 @@ use crab_cell_runtime::{
     ltx::CellStorageLayout, node::NodeAdvertisement, node::NodeCapacity, node::NodeDirectory,
     node::NodeFailureDomain, node::VersionedNodeAdvertisement,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
-use crab_storage::Store;
+use cellule_store::Store;
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};
@@ -562,7 +562,7 @@ fn unix_now_ms() -> Result<i64, Box<dyn std::error::Error>> {
 fn replica(
     application: &CompiledApplication,
     layout: &CellStorageLayout,
-    target: &crab_cell_runtime::CellTarget,
+    target: &cellule_runtime::CellTarget,
     incarnation: [u8; 16],
 ) -> Result<CellReplica, Box<dyn std::error::Error>> {
     let cell_type = application

@@ -1,5 +1,5 @@
 use super::*;
-use crab_cell_runtime::{control::Control, control::ControlState};
+use cellule_runtime::{control::Control, control::ControlState};
 use futures_core::Stream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStoreExt,
@@ -352,8 +352,8 @@ fn runtime_destruction_cannot_release_an_unconfirmed_sql_workspace() -> Result {
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_waits_for_confirmed_cell_release() -> Result {
     use canopy_server::{CanopyApplication, build_descriptor, deployment::Deployment};
-    use crab_cell_app::CellApplication;
-    use crab_cell_runtime::{cell::application::ApplicationIdentity, identity::RequestId};
+    use cellule_app::CellApplication;
+    use cellule_runtime::{cell::application::ApplicationIdentity, identity::RequestId};
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
     let address = available_address().await?;
@@ -363,7 +363,7 @@ async fn maintenance_waits_for_confirmed_cell_release() -> Result {
         env!("CARGO_PKG_VERSION"),
     ))?;
     let deployment = Deployment::new(
-        crab_storage::Store::new(store.clone()),
+        cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
         ApplicationIdentity::new(settings.tenant, settings.application),
         settings.fleet,
@@ -400,8 +400,8 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         deployment::{Deployment, WorkerConfig},
         repository_target,
     };
-    use crab_cell_app::CellApplication;
-    use crab_cell_runtime::{
+    use cellule_app::CellApplication;
+    use cellule_runtime::{
         CellModule, cell::application::ApplicationIdentity, cell::catalog::CatalogEntry,
         cell::catalog::CatalogRole, cell::catalog::CellCatalog, identity::RequestId,
         ltx::CellStorageLayout,
@@ -414,7 +414,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         env!("CARGO_PKG_VERSION"),
     ))?;
     let deployment = Deployment::new(
-        crab_storage::Store::new(store.clone()),
+        cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
         ApplicationIdentity::new(settings.tenant, settings.application),
         settings.fleet,
@@ -422,7 +422,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
         application.registry(),
     )?;
     let layout = CellStorageLayout::new(
-        crab_storage::Store::new(store.clone()),
+        cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
         *settings.application.as_bytes(),
     );
@@ -490,8 +490,8 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
         CanopyApplication, build_descriptor,
         deployment::{Deployment, WorkerConfig},
     };
-    use crab_cell_app::CellApplication;
-    use crab_cell_runtime::{
+    use cellule_app::CellApplication;
+    use cellule_runtime::{
         cell::application::ApplicationIdentity, control::Transition,
         control::authority::CellAuthority, identity::RequestId, ltx::CellStorageLayout,
     };
@@ -503,7 +503,7 @@ async fn backup_rejects_control_change_between_snapshot_reads() -> Result {
         env!("CARGO_PKG_VERSION"),
     ))?;
     let layout = CellStorageLayout::new(
-        crab_storage::Store::new(store.clone()),
+        cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
         *settings.application.as_bytes(),
     );

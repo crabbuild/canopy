@@ -25,22 +25,21 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
     let signing_key = first_config.signing_key.clone();
     let target =
         canopy_server::directory::directory_target(first_config.tenant, first_config.application)?;
-    let application =
-        <canopy_server::CanopyApplication as crab_cell_app::CellApplication>::compile(
-            canopy_server::build_descriptor(
-                include_bytes!("../../Cargo.lock"),
-                env!("CARGO_PKG_VERSION"),
-            ),
-        )?;
-    let layout = crab_cell_runtime::ltx::CellStorageLayout::new(
-        crab_storage::Store::new(Arc::clone(&store)),
+    let application = <canopy_server::CanopyApplication as cellule_app::CellApplication>::compile(
+        canopy_server::build_descriptor(
+            include_bytes!("../../Cargo.lock"),
+            env!("CARGO_PKG_VERSION"),
+        ),
+    )?;
+    let layout = cellule_runtime::ltx::CellStorageLayout::new(
+        cellule_store::Store::new(Arc::clone(&store)),
         first_config.store_prefix.clone(),
         *first_config.application.as_bytes(),
     );
-    let authority = crab_cell_runtime::control::authority::CellAuthority::new(layout.clone());
+    let authority = cellule_runtime::control::authority::CellAuthority::new(layout.clone());
     let tenant = first_config.tenant;
     let application_id = first_config.application;
-    let directory = crab_cell_runtime::node::NodeDirectory::new(
+    let directory = cellule_runtime::node::NodeDirectory::new(
         layout,
         first_config.fleet,
         first_config.image,
@@ -203,11 +202,11 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
 
 async fn reject_unauthorized_peers(
     address: std::net::SocketAddr,
-    directory: &crab_cell_runtime::node::NodeDirectory,
-    target: &crab_cell_runtime::CellTarget,
+    directory: &cellule_runtime::node::NodeDirectory,
+    target: &cellule_runtime::CellTarget,
     key: SigningKey,
 ) -> Result {
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         SessionId, peer::PeerOperation, peer::PeerPrincipal, peer::PeerSigner, peer::wire,
     };
     let now = i64::try_from(
@@ -282,7 +281,7 @@ async fn reject_unauthorized_peers(
             .error_for_status()?
             .bytes()
             .await?;
-        let reply = crab_cell_runtime::peer::decode_peer_reply(&response)?;
+        let reply = cellule_runtime::peer::decode_peer_reply(&response)?;
         assert!(matches!(
             reply.outcome,
             Some(wire::peer_reply::Outcome::Error(_))
@@ -346,7 +345,7 @@ async fn response_loss_proxy(
         async move {
             let bytes = to_bytes(
                 request.into_body(),
-                crab_cell_runtime::peer::MAX_PEER_REQUEST_BYTES,
+                cellule_runtime::peer::MAX_PEER_REQUEST_BYTES,
             )
             .await
             .unwrap();
@@ -432,10 +431,10 @@ async fn moving_repositories_preserve_history_and_serialize_cross_gateway_pushes
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
     use canopy_server::repository_target;
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         control::ControlState, control::authority::CellAuthority, ltx::CellStorageLayout,
     };
-    use crab_storage::Store;
+    use cellule_store::Store;
 
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let files = tempfile::TempDir::new()?;

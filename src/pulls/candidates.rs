@@ -7,7 +7,7 @@ pub(crate) mod rebase;
 use super::merge::{MergeStrategy, oid, policy_state, policy_statement};
 use super::*;
 use crate::ObjectKind;
-use crab_cell_runtime::{
+use cellule_runtime::{
     codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError, codec::WireValue,
     registry::CommandContext,
 };
@@ -139,11 +139,11 @@ impl RepositoryCell {
             .await
     }
 }
-fn query(id: &str) -> crab_cell_runtime::Result<SqlBatch> {
+fn query(id: &str) -> cellule_runtime::Result<SqlBatch> {
     let id = uuid::Uuid::parse_str(id).map_err(|_| Error::Command("invalid candidate UUID"))?;
     Ok(SqlBatch {statements:vec![SqlStatement {sql:"SELECT binding, pull_number, actor, request, created_ms, result FROM merge_candidates WHERE id = ?1".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec())]}]})
 }
-fn decode(sets: &[SqlResultSet]) -> crab_cell_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
+fn decode(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing candidate result"))?;
@@ -199,7 +199,7 @@ pub(crate) fn publication_oid(
     context: &CommandContext<'_, '_>,
     number: i64,
     request: &merge::MergeRequest,
-) -> crab_cell_runtime::Result<Option<crate::ObjectId>> {
+) -> cellule_runtime::Result<Option<crate::ObjectId>> {
     let Some(id) = request.candidate_id.as_deref() else {
         return Ok(None);
     };
@@ -229,7 +229,7 @@ fn certified(
     candidate: &MergeCandidate,
     commit: &str,
     tree: &str,
-) -> crab_cell_runtime::Result<bool> {
+) -> cellule_runtime::Result<bool> {
     if candidate.request.strategy == MergeStrategy::Rebase {
         return rebase::certified(context, candidate, commit, tree);
     }

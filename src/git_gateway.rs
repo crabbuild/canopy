@@ -12,8 +12,8 @@ use std::{
 
 use crate::AdmissionPermit;
 use axum::body::Body;
-use crab_cell_runtime::{MutationIdentity, identity::RequestId};
-use crab_ltx::DiskBudget;
+use cellule_ltx::DiskBudget;
+use cellule_runtime::{MutationIdentity, identity::RequestId};
 use object_store::ObjectStore;
 use tokio::sync::{Mutex, OnceCell};
 

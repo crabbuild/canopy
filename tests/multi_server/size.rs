@@ -107,9 +107,9 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
                 if !path.is_file() {
                     continue;
                 }
-                let database = crab_ltx::rusqlite::Connection::open_with_flags(
+                let database = cellule_ltx::rusqlite::Connection::open_with_flags(
                     path,
-                    crab_ltx::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    cellule_ltx::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                 )?;
                 let pages: u64 = database.query_row("PRAGMA page_count", [], |row| row.get(0))?;
                 let page_size: u64 =

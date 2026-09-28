@@ -487,7 +487,7 @@ async fn list_repositories(
             }),
         ),
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
-        Err(ServerError::Runtime(crab_cell_runtime::Error::Capacity(_))) => {
+        Err(ServerError::Runtime(cellule_runtime::Error::Capacity(_))) => {
             let mut response = plain(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Repository listing capacity is full; retry the request",

@@ -86,7 +86,7 @@ pub(super) fn certified(
     candidate: &MergeCandidate,
     tip: &str,
     tree: &str,
-) -> crab_cell_runtime::Result<bool> {
+) -> cellule_runtime::Result<bool> {
     let mut source = candidate.request.revision.source_oid.clone();
     let mut current = tip.to_owned();
     let base = &candidate.request.revision.base_oid;
@@ -137,7 +137,7 @@ pub(super) fn certified(
 fn body(
     context: &CommandContext<'_, '_>,
     commit: &str,
-) -> crab_cell_runtime::Result<Option<Vec<u8>>> {
+) -> cellule_runtime::Result<Option<Vec<u8>>> {
     let rows = context.sql(&SqlBatch { statements: vec![SqlStatement {
         sql: "SELECT o.body FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1 AND o.kind = 'commit' AND o.storage = 'inline' AND o.size <= ?2".into(),
         parameters: vec![SqlValue::Blob(oid(commit)?.to_vec()), SqlValue::Integer(MAX_COMMIT_BYTES as i64)],

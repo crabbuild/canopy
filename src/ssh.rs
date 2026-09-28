@@ -37,7 +37,7 @@ enum SshError {
     #[error("SSH Git transfer failed")]
     Git(#[from] crate::git_gateway::GatewayError),
     #[error("SSH transfer admission failed")]
-    Admission(#[from] crab_cell_runtime::Error),
+    Admission(#[from] cellule_runtime::Error),
     #[error("{0}")]
     Rejected(&'static str),
 }

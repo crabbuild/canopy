@@ -4,7 +4,7 @@ use canopy_server::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, RepositoryCell, RepositoryModule,
     StoredObject, object_id,
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     InvocationError, MutationIdentity, SqlCell, identity::RequestId, primitives::sql::SqlBatch,
     primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };

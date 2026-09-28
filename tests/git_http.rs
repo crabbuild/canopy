@@ -6,7 +6,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
     let root = tempfile::TempDir::new()?;
     let backend = GitHttpBackend::initialize(
         root.path().to_path_buf(),
-        crab_ltx::DiskBudget::new(1 << 20),
+        cellule_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
         canopy_server::ObjectFormat::Sha1,
     )
@@ -32,7 +32,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                 body: canopy_server::git_input::GitInput::receive(
                     axum::body::Body::empty(),
                     root.path(),
-                    &crab_ltx::DiskBudget::new(1 << 20),
+                    &cellule_ltx::DiskBudget::new(1 << 20),
                     Some(1 << 20),
                     None,
                 )

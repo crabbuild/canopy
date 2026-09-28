@@ -13,7 +13,7 @@ use axum::{
     body::{Body, Bytes, HttpBody},
     http::{Request, Response},
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellClient, CellId, CellModule, CellTarget, Error, cell::catalog::CatalogRole,
 };
 use http_body::{Frame, SizeHint};
@@ -401,7 +401,7 @@ impl RepositoryManager {
             .node
             .release_idle_cell(cell, self.session, generation)
             .await;
-        // Crab rejects this exact capacity error before transfer preflight.
+        // Cellule rejects this exact capacity error before transfer preflight.
         // Wait one rate window; the retry rechecks generation and settled work.
         // Other failures can follow release and must retain the recovery path.
         if matches!(&result, Err(Error::Capacity("movement budget"))) {

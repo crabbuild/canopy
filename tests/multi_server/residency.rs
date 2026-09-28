@@ -1,9 +1,9 @@
 use super::*;
 use canopy_server::repository_target;
-use crab_cell_runtime::{
+use cellule_runtime::{
     control::ControlState, control::authority::CellAuthority, ltx::CellStorageLayout,
 };
-use crab_storage::Store;
+use cellule_store::Store;
 use sha2::{Digest as _, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

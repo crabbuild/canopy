@@ -4,7 +4,7 @@ use canopy_server::{
     branch_rules::BranchRuleEdit,
     checks::{CheckContextEdit, CheckEdit, CheckState, NewCheck},
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     SqlCell, primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 
@@ -312,11 +312,11 @@ struct Proof {
     ancestor: Oid,
     steps: Vec<(Oid, Oid)>,
 }
-impl crab_cell_runtime::codec::WireValue for Proof {
+impl cellule_runtime::codec::WireValue for Proof {
     fn encode(
         &self,
-        out: &mut crab_cell_runtime::codec::BoundedEncoder,
-    ) -> std::result::Result<(), crab_cell_runtime::codec::CodecError> {
+        out: &mut cellule_runtime::codec::BoundedEncoder,
+    ) -> std::result::Result<(), cellule_runtime::codec::CodecError> {
         out.write_bytes(&self.ancestor)?;
         out.write_count(self.steps.len())?;
         for (child, parent) in &self.steps {
@@ -326,25 +326,25 @@ impl crab_cell_runtime::codec::WireValue for Proof {
         Ok(())
     }
     fn decode(
-        _: &mut crab_cell_runtime::codec::BoundedDecoder<'_>,
-    ) -> std::result::Result<Self, crab_cell_runtime::codec::CodecError> {
-        Err(crab_cell_runtime::codec::CodecError::Invalid(
+        _: &mut cellule_runtime::codec::BoundedDecoder<'_>,
+    ) -> std::result::Result<Self, cellule_runtime::codec::CodecError> {
+        Err(cellule_runtime::codec::CodecError::Invalid(
             "encode-only test client",
         ))
     }
 }
 struct CertificateCommand;
-impl crab_cell_runtime::Command for CertificateCommand {
+impl cellule_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 7;
     const CODEC_VERSION: u32 = 2;
     type Input = Proof;
     type Output = bool;
     fn execute(
-        _: &mut crab_cell_runtime::registry::CommandContext<'_, '_>,
+        _: &mut cellule_runtime::registry::CommandContext<'_, '_>,
         _: Proof,
-    ) -> crab_cell_runtime::Result<crab_cell_runtime::registry::CommandResult<bool>> {
-        Err(crab_cell_runtime::Error::Command(
+    ) -> cellule_runtime::Result<cellule_runtime::registry::CommandResult<bool>> {
+        Err(cellule_runtime::Error::Command(
             "client handler must not execute",
         ))
     }

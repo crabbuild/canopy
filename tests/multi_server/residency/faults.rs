@@ -1,6 +1,6 @@
 use std::{fmt, pin::Pin, sync::Mutex};
 
-use crab_cell_runtime::control::Control;
+use cellule_runtime::control::Control;
 use futures_core::Stream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
@@ -157,7 +157,7 @@ struct Fixture {
     client: reqwest::Client,
     address: std::net::SocketAddr,
     layout: CellStorageLayout,
-    target: crab_cell_runtime::CellTarget,
+    target: cellule_runtime::CellTarget,
     repository_dir: std::path::PathBuf,
     oid: Vec<u8>,
 }

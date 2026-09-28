@@ -3,7 +3,7 @@ use crate::{
     RepositoryModule,
     access::{access_statement, decode_access},
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellModule, Command, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
     codec::WireValue, registry::CommandContext, registry::CommandResult,
 };
@@ -79,7 +79,7 @@ impl Command for SetBranchRule {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         change: RuleChange,
-    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
+    ) -> cellule_runtime::Result<CommandResult<bool>> {
         if decode_access(&context.sql(&SqlBatch {
             statements: vec![access_statement(&change.actor)],
         })?)?

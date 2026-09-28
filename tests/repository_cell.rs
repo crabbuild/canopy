@@ -36,16 +36,16 @@ use canopy_server::{
     CanopyApplication, ObjectKind, PushPlan, RefExpectation, RefUpdate, RepositoryCell,
     RepositoryModule, build_descriptor, directory::TokenScope, object_id, repository_target,
 };
-use crab_cell_app::{ApplicationHandle, CellApplication};
-use crab_cell_runtime::{
+use cellule_app::{ApplicationHandle, CellApplication};
+use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
+use cellule_runtime::{
     ApplicationId, CellClient, CellModule, CellRuntime, CellTarget, Error, InvocationError,
     MutationIdentity, NamespaceId, SessionId, TenantId, cell::catalog::CatalogEntry,
     cell::catalog::CatalogRole, cell::catalog::CellCatalog, cell::worker::SqlWorkerPool,
     control::Owner, control::authority::CellAuthority, identity::IncarnationId,
     identity::RequestId, ltx::CellStorageLayout,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
-use crab_storage::Store;
+use cellule_store::Store;
 use object_store::{memory::InMemory, path::Path};
 
 #[tokio::test(flavor = "multi_thread")]

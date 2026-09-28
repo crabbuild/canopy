@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, pin::Pin, sync::Arc};
 
-use crab_cell_runtime::{control::Control, control::ControlState};
+use cellule_runtime::{control::Control, control::ControlState};
 use futures_core::Stream;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,

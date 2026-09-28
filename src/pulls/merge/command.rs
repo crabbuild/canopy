@@ -3,7 +3,7 @@ use crate::{
     PushPlan, RepositoryModule,
     access::{access_statement, decode_access},
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellModule, Command, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
     codec::WireValue, registry::CommandContext, registry::CommandResult,
 };
@@ -67,7 +67,7 @@ impl Command for MergePull {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         input: MergeInput,
-    ) -> crab_cell_runtime::Result<CommandResult<MergeOutcome>> {
+    ) -> cellule_runtime::Result<CommandResult<MergeOutcome>> {
         let role = decode_access(&context.sql(&SqlBatch {
             statements: vec![access_statement(&input.actor)],
         })?)?;

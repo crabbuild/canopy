@@ -1,6 +1,6 @@
 use super::*;
 use canopy_server::{INLINE_OBJECT_LIMIT, ObjectBatch, ObjectStorage, StoredObject};
-use crab_cell_runtime::{
+use cellule_runtime::{
     SqlCell, primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 use sha2::{Digest as _, Sha256};

@@ -1,12 +1,12 @@
 use super::*;
-use crab_cell_runtime::{
+use cellule_runtime::{
     Command, Query, registry::CommandContext, registry::CommandResult, registry::QueryContext,
 };
 
 // Credential decisions use one owner timestamp for the whole transaction.
-// Crab samples context time before queueing; refresh it to fence expired
+// Cellule samples context time before queueing; refresh it to fence expired
 // requests without racing separate decision/update statements.
-fn bind_time(mut batch: SqlBatch, admitted_at_ms: i64) -> crab_cell_runtime::Result<SqlBatch> {
+fn bind_time(mut batch: SqlBatch, admitted_at_ms: i64) -> cellule_runtime::Result<SqlBatch> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|source| Error::Facility {
@@ -34,7 +34,7 @@ impl Command for CredentialCommand {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         input: SqlBatch,
-    ) -> crab_cell_runtime::Result<CommandResult<Self::Output>> {
+    ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
         let batch = bind_time(input, context.now_ms())?;
         Ok(CommandResult::Success(context.sql(&batch)?))
     }
@@ -52,7 +52,7 @@ impl Query for CredentialQuery {
     fn execute(
         context: &mut QueryContext<'_>,
         input: SqlBatch,
-    ) -> crab_cell_runtime::Result<Self::Output> {
+    ) -> cellule_runtime::Result<Self::Output> {
         let batch = bind_time(input, context.now_ms())?;
         context.sql(&batch)
     }

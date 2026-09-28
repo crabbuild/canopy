@@ -1,6 +1,6 @@
 //! Bounded immutable object pages for cold cache hydration.
 
-use crab_cell_runtime::{
+use cellule_runtime::{
     Error, InvocationError, Observed, Receipt, primitives::sql::SqlBatch,
     primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
@@ -140,7 +140,7 @@ impl RepositoryCell {
         }
         let placeholders = vec!["?"; ids.len()].join(",");
         // Immutable records bind this second read to the selected headers. The
-        // payload bound leaves room for record metadata under Crab's 1 MiB cap.
+        // payload bound leaves room for record metadata under Cellule's 1 MiB cap.
         let result = self.sql.query(Some(headers.receipt), SqlBatch {
             statements: vec![SqlStatement {
                 sql: format!("SELECT oid, kind, size, digest, storage, body, external_sha256, chunk_id FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
@@ -159,7 +159,7 @@ impl RepositoryCell {
             let objects = rows
                 .into_iter()
                 .map(decode_object)
-                .collect::<crab_cell_runtime::Result<Vec<_>>>()?;
+                .collect::<cellule_runtime::Result<Vec<_>>>()?;
             if objects.iter().map(|object| object.oid).ne(ids) {
                 return Err(Error::Command("objects changed during page read"));
             }
@@ -180,9 +180,7 @@ impl RepositoryCell {
     }
 }
 
-fn decode_headers(
-    rows: &[Vec<SqlValue>],
-) -> crab_cell_runtime::Result<(Vec<crate::ObjectId>, i64)> {
+fn decode_headers(rows: &[Vec<SqlValue>]) -> cellule_runtime::Result<(Vec<crate::ObjectId>, i64)> {
     let mut ids = Vec::new();
     let mut bytes = 0;
     let mut through = 0;
@@ -216,7 +214,7 @@ fn decode_headers(
     Ok((ids, through))
 }
 
-fn decode_object(row: Vec<SqlValue>) -> crab_cell_runtime::Result<StoredObject> {
+fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
     let row: [SqlValue; 8] = row
         .try_into()
         .map_err(|_| Error::Command("invalid stored object row"))?;

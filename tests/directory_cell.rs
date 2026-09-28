@@ -21,16 +21,16 @@ use canopy_server::{
     },
     object_id, repository_target,
 };
-use crab_cell_app::{ApplicationHandle, CellApplication};
-use crab_cell_runtime::{
+use cellule_app::{ApplicationHandle, CellApplication};
+use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
+use cellule_runtime::{
     ApplicationId, CellClient, CellModule, CellRuntime, MutationIdentity, Registry, SessionId,
     TenantId, cell::actor::CellHandle, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
     cell::catalog::CellCatalog, cell::worker::SqlWorkerPool, control::Owner,
     control::authority::CellAuthority, identity::IncarnationId, identity::RequestId,
     ltx::CellStorageLayout,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
-use crab_storage::Store;
+use cellule_store::Store;
 use object_store::{memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 
@@ -402,7 +402,7 @@ fn random_identity() -> Result<MutationIdentity, Box<dyn std::error::Error>> {
     })
 }
 
-fn runtime(session: SessionId) -> crab_cell_runtime::Result<CellRuntime> {
+fn runtime(session: SessionId) -> cellule_runtime::Result<CellRuntime> {
     CellRuntime::new_with_replica_host(
         SqlWorkerPool::new(1, 4)?,
         64 * 1024 * 1024,
@@ -412,11 +412,11 @@ fn runtime(session: SessionId) -> crab_cell_runtime::Result<CellRuntime> {
 }
 
 fn app_handle(
-    application: &Arc<crab_cell_app::CompiledApplication>,
+    application: &Arc<cellule_app::CompiledApplication>,
     tenant: TenantId,
     application_id: ApplicationId,
     handle: CellHandle,
-) -> crab_cell_runtime::Result<ApplicationHandle<CanopyApplication>> {
+) -> cellule_runtime::Result<ApplicationHandle<CanopyApplication>> {
     ApplicationHandle::new(
         CellClient::local(application.registry(), handle),
         Arc::clone(application),
@@ -429,7 +429,7 @@ async fn bootstrap(
     runtime: &CellRuntime,
     registry: &Registry,
     layout: &CellStorageLayout,
-    target: &crab_cell_runtime::CellTarget,
+    target: &cellule_runtime::CellTarget,
     module_schema: (&str, &'static str),
     session: SessionId,
     destination: &Path,
@@ -475,7 +475,7 @@ async fn restore(
     runtime: &CellRuntime,
     registry: &Registry,
     layout: &CellStorageLayout,
-    target: &crab_cell_runtime::CellTarget,
+    target: &cellule_runtime::CellTarget,
     module: &str,
     session: SessionId,
     destination: &Path,

@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellModule, Command, Error, InvocationError, MutationIdentity, codec::BoundedDecoder,
     codec::BoundedEncoder, codec::CodecError, codec::WireValue, identity::RequestId,
     primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
@@ -313,7 +313,7 @@ impl RepositoryCell {
     pub(crate) async fn complete_push(
         &self,
         input: PushCompletion,
-    ) -> Result<crab_cell_runtime::Committed<bool>, InvocationError<bool>> {
+    ) -> Result<cellule_runtime::Committed<bool>, InvocationError<bool>> {
         if !valid_options(&input.options) {
             return Err(InvocationError::NotStarted(Error::Command(
                 "invalid push options",
@@ -455,7 +455,7 @@ impl Command for CompletePush {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
-    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
+    ) -> cellule_runtime::Result<CommandResult<bool>> {
         if !valid_options(&input.options) {
             return Ok(CommandResult::Rejected(false));
         }
@@ -559,7 +559,7 @@ fn response_complete(
     context: &CommandContext<'_, '_>,
     push_id: [u8; 16],
     response_id: [u8; 16],
-) -> crab_cell_runtime::Result<bool> {
+) -> cellule_runtime::Result<bool> {
     let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
         sql: "SELECT r.size, count(c.part), coalesce(sum(length(c.body)), 0), coalesce(min(c.part), 0), coalesce(max(c.part), -1) FROM push_responses r LEFT JOIN push_response_chunks c ON c.response_id = r.id WHERE r.id = ?1 AND r.push_id = ?2 GROUP BY r.id".into(),
         parameters: vec![SqlValue::Blob(response_id.to_vec()), SqlValue::Blob(push_id.to_vec())],

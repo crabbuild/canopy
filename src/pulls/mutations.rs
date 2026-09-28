@@ -190,7 +190,7 @@ pub(super) fn binding(fields: &[&str]) -> Vec<u8> {
     }
     hash.finalize().as_bytes().to_vec()
 }
-fn change(sets: &[SqlResultSet]) -> crab_cell_runtime::Result<PullChange> {
+fn change(sets: &[SqlResultSet]) -> cellule_runtime::Result<PullChange> {
     match sets
         .first()
         .and_then(|set| set.rows.first())

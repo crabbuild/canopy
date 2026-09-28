@@ -3,8 +3,8 @@ use crate::{
     large_blob::{LargeBlobReference, LargeBlobStore, blob_path},
     lfs::{LfsObject, lfs_path, verify_lfs_object},
 };
-use crab_cell_runtime::{NodeLeaseGuard, cell::catalog::CatalogRole};
-use crab_ltx::rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use cellule_ltx::rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use cellule_runtime::{NodeLeaseGuard, cell::catalog::CatalogRole};
 use object_store::{ObjectStore, prefix::PrefixStore};
 
 #[derive(Clone, Copy)]

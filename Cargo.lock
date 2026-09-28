@@ -361,11 +361,11 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
- "crab-cell-app",
- "crab-cell-host",
- "crab-cell-runtime",
- "crab-ltx",
- "crab-storage",
+ "cellule-app",
+ "cellule-host",
+ "cellule-ltx",
+ "cellule-runtime",
+ "cellule-store",
  "ed25519-dalek 2.2.0",
  "flate2",
  "futures-core",
@@ -414,6 +414,109 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex",
+]
+
+[[package]]
+name = "cellule-app"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "blake3",
+ "cellule-runtime",
+]
+
+[[package]]
+name = "cellule-host"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "cellule-app",
+ "cellule-runtime",
+ "futures-util",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cellule-ltx"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "cellule-store",
+ "crc-fast",
+ "futures-util",
+ "lz4_flex",
+ "object_store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "cellule-runtime"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "blake3",
+ "bytes",
+ "cellule-ltx",
+ "cellule-store",
+ "ed25519-dalek 2.2.0",
+ "futures-util",
+ "object_store",
+ "prost",
+ "prost-build",
+ "protoc-bin-vendored",
+ "rand 0.9.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "cellule-store"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "cellule-types",
+ "futures-util",
+ "hyper",
+ "object_store",
+ "rand 0.9.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cellule-types"
+version = "0.1.0"
+source = "git+https://github.com/crabbuild/cellule.git?rev=75462e46c203256fb3fe70903908103f619d99b2#75462e46c203256fb3fe70903908103f619d99b2"
+dependencies = [
+ "schemars",
+ "serde",
 ]
 
 [[package]]
@@ -548,106 +651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "crab-cell-app"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "blake3",
- "crab-cell-runtime",
-]
-
-[[package]]
-name = "crab-cell-host"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "crab-cell-app",
- "crab-cell-runtime",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "crab-cell-runtime"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "blake3",
- "bytes",
- "crab-ltx",
- "crab-storage",
- "ed25519-dalek 2.2.0",
- "futures-util",
- "object_store",
- "prost",
- "prost-build",
- "protoc-bin-vendored",
- "rand 0.9.5",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "crab-ltx"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "async-trait",
- "blake3",
- "bytes",
- "crab-storage",
- "crc-fast",
- "futures-util",
- "lz4_flex",
- "object_store",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "crab-storage"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "async-trait",
- "blake3",
- "bytes",
- "crab-types",
- "futures-util",
- "hyper",
- "object_store",
- "rand 0.9.5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "crab-types"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/crab.git?rev=311105eb864ca90fc08bf62d3bfa6ef5c8991e2a#311105eb864ca90fc08bf62d3bfa6ef5c8991e2a"
-dependencies = [
- "schemars",
- "serde",
 ]
 
 [[package]]
@@ -3867,12 +3870,13 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

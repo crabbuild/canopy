@@ -7,12 +7,12 @@ use crate::{
     lfs::LfsError,
     server::{ServerError, unix_now_ms},
 };
-use crab_cell_runtime::{
+use cellule_ltx::{CellReplica, DiskBudget, Host};
+use cellule_runtime::{
     control::Control, recovery::backup::BackupPin, recovery::backup::BackupPinStore,
     recovery::backup::PinnedCatalogShard,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host};
-use crab_storage::StorageError;
+use cellule_store::StorageError;
 use std::path::PathBuf;
 
 mod bodies;
@@ -27,7 +27,7 @@ pub enum BackupError {
     #[error("backup worker failed")]
     Server(#[from] ServerError),
     #[error("backup replica operation failed")]
-    Ltx(#[from] crab_ltx::CrabError),
+    Ltx(#[from] cellule_ltx::LtxError),
     #[error("backup storage operation failed")]
     Store(#[from] StorageError),
     #[error("backup external part copy failed")]
@@ -37,7 +37,7 @@ pub enum BackupError {
     #[error("backup LFS verification failed")]
     Lfs(#[from] LfsError),
     #[error("backup SQLite read failed")]
-    Sql(#[from] crab_ltx::rusqlite::Error),
+    Sql(#[from] cellule_ltx::rusqlite::Error),
     #[error("backup local I/O failed")]
     Io(#[from] std::io::Error),
     #[error("backup task failed")]

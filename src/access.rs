@@ -1,6 +1,6 @@
 //! Repository-local ownership and collaborator roles.
 
-use crab_cell_runtime::{
+use cellule_runtime::{
     Committed, Error, InvocationError, MutationIdentity, Observed, Receipt,
     primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
     primitives::sql::SqlValue,
@@ -33,7 +33,7 @@ impl<'a> From<&'a String> for ReadIdentity<'a> {
     }
 }
 impl ReadIdentity<'_> {
-    pub(crate) fn validate(self) -> crab_cell_runtime::Result<()> {
+    pub(crate) fn validate(self) -> cellule_runtime::Result<()> {
         match self {
             Self::Anonymous => Ok(()),
             Self::Account(account) => validate_component(account),
@@ -105,7 +105,7 @@ impl RepositoryCell {
                         role,
                     })
                 })
-                .collect::<crab_cell_runtime::Result<Vec<_>>>()
+                .collect::<cellule_runtime::Result<Vec<_>>>()
                 .map_err(InvocationError::NotStarted)?;
             Some(members)
         };
@@ -293,9 +293,7 @@ pub(crate) fn access_statement<'a>(account: impl Into<ReadIdentity<'a>>) -> SqlS
     }
 }
 
-pub(crate) fn decode_access(
-    sets: &[SqlResultSet],
-) -> crab_cell_runtime::Result<Option<TokenScope>> {
+pub(crate) fn decode_access(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<TokenScope>> {
     let Some(row) = sets.first().and_then(|set| set.rows.first()) else {
         return Err(Error::Command("repository access query returned no result"));
     };

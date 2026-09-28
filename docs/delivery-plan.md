@@ -7,7 +7,7 @@ Do not infer completion from compilation or a disposable cache test.
 
 | Gate | Deliverable | Acceptance proof | State |
 | --- | --- | --- | --- |
-| 0 Independent build | Pin an immutable Crab Cell revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned and local fresh-checkout proof; hosted CI pending a Canopy remote |
+| 0 Independent build | Pin an immutable Cellule revision; build `canopy-server` without local paths or Crab product crates | Fresh checkout builds in CI | Partial: immutable Git revision pinned; hosted CI pending a Canopy remote |
 | 1 Node process | `canopy` binary, validated config, CellNode lease/renewal, listener, readiness, drain | Start/stop against durable store; no worker or lease leak | Partial: S3-compatible process restart, selected-release admission and supervised fleet maintenance drain pass; worker/lease fault matrix remains |
 | 2 Repository lifecycle | Directory Cell, create/list/get/rename, account identity, token scopes, repository ACL | Two users see only authorized repositories; failed creation converges on one UUID | Partial: accounts and disablement, token issuance/listing/revocation/expiry and account issuance limits, repository roles/rosters, default branches and authorized repository list/get survive recovery; browser account/token administration and atomic account audit history implemented; account deletion and broader audit coverage remain |
 | 3 Git object path | Streamed pack ingest, SQLite object chunks, verified external large blobs | Push delta pack; restore exact bytes and OIDs after owner loss; reject corruption | Partial: push, database and object byte quotas removed; external bodies use immutable parts; disk admission and bounded batches remain. Non-blob materialization, runtime deadlines, provider limits and the complete resource fault matrix still need capacity qualification |
@@ -32,9 +32,9 @@ separate product decisions.
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The current build pins Crab `main` revision `311105eb` and
-   owns the startup storage probe in Canopy. Historical Cellule qualification
-   runs below remain evidence for their recorded revisions only.
+   a Canopy remote. The current build pins Cellule revision `75462e4` and
+   owns a startup storage probe with cleanup on failure. Historical dependency
+   qualification runs below remain evidence for their recorded revisions only.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
@@ -3247,9 +3247,9 @@ isolation policy, not proof of optimal throughput, scheduling fairness under
 combined-account saturation, or thousands of fully active repository Cells.
 
 
-## Crab runtime migration
+## Historical Crab runtime migration
 
-Canopy now pins `crab-cell-runtime`, `crab-cell-app`, `crab-cell-host`, `crab-ltx`
+Canopy previously pinned `crab-cell-runtime`, `crab-cell-app`, `crab-cell-host`, `crab-ltx`
 and `crab-storage` to Crab `main` revision
 `311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`. The lockfile replaces exactly six
 Cellule packages with six Crab library packages (including transitive
@@ -3307,7 +3307,7 @@ not a production performance or provider durability claim.
 `src/deployment/root.rs` removes the Service exception that could adopt an
 application identity without a Canopy root marker. Service, Backup and Restore
 now reject that state without writing a reservation or changing the identity.
-Crab is the sole dependency/API/storage path; no Cellule decoder, adapter, alias,
+Cellule is the sole dependency/API/storage path; no Crab Cell decoder, adapter, alias,
 retained module code or data migration is provided.
 
 The same root reservation still serializes concurrent current-format startup
@@ -3719,3 +3719,31 @@ stock SHA-256 push and clone. A conflicting create format returns HTTP 409;
 stock SHA-1 Git refuses to push into the SHA-256 repository. The SHA-1 Repository
 Cell test rejects mixed-format object publication. SHA-256 SSH recovery, PR/check
 workflows and real-provider qualification remain open.
+
+## Cellule runtime cutover
+
+Canopy now pins `cellule-app`, `cellule-host`, `cellule-runtime`, `cellule-ltx`
+and `cellule-store` to immutable Cellule revision
+`75462e46c203256fb3fe70903908103f619d99b2`. The lockfile replaces the
+five direct Crab Cell crates and transitive `crab-types` with the Cellule crates
+and `cellule-types`. Cellule requires `uuid = 1.24.0`, so the direct dependency
+and lockfile use that exact version. Source, tests and examples use the Cellule
+crate paths and LTX's `LtxError`. No local path or compatibility dependency
+remains.
+
+This changes the runtime release identity and storage layout. Use a fresh
+storage prefix; prior runtime prefixes and backups are not admitted. Canopy's
+startup object-store probe remains product-owned because it removes its probe
+object on failure as well as success. The full repository primitive and density
+gates above remain open.
+
+Local proof: locked all-target check, all-target Clippy with warnings denied,
+formatting, binary build and 105 library tests pass. Directory, repository Cell,
+owner-restart and stock smart-HTTP integration tests pass. Six isolated RustFS
+provider gates pass, including SHA-256, signed pushes, bulk refs and filtered
+clone. A broad parallel `cargo test` run had five multi-server failures; the
+large-object and three residency cases pass individually. The remaining
+discovery test expects 401 for an anonymous repository listing, while the
+existing public-listing route deliberately returns 200. That assertion also
+predates this cutover. Hosted CI and production-provider qualification remain
+open.

@@ -7,7 +7,7 @@ use crate::{
     },
     server::{RepositoryRoute, mutation_identity},
 };
-use crab_cell_runtime::{
+use cellule_runtime::{
     Committed, InvocationError, MutationIdentity, primitives::sql::SqlResultSet,
 };
 use serde::de::DeserializeOwned;

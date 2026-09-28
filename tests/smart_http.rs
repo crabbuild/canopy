@@ -5,15 +5,15 @@ use canopy_server::{
     directory::TokenScope, git_gateway::GitGateway, http::GitHttpApi, lfs::LfsError,
     repository_target,
 };
-use crab_cell_app::{ApplicationHandle, CellApplication};
-use crab_cell_runtime::{
+use cellule_app::{ApplicationHandle, CellApplication};
+use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
+use cellule_runtime::{
     ApplicationId, CellClient, CellModule, CellRuntime, Error, SessionId, TenantId,
     cell::catalog::CatalogEntry, cell::catalog::CatalogRole, cell::catalog::CellCatalog,
     cell::worker::SqlWorkerPool, control::Owner, control::authority::CellAuthority,
     identity::IncarnationId, ltx::CellStorageLayout,
 };
-use crab_ltx::{CellReplica, DiskBudget, Host, Limits};
-use crab_storage::Store;
+use cellule_store::Store;
 use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use sha2::{Digest as _, Sha256};
 use tokio::{net::TcpListener, process::Command, sync::oneshot};

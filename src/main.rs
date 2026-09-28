@@ -5,12 +5,12 @@ use canopy_server::{
     deployment::{BackupError, Deployment, WorkerConfig},
     server::{CanopyServer, ServerConfig, ServerError},
 };
-use crab_cell_app::CellApplication;
-use crab_cell_runtime::{
+use cellule_app::CellApplication;
+use cellule_runtime::{
     ApplicationId, Digest, TenantId, cell::application::ApplicationIdentity, identity::NodeId,
     identity::RequestId,
 };
-use crab_storage::{StorageError, Store, provider_store::UrlObjectStore};
+use cellule_store::{StorageError, Store, provider_store::UrlObjectStore};
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use thiserror::Error;
@@ -72,7 +72,7 @@ enum StartupError {
     #[error("object-store configuration failed")]
     Storage(#[from] StorageError),
     #[error("deployment administration failed")]
-    Deployment(#[from] crab_cell_runtime::Error),
+    Deployment(#[from] cellule_runtime::Error),
     #[error("Canopy service failed")]
     Server(#[from] ServerError),
 }

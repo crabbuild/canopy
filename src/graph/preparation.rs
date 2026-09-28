@@ -3,7 +3,7 @@ use crate::{
     RepositoryCell,
     directory::{TokenScope, validate_component},
 };
-use crab_cell_runtime::{InvocationError, MutationIdentity, identity::RequestId};
+use cellule_runtime::{InvocationError, MutationIdentity, identity::RequestId};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},

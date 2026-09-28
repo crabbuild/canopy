@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::{ObjectKind, PushPlan, RepositoryModule, object_batch::VERIFY_BATCH_BYTES, object_id};
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellModule, Command, Error, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
     codec::WireValue, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
     primitives::sql::SqlStatement, primitives::sql::SqlValue, registry::CommandContext,
@@ -70,7 +70,7 @@ fn status_query(oids: &[Oid]) -> SqlBatch {
     }
 }
 
-fn statuses(results: &[SqlResultSet]) -> crab_cell_runtime::Result<BTreeMap<Oid, Status>> {
+fn statuses(results: &[SqlResultSet]) -> cellule_runtime::Result<BTreeMap<Oid, Status>> {
     let mut states = BTreeMap::new();
     for row in &results
         .first()
@@ -113,7 +113,7 @@ impl Command for CertifyObjects {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         batch: CertificateBatch,
-    ) -> crab_cell_runtime::Result<CommandResult<bool>> {
+    ) -> cellule_runtime::Result<CommandResult<bool>> {
         let mut verified = 0;
         for oid in batch.0 {
             let states = statuses(&context.sql(&status_query(&[oid]))?)?;
@@ -187,7 +187,7 @@ impl Command for CertifyObjects {
 pub(crate) fn certified_roots(
     context: &CommandContext<'_, '_>,
     plan: &PushPlan,
-) -> crab_cell_runtime::Result<bool> {
+) -> cellule_runtime::Result<bool> {
     for updates in plan.updates.chunks(MAX_CERTIFICATES) {
         let oids: Vec<_> = updates.iter().filter_map(|update| update.new_oid).collect();
         if oids.is_empty() {
@@ -213,7 +213,7 @@ fn object_edges(
     context: &CommandContext<'_, '_>,
     oid: Oid,
     kind: ObjectKind,
-) -> crab_cell_runtime::Result<Option<Vec<Edge>>> {
+) -> cellule_runtime::Result<Option<Vec<Edge>>> {
     let result = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
             sql: "SELECT storage, body, digest, size, chunk_id FROM objects WHERE oid = ?1".into(),

@@ -1,7 +1,7 @@
 //! Versioned repository visibility in the same authority as refs and access grants.
 
 use crate::{RepositoryCell, directory::validate_component};
-use crab_cell_runtime::{
+use cellule_runtime::{
     Committed, Error, InvocationError, MutationIdentity, Observed, primitives::sql::SqlBatch,
     primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };

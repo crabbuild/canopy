@@ -8,7 +8,7 @@ use std::{
 
 use crate::AdmissionPermit;
 use axum::body::Body;
-use crab_cell_runtime::{
+use cellule_runtime::{
     Error, InvocationError, MutationIdentity, Observed, identity::RequestId,
     primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
     primitives::sql::SqlValue,
@@ -188,7 +188,7 @@ impl RepositoryCell {
         identity: MutationIdentity,
         actor: &str,
         object: LfsObject,
-    ) -> Result<crab_cell_runtime::Committed<bool>, InvocationError<Vec<SqlResultSet>>> {
+    ) -> Result<cellule_runtime::Committed<bool>, InvocationError<Vec<SqlResultSet>>> {
         validate_component(actor).map_err(InvocationError::NotStarted)?;
         let size = i64::try_from(object.size).map_err(|_| {
             InvocationError::NotStarted(Error::Command("LFS object size overflows SQLite"))
@@ -225,7 +225,7 @@ impl RepositoryCell {
             })?
             .is_some_and(|role| role >= TokenScope::Write);
         if !authorized {
-            return Ok(crab_cell_runtime::Committed {
+            return Ok(cellule_runtime::Committed {
                 output: false,
                 receipt: committed.receipt,
             });
@@ -257,7 +257,7 @@ impl RepositoryCell {
                 source: Box::new(Error::Command("conflicting LFS object identity")),
             });
         }
-        Ok(crab_cell_runtime::Committed {
+        Ok(cellule_runtime::Committed {
             output: true,
             receipt: committed.receipt,
         })

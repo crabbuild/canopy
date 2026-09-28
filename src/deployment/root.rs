@@ -2,7 +2,7 @@
 
 use super::*;
 use bytes::Bytes;
-use crab_storage::{ETag, StorageError};
+use cellule_store::{ETag, StorageError};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -7,9 +7,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crab_cell_app::CellApplication;
-use crab_cell_host::{CellNode, CellNodeBuilder};
-use crab_cell_runtime::{
+use cellule_app::CellApplication;
+use cellule_host::{CellNode, CellNodeBuilder};
+use cellule_ltx::{CellReplica, DiskBudget, Host, LtxError};
+use cellule_runtime::{
     ApplicationId, CellClient, CellModule, CellTarget, Digest, Error, InvocationError,
     MutationIdentity, NodeLeaseGuard, SessionId, TenantId, cell::application::ApplicationIdentity,
     cell::catalog::CatalogEntry, cell::catalog::CatalogRole, cell::catalog::CellCatalog,
@@ -20,8 +21,7 @@ use crab_cell_runtime::{
     primitives::sql::SqlResultSet, recovery::manifest::RecoveryManifestStore,
     recovery::release::ReleaseStore,
 };
-use crab_ltx::{CellReplica, CrabError, DiskBudget, Host};
-use crab_storage::{StorageError, Store};
+use cellule_store::{StorageError, Store};
 use ed25519_dalek::SigningKey;
 use object_store::{ObjectStore, path::Path as StorePath, prefix::PrefixStore};
 use sha2::{Digest as _, Sha256};
@@ -67,10 +67,10 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 pub enum ServerError {
     #[error("invalid SSH host key")]
     SshKey(#[source] Box<directory::SshKeyError>),
-    #[error("Crab runtime failed")]
+    #[error("Cellule runtime failed")]
     Runtime(#[from] Error),
-    #[error("Crab LTX failed")]
-    Ltx(#[from] CrabError),
+    #[error("Cellule LTX failed")]
+    Ltx(#[from] LtxError),
     #[error("object storage failed")]
     Storage(#[from] StorageError),
     #[error("server I/O failed")]
@@ -403,7 +403,7 @@ impl RunningServer {
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
-        // Crab permits 10,000 active Cells; reserve one for Directory takeover.
+        // Cellule permits 10,000 active Cells; reserve one for Directory takeover.
         if !(1..10_000).contains(&config.max_active_repositories) {
             return Err(ServerError::Http(
                 "max_active_repositories must be between 1 and 9999",
@@ -727,7 +727,7 @@ async fn acquire_sql_cell(
     spec: SqlCellSpec<'_>,
     session: SessionId,
     endpoint: &str,
-) -> Result<crab_cell_runtime::cell::actor::CellHandle, ServerError> {
+) -> Result<cellule_runtime::cell::actor::CellHandle, ServerError> {
     let target = spec.target;
     let registry = node.application().registry();
     let code = registry
@@ -755,8 +755,8 @@ pub(crate) async fn acquire_provisioned_sql_cell(
     spec: SqlCellSpec<'_>,
     session: SessionId,
     endpoint: &str,
-    proof: crab_cell_runtime::cell::catalog::CatalogProof,
-) -> Result<crab_cell_runtime::cell::actor::CellHandle, ServerError> {
+    proof: cellule_runtime::cell::catalog::CatalogProof,
+) -> Result<cellule_runtime::cell::actor::CellHandle, ServerError> {
     let SqlCellSpec {
         target,
         module: _,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::server::{LEASE_MS, RENEW_INTERVAL, renew_node_lease, workspace};
-use crab_cell_runtime::{
+use cellule_runtime::{
     NodeLeaseGuard, SessionId, node::NodeAdvertisement, node::NodeCapacity, node::NodeFailureDomain,
 };
 use tokio::sync::Mutex;

@@ -73,7 +73,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
                 let _ = entered.send(());
                 released
                     .recv_timeout(std::time::Duration::from_secs(4))
-                    .map_err(|source| crab_cell_runtime::Error::Facility {
+                    .map_err(|source| cellule_runtime::Error::Facility {
                         name: "test release",
                         source: Box::new(source),
                     })?;
@@ -180,7 +180,7 @@ async fn queued_credentials_expire_at_execution_and_cannot_create_or_revoke_auth
 #[tokio::test(flavor = "multi_thread")]
 async fn issuance_window_and_expiry_release_capacity_without_deleting_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
     };
     let application = Arc::new(CanopyApplication::compile(build_descriptor(

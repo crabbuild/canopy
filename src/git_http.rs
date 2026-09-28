@@ -16,7 +16,7 @@ use crate::{
     git_input::{GitInput, MAX_FETCH_REQUEST_BYTES},
 };
 use bytes::Bytes;
-use crab_ltx::DiskBudget;
+use cellule_ltx::DiskBudget;
 use futures_core::Stream;
 use tokio_util::task::AbortOnDropHandle;
 

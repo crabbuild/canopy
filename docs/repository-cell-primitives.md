@@ -21,18 +21,18 @@ in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Crab revision is `311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`.
+The pinned Cellule revision is `75462e46c203256fb3fe70903908103f619d99b2`.
 Read-only inspection establishes the following constraints in that source:
 
 | Surface | Existing contract | Required change |
 | --- | --- | --- |
-| `crab-cell-runtime/src/cell/catalog.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
-| `crab-cell-runtime/src/primitives/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
-| `crab-cell-runtime/src/primitives/queue/api.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
-| `crab-cell-runtime/src/primitives/workflow/api.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
-| `crab-cell-runtime/src/registry/schemas/validation.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
-| `crab-cell-runtime/src/primitives/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
-| `crab-cell-runtime/src/registry/handlers.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
+| `cellule-runtime/src/cell/catalog/mod.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
+| `cellule-runtime/src/primitives/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
+| `cellule-runtime/src/primitives/queue/api/mod.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
+| `cellule-runtime/src/primitives/workflow/api/mod.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
+| `cellule-runtime/src/registry/schemas/validation.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
+| `cellule-runtime/src/primitives/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
+| `cellule-runtime/src/registry/handlers.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
 
 Registering a queue command against the existing SQL namespace is insufficient:
 registry validation rejects it, and role-based work inspection would omit live
@@ -77,10 +77,10 @@ close these gates.
    Measure what can sleep, what must stay owned, and what prevents transfer;
    do not infer that all waiting workflows are safely evictable.
 
-The user-authorized migration replaces Cellule with the current Crab runtime,
-app, host, LTX and storage crates. It does not patch upstream behavior or add a
-vendor override. Future runtime implementation work belongs in an isolated Crab
-checkout with its own Cargo target directory, preserving other active work.
+The current dependency cutover uses Cellule's runtime, app, host, LTX and store
+crates. It does not patch upstream behavior or add a vendor override. Future
+runtime implementation work belongs in an isolated Cellule checkout with its
+own Cargo target directory, preserving other active work.
 
 ## Canopy integration after the runtime contract is ready
 

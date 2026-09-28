@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crab_ltx::{CrabError, DiskBudget, DiskReservation};
+use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::{
@@ -27,7 +27,7 @@ pub enum CacheError {
     #[error("Git cache I/O failed")]
     Io(#[from] io::Error),
     #[error("Git cache disk admission failed")]
-    Budget(#[from] CrabError),
+    Budget(#[from] LtxError),
     #[error("Git blob hydration failed")]
     Blob(#[from] LargeBlobError),
     #[error("Git cache worker failed")]
@@ -37,7 +37,7 @@ pub enum CacheError {
 impl CacheError {
     pub(crate) fn is_admission(&self) -> bool {
         matches!(self, Self::Budget(_))
-            || matches!(self, Self::Io(error) if error.get_ref().is_some_and(|source| source.is::<CrabError>()))
+            || matches!(self, Self::Io(error) if error.get_ref().is_some_and(|source| source.is::<LtxError>()))
     }
 }
 

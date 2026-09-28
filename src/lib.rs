@@ -2,8 +2,8 @@
 
 use std::sync::OnceLock;
 
-use crab_cell_app::{ApplicationBuilder, ApplicationHandle, CellApplication, CellType};
-use crab_cell_runtime::{
+use cellule_app::{ApplicationBuilder, ApplicationHandle, CellApplication, CellType};
+use cellule_runtime::{
     ApplicationId, BuildDescriptor, CellModule, CellTarget, Committed, Digest, Error,
     MigrationDescriptor, ModuleDescriptor, NamespaceDescriptor, NamespaceId, Observed, Receipt,
     RegistryBuilder, SqlCell, SqlModule, TenantId, cell::catalog::CatalogRole,
@@ -62,8 +62,8 @@ pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 // This is a format boundary, not a repository quota.
 pub const REPOSITORY_DATABASE_LIMIT_BYTES: u64 = (u32::MAX as u64 - 1) * 65_536;
 
-pub(crate) fn replica_limits(database: u64, capture: u64) -> crab_ltx::Limits {
-    crab_ltx::Limits {
+pub(crate) fn replica_limits(database: u64, capture: u64) -> cellule_ltx::Limits {
+    cellule_ltx::Limits {
         max_database_bytes: database,
         max_capture_bytes: capture,
         // LTX validates these against addressable index space. Snapshots and
@@ -108,7 +108,7 @@ pub fn repository_target(
     tenant: TenantId,
     application: ApplicationId,
     repository: [u8; 16],
-) -> crab_cell_runtime::Result<CellTarget> {
+) -> cellule_runtime::Result<CellTarget> {
     validate_repository_id(repository)?;
     CellTarget::new(
         tenant,
@@ -118,7 +118,7 @@ pub fn repository_target(
     )
 }
 
-pub(crate) fn validate_repository_id(repository: [u8; 16]) -> crab_cell_runtime::Result<()> {
+pub(crate) fn validate_repository_id(repository: [u8; 16]) -> cellule_runtime::Result<()> {
     if !(1..=8).contains(&(repository[6] >> 4)) || repository[8] >> 6 != 2 {
         return Err(Error::Identity("repository UUID is not canonical"));
     }
@@ -245,7 +245,7 @@ impl CellModule for RepositoryModule {
         })
     }
 
-    fn register(self, registry: &mut RegistryBuilder) -> crab_cell_runtime::Result<()> {
+    fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<FinalizePush>()?;
         registry.bind_command::<push::CompletePush>()?;
@@ -263,7 +263,7 @@ pub struct CanopyApplication;
 impl CellApplication for CanopyApplication {
     const NAME: &'static str = "canopy";
 
-    fn register(builder: &mut ApplicationBuilder) -> crab_cell_runtime::Result<()> {
+    fn register(builder: &mut ApplicationBuilder) -> cellule_runtime::Result<()> {
         builder.register(directory::DirectoryModule)?;
         builder.register(RepositoryModule)?;
         builder.cell_type(directory::cell_type()?)?;
@@ -271,7 +271,7 @@ impl CellApplication for CanopyApplication {
     }
 }
 
-fn repository_cell_type() -> crab_cell_runtime::Result<CellType> {
+fn repository_cell_type() -> cellule_runtime::Result<CellType> {
     CellType::new(
         RepositoryModule::NAME,
         "repository",
@@ -306,7 +306,7 @@ impl RepositoryCell {
         target: CellTarget,
         id: [u8; 16],
         object_format: ObjectFormat,
-    ) -> crab_cell_runtime::Result<Self> {
+    ) -> cellule_runtime::Result<Self> {
         if target != repository_target(target.tenant(), target.application(), id)? {
             return Err(Error::Identity("repository UUID differs from Cell target"));
         }
@@ -322,9 +322,9 @@ impl RepositoryCell {
     /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.
     pub async fn finalize_push(
         &self,
-        identity: crab_cell_runtime::MutationIdentity,
+        identity: cellule_runtime::MutationIdentity,
         plan: PushPlan,
-    ) -> std::result::Result<Committed<bool>, crab_cell_runtime::InvocationError<bool>> {
+    ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
         self.prepare_graph(&plan).await?;
         self.prepare_branch_proofs(&plan).await?;
         self.application
@@ -338,7 +338,7 @@ impl RepositoryCell {
         minimum: Option<Receipt>,
     ) -> std::result::Result<
         Observed<Option<(ObjectKind, Vec<u8>)>>,
-        crab_cell_runtime::InvocationError<Vec<crab_cell_runtime::primitives::sql::SqlResultSet>>,
+        cellule_runtime::InvocationError<Vec<cellule_runtime::primitives::sql::SqlResultSet>>,
     > {
         let result = self
             .sql
@@ -368,7 +368,7 @@ impl RepositoryCell {
             upload,
         ] = row.as_slice()
         else {
-            return Err(crab_cell_runtime::InvocationError::NotStarted(
+            return Err(cellule_runtime::InvocationError::NotStarted(
                 Error::Command("invalid stored object row"),
             ));
         };
@@ -378,7 +378,7 @@ impl RepositoryCell {
             "commit" => ObjectKind::Commit,
             "tag" => ObjectKind::Tag,
             _ => {
-                return Err(crab_cell_runtime::InvocationError::NotStarted(
+                return Err(cellule_runtime::InvocationError::NotStarted(
                     Error::Command("invalid stored object kind"),
                 ));
             }
@@ -391,7 +391,7 @@ impl RepositoryCell {
             }
             (SqlValue::Null, SqlValue::Blob(upload)) => {
                 let invalid = || {
-                    crab_cell_runtime::InvocationError::NotStarted(Error::Command(
+                    cellule_runtime::InvocationError::NotStarted(Error::Command(
                         "invalid object chunk reference",
                     ))
                 };
@@ -405,7 +405,7 @@ impl RepositoryCell {
                 .await?
             }
             _ => {
-                return Err(crab_cell_runtime::InvocationError::NotStarted(
+                return Err(cellule_runtime::InvocationError::NotStarted(
                     Error::Command("invalid stored object body"),
                 ));
             }
@@ -413,7 +413,7 @@ impl RepositoryCell {
         if object_id(oid.format(), kind, &body) != oid
             || blake3::hash(&body).as_bytes() != digest.as_slice()
         {
-            return Err(crab_cell_runtime::InvocationError::NotStarted(
+            return Err(cellule_runtime::InvocationError::NotStarted(
                 Error::Command("corrupt stored object"),
             ));
         }

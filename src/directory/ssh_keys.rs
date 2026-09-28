@@ -202,7 +202,7 @@ impl DirectoryCell {
                 page.rows
                     .iter()
                     .map(|row| key_info(row))
-                    .collect::<crab_cell_runtime::Result<Vec<_>>>()
+                    .collect::<cellule_runtime::Result<Vec<_>>>()
                     .map_err(InvocationError::NotStarted)?,
             )
         } else {
@@ -321,14 +321,14 @@ fn changed(
     })
 }
 
-fn key_scope(scope: &str) -> crab_cell_runtime::Result<TokenScope> {
+fn key_scope(scope: &str) -> cellule_runtime::Result<TokenScope> {
     match TokenScope::parse(scope) {
         Some(scope @ (TokenScope::Read | TokenScope::Write)) => Ok(scope),
         _ => Err(Error::Command("invalid SSH key scope")),
     }
 }
 
-fn key_info(row: &[SqlValue]) -> crab_cell_runtime::Result<SshKeyInfo> {
+fn key_info(row: &[SqlValue]) -> cellule_runtime::Result<SshKeyInfo> {
     let [
         SqlValue::Blob(id),
         SqlValue::Blob(fingerprint),

@@ -260,7 +260,7 @@ fn changed(
     state: &RepositoryHttp,
     result: Result<
         PullChange,
-        crab_cell_runtime::InvocationError<Vec<crab_cell_runtime::primitives::sql::SqlResultSet>>,
+        cellule_runtime::InvocationError<Vec<cellule_runtime::primitives::sql::SqlResultSet>>,
     >,
     created: bool,
 ) -> Response<Body> {

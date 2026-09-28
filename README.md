@@ -1,7 +1,7 @@
 # Canopy
 
-Canopy is an independent Git hosting service built on `crab-cell-runtime`,
-`crab-cell-app` and `crab-cell-host`. The dedicated `canopy-server` crate owns its product schema, Git gateway and HTTP API. A
+Canopy is an independent Git hosting service built on `cellule-runtime`,
+`cellule-app` and `cellule-host`. The dedicated `canopy-server` crate owns its product schema, Git gateway and HTTP API. A
 Directory Cell maps an owner and repository name to a stable UUID. Each UUID
 identifies its own SQLite Repository Cell. Ordinary Git objects, refs and LFS
 metadata live in that Cell; large Git blob and LFS bytes use immutable
@@ -14,7 +14,7 @@ See [Git compatibility](docs/git-compatibility.md) for verified operations,
 current limits and remaining transport and object-format qualification.
 
 This repository is an implementation under construction. The `canopy` binary
-starts one leased Crab Cell node and serves repositories created through its API.
+starts one leased Cellule node and serves repositories created through its API.
 It probes the object store's fencing capabilities, publishes and renews a signed node
 advertisement, and restores the repository Cell from object storage when its
 local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
@@ -810,17 +810,17 @@ A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
-`Cargo.toml` pins the Crab Cell crates and their storage/LTX dependencies to
-Crab `main` revision `311105eb864ca90fc08bf62d3bfa6ef5c8991e2a`. Canopy remains a
-separate product crate and builds without a local Crab checkout. There are no
-Cellule, Crab CLI/server or Xet dependencies.
+`Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to revision
+`75462e46c203256fb3fe70903908103f619d99b2`. Canopy remains a separate
+product crate and builds without a local Cellule checkout. There are no Crab
+product/server or Xet dependencies.
 
-Use a **fresh storage prefix** for this build. Crab derives a 33-byte entity
+Use a **fresh storage prefix** for this build. Cellule derives a 33-byte entity
 partition from the repository UUID; the UUID is also persisted in repository
-SQLite for backup recovery. This is a hard cutover: previous Cellule
+SQLite for backup recovery. This is a hard cutover: previous runtime
 prefixes/backups are unsupported. Startup rejects unmarked application roots,
 and release admission rejects a different compiled release. See the
-[runtime integration contract](docs/contracts.md#crab-cell-integration).
+[runtime integration contract](docs/contracts.md#cellule-integration).
 
 Before ref publication, bounded certificate batches verify the durable Git
 graph: commit trees and parents, tree entries and tag targets must exist with

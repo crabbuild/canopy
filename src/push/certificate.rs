@@ -90,7 +90,7 @@ pub(super) fn certificate_complete(
     context: &CommandContext<'_, '_>,
     push_id: [u8; 16],
     certificate: &CertificateMeta,
-) -> crab_cell_runtime::Result<bool> {
+) -> cellule_runtime::Result<bool> {
     if certificate.size <= 0 || certificate.signer.is_empty() || certificate.key.is_empty() {
         return Ok(false);
     }

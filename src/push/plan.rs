@@ -68,7 +68,7 @@ impl StagedPlan {
         context: &CommandContext<'_, '_>,
         response: [u8; 16],
         actor: &str,
-    ) -> crab_cell_runtime::Result<PushPlan> {
+    ) -> cellule_runtime::Result<PushPlan> {
         let mut digest = blake3::Hasher::new();
         let mut updates = Vec::new();
         let parts = self.updates.div_ceil(UPDATES_PER_CHUNK);

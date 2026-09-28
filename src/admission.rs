@@ -1,7 +1,7 @@
 //! Bounded account shares of node work, retained until the last worker exits.
 
 use crate::ReadIdentity;
-use crab_cell_runtime::Error;
+use cellule_runtime::Error;
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},

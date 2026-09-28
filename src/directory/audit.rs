@@ -80,7 +80,7 @@ impl DirectoryCell {
                 page.rows
                     .iter()
                     .map(|row| event(row))
-                    .collect::<crab_cell_runtime::Result<Vec<_>>>()
+                    .collect::<cellule_runtime::Result<Vec<_>>>()
                     .map_err(InvocationError::NotStarted)?,
             )
         } else {
@@ -93,7 +93,7 @@ impl DirectoryCell {
     }
 }
 
-fn event(row: &[SqlValue]) -> crab_cell_runtime::Result<AccountEvent> {
+fn event(row: &[SqlValue]) -> cellule_runtime::Result<AccountEvent> {
     let [
         SqlValue::Integer(id),
         SqlValue::Integer(occurred_at_ms),
@@ -140,7 +140,7 @@ fn event(row: &[SqlValue]) -> crab_cell_runtime::Result<AccountEvent> {
     })
 }
 
-fn token_id(value: &SqlValue) -> crab_cell_runtime::Result<Option<[u8; 16]>> {
+fn token_id(value: &SqlValue) -> cellule_runtime::Result<Option<[u8; 16]>> {
     match value {
         SqlValue::Null => Ok(None),
         SqlValue::Blob(bytes) => bytes

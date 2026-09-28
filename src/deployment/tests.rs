@@ -1,7 +1,7 @@
 use super::*;
 use crate::{CanopyApplication, RepositoryModule, build_descriptor, repository_target};
-use crab_cell_app::CellApplication;
-use crab_cell_runtime::{
+use cellule_app::CellApplication;
+use cellule_runtime::{
     ApplicationId, CellModule, TenantId, cell::catalog::CatalogEntry, cell::catalog::CatalogRole,
 };
 use object_store::{ObjectStoreExt, memory::InMemory};
@@ -185,7 +185,7 @@ async fn corrupted_selected_descriptor_closes_admission() -> TestResult {
 
 #[tokio::test]
 async fn expired_advertisement_is_not_drain_evidence() -> TestResult {
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         SessionId, identity::NodeId, node::NodeAdvertisement, node::NodeCapacity,
         node::NodeFailureDomain,
     };
@@ -225,7 +225,7 @@ async fn expired_advertisement_is_not_drain_evidence() -> TestResult {
 
 fn recovery_config(data_dir: std::path::PathBuf) -> WorkerConfig {
     WorkerConfig {
-        node: crab_cell_runtime::identity::NodeId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
+        node: cellule_runtime::identity::NodeId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
         signing_key: ed25519_dalek::SigningKey::from_bytes(&[21; 32]),
         endpoint: "https://recovery.example.invalid".into(),
         data_dir,
@@ -234,7 +234,7 @@ fn recovery_config(data_dir: std::path::PathBuf) -> WorkerConfig {
 }
 
 async fn advertise_owner(deployment: &Deployment, expired: bool) -> TestResult {
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         SessionId, identity::NodeId, node::NodeAdvertisement, node::NodeCapacity,
         node::NodeFailureDomain,
     };
@@ -263,7 +263,7 @@ async fn advertise_owner(deployment: &Deployment, expired: bool) -> TestResult {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_recovery_initializes_abandoned_catalog_and_unpublished_owner() -> TestResult {
-    use crab_cell_runtime::{SessionId, control::Owner, identity::IncarnationId};
+    use cellule_runtime::{SessionId, control::Owner, identity::IncarnationId};
     let deployment = fixture()?;
     deployment.initialize().await?;
     advertise_owner(&deployment, true).await?;
@@ -338,7 +338,7 @@ async fn maintenance_recovery_cannot_fence_a_live_owner_or_another_operation() -
     let files = tempfile::TempDir::new()?;
     let operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
     deployment.begin_maintenance(operation).await?;
-    let owner = crab_cell_runtime::SessionId::from_bytes([6; 16]);
+    let owner = cellule_runtime::SessionId::from_bytes([6; 16]);
     let before = deployment
         .nodes
         .load(owner, crate::server::unix_now_ms()?)
@@ -375,7 +375,7 @@ async fn maintenance_recovery_cannot_fence_a_live_owner_or_another_operation() -
 
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_recovery_rejects_missing_published_root() -> TestResult {
-    use crab_cell_runtime::{
+    use cellule_runtime::{
         SessionId, control::Owner, control::RootRef, control::Transition, identity::IncarnationId,
     };
     let deployment = fixture()?;

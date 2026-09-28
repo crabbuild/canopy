@@ -1,6 +1,6 @@
 //! Durable symbolic HEAD, versioned with the repository's ref snapshot.
 
-use crab_cell_runtime::{
+use cellule_runtime::{
     Committed, Error, InvocationError, MutationIdentity, Observed, Receipt,
     primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
     primitives::sql::SqlValue,
@@ -78,7 +78,7 @@ pub(crate) fn valid_default_branch(reference: &str) -> bool {
     reference.starts_with("refs/heads/") && valid_ref_name(reference)
 }
 
-pub(crate) fn decode_head(row: &[SqlValue]) -> crab_cell_runtime::Result<DefaultBranch> {
+pub(crate) fn decode_head(row: &[SqlValue]) -> cellule_runtime::Result<DefaultBranch> {
     match row {
         [SqlValue::Integer(generation), SqlValue::Text(reference), ..]
             if *generation >= 0 && valid_default_branch(reference) =>

@@ -13,11 +13,11 @@ axum = "0.8.9"
 base64 = "0.22"
 blake3 = "1.8"
 bytes = "1.11"
-crab-cell-app = { git = "https://github.com/crabbuild/crab.git", rev = "311105eb864ca90fc08bf62d3bfa6ef5c8991e2a" }
-crab-cell-host = { git = "https://github.com/crabbuild/crab.git", rev = "311105eb864ca90fc08bf62d3bfa6ef5c8991e2a" }
-crab-ltx = { git = "https://github.com/crabbuild/crab.git", rev = "311105eb864ca90fc08bf62d3bfa6ef5c8991e2a", features = ["replica"] }
-crab-cell-runtime = { git = "https://github.com/crabbuild/crab.git", rev = "311105eb864ca90fc08bf62d3bfa6ef5c8991e2a" }
-crab-storage = { git = "https://github.com/crabbuild/crab.git", rev = "311105eb864ca90fc08bf62d3bfa6ef5c8991e2a" }
+cellule-app = { git = "https://github.com/crabbuild/cellule.git", rev = "75462e46c203256fb3fe70903908103f619d99b2" }
+cellule-host = { git = "https://github.com/crabbuild/cellule.git", rev = "75462e46c203256fb3fe70903908103f619d99b2" }
+cellule-ltx = { git = "https://github.com/crabbuild/cellule.git", rev = "75462e46c203256fb3fe70903908103f619d99b2", features = ["replica"] }
+cellule-runtime = { git = "https://github.com/crabbuild/cellule.git", rev = "75462e46c203256fb3fe70903908103f619d99b2" }
+cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "75462e46c203256fb3fe70903908103f619d99b2" }
 ed25519-dalek = "2"
 flate2 = "1.1"
 futures-core = "0.3"
@@ -40,7 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.49", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 tower = { version = "0.5", features = ["util"] }
-uuid = { version = "1.24", features = ["v4"] }
+uuid = { version = "=1.24.0", features = ["v4"] }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]

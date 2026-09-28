@@ -1,6 +1,6 @@
 use super::ServerError;
 use bytes::Bytes;
-use crab_storage::{StorageError, Store};
+use cellule_store::{StorageError, Store};
 use object_store::path::Path;
 
 pub(crate) async fn probe(store: &Store, prefix: &Path) -> Result<(), ServerError> {

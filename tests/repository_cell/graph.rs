@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use canopy_server::{ObjectKind, PushPlan, RefUpdate, RepositoryCell, RepositoryModule, object_id};
-use crab_cell_runtime::{
+use cellule_runtime::{
     InvocationError, MutationIdentity, SqlCell, identity::RequestId, primitives::sql::SqlBatch,
     primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
@@ -74,8 +74,8 @@ async fn certificates(sql: &SqlCell<RepositoryModule>) -> Result<Vec<SqlValue>> 
 pub async fn verify(
     repository: &RepositoryCell,
     sql: &SqlCell<RepositoryModule>,
-    application: &crab_cell_app::ApplicationHandle<canopy_server::CanopyApplication>,
-    target: &crab_cell_runtime::CellTarget,
+    application: &cellule_app::ApplicationHandle<canopy_server::CanopyApplication>,
+    target: &cellule_runtime::CellTarget,
 ) -> Result<()> {
     let blob_body = b"graph closure leaf";
     let blob = object_id(
@@ -366,11 +366,11 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
 // A separately encoded client invokes the registered server command. Its local
 // handler cannot run, so these checks exercise the actual wire trust boundary.
 struct CertificateInput(Vec<canopy_server::ObjectId>);
-impl crab_cell_runtime::codec::WireValue for CertificateInput {
+impl cellule_runtime::codec::WireValue for CertificateInput {
     fn encode(
         &self,
-        encoder: &mut crab_cell_runtime::codec::BoundedEncoder,
-    ) -> std::result::Result<(), crab_cell_runtime::codec::CodecError> {
+        encoder: &mut cellule_runtime::codec::BoundedEncoder,
+    ) -> std::result::Result<(), cellule_runtime::codec::CodecError> {
         encoder.write_count(self.0.len())?;
         for oid in &self.0 {
             encoder.write_bytes(oid)?;
@@ -378,25 +378,25 @@ impl crab_cell_runtime::codec::WireValue for CertificateInput {
         Ok(())
     }
     fn decode(
-        _: &mut crab_cell_runtime::codec::BoundedDecoder<'_>,
-    ) -> std::result::Result<Self, crab_cell_runtime::codec::CodecError> {
-        Err(crab_cell_runtime::codec::CodecError::Invalid(
+        _: &mut cellule_runtime::codec::BoundedDecoder<'_>,
+    ) -> std::result::Result<Self, cellule_runtime::codec::CodecError> {
+        Err(cellule_runtime::codec::CodecError::Invalid(
             "client fixture is encode-only",
         ))
     }
 }
 struct CertificateCommand;
-impl crab_cell_runtime::Command for CertificateCommand {
+impl cellule_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 6;
     const CODEC_VERSION: u32 = 2;
     type Input = CertificateInput;
     type Output = bool;
     fn execute(
-        _: &mut crab_cell_runtime::registry::CommandContext<'_, '_>,
+        _: &mut cellule_runtime::registry::CommandContext<'_, '_>,
         _: Self::Input,
-    ) -> crab_cell_runtime::Result<crab_cell_runtime::registry::CommandResult<bool>> {
-        Err(crab_cell_runtime::Error::Command(
+    ) -> cellule_runtime::Result<cellule_runtime::registry::CommandResult<bool>> {
+        Err(cellule_runtime::Error::Command(
             "client fixture handler must not execute",
         ))
     }

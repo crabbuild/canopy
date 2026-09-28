@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crab_cell_runtime::{
+use cellule_runtime::{
     CellModule, Command, Committed, Error, InvocationError, MutationIdentity, Observed,
     codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError, codec::WireValue,
     primitives::sql::SqlBatch, primitives::sql::SqlResultSet, primitives::sql::SqlStatement,
@@ -166,7 +166,7 @@ impl Command for PutObjects {
     fn execute(
         context: &mut CommandContext<'_, '_>,
         batch: Self::Input,
-    ) -> crab_cell_runtime::Result<CommandResult<()>> {
+    ) -> cellule_runtime::Result<CommandResult<()>> {
         let identity = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
                 sql: "SELECT object_format FROM repository_identity WHERE singleton = 1".into(),

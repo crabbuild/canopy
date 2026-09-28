@@ -4,7 +4,7 @@
 mod store;
 
 use canopy_server::server::{CanopyServer, ServerConfig};
-use crab_cell_runtime::{ApplicationId, Digest, TenantId, identity::NodeId};
+use cellule_runtime::{ApplicationId, Digest, TenantId, identity::NodeId};
 use ed25519_dalek::SigningKey;
 use object_store::ObjectStore;
 use serde_json::{Value, json};

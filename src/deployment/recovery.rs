@@ -9,13 +9,13 @@ use crate::{
         renew_node_lease, unix_now_ms, workspace,
     },
 };
-use crab_cell_app::CellApplication;
-use crab_cell_host::CellNodeBuilder;
-use crab_cell_runtime::{
+use cellule_app::CellApplication;
+use cellule_host::CellNodeBuilder;
+use cellule_ltx::{DiskBudget, Host};
+use cellule_runtime::{
     CellModule, CellTarget, NodeLeaseGuard, SessionId, cell::worker::SqlWorkerPool,
     identity::NodeId, node::NodeAdvertisement, node::NodeCapacity, node::NodeFailureDomain,
 };
-use crab_ltx::{DiskBudget, Host};
 use ed25519_dalek::SigningKey;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
