@@ -21,10 +21,15 @@ pub(super) async fn receive(
     ));
     let mut upload = Upload::new(store.clone(), stage).await?;
     let result = async {
-        let object = parts(&mut upload, oid, body, declared, admission.clone()).await?;
-        upload
-            .publish(&lfs_path(repository_id, &oid), object.size)
+        let body = parts(&mut upload, oid, body, declared, admission.clone()).await?;
+        let parts_digest = upload
+            .publish_lfs(&lfs_path(repository_id, &oid), body.size, &body.digests)
             .await?;
+        let object = LfsObject {
+            sha256: oid,
+            size: body.size,
+            parts_digest,
+        };
         verify_lfs_object(store.clone(), repository_id, object, admission).await?;
         Ok::<_, LfsError>(object)
     }
@@ -42,16 +47,21 @@ pub(super) async fn receive(
 
 struct Hashes {
     sha256: Sha256,
-    blake3: blake3::Hasher,
     size: u64,
+    digests: Vec<[u8; 32]>,
     _admission: Option<Arc<AdmissionPermit>>,
+}
+
+struct UploadedBody {
+    size: u64,
+    digests: Vec<[u8; 32]>,
 }
 
 impl Hashes {
     async fn update(mut self, bytes: Bytes) -> Result<(Self, Bytes), LfsError> {
         Ok(tokio::task::spawn_blocking(move || {
             self.sha256.update(&bytes);
-            self.blake3.update(&bytes);
+            self.digests.push(*blake3::hash(&bytes).as_bytes());
             self.size += bytes.len() as u64;
             (self, bytes)
         })
@@ -65,11 +75,11 @@ async fn parts(
     body: Body,
     declared: Option<u64>,
     admission: Option<Arc<AdmissionPermit>>,
-) -> Result<LfsObject, LfsError> {
+) -> Result<UploadedBody, LfsError> {
     let mut hashes = Hashes {
         sha256: Sha256::new(),
-        blake3: blake3::Hasher::new(),
         size: 0,
+        digests: Vec::new(),
         _admission: admission,
     };
     let mut input = body.into_data_stream();
@@ -110,9 +120,8 @@ async fn parts(
     if hashes.sha256.finalize().as_slice() != oid {
         return Err(LfsError::Corrupt);
     }
-    Ok(LfsObject {
-        sha256: oid,
+    Ok(UploadedBody {
         size: hashes.size,
-        blake3: *hashes.blake3.finalize().as_bytes(),
+        digests: hashes.digests,
     })
 }
