@@ -715,8 +715,9 @@ push publication path.
 
 SSH prepares advertised ref/tag targets before negotiation and hydrates non-blob
 history reachable from each request's wants before forwarding them to Git.
-Exact `blob:none` requests hydrate only explicit missing blobs. Other requests
-apply the native filter while selecting missing reachable blobs, before
+Unfiltered requests hydrate reachable blobs in the same certified Cell graph
+walk. Exact `blob:none` requests hydrate only explicit missing blobs. Other
+requests apply the native filter while selecting missing reachable blobs, before
 forwarding wants to native Git. Tree and object-type constraints skip omitted
 bodies; size filters still load missing bodies because native Git needs their sizes.
 Git LFS can use the same SSH key: `git-lfs-authenticate` returns the configured
