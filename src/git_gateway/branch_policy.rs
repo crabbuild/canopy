@@ -17,6 +17,7 @@ pub(super) enum PushCommands {
         options_requested: bool,
         options: Vec<String>,
         certificate_options: Option<Vec<String>>,
+        certificate_body: Option<Vec<u8>>,
         options_error: Option<&'static str>,
     },
 }
@@ -66,6 +67,15 @@ impl PushCommands {
         }
     }
 
+    pub(super) fn certificate(&self) -> Option<&[u8]> {
+        match self {
+            Self::Parsed {
+                certificate_body, ..
+            } => certificate_body.as_deref(),
+            Self::OtherMedia | Self::Limited => None,
+        }
+    }
+
     pub(super) fn option_error(&self) -> Option<&'static str> {
         let Self::Parsed {
             options,
@@ -110,6 +120,56 @@ impl PushCommands {
 }
 
 impl GitGateway {
+    pub(super) async fn install_certificate_policy(
+        &self,
+        cached: &CachedRepository,
+        commands: &PushCommands,
+        actor: &str,
+    ) -> Result<Option<std::path::PathBuf>, GatewayError> {
+        let Some(directory) = &self.signer_directory else {
+            return Ok(None);
+        };
+        if commands.certificate().is_none() {
+            return Ok(None);
+        }
+        let signers = directory
+            .push_signers(actor)
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+        let mut body = Vec::new();
+        for signer in signers {
+            body.extend_from_slice(format!("{actor} {}\n", signer.public_key()).as_bytes());
+        }
+        let path = cached.backend.cache.store_push_signers(body).await?;
+        let receipt = quote(
+            &cached
+                .backend
+                .git_dir()
+                .join("hooks/canopy-push-certificate")
+                .display()
+                .to_string(),
+        );
+        let actor = quote(actor);
+        let script = format!(
+            "#!/bin/sh\n\
+            if [ -z \"${{GIT_PUSH_CERT-}}\" ]; then exit 0; fi\n\
+            if [ \"${{GIT_PUSH_CERT_STATUS-}}\" != G ] || [ \"${{GIT_PUSH_CERT_SIGNER-}}\" != {actor} ]; then\n\
+              printf '%s\\n' 'Canopy signed push signature or signer is invalid' >&2; exit 1\n\
+            fi\n\
+            case \"${{GIT_PUSH_CERT_NONCE_STATUS-}}\" in OK|SLOP) ;; *) printf '%s\\n' 'Canopy signed push nonce is invalid' >&2; exit 1 ;; esac\n\
+            if [ -z \"${{GIT_PUSH_CERT_KEY-}}\" ]; then\n\
+              printf '%s\\n' 'Canopy signed push key is missing' >&2; exit 1\n\
+            fi\n\
+            printf '%s\\n%s\\n%s\\n' \"$GIT_PUSH_CERT\" \"$GIT_PUSH_CERT_SIGNER\" \"$GIT_PUSH_CERT_KEY\" > {receipt}\n"
+        );
+        cached
+            .backend
+            .cache
+            .store_receive_hook(ReceiveHook::PreReceive, script.into_bytes())
+            .await?;
+        Ok(Some(path))
+    }
+
     pub(super) async fn install_branch_policy(
         &self,
         cached: &CachedRepository,
@@ -221,6 +281,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
     let mut names = BTreeSet::new();
     let mut certificate = None;
     let mut certificate_options: Option<Vec<String>> = None;
+    let mut certificate_body: Option<Vec<u8>> = None;
     loop {
         let header = bytes.get(..4).ok_or(InputError::Commands)?;
         if !header.iter().all(u8::is_ascii_hexdigit) {
@@ -241,6 +302,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
                 options_requested,
                 options: Vec::new(),
                 certificate_options,
+                certificate_body,
                 options_error: None,
             });
         }
@@ -252,6 +314,12 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
         if let Some(state) = &mut certificate {
             // These ref names feed policy and SSH pack detection only. This
             // parser does not verify a signature or authorize publication.
+            if payload != b"push-cert-end\n" {
+                certificate_body
+                    .as_mut()
+                    .ok_or(InputError::Commands)?
+                    .extend_from_slice(payload);
+            }
             match state {
                 Certificate::Headers if payload == b"\n" => *state = Certificate::Updates,
                 Certificate::Headers
@@ -307,6 +375,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             }
             certificate = Some(Certificate::Headers);
             certificate_options = Some(Vec::new());
+            certificate_body = Some(Vec::new());
             continue;
         }
         parse_update(payload, &mut updates, &mut names)?;

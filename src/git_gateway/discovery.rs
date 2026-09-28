@@ -62,7 +62,8 @@ impl GitGateway {
             &snapshot.head,
             self.repository.object_format(),
         )
-        .await?;
+        .await?
+        .with_nonce(self.certificate_nonce().await?);
         let mut pending: BTreeSet<_> = snapshot
             .refs
             .values()

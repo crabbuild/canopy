@@ -17,12 +17,13 @@ use crate::{
     PushPlan, RepositoryCell, RepositoryModule, git_http::GitHttpResponse, refs::apply_refs,
 };
 
-/// One completed push's authenticated, durable option annotation.
+/// One completed push's authenticated, durable audit annotation.
 #[derive(Debug, serde::Serialize)]
 pub struct PushReceipt {
     pub id: String,
     pub actor: String,
     pub options: Vec<String>,
+    pub certificate: Option<PushCertificateReceipt>,
 }
 
 pub(crate) fn valid_options(options: &[String]) -> bool {
@@ -36,7 +37,11 @@ pub(crate) fn valid_options(options: &[String]) -> bool {
         })
 }
 
+mod certificate;
 mod plan;
+pub use certificate::PushCertificateReceipt;
+pub(crate) use certificate::VerifiedPushCertificate;
+use certificate::{CertificateMeta, certificate_complete};
 pub(crate) mod report;
 use plan::StagedPlan;
 
@@ -72,14 +77,22 @@ impl RepositoryCell {
     ) -> Result<Option<PushReceipt>, PushError> {
         crate::directory::validate_component(actor).map_err(cell)?;
         let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-            sql: format!("SELECT actor, options FROM pushes WHERE id = ?2 AND response_id IS NOT NULL AND (actor = ?1 OR EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)) AND ({READ_ACCESS})"),
+            sql: format!("SELECT p.actor, p.options, c.digest, c.signer, c.key, c.recorded_at_ms FROM pushes p LEFT JOIN push_certificates c ON c.push_id = p.id WHERE p.id = ?2 AND p.response_id IS NOT NULL AND (p.actor = ?1 OR EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?1)) AND ({READ_ACCESS})"),
             parameters: vec![SqlValue::Text(actor.into()), SqlValue::Blob(id.to_vec())],
         }]}).await.map_err(cell)?;
         let set = result.output.first().ok_or(PushError::InvalidResponse)?;
         let Some(row) = set.rows.first() else {
             return Ok(None);
         };
-        let [SqlValue::Text(author), SqlValue::Text(options)] = row.as_slice() else {
+        let [
+            SqlValue::Text(author),
+            SqlValue::Text(options),
+            digest,
+            signer,
+            key,
+            recorded_at_ms,
+        ] = row.as_slice()
+        else {
             return Err(PushError::InvalidResponse);
         };
         let options: Vec<String> =
@@ -87,10 +100,26 @@ impl RepositoryCell {
         if !valid_options(&options) {
             return Err(PushError::InvalidResponse);
         }
+        let certificate = match (digest, signer, key, recorded_at_ms) {
+            (SqlValue::Null, SqlValue::Null, SqlValue::Null, SqlValue::Null) => None,
+            (
+                SqlValue::Blob(digest),
+                SqlValue::Text(signer),
+                SqlValue::Text(key),
+                SqlValue::Integer(recorded_at_ms),
+            ) if digest.len() == 32 && *recorded_at_ms >= 0 => Some(PushCertificateReceipt {
+                sha256: hex::encode(digest),
+                signer: signer.clone(),
+                key: key.clone(),
+                recorded_at_ms: *recorded_at_ms,
+            }),
+            _ => return Err(PushError::InvalidResponse),
+        };
         Ok(Some(PushReceipt {
             id: uuid::Uuid::from_bytes(id).to_string(),
             actor: author.clone(),
             options,
+            certificate,
         }))
     }
 
@@ -104,14 +133,14 @@ impl RepositoryCell {
                 None,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql: "SELECT response_id, rejected FROM pushes WHERE id = ?1".into(),
+                        sql: "SELECT response_id, rejected, rejection_reason FROM pushes WHERE id = ?1".into(),
                         parameters: vec![SqlValue::Blob(push_id.to_vec())],
                     }],
                 },
             )
             .await
             .map_err(cell)?;
-        let Some([SqlValue::Blob(id), SqlValue::Integer(rejected)]) = result
+        let Some([SqlValue::Blob(id), SqlValue::Integer(rejected), reason]) = result
             .output
             .first()
             .and_then(|set| set.rows.first())
@@ -126,9 +155,10 @@ impl RepositoryCell {
                     .map_err(|_| PushError::InvalidResponse)?,
             )
             .await?;
-        match rejected {
-            0 => Ok(response),
-            1 => report::rejected_report(&response, report::REJECTED),
+        match (rejected, reason) {
+            (0, SqlValue::Null) => Ok(response),
+            (1, SqlValue::Null) => report::rejected_report(&response, report::REJECTED),
+            (1, SqlValue::Text(reason)) => report::rejected_report(&response, reason),
             _ => Err(PushError::InvalidResponse),
         }
     }
@@ -289,6 +319,11 @@ impl RepositoryCell {
                 "invalid push options",
             )));
         }
+        let certificate = if let Some(certificate) = &input.certificate {
+            Some(self.stage_push_certificate(input.id, certificate).await?)
+        } else {
+            None
+        };
         if let Some(plan) = &input.plan {
             self.prepare_graph(plan).await?;
             self.prepare_branch_proofs(plan).await?;
@@ -320,6 +355,7 @@ impl RepositoryCell {
             response_id: input.response_id,
             options: input.options,
             plan,
+            certificate,
         };
         let identity = identity().map_err(|_| {
             InvocationError::NotStarted(Error::Command("push mutation clock failed"))
@@ -337,6 +373,7 @@ pub(crate) struct PushCompletion {
     pub response_id: [u8; 16],
     pub options: Vec<String>,
     pub plan: Option<PushPlan>,
+    pub certificate: Option<VerifiedPushCertificate>,
 }
 
 pub(crate) struct CompletePushInput {
@@ -346,6 +383,7 @@ pub(crate) struct CompletePushInput {
     response_id: [u8; 16],
     options: Vec<String>,
     plan: Option<StagedPlan>,
+    certificate: Option<CertificateMeta>,
 }
 
 impl WireValue for CompletePushInput {
@@ -361,6 +399,13 @@ impl WireValue for CompletePushInput {
         if let Some(plan) = &self.plan {
             plan.encode(encoder)?;
         }
+        encoder.write_bool(self.certificate.is_some())?;
+        if let Some(certificate) = &self.certificate {
+            encoder.write_bytes(&certificate.digest)?;
+            encoder.write_u64(certificate.size as u64)?;
+            encoder.write_text(&certificate.signer)?;
+            encoder.write_text(&certificate.key)?;
+        }
         Ok(())
     }
     fn decode(decoder: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
@@ -373,6 +418,17 @@ impl WireValue for CompletePushInput {
                 .map_err(|_| CodecError::Invalid("push options"))?,
             plan: if decoder.read_bool()? {
                 Some(StagedPlan::decode(decoder)?)
+            } else {
+                None
+            },
+            certificate: if decoder.read_bool()? {
+                Some(CertificateMeta {
+                    digest: fixed(decoder)?,
+                    size: i64::try_from(decoder.read_u64()?)
+                        .map_err(|_| CodecError::Invalid("invalid certificate size"))?,
+                    signer: decoder.read_text()?.into(),
+                    key: decoder.read_text()?.into(),
+                })
             } else {
                 None
             },
@@ -392,7 +448,7 @@ pub(crate) struct CompletePush;
 impl Command for CompletePush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 4;
-    const CODEC_VERSION: u32 = 5;
+    const CODEC_VERSION: u32 = 6;
     type Input = CompletePushInput;
     type Output = bool;
 
@@ -419,7 +475,31 @@ impl Command for CompletePush {
         if !response_complete(context, input.id, input.response_id)? {
             return Ok(CommandResult::Rejected(false));
         }
-        let rejected = if let Some(plan) = &input.plan {
+        // The final Cell decision must bind the signed principal to the push actor.
+        if let Some(certificate) = &input.certificate
+            && (certificate.signer != input.actor
+                || !certificate_complete(context, input.id, certificate)?)
+        {
+            return Ok(CommandResult::Rejected(false));
+        }
+        let replay = if let Some(certificate) = &input.certificate {
+            let rows = context.sql(&SqlBatch {
+                statements: vec![SqlStatement {
+                    sql: "SELECT push_id FROM push_certificates WHERE digest = ?1".into(),
+                    parameters: vec![SqlValue::Blob(certificate.digest.to_vec())],
+                }],
+            })?;
+            !rows
+                .first()
+                .ok_or(Error::Command("missing certificate replay result"))?
+                .rows
+                .is_empty()
+        } else {
+            false
+        };
+        let rejected = if replay {
+            true
+        } else if let Some(plan) = &input.plan {
             let plan = plan.load(context, input.response_id, &input.actor)?;
             // apply_refs returns false only before any writes. A policy/CAS/ACL
             // refusal records rejection without publishing refs; SQL failures
@@ -430,17 +510,28 @@ impl Command for CompletePush {
             // bound outcome even if write permission was revoked after admission.
             false
         };
+        if let Some(certificate) = &input.certificate
+            && !replay
+        {
+            // Keep the exact signed bytes with the decision. A second push ID
+            // cannot publish the same certificate, even after ref ABA or takeover.
+            context.sql(&SqlBatch { statements: vec![SqlStatement {
+                sql: "INSERT INTO push_certificates (digest, push_id, actor, signer, key, size, recorded_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)".into(),
+                parameters: vec![SqlValue::Blob(certificate.digest.to_vec()), SqlValue::Blob(input.id.to_vec()), SqlValue::Text(input.actor.clone()), SqlValue::Text(certificate.signer.clone()), SqlValue::Text(certificate.key.clone()), SqlValue::Integer(certificate.size), SqlValue::Integer(context.now_ms())],
+            }]})?;
+        }
         // Publishing the response in the ref transaction makes a lost HTTP reply replayable.
         // Staged chunks from interrupted attempts are never returned as completed outcomes.
         context.sql(&SqlBatch {
             statements: vec![SqlStatement {
-                sql: "UPDATE pushes SET response_id = ?1, rejected = ?3, options = ?4 WHERE id = ?2 AND response_id IS NULL"
+                sql: "UPDATE pushes SET response_id = ?1, rejected = ?3, options = ?4, rejection_reason = ?5 WHERE id = ?2 AND response_id IS NULL"
                     .into(),
                 parameters: vec![
                     SqlValue::Blob(input.response_id.to_vec()),
                     SqlValue::Blob(input.id.to_vec()),
                     SqlValue::Integer(i64::from(rejected)),
                     SqlValue::Text(serde_json::to_string(&input.options).map_err(|_| Error::Command("invalid push options"))?),
+                    if replay { SqlValue::Text("Canopy signed push certificate was already used".into()) } else { SqlValue::Null },
                 ],
             }],
         })?;
@@ -452,6 +543,14 @@ impl Command for CompletePush {
                 parameters: vec![SqlValue::Blob(input.response_id.to_vec())],
             }],
         })?;
+        if replay {
+            context.sql(&SqlBatch {
+                statements: vec![SqlStatement {
+                    sql: "DELETE FROM push_certificate_chunks WHERE push_id = ?1".into(),
+                    parameters: vec![SqlValue::Blob(input.id.to_vec())],
+                }],
+            })?;
+        }
         Ok(CommandResult::Success(true))
     }
 }

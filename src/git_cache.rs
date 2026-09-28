@@ -219,6 +219,18 @@ impl GitCache {
         .await?
     }
 
+    pub(crate) async fn store_push_signers(
+        self: &Arc<Self>,
+        bytes: Vec<u8>,
+    ) -> Result<PathBuf, CacheError> {
+        let cache = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            cache.write_file("hooks/canopy-push-signers", &bytes)?;
+            Ok(cache.git_dir().join("hooks/canopy-push-signers"))
+        })
+        .await?
+    }
+
     pub(crate) async fn store_object(
         self: &Arc<Self>,
         oid: crate::ObjectId,

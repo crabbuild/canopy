@@ -94,7 +94,25 @@ CREATE TABLE pushes (
     options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 32768),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     rejected INTEGER CHECK(rejected IN (0, 1)),
+    rejection_reason TEXT,
     CHECK((response_id IS NULL) = (rejected IS NULL))
+) WITHOUT ROWID;
+
+CREATE TABLE push_certificates (
+    digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
+    push_id BLOB NOT NULL UNIQUE REFERENCES pushes(id),
+    actor TEXT NOT NULL,
+    signer TEXT NOT NULL,
+    key TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK(size > 0),
+    recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms >= 0)
+) WITHOUT ROWID;
+
+CREATE TABLE push_certificate_chunks (
+    push_id BLOB NOT NULL REFERENCES pushes(id),
+    part INTEGER NOT NULL CHECK(part >= 0),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
+    PRIMARY KEY(push_id, part)
 ) WITHOUT ROWID;
 
 CREATE TABLE push_responses (

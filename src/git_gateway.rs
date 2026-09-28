@@ -15,7 +15,7 @@ use axum::body::Body;
 use crab_cell_runtime::{MutationIdentity, identity::RequestId};
 use crab_ltx::DiskBudget;
 use object_store::ObjectStore;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
     INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
@@ -64,6 +64,8 @@ pub enum GatewayError {
     Git(String),
     #[error("Git cache contains malformed data")]
     MalformedCache,
+    #[error("{0}")]
+    Certificate(&'static str),
     #[error("Git object ingestion failed")]
     Objects(#[from] ObjectReadError),
     #[error("repository refs kept changing during snapshot acquisition")]
@@ -98,6 +100,8 @@ struct RefSnapshot {
 /// Serves Git requests from a warm, disposable cache of durable Cell state.
 pub struct GitGateway {
     repository: Arc<RepositoryCell>,
+    signer_directory: Option<Arc<crate::directory::DirectoryCell>>,
+    certificate_seed: OnceCell<[u8; 32]>,
     large_blobs: LargeBlobStore,
     lfs: LfsService,
     scratch_root: PathBuf,
@@ -118,6 +122,8 @@ impl GitGateway {
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
         Self {
             repository,
+            signer_directory: None,
+            certificate_seed: OnceCell::new(),
             large_blobs,
             lfs,
             scratch_root,
@@ -126,6 +132,26 @@ impl GitGateway {
             objects: Mutex::new(None),
             push: Mutex::new(()),
         }
+    }
+
+    pub(crate) fn with_signer_directory(
+        mut self,
+        directory: Arc<crate::directory::DirectoryCell>,
+    ) -> Self {
+        self.signer_directory = Some(directory);
+        self
+    }
+
+    async fn certificate_nonce(&self) -> Result<Option<[u8; 32]>, GatewayError> {
+        if self.signer_directory.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(
+            *self
+                .certificate_seed
+                .get_or_try_init(|| async { self.repository.push_certificate_seed().await })
+                .await?,
+        ))
     }
 
     pub fn lfs(&self) -> &LfsService {
@@ -203,7 +229,8 @@ impl GitGateway {
                 &head.output.reference,
                 self.repository.object_format(),
             )
-            .await?;
+            .await?
+            .with_nonce(self.certificate_nonce().await?);
             backend.stream(request, ()).await?
         } else if discovery::is_ref_discovery(&request).await? {
             if let Some(cached) = self.current_cache().await? {
@@ -348,6 +375,8 @@ impl GitGateway {
                 Some(Arc::clone(&shared.cache)),
             )
             .await?,
+            nonce_seed: self.certificate_nonce().await?,
+            signers: None,
         };
         backend.cache.store_refs(&snapshot.refs).await?;
         Ok(CachedRepository { backend, snapshot })

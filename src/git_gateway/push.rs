@@ -9,18 +9,27 @@ impl GitGateway {
         digest: [u8; 32],
     ) -> Result<GitHttpResponse, GatewayError> {
         let commands = branch_policy::PushCommands::read(&request).await?;
-        let option_error = commands.option_error();
+        let option_error = commands.option_error().or_else(|| {
+            (commands.certificate().is_some() && self.signer_directory.is_none())
+                .then_some("Canopy signed pushes are unavailable on this gateway")
+        });
         let prepared = async {
             if let Some(reason) = option_error {
                 let response = commands
                     .rejection(reason)?
                     .ok_or(GatewayError::MalformedCache)?;
-                return Ok::<_, GatewayError>((response, None));
+                return Ok::<_, GatewayError>((response, None, None));
             }
             let cached = self.build_cache(self.cell_refs().await?, true).await?;
             self.install_branch_policy(&cached, &commands).await?;
+            let signers = self.install_certificate_policy(&cached, &commands, actor).await?;
             let before = cached.snapshot.refs.clone();
-            let mut response = cached.backend.run(request).await?;
+            let backend = signers.map_or_else(
+                || cached.backend.clone(),
+                |path| cached.backend.with_signers(path),
+            );
+            let mut response = backend.run(request).await?;
+            let certificate = self.verified_certificate(&cached, &commands, actor).await?;
             // Git may accept some refs and reject others unless atomic was requested.
             // Publish its actual changes before returning any successful per-ref report.
             let plan = if response.status == 200 {
@@ -50,10 +59,10 @@ impl GitGateway {
             } else {
                 None
             };
-            Ok::<_, GatewayError>((response, plan))
+            Ok::<_, GatewayError>((response, plan, certificate))
         }
         .await;
-        let (response, plan) = match prepared {
+        let (response, plan, certificate) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 let reason = match &error {
@@ -62,13 +71,14 @@ impl GitGateway {
                     {
                         "Canopy push failed before publication: cache disk budget exhausted"
                     }
+                    GatewayError::Certificate(reason) => reason,
                     _ => "Canopy push failed before publication; retry after server recovery",
                 };
                 let Some(response) = commands.rejection(reason)? else {
                     return Err(error);
                 };
                 tracing::warn!(push_id = %hex::encode(id), error = ?error, "Git push failed before publication");
-                (response, None)
+                (response, None, None)
             }
         };
         let options = if option_error.is_some() {
@@ -91,6 +101,7 @@ impl GitGateway {
                 response_id,
                 options,
                 plan,
+                certificate,
             })
             .await
             .map_err(|error| GatewayError::Cell(Box::new(error)))?;
@@ -101,5 +112,62 @@ impl GitGateway {
             self.repository.completed_response(id).await?,
             id,
         ))
+    }
+
+    async fn verified_certificate(
+        &self,
+        cached: &CachedRepository,
+        commands: &branch_policy::PushCommands,
+        actor: &str,
+    ) -> Result<Option<crate::push::VerifiedPushCertificate>, GatewayError> {
+        let Some(body) = commands.certificate() else {
+            return Ok(None);
+        };
+        let path = cached
+            .backend
+            .git_dir()
+            .join("hooks/canopy-push-certificate");
+        let receipt = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|_| GatewayError::Certificate("Canopy signed push verification failed"))?;
+        let mut lines = receipt.lines();
+        let (Some(oid), Some(signer), Some(key), None) =
+            (lines.next(), lines.next(), lines.next(), lines.next())
+        else {
+            return Err(GatewayError::Certificate(
+                "Canopy signed push verification failed",
+            ));
+        };
+        let oid = crate::ObjectId::from_hex(oid).map_err(|_| {
+            GatewayError::Certificate("Canopy signed push certificate ID is invalid")
+        })?;
+        if oid.format() != self.repository.object_format()
+            || oid != crate::object_id(oid.format(), ObjectKind::Blob, body)
+            || signer != actor
+        {
+            return Err(GatewayError::Certificate(
+                "Canopy signed push certificate does not match verified bytes",
+            ));
+        }
+        let directory = self
+            .signer_directory
+            .as_ref()
+            .ok_or(GatewayError::Certificate(
+                "Canopy signed push signer is unavailable",
+            ))?;
+        let signers = directory
+            .push_signers(actor)
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+        if !signers.iter().any(|signer| signer.fingerprint() == key) {
+            return Err(GatewayError::Certificate(
+                "Canopy signed push key is no longer authorized",
+            ));
+        }
+        Ok(Some(crate::push::VerifiedPushCertificate {
+            body: body.to_vec(),
+            signer: signer.into(),
+            key: key.into(),
+        }))
     }
 }

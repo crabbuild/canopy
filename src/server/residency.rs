@@ -470,12 +470,15 @@ impl RepositoryManager {
             entry.repository_id,
             entry.object_format,
         )?);
-        let gateway = Arc::new(GitGateway::new(
-            Arc::clone(&repository),
-            self.local.path().to_path_buf(),
-            Arc::clone(&self.external_store),
-            self.disk_budget.clone(),
-        ));
+        let gateway = Arc::new(
+            GitGateway::new(
+                Arc::clone(&repository),
+                self.local.path().to_path_buf(),
+                Arc::clone(&self.external_store),
+                self.disk_budget.clone(),
+            )
+            .with_signer_directory(Arc::clone(&self.directory)),
+        );
         let router = self.router_for(entry, Arc::clone(&gateway))?;
         Ok(LoadedRepository {
             repository,

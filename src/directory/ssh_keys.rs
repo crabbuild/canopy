@@ -96,6 +96,35 @@ pub enum SshKeyChange {
 }
 
 impl DirectoryCell {
+    pub(crate) async fn push_signers(
+        &self,
+        account: &str,
+    ) -> Result<Vec<SshKey>, InvocationError<Vec<SqlResultSet>>> {
+        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
+            sql: "SELECT k.public_key FROM ssh_keys k JOIN accounts a ON a.name = k.account WHERE k.account = ?1 AND k.scope = 'write' AND k.enabled = 1 AND a.enabled = 1 ORDER BY k.id".into(),
+            parameters: vec![SqlValue::Text(account.into())],
+        }]}).await?;
+        result
+            .output
+            .first()
+            .ok_or_else(|| {
+                InvocationError::NotStarted(Error::Command("missing push signer result"))
+            })?
+            .rows
+            .iter()
+            .map(|row| {
+                let [SqlValue::Text(key)] = row.as_slice() else {
+                    return Err(InvocationError::NotStarted(Error::Command(
+                        "invalid push signer",
+                    )));
+                };
+                SshKey::parse(key).map_err(|_| {
+                    InvocationError::NotStarted(Error::Command("invalid stored push signer"))
+                })
+            })
+            .collect()
+    }
+
     /// Resolves an enabled key and account; the SSH transport must verify possession.
     pub async fn ssh_identity(
         &self,

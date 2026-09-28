@@ -53,7 +53,7 @@ pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
 pub use object_chunks::ObjectStageError;
-pub use push::{PushError, PushReceipt};
+pub use push::{PushCertificateReceipt, PushError, PushReceipt};
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
@@ -78,7 +78,7 @@ const SCHEMA: &str = include_str!("schema.sql");
 const COMMANDS: [OperationDescriptor; 9] = [
     operation(1),
     operation_with_codec(3, 4),
-    operation_with_codec(4, 5),
+    operation_with_codec(4, 6),
     operation_with_codec(5, 3),
     operation_with_codec(6, 2),
     operation_with_codec(7, 2),

@@ -1603,13 +1603,23 @@ through a durable Git report before native pack processing or ref publication.
 If a client frames a push certificate, its signed `push-option` headers must
 match the separate option group exactly, and certificate commands cannot be
 mixed with ordinary commands. A mismatch gets the same durable Git rejection.
-Push certificates are not advertised or trusted yet.
+For signed pushes, native receive-pack advertises a nonce derived from the
+Repository Cell's persistent seed. Git verifies the SSH signature against only
+the authenticated account's active write-scoped SSH keys. A pre-receive hook
+requires a good signature, matching account principal and a nonce issued within
+the 300-second receive window. The gateway matches Git's certificate object ID
+to the exact packet-line certificate bytes and rechecks the key before Cell
+completion. A different push ID cannot reuse the same signed bytes: the final
+ref transaction records the certificate SHA-256 digest or rejects the update.
+The certificate body remains in SQLite chunks with its signer, key and Cell
+recording time. Exact request-ID retries replay the original push response.
 Completed notes are stored in the same `CompletePush` transaction as the Git
 response and refs. `GET /api/repositories/<name>/pushes/<UUID>` returns the push
-author and notes to the current repository owner or the author while they retain
+author, notes and optional certificate SHA-256, signer, key and recording time to
+the current repository owner or the author while they retain
 read access; other readers receive 404. A missing or unfinished push also returns
 404. Notes are audit metadata; they do not run hooks or alter checks. This
-unreleased schema and operation 4 codec 5 require a fresh development prefix.
+unreleased schema and operation 4 codec 6 require a fresh development prefix.
 Policy reads use batches of at most 128 statements. An `(enabled, reference)`
 index bounds the presence probe; rule and requirement primary keys and the
 check-attempt index bound final policy lookups.

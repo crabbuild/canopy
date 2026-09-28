@@ -627,6 +627,11 @@ The Cell records ref publication or rejection atomically with the response
 selection; an exact completed retry returns the same report without reapplying
 refs. Clients that decline report-status receive HTTP 409 on a late rejection.
 
+Signed pushes use `git push --signed=true` with `gpg.format=ssh` and a
+`user.signingkey` whose public key is registered with write scope on the
+authenticated Canopy account. Git verifies the signature and nonce; the Repository Cell
+records certificate bytes and prevents replay under a different push ID.
+
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
 own account's tokens; the configured owner can manage any account's tokens:
 

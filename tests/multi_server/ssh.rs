@@ -113,6 +113,99 @@ async fn known_host(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn signed_sha256_ssh_push_survives_fresh_disk_restore() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let workspace = tempfile::TempDir::new()?;
+    let host = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[19; 32]).into(),
+        "canopy-test",
+    )?;
+    let address = available_address().await?;
+    let server = CanopyServer::start(
+        server_config(address, workspace.path().join("first"), &host)?,
+        Arc::clone(&store),
+    )
+    .await?;
+    reqwest::Client::new()
+        .post(format!("http://{address}/api/repositories"))
+        .bearer_auth(AUTH)
+        .json(&serde_json::json!({"name":"signed-sha256","object_format":"sha256"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let client_key = key(workspace.path(), "signing-key").await?;
+    register(address, "canopy", &client_key, "write").await?;
+    let known = workspace.path().join("known_hosts");
+    let ssh_address = server.ssh_addr().ok_or("SSH listener missing")?;
+    known_host(&known, ssh_address, &host).await?;
+    let ssh = transport(&client_key, &known)?;
+    let source = workspace.path().join("source");
+    git(
+        None,
+        &ssh,
+        &[
+            "init",
+            "--object-format=sha256",
+            "-b",
+            "main",
+            path_str(&source)?,
+        ],
+    )
+    .await?;
+    git(Some(&source), &ssh, &["config", "user.name", "Canopy Test"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["config", "user.email", "test@example.invalid"],
+    )
+    .await?;
+    tokio::fs::write(source.join("file"), b"signed sha256 ssh\n").await?;
+    git(Some(&source), &ssh, &["add", "file"]).await?;
+    git(
+        Some(&source),
+        &ssh,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "Signed"],
+    )
+    .await?;
+    let signing_key = format!("user.signingkey={}", client_key.display());
+    let url = format!("ssh://git@{ssh_address}/canopy/signed-sha256.git");
+    git(
+        Some(&source),
+        &ssh,
+        &[
+            "-c",
+            "gpg.format=ssh",
+            "-c",
+            &signing_key,
+            "push",
+            "--signed=true",
+            &url,
+            "HEAD:refs/heads/main",
+        ],
+    )
+    .await?;
+    server.shutdown().await?;
+    let restored_address = available_address().await?;
+    let restored = CanopyServer::start(
+        server_config(restored_address, workspace.path().join("restored"), &host)?,
+        store,
+    )
+    .await?;
+    let ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
+    known_host(&known, ssh_address, &host).await?;
+    let url = format!("ssh://git@{ssh_address}/canopy/signed-sha256.git");
+    let clone = workspace.path().join("clone");
+    git(None, &ssh, &["clone", &url, path_str(&clone)?]).await?;
+    assert_eq!(
+        tokio::fs::read(clone.join("file")).await?,
+        b"signed sha256 ssh\n"
+    );
+    git(Some(&clone), &ssh, &["fsck", "--strict", "--full"]).await?;
+    restored.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sha256_ssh_push_and_clone() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;

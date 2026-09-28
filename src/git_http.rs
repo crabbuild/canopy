@@ -76,8 +76,11 @@ pub struct GitHttpResponse<B = Vec<u8>> {
 }
 
 /// Disposable bare repository used only while serving Git wire requests.
+#[derive(Clone)]
 pub struct GitHttpBackend {
     pub(crate) cache: Arc<GitCache>,
+    pub(crate) nonce_seed: Option<[u8; 32]>,
+    pub(crate) signers: Option<PathBuf>,
 }
 
 impl GitHttpBackend {
@@ -94,7 +97,22 @@ impl GitHttpBackend {
     ) -> Result<Self, GitHttpError> {
         Ok(Self {
             cache: GitCache::create(scratch_root, budget, head, object_format).await?,
+            nonce_seed: None,
+            signers: None,
         })
+    }
+
+    pub(crate) fn with_nonce(mut self, seed: Option<[u8; 32]>) -> Self {
+        self.nonce_seed = seed;
+        self
+    }
+
+    pub(crate) fn with_signers(&self, path: PathBuf) -> Self {
+        Self {
+            cache: Arc::clone(&self.cache),
+            nonce_seed: self.nonce_seed,
+            signers: Some(path),
+        }
     }
 
     /// Runs Git on decoded input and collects a bounded reply for durable push publication.
@@ -162,6 +180,18 @@ impl GitHttpBackend {
                 "core.hooksPath={}",
                 self.git_dir().join("hooks").display()
             ));
+        if let Some(seed) = self.nonce_seed {
+            process
+                .arg("-c")
+                .arg(format!("receive.certNonceSeed={}", hex::encode(seed)));
+            process.args(["-c", "receive.certNonceSlop=300"]);
+        }
+        if let Some(signers) = &self.signers {
+            process.args(["-c", "gpg.format=ssh"]);
+            process
+                .arg("-c")
+                .arg(format!("gpg.ssh.allowedSignersFile={}", signers.display()));
+        }
         Ok(process)
     }
 

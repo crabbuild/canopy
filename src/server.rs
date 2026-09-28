@@ -169,7 +169,7 @@ struct RunningServer {
 }
 
 pub(crate) struct RepositoryManager {
-    directory: DirectoryCell,
+    directory: Arc<DirectoryCell>,
     peer: peer::NodePeer,
     node: Arc<CellNode>,
     layout: CellStorageLayout,
@@ -570,7 +570,7 @@ impl RunningServer {
                 ));
             }
             let manager = Arc::new(RepositoryManager {
-                directory: directory_cell,
+                directory: Arc::new(directory_cell),
                 peer: peer.clone(),
                 node: Arc::clone(&node),
                 layout: layout.clone(),
