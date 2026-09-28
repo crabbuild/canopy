@@ -36,15 +36,15 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Surface | Current behavior | Acceptance gate |
 | --- | --- | --- |
 | Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete, atomic generation and command-limit rejection qualified against isolated RustFS | Full-capacity and cloud-provider scale qualification remain |
-| Rejection reporting | Branch policy, unsupported names, command limits, late Cell refusals, ingestion and preparation failures produce durable Git reports when commands are decoded and completion is available; clients declining reports receive HTTP 409; fenced or unavailable Git gateway Cells return HTTP 503 | Incomplete uploads, unparsed commands and unavailable/uncertain response publication can still return transport errors; qualify the remaining failure matrix |
-| Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
+| Rejection reporting | Branch policy, unsupported names, command limits, late Cell refusals, ingestion and preparation failures produce durable Git reports when commands are decoded and completion is available; clients declining reports receive HTTP 409 | Incomplete uploads, unparsed commands and unavailable/uncertain response publication can still return transport errors; qualify the remaining failure matrix |
+| Ref names | UTF-8 only; no total-length product cap. Stock mirror push and fresh-disk clone cover names above 255 bytes; byte-bounded Cell ref pages preserve longer-name scans; native Git and the host filesystem still impose path constraints | Define raw-byte and filesystem-equivalent-name scope; qualify long paths across platforms |
 | Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled; filtered clone and lazy fetch pass against isolated RustFS | Qualify large histories and cloud providers; select sparse-pattern scope explicitly |
 | Cold fetch | HTTP and SSH hydrate ref/tag targets and non-blob history reachable from requested wants; exact `blob:none` adds explicit blob wants only; native tree/type/combined filters select missing reachable blobs before hydration | Narrow size-filter hydration; measure cold/warm bytes and latency at scale |
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested; full transfer matrix runs against isolated RustFS | Storage failures, owner-loss, cloud-provider and capacity qualification |
 | Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
 | Signed pushes | The production gateway advertises a nonce. Native Git verifies the SSH signature; Canopy binds the signer to the authenticated account's active write key, retains certificate bytes, and rejects duplicate signed bytes in the ref transaction | The isolated RustFS gate covers HTTP SHA-1 and SSH SHA-256 with fresh-disk recovery; qualify malformed certificates, owner loss and large certificate staging, then define an audit export contract |
 | SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
-| Advanced LFS | HTTP basic transfers, verified tail-range download resume, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, optimize large-offset resume reads and qualify cloud providers |
+| Advanced LFS | HTTP basic transfers, part-verified tail-range download resume without prefix reads, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, rerun the greater-than-5 GiB gate for the new manifest, and qualify cloud providers |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
 Signed commits and signed tags are ordinary stored Git objects; **signed push
@@ -52,7 +52,8 @@ certificates are a different feature**. LFS uses SHA-256 content IDs independent
 
 Canopy imposes no fixed product byte quota on push bodies, Repository Cell
 SQLite databases, Git blobs, LFS objects, or individual SQLite Git objects.
-External bodies use immutable 8 MiB parts and a 16-byte manifest, so the S3
+External bodies use immutable 8 MiB parts. Git blobs have a 16-byte manifest;
+LFS manifests add one 32-byte digest per part, anchored by SQLite. The S3
 adapter's single-part copy restriction does not bound logical file size. SQLite
 integer/page formats and available storage still impose physical limits.
 Node resource admission, bounded batch/chunk sizes, protocol validation, the

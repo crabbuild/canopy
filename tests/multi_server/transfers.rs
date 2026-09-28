@@ -66,6 +66,20 @@ async fn lfs_tail_range_resumes_after_restore_and_keeps_hash_verification()
         Some((bytes.len() - start) as u64)
     );
     assert_eq!(response.bytes().await?, bytes[start..]);
+    let skipped = StorePath::from(format!(
+        "{prefix}/repos/{}/lfs/{oid}.parts/0000000000000000",
+        id.simple()
+    ));
+    store.delete(&skipped).await?;
+    let skipped_start = 8 * 1024 * 1024 + 7;
+    let skipped_range = format!("bytes={skipped_start}-{}", bytes.len() - 1);
+    let response = client
+        .get(&endpoint)
+        .bearer_auth("local-test-token")
+        .header(reqwest::header::RANGE, &skipped_range)
+        .send()
+        .await?;
+    assert_eq!(response.bytes().await?, bytes[skipped_start..]);
     let response = client
         .get(&endpoint)
         .bearer_auth("local-test-token")
@@ -91,7 +105,7 @@ async fn lfs_tail_range_resumes_after_restore_and_keeps_hash_verification()
     let response = client
         .get(&endpoint)
         .bearer_auth("local-test-token")
-        .header(reqwest::header::RANGE, range)
+        .header(reqwest::header::RANGE, skipped_range)
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);

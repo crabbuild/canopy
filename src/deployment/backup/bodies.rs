@@ -214,11 +214,11 @@ async fn read_page(
             let digest: Vec<u8> = row.get(2)?;
             let sha256: Vec<u8> = row.get(3)?;
             let size = u64::try_from(size).map_err(|_| BackupError::Invalid("invalid body size"))?;
-            let blake3 = digest.try_into().map_err(|_| BackupError::Invalid("invalid body digest"))?;
+            let digest = digest.try_into().map_err(|_| BackupError::Invalid("invalid body digest"))?;
             let sha256 = sha256.try_into().map_err(|_| BackupError::Invalid("invalid body SHA-256"))?;
             page.push(match kind {
-                BodyKind::Git => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3, sha256 }),
-                BodyKind::Lfs => Reference::Lfs(LfsObject { sha256, size, blake3 }),
+                BodyKind::Git => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3: digest, sha256 }),
+                BodyKind::Lfs => Reference::Lfs(LfsObject { sha256, size, parts_digest: digest }),
             });
         }
         Ok(page)

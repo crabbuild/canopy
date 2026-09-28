@@ -27,7 +27,7 @@ before admitting persistent customer repositories.
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
-| External bodies | No fixed logical byte quota; 8 MiB immutable parts plus a 16-byte manifest | Each conditional S3 copy handles one bounded part |
+| External bodies | No fixed logical byte quota; 8 MiB immutable parts, a 16-byte Git manifest or a part-digest LFS manifest | Each conditional S3 copy handles one bounded part |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout with no whole-transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | No receive-pack byte quota; 64 MiB for other requests; 120-second input idle deadline | anonymous request spool |
@@ -619,14 +619,17 @@ invalidates its reader. Hydration compresses into disk-accounted cache files on
 blocking workers; each writer retains the cache reservation until it exits.
 The ref generation is not published for Git service until hydration finishes.
 
-External objects consist of an immutable `CANOPY01` manifest (eight magic bytes,
-then an eight-byte little-endian logical size), and `<key>.parts/<16-digit hex
-index>` objects. Each part is at most 8 MiB; empty bodies have one empty part.
+External Git blobs use an immutable `CANOPY01` manifest (eight magic bytes,
+then an eight-byte little-endian logical size). LFS bodies use `CANOPY02` with
+one BLAKE3 digest per part after the size; SQLite pins the manifest's BLAKE3
+digest. The body bytes live at `<key>.parts/<16-digit hex index>`. Each part is
+at most 8 MiB; empty bodies have one empty part.
 Parts are conditionally copied before the manifest is created, and the whole
 logical body is reverified before SQLite metadata is published. Backup copies
 all referenced parts before copying the manifest. There is no whole-object S3
-copy and no fixed logical file-size quota. This storage cutover requires a fresh
-preview prefix; no old-body decoder or migration is provided.
+copy and no fixed logical file-size quota. `CANOPY02` replaces the previous LFS
+manifest and digest meaning. This hard cutover requires a fresh preview prefix
+or re-uploaded LFS bodies; no old-body decoder or migration is provided.
 
 Trees, commits and tags have no fixed byte quota, but publication and graph
 parsing currently materialize individual bodies. Available worker memory remains
@@ -2485,7 +2488,8 @@ Create copies the runtime pin/graph, then restores each pinned repository SQLite
 snapshot locally to enumerate external Git/LFS references. The pinned SQLite data
 is the body manifest: no second mutable index determines backup contents. Rows
 are paginated in batches of 256. Source and destination bytes must match the
-recorded size, SHA-256 and BLAKE3; Git blobs also match their Git OID. Body parts and manifests are
+recorded size and SHA-256; Git blobs also match their Git OID and whole-body
+BLAKE3, while LFS parts match the SQLite-anchored manifest. Body parts and manifests are
 conditionally copied before the completion CAS. Conflicting destination bodies
 must verify or the operation fails. Snapshot disk reservations cover each restored
 database and remain held until its scratch directory is removed. Capture admits
@@ -2525,13 +2529,14 @@ one tail range (`bytes=<start>-<last>` or `bytes=<start>-`) with `206` and
 
 An upload is supervised through reception, cleanup and SQLite publication. It
 holds shared node transfer admission even if the awaiting client disconnects.
-The body is consumed with backpressure into 8 MiB parts, hashing SHA-256/BLAKE3
+The body is consumed with backpressure into 8 MiB parts, hashing whole-body SHA-256 and each part with BLAKE3
 in blocking jobs that retain admission. Input size and known Content-Length are
 checked before completion. A hash mismatch, body error, excess length or timeout
 cannot complete a canonical object or publish its metadata. Received parts use
 unique parts under `repos/<uuid>/lfs-staging/<operation-uuid>.parts/`. After
 verification, conditional copies create/adopt canonical parts, then a create-only
-manifest records the logical size. Bounded reads verify the stored result. Staging deletion precedes the SQLite
+manifest records the logical size and part digests. SQLite stores its BLAKE3
+digest. Bounded reads verify the stored result. Staging deletion precedes the SQLite
 reference transaction, which still rechecks repository write access.
 
 Failed transfers abort unfinished multipart uploads and delete their staging
@@ -2544,15 +2549,15 @@ Downloads first verify the manifest and pin its ETag/version when present.
 Each read retrieves one part of at most 8 MiB. The final read rechecks the
 manifest before returning bytes. Part sizes must match exactly; collection
 rejects excess/truncated data.
-The reader hashes each part, withholding the final part until SHA-256 and
-BLAKE3 match SQLite. Thus a same-length corruption cannot satisfy HTTP's declared
+The reader verifies each part against the SQLite-anchored manifest before
+sending it. Full downloads also withhold the final part until whole-body SHA-256
+matches the LFS OID. Thus a same-length corruption cannot satisfy HTTP's declared
 Content-Length before verification. Earlier ranges may already have been sent;
 a late error terminates the transfer, and stock LFS additionally verifies its OID.
 Empty objects verify at stream opening. Read requests have 120-second deadlines.
-For resumed downloads, the server reads and hashes the skipped prefix before
-emitting the tail. This preserves full-object verification but makes server-side
-read work proportional to the full object size; part-level verification is needed
-before large-offset resumes can avoid rereading the prefix.
+For resumed downloads, the server starts at the part containing the requested
+offset and verifies only transmitted parts. The client still checks the complete
+reassembled file against its LFS SHA-256 OID.
 
 The same reader verifies backup source/destination LFS bodies, so increasing
 transfer size does not introduce an unbounded backup allocation. There is no
