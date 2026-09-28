@@ -14,7 +14,6 @@ use crate::{
 };
 
 pub(crate) const MAX_UPDATES: usize = 100_000;
-const MAX_REF_NAME_BYTES: usize = 255;
 pub(crate) const REF_PAGE_SIZE: usize = 256;
 
 /// A bounded ref page tied to one durable ref generation, including deletions.
@@ -480,7 +479,6 @@ fn existing_namespace_conflict(
 
 pub(crate) fn valid_ref_name(name: &str) -> bool {
     if !name.starts_with("refs/")
-        || name.len() > MAX_REF_NAME_BYTES
         || name.ends_with('/')
         || name.ends_with('.')
         || name.contains("@{")
@@ -526,6 +524,11 @@ mod tests {
             ]
             .map(String::from),
         );
+        names.push(format!(
+            "refs/heads/{}/{}",
+            "a".repeat(150),
+            "b".repeat(150)
+        ));
         for name in names {
             let native = std::process::Command::new("git")
                 .args(["check-ref-format", &name])
