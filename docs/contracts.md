@@ -756,18 +756,21 @@ arbitrary tree/blob wants. The index is populated with graph certificates and
 requires a fresh schema/release; there is no backfill or old-reader fallback.
 
 Fetch caches first hydrate ref tips and peeled tag targets for native discovery.
-After validating each request's wants, they page certified edges and hydrate only
-reachable non-blob structure. An exact `blob:none` request also hydrates explicit
+After validating each request's wants, they page certified edges. Unfiltered
+requests hydrate reachable non-blob structure and blob bodies in that one graph
+walk, without a second native enumeration. Filtered requests hydrate only
+non-blob structure first. An exact `blob:none` request also hydrates explicit
 blob wants; ordinary blob bodies stay absent until needed. Full-object sequence
 hydration remains for push/merge preparation. Reusing a fetch snapshot never
 skips a new requested closure. Shared immutable bytes and snapshot ownership use
 the same disk accounting and worker fences.
 
-Full fetches and other filters use native `rev-list --objects --missing=print`
+Other filters use native `rev-list --objects --missing=print`
 with requested OIDs on stdin, without `--all`, to enumerate missing reachable
 blobs. Filtered requests pass the same `--filter` specification to this walk;
 tree/type/combined filters can omit blobs without fetching their bodies. Explicit
-wants and tag chains are loaded first, followed by requested non-blob structure. Missing IDs stream in batches of at most 128 into the existing
+wants and tag chains are loaded first, followed by requested non-blob structure.
+Missing IDs stream in batches of at most 128 into the existing
 bounded Cell reads and verified cache writes. The shared object lock serializes
 hydration until the request can safely reach upload-pack. Enumeration process
 failures abort preparation. The shared native object walker also continues to
@@ -777,7 +780,7 @@ See [Git rev-list's missing-object contract](https://git-scm.com/docs/git-rev-li
 Size filters still load missing reachable blobs even when the client pack omits
 some: Git's [`filter_blobs_limit`](https://github.com/git/git/blob/v2.50.1/list-objects-filter.c)
 includes missing blobs when their sizes are unknown. Tree/type constraints in a
-combined filter still apply. Structural preparation pages only the requested
+combined filter still apply. Cell graph preparation pages only the requested
 graph but retains its visited OIDs in memory. Reverse traversal can visit the
 whole ancestor graph for an unreachable want. These costs require scale
 qualification; this is not a bounded-latency implementation. Local integration tests cover actual

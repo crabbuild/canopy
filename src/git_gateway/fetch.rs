@@ -117,8 +117,13 @@ impl GitGateway {
         let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
         let roots: Vec<_> = request.wants.iter().copied().collect();
         self.hydrate_selected(&shared.cache, request.wants).await?;
-        self.hydrate_structure(&shared.cache, &roots).await?;
-        if request.filter.as_deref() == Some("blob:none") {
+        let unfiltered = request.filter.is_none();
+        // The certified Cell graph already names every reachable blob. A full
+        // fetch can hydrate those bodies during the structural walk and avoid
+        // a second native traversal over the same cold history.
+        self.hydrate_structure(&shared.cache, &roots, unfiltered)
+            .await?;
+        if unfiltered || request.filter.as_deref() == Some("blob:none") {
             return Ok(());
         }
         // Use the same native filter as upload-pack. Structure is present, so
@@ -272,6 +277,7 @@ impl GitGateway {
         &self,
         cache: &Arc<GitCache>,
         roots: &[crate::ObjectId],
+        include_blobs: bool,
     ) -> Result<(), GatewayError> {
         let mut pending: BTreeSet<_> = roots.iter().copied().collect();
         let mut visited = BTreeSet::new();
@@ -283,6 +289,11 @@ impl GitGateway {
                 visited.insert(*oid);
             }
             let placeholders = vec!["?"; ids.len()].join(",");
+            let kind_filter = if include_blobs {
+                ""
+            } else {
+                "AND o.kind != 'blob'"
+            };
             let mut after_parent = Vec::new();
             let mut after_child = Vec::new();
             loop {
@@ -297,7 +308,7 @@ impl GitGateway {
                     SqlValue::Integer(MAX_OBJECTS as i64),
                 ]);
                 let result = self.repository.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-                    sql: format!("SELECT e.parent, e.child FROM object_edges e JOIN objects o ON o.oid = e.child WHERE e.parent IN ({placeholders}) AND o.kind != 'blob' AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
+                    sql: format!("SELECT e.parent, e.child, o.kind FROM object_edges e JOIN objects o ON o.oid = e.child WHERE e.parent IN ({placeholders}) {kind_filter} AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
                     parameters,
                 }] }).await.map_err(|error| GatewayError::Cell(Box::new(error)))?;
                 let rows = &result
@@ -305,8 +316,14 @@ impl GitGateway {
                     .first()
                     .ok_or(GatewayError::MalformedCache)?
                     .rows;
+                let mut blobs = Vec::new();
                 for row in rows {
-                    let [SqlValue::Blob(parent), SqlValue::Blob(child)] = row.as_slice() else {
+                    let [
+                        SqlValue::Blob(parent),
+                        SqlValue::Blob(child),
+                        SqlValue::Text(kind),
+                    ] = row.as_slice()
+                    else {
                         return Err(GatewayError::MalformedCache);
                     };
                     after_parent.clone_from(parent);
@@ -315,9 +332,16 @@ impl GitGateway {
                         .as_slice()
                         .try_into()
                         .map_err(|_| GatewayError::MalformedCache)?;
-                    if !visited.contains(&oid) {
+                    if kind == "blob" {
+                        if include_blobs && visited.insert(oid) {
+                            blobs.push(oid);
+                        }
+                    } else if !visited.contains(&oid) {
                         pending.insert(oid);
                     }
+                }
+                if !blobs.is_empty() {
+                    self.hydrate_objects(cache, blobs, &mut stats).await?;
                 }
                 if rows.len() < MAX_OBJECTS {
                     break;
@@ -329,6 +353,7 @@ impl GitGateway {
             repository = %hex::encode(self.repository.repository_id()),
             objects = stats.objects,
             bytes = stats.bytes,
+            include_blobs,
             "prepared reachable Git structure"
         );
         Ok(())
