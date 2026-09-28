@@ -1,6 +1,6 @@
 //! HTTP ingress for Git repositories with current Cell access checks.
 
-use std::{net::IpAddr, sync::Arc};
+use std::{error::Error as StdError, net::IpAddr, sync::Arc};
 
 use axum::{
     Router,
@@ -698,11 +698,50 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         Err(GatewayError::Objects(crate::git_gateway::ObjectReadError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git object is too large")
         }
-        Err(error) => {
+        Err(error) => git_failure(error),
+    }
+}
+
+fn git_failure(error: GatewayError) -> Response<Body> {
+    match error {
+        GatewayError::Cell(error) | GatewayError::Push(crate::PushError::Cell(error))
+            if cell_unavailable(error.as_ref()) =>
+        {
+            // The Cell cannot durably publish a Git rejection or prove a push's
+            // outcome while it is unavailable. Keep this distinct from a server bug.
+            tracing::warn!(error = ?error, "Repository Cell unavailable during Git request");
+            plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Repository Cell unavailable",
+            )
+        }
+        error => {
             tracing::error!(error = ?error, "Git request failed");
             plain(StatusCode::INTERNAL_SERVER_ERROR, "Git request failed")
         }
     }
+}
+
+fn cell_unavailable(error: &(dyn StdError + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(source) = current {
+        if let Some(runtime) = source.downcast_ref::<cellule_runtime::Error>()
+            && matches!(
+                runtime,
+                cellule_runtime::Error::Fenced
+                    | cellule_runtime::Error::RuntimeClosed
+                    | cellule_runtime::Error::CellNotActive
+                    | cellule_runtime::Error::CellDraining
+                    | cellule_runtime::Error::ReplicaUnavailable
+                    | cellule_runtime::Error::Deadline
+                    | cellule_runtime::Error::Capacity(_)
+            )
+        {
+            return true;
+        }
+        current = source.source();
+    }
+    false
 }
 
 fn git_required(method: &str, suffix: &str, query: &str) -> Option<TokenScope> {
@@ -775,5 +814,43 @@ mod tests {
         let result = lfs_body(Body::from_stream(Stalled), MAX_LFS_BATCH_BYTES).await;
         assert_eq!(result, Err(StatusCode::REQUEST_TIMEOUT));
         assert_eq!(started.elapsed(), std::time::Duration::from_secs(120));
+    }
+
+    #[tokio::test]
+    async fn unavailable_cell_returns_503_including_during_push_completion() {
+        let source =
+            || cellule_runtime::InvocationError::<bool>::NotStarted(cellule_runtime::Error::Fenced);
+        for error in [
+            GatewayError::Cell(Box::new(source())),
+            GatewayError::Push(crate::PushError::Cell(Box::new(source()))),
+            GatewayError::Cell(Box::new(
+                cellule_runtime::InvocationError::<bool>::NotStarted(
+                    cellule_runtime::Error::Facility {
+                        name: "Git Cell",
+                        source: Box::new(cellule_runtime::Error::Fenced),
+                    },
+                ),
+            )),
+        ] {
+            let response = git_failure(error);
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
+                b"Repository Cell unavailable"
+            );
+        }
+        assert_eq!(
+            git_failure(GatewayError::MalformedCache).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            git_failure(GatewayError::Cell(Box::new(
+                cellule_runtime::InvocationError::<bool>::NotStarted(
+                    cellule_runtime::Error::Command("invalid command"),
+                ),
+            )))
+            .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }
