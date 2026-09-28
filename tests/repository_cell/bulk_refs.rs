@@ -114,5 +114,70 @@ pub async fn verify(repository: &RepositoryCell) -> Result<(), Box<dyn std::erro
         repository.default_branch(None).await?.output.generation,
         generation + 2
     );
+    let long_prefix = format!(
+        "refs/tags/long-page/{}",
+        vec!["r".repeat(200); 21].join("/")
+    );
+    let long_names: Vec<_> = (0..270)
+        .map(|index| format!("{long_prefix}/{index:04}"))
+        .collect();
+    assert!(long_names[0].len() * 256 > 1 << 20);
+    for chunk in long_names.chunks(16) {
+        repository
+            .finalize_push(
+                super::graph::identity()?,
+                PushPlan {
+                    actor: "canopy".into(),
+                    updates: chunk
+                        .iter()
+                        .map(|name| RefUpdate {
+                            name: name.clone(),
+                            expected: None,
+                            new_oid: oid,
+                        })
+                        .collect(),
+                },
+            )
+            .await?;
+    }
+    assert!(matches!(
+        repository
+            .finalize_push(
+                super::graph::identity()?,
+                PushPlan {
+                    actor: "canopy".into(),
+                    updates: vec![RefUpdate {
+                        name: "refs/tags/long-page".into(),
+                        expected: None,
+                        new_oid: oid,
+                    }],
+                },
+            )
+            .await,
+        Err(InvocationError::Rejected(_))
+    ));
+    let mut after = String::new();
+    let mut page_generation = None;
+    let mut observed = Vec::new();
+    let mut byte_bounded = false;
+    loop {
+        let page = repository.refs_page(&after, page_generation).await?.output;
+        page_generation = Some(page.generation);
+        byte_bounded |= page.has_more && page.refs.len() < 256;
+        if let Some((name, _)) = page.refs.last() {
+            after.clone_from(name);
+        }
+        observed.extend(
+            page.refs
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("refs/tags/long-page/"))
+                .map(|(name, _)| name),
+        );
+        if !page.has_more {
+            break;
+        }
+    }
+    assert!(byte_bounded);
+    assert_eq!(observed, long_names);
     Ok(())
 }

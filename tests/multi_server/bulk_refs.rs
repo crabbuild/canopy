@@ -105,9 +105,11 @@ async fn bulk_mirror_round_trip(store: Arc<dyn ObjectStore>) -> Result {
         .to_owned();
     // Long valid names make the complete plan exceed the Cell's 1 MiB input
     // ceiling; one successful generation proves publication did not split it.
+    let prefix = format!("refs/tags/{}/{}", "r".repeat(150), "s".repeat(150));
     let names: Vec<_> = (0..4096)
-        .map(|index| format!("refs/tags/{}-{index:04}", "r".repeat(230)))
+        .map(|index| format!("{prefix}-{index:04}"))
         .collect();
+    assert!(names[0].len() > 255);
     let create: String = names
         .iter()
         .map(|name| format!("create {name} {oid}\n"))
@@ -134,8 +136,7 @@ async fn bulk_mirror_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     run_git(Some(&mirror), &["fsck", "--strict", "--full"]).await?;
 
     // A valid sibling commits on ordinary rejection, while atomic rejection
-    // leaves it absent. A Git-valid name over Canopy's bound gets a Git report.
-    let long = format!("refs/tags/{}/{}", "a".repeat(150), "b".repeat(150));
+    // leaves it absent. The protected branch reports a Git-level refusal.
     for atomic in [true, false] {
         let mut command = Command::new("git");
         command
@@ -145,12 +146,15 @@ async fn bulk_mirror_round_trip(store: Arc<dyn ObjectStore>) -> Result {
             command.arg("--atomic");
         }
         let output = command
-            .args([&url, "HEAD:refs/tags/accepted", &format!("HEAD:{long}")])
+            .args([&url, "HEAD:refs/tags/accepted", ":refs/heads/main"])
             .output()
             .await?;
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success());
-        assert!(stderr.contains("Canopy ref name exceeds"), "{stderr}");
+        assert!(
+            stderr.contains("Canopy branch rule rejected this update"),
+            "{stderr}"
+        );
         assert!(!stderr.contains("HTTP 500"), "{stderr}");
         assert_eq!(
             generation(&client, &api).await?,

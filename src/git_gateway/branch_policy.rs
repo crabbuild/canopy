@@ -224,7 +224,7 @@ impl GitGateway {
                 }
                 if !valid_ref_name(&update.name) {
                     restricted = true;
-                    script.push_str(&format!("{}) printf '%s\\n' 'Canopy ref name exceeds supported format or length' >&2; exit 1 ;;\n", quote(&update.name)));
+                    script.push_str(&format!("{}) printf '%s\\n' 'Canopy ref name does not match supported format' >&2; exit 1 ;;\n", quote(&update.name)));
                     continue;
                 }
                 let Some(policy) = policy else {

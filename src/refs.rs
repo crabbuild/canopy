@@ -14,14 +14,16 @@ use crate::{
 };
 
 pub(crate) const MAX_UPDATES: usize = 100_000;
-const MAX_REF_NAME_BYTES: usize = 255;
 pub(crate) const REF_PAGE_SIZE: usize = 256;
+// Cellule bounds SQL results to 1 MiB; leave room for OIDs, versions and the page header.
+const REF_PAGE_NAME_BYTES: i64 = 512 * 1024;
 
 /// A bounded ref page tied to one durable ref generation, including deletions.
 pub struct RefPage {
     pub generation: i64,
     pub default_branch: String,
     pub refs: Vec<(String, RefExpectation)>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +89,7 @@ impl RepositoryCell {
         })
     }
 
-    /// Reads at most 256 refs; continuations require the first page's generation.
+    /// Reads a byte-bounded page of at most 256 refs; continuations require the first page's generation.
     ///
     /// A changed generation rejects the page, requiring a new scan from the start.
     pub async fn refs_page(
@@ -109,8 +111,34 @@ impl RepositoryCell {
                     statements: vec![SqlStatement {
                         // One SQLite statement binds the generation even to an empty
                         // final page. Separate observations could miss a concurrent push.
-                        sql: "SELECT g.generation, g.default_branch, r.name, r.oid, r.version FROM ref_generation g LEFT JOIN (SELECT name, oid, version FROM refs WHERE name > ?1 ORDER BY name LIMIT ?2) r ON 1 = 1 WHERE g.singleton = 1 ORDER BY r.name".into(),
-                        parameters: vec![SqlValue::Text(after.into()), SqlValue::Integer(REF_PAGE_SIZE as i64)],
+                        sql: r#"
+                            WITH candidates AS MATERIALIZED (
+                                SELECT name, oid, version FROM refs
+                                WHERE name > ?1 ORDER BY name LIMIT ?2
+                            ), ranked AS (
+                                SELECT name, oid, version,
+                                    ROW_NUMBER() OVER (ORDER BY name) AS position,
+                                    SUM(LENGTH(CAST(name AS BLOB)) + 64)
+                                        OVER (ORDER BY name) AS bytes
+                                FROM candidates
+                            ), page AS MATERIALIZED (
+                                SELECT name, oid, version FROM ranked
+                                WHERE bytes <= ?3 OR position = 1
+                            )
+                            SELECT g.generation, g.default_branch, NULL, NULL, NULL,
+                                EXISTS(SELECT 1 FROM refs WHERE name >
+                                    COALESCE((SELECT MAX(name) FROM page), ?1))
+                            FROM ref_generation g WHERE g.singleton = 1
+                            UNION ALL
+                            SELECT NULL, NULL, name, oid, version, NULL FROM page
+                            ORDER BY name
+                        "#
+                        .into(),
+                        parameters: vec![
+                            SqlValue::Text(after.into()),
+                            SqlValue::Integer(REF_PAGE_SIZE as i64),
+                            SqlValue::Integer(REF_PAGE_NAME_BYTES),
+                        ],
                     }],
                 },
             )
@@ -124,19 +152,36 @@ impl RepositoryCell {
             .first()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing ref generation")))?;
         let head = crate::default_branch::decode_head(row).map_err(InvocationError::NotStarted)?;
+        let has_more = match row.as_slice() {
+            [
+                _,
+                _,
+                SqlValue::Null,
+                SqlValue::Null,
+                SqlValue::Null,
+                SqlValue::Integer(more),
+            ] => *more != 0,
+            _ => {
+                return Err(
+                    InvocationError::NotStarted(Error::Command("invalid ref page head")).into(),
+                );
+            }
+        };
         let current = head.generation;
         if generation.is_some_and(|expected| expected != current) {
             return Err(RefReadError::Changed);
         }
-        let mut refs = Vec::with_capacity(rows.rows.len());
-        for row in &rows.rows {
-            if matches!(
-                row.as_slice(),
-                [_, _, SqlValue::Null, SqlValue::Null, SqlValue::Null]
-            ) {
-                continue;
-            }
-            let [_, _, SqlValue::Text(name), oid, version] = row.as_slice() else {
+        let mut refs = Vec::with_capacity(rows.rows.len().saturating_sub(1));
+        for row in rows.rows.iter().skip(1) {
+            let [
+                SqlValue::Null,
+                SqlValue::Null,
+                SqlValue::Text(name),
+                oid,
+                version,
+                SqlValue::Null,
+            ] = row.as_slice()
+            else {
                 return Err(
                     InvocationError::NotStarted(Error::Command("invalid stored ref row")).into(),
                 );
@@ -150,6 +195,7 @@ impl RepositoryCell {
                 generation: current,
                 default_branch: head.reference,
                 refs,
+                has_more,
             },
             receipt: result.receipt,
         })
@@ -452,16 +498,48 @@ fn existing_namespace_conflict(
     }
     let mut after = prefix.clone();
     loop {
-        let result = context.sql(&SqlBatch { statements: vec![SqlStatement {
-            sql: "SELECT name FROM refs WHERE name > ?1 AND name < ?2 AND oid IS NOT NULL ORDER BY name LIMIT ?3".into(),
-            parameters: vec![SqlValue::Text(after.clone()), SqlValue::Text(end.clone()), SqlValue::Integer(REF_PAGE_SIZE as i64)],
-        }]})?;
+        let result = context.sql(&SqlBatch {
+            statements: vec![SqlStatement {
+                sql: r#"
+                WITH candidates AS MATERIALIZED (
+                    SELECT name FROM refs
+                    WHERE name > ?1 AND name < ?2 AND oid IS NOT NULL
+                    ORDER BY name LIMIT ?3
+                ), ranked AS (
+                    SELECT name, ROW_NUMBER() OVER (ORDER BY name) AS position,
+                        SUM(LENGTH(CAST(name AS BLOB)) + 16)
+                            OVER (ORDER BY name) AS bytes
+                    FROM candidates
+                ), page AS MATERIALIZED (
+                    SELECT name FROM ranked WHERE bytes <= ?4 OR position = 1
+                )
+                SELECT name, EXISTS(
+                    SELECT 1 FROM refs WHERE name > (SELECT MAX(name) FROM page)
+                        AND name < ?2 AND oid IS NOT NULL
+                ) FROM page ORDER BY name
+            "#
+                .into(),
+                parameters: vec![
+                    SqlValue::Text(after.clone()),
+                    SqlValue::Text(end.clone()),
+                    SqlValue::Integer(REF_PAGE_SIZE as i64),
+                    SqlValue::Integer(REF_PAGE_NAME_BYTES),
+                ],
+            }],
+        })?;
         let rows = &result
             .first()
             .ok_or(Error::Command("missing ref namespace result"))?
             .rows;
+        let has_more = match rows.first().map(Vec::as_slice) {
+            Some([SqlValue::Text(_), SqlValue::Integer(more)]) if *more == 0 || *more == 1 => {
+                *more == 1
+            }
+            None => false,
+            _ => return Err(Error::Command("invalid ref namespace row")),
+        };
         for row in rows {
-            let [SqlValue::Text(existing)] = row.as_slice() else {
+            let [SqlValue::Text(existing), SqlValue::Integer(_)] = row.as_slice() else {
                 return Err(Error::Command("invalid ref namespace row"));
             };
             if updates
@@ -472,7 +550,7 @@ fn existing_namespace_conflict(
             }
             after.clone_from(existing);
         }
-        if rows.len() < REF_PAGE_SIZE {
+        if !has_more {
             return Ok(false);
         }
     }
@@ -480,7 +558,6 @@ fn existing_namespace_conflict(
 
 pub(crate) fn valid_ref_name(name: &str) -> bool {
     if !name.starts_with("refs/")
-        || name.len() > MAX_REF_NAME_BYTES
         || name.ends_with('/')
         || name.ends_with('.')
         || name.contains("@{")
@@ -526,6 +603,11 @@ mod tests {
             ]
             .map(String::from),
         );
+        names.push(format!(
+            "refs/heads/{}/{}",
+            "a".repeat(150),
+            "b".repeat(150)
+        ));
         for name in names {
             let native = std::process::Command::new("git")
                 .args(["check-ref-format", &name])

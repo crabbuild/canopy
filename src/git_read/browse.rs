@@ -1,6 +1,6 @@
 use super::*;
 use crate::ReadIdentity;
-use crate::refs::{REF_PAGE_SIZE, RefReadError, valid_ref_name};
+use crate::refs::{RefReadError, valid_ref_name};
 
 const PAGE: usize = 32;
 
@@ -80,7 +80,8 @@ impl Reader {
                 RefReadError::Cell(error) => ReadError::Cell(error),
             })?
             .output;
-        let next_after = (page.refs.len() == REF_PAGE_SIZE)
+        let next_after = page
+            .has_more
             .then(|| page.refs.last().map(|(name, _)| name.clone()))
             .flatten();
         let entries: Vec<_> = page.refs.into_iter().filter_map(|(name, state)| state.oid.map(|oid| serde_json::json!({"name":name,"oid":hex::encode(oid),"version":state.version}))).collect();
