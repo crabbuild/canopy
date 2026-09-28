@@ -2541,8 +2541,9 @@ cleanup and a future fenced collector remain necessary; no automatic collector
 is enabled. Canonical bytes are never deleted by failed-transfer cleanup.
 
 Downloads first verify the manifest and pin its ETag/version when present.
-Each read rechecks the manifest and retrieves one part of at most 8 MiB. Part
-sizes must match exactly; collection rejects excess/truncated data.
+Each read retrieves one part of at most 8 MiB. The final read rechecks the
+manifest before returning bytes. Part sizes must match exactly; collection
+rejects excess/truncated data.
 The reader hashes each part, withholding the final part until SHA-256 and
 BLAKE3 match SQLite. Thus a same-length corruption cannot satisfy HTTP's declared
 Content-Length before verification. Earlier ranges may already have been sent;
