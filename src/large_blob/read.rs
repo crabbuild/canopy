@@ -1,11 +1,10 @@
 use super::*;
-use object_store::ObjectMeta;
 
 /// Sequential bounded ranges from one immutable Git blob.
 pub struct LargeBlobRead {
     store: Arc<dyn ObjectStore>,
     path: Path,
-    meta: ObjectMeta,
+    manifest: crate::external::Manifest,
     reference: LargeBlobReference,
     offset: u64,
     hashes: Option<Hashes>,
@@ -18,11 +17,11 @@ impl LargeBlobRead {
         reference: LargeBlobReference,
     ) -> Result<Self, LargeBlobError> {
         let path = blob_path(repository_id, &reference.sha256);
-        let meta = crate::external::open(store.as_ref(), &path, reference.size).await?;
+        let manifest = crate::external::open(store.as_ref(), &path, reference.size).await?;
         let read = Self {
             store,
             path,
-            meta,
+            manifest,
             reference,
             offset: 0,
             hashes: Some(Hashes::new(reference.oid.format(), reference.size)),
@@ -63,7 +62,7 @@ impl LargeBlobRead {
         Ok(crate::external::read(
             self.store.as_ref(),
             &self.path,
-            &self.meta,
+            &self.manifest,
             self.reference.size,
             self.offset,
         )

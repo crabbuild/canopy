@@ -37,7 +37,7 @@ const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 pub struct LfsObject {
     pub sha256: [u8; 32],
     pub size: u64,
-    pub blake3: [u8; 32],
+    pub parts_digest: [u8; 32],
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -159,19 +159,19 @@ impl RepositoryCell {
             .first()
             .and_then(|set| set.rows.first())
             .map(|row| {
-                let [SqlValue::Integer(size), SqlValue::Blob(digest)] = row.as_slice() else {
+                let [SqlValue::Integer(size), SqlValue::Blob(parts_digest)] = row.as_slice() else {
                     return Err(Error::Command("invalid LFS object row"));
                 };
-                let blake3 = digest
+                let parts_digest = parts_digest
                     .as_slice()
                     .try_into()
-                    .map_err(|_| Error::Command("invalid LFS digest"))?;
+                    .map_err(|_| Error::Command("invalid LFS part digest"))?;
                 let size =
                     u64::try_from(*size).map_err(|_| Error::Command("invalid LFS object size"))?;
                 Ok(LfsObject {
                     sha256: oid,
                     size,
-                    blake3,
+                    parts_digest,
                 })
             })
             .transpose()
@@ -203,7 +203,7 @@ impl RepositoryCell {
                         parameters: vec![
                             SqlValue::Blob(object.sha256.to_vec()),
                             SqlValue::Integer(size),
-                            SqlValue::Blob(object.blake3.to_vec()),
+                            SqlValue::Blob(object.parts_digest.to_vec()),
                             SqlValue::Text(actor.into()),
                         ],
                     }, access_statement(actor)],
@@ -232,7 +232,7 @@ impl RepositoryCell {
         }
         let expected = [
             SqlValue::Integer(size),
-            SqlValue::Blob(object.blake3.to_vec()),
+            SqlValue::Blob(object.parts_digest.to_vec()),
         ];
         if self
             .sql

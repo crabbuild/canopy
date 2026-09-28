@@ -54,10 +54,19 @@ async fn truncated_uploads_cannot_publish_bytes() -> TestResult {
 }
 
 fn object(bytes: &[u8]) -> LfsObject {
+    let mut manifest = b"CANOPY02".to_vec();
+    manifest.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    if bytes.is_empty() {
+        manifest.extend_from_slice(blake3::hash(b"").as_bytes());
+    } else {
+        for part in bytes.chunks(CHUNK_BYTES) {
+            manifest.extend_from_slice(blake3::hash(part).as_bytes());
+        }
+    }
     LfsObject {
         sha256: Sha256::digest(bytes).into(),
         size: bytes.len() as u64,
-        blake3: *blake3::hash(bytes).as_bytes(),
+        parts_digest: *blake3::hash(&manifest).as_bytes(),
     }
 }
 
@@ -95,6 +104,106 @@ async fn corruption_cannot_yield_a_complete_response() -> TestResult {
             .await
             .is_none()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resumed_tail_skips_the_prefix_and_verifies_its_first_part() -> TestResult {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let bytes = vec![7; CHUNK_BYTES * 2 + 23];
+    let expected = object(&bytes);
+    let path = lfs_path([1; 16], &expected.sha256);
+    upload::receive(
+        store.clone(),
+        [1; 16],
+        expected.sha256,
+        Body::from(bytes.clone()),
+        None,
+    )
+    .await?;
+    store.delete(&crate::external::part(&path, 0)).await?;
+    let start = CHUNK_BYTES + 7;
+    let mut reader = LfsRead::open(store.clone(), [1; 16], expected, None)
+        .await?
+        .resume_from(start as u64);
+    let mut tail = Vec::new();
+    while let Some(chunk) = poll_fn(|cx| Pin::new(&mut reader).poll_next(cx)).await {
+        tail.extend_from_slice(&chunk?);
+    }
+    assert_eq!(tail, bytes[start..]);
+
+    let mut corrupt = bytes[CHUNK_BYTES..CHUNK_BYTES * 2].to_vec();
+    corrupt[7] ^= 1;
+    store
+        .put(&crate::external::part(&path, 1), corrupt.into())
+        .await?;
+    let mut reader = LfsRead::open(store, [1; 16], expected, None)
+        .await?
+        .resume_from(start as u64);
+    assert!(matches!(
+        poll_fn(|cx| Pin::new(&mut reader).poll_next(cx)).await,
+        Some(Err(LfsError::Corrupt))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn five_gib_tail_reads_only_its_final_part() -> TestResult {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let size = CHUNK_BYTES as u64 * 641;
+    let sha256: [u8; 32] =
+        hex::decode("d10a354ad1d4a3bce953fe5678594a5158a8e27dad21b98fec2e6cd6db042778")?
+            .try_into()
+            .map_err(|_| "invalid fixture SHA-256")?;
+    let path = lfs_path([1; 16], &sha256);
+    let final_part = Bytes::from(vec![0; CHUNK_BYTES]);
+    let digest = blake3::hash(&final_part);
+    let mut manifest = b"CANOPY02".to_vec();
+    manifest.extend_from_slice(&size.to_le_bytes());
+    for _ in 0..641 {
+        manifest.extend_from_slice(digest.as_bytes());
+    }
+    let expected = LfsObject {
+        sha256,
+        size,
+        parts_digest: *blake3::hash(&manifest).as_bytes(),
+    };
+    store.put(&path, manifest.into()).await?;
+    store
+        .put(&crate::external::part(&path, 640), final_part.into())
+        .await?;
+    let mut reader = LfsRead::open(store, [1; 16], expected, None)
+        .await?
+        .resume_from(size - 7);
+    let tail = poll_fn(|cx| Pin::new(&mut reader).poll_next(cx))
+        .await
+        .ok_or("missing tail")??;
+    assert_eq!(tail.as_ref(), &[0; 7]);
+    assert!(
+        poll_fn(|cx| Pin::new(&mut reader).poll_next(cx))
+            .await
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_part_manifest_is_rejected_against_cell_metadata() -> TestResult {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let expected = object(b"manifest-bound LFS body");
+    let path = lfs_path([1; 16], &expected.sha256);
+    upload::receive(
+        store.clone(),
+        [1; 16],
+        expected.sha256,
+        Body::from("manifest-bound LFS body"),
+        None,
+    )
+    .await?;
+    let mut manifest = store.get(&path).await?.bytes().await?.to_vec();
+    manifest[16] ^= 1;
+    store.put(&path, manifest.into()).await?;
+    assert!(LfsRead::open(store, [1; 16], expected, None).await.is_err());
     Ok(())
 }
 

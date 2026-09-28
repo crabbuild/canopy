@@ -1,7 +1,6 @@
 use super::*;
 use bytes::Bytes;
 use futures_core::Stream;
-use object_store::ObjectMeta;
 use sha2::{Digest, Sha256};
 use std::{
     future::{Future, poll_fn},
@@ -15,17 +14,18 @@ type NextRead = Pin<Box<dyn Future<Output = Result<(ReadState, Bytes), LfsError>
 pub struct LfsRead {
     size: u64,
     emit_from: u64,
+    state: Option<ReadState>,
     next: Option<NextRead>,
 }
 
 struct ReadState {
     store: Arc<dyn ObjectStore>,
     path: Path,
-    meta: ObjectMeta,
+    manifest: crate::external::Manifest,
     expected: LfsObject,
     offset: u64,
     sha256: Sha256,
-    blake3: blake3::Hasher,
+    verify_full: bool,
     // Hash jobs retain transfer admission after the HTTP body is dropped.
     _admission: Option<Arc<AdmissionPermit>>,
 }
@@ -38,27 +38,30 @@ impl LfsRead {
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, LfsError> {
         let path = lfs_path(repository_id, &expected.sha256);
-        let meta = crate::external::open(store.as_ref(), &path, expected.size).await?;
+        let manifest =
+            crate::external::open_lfs(store.as_ref(), &path, expected.size, expected.parts_digest)
+                .await?;
         let state = ReadState {
             store,
             path,
-            meta,
+            manifest,
             expected,
             offset: 0,
             sha256: Sha256::new(),
-            blake3: blake3::Hasher::new(),
+            verify_full: true,
             _admission: admission,
         };
-        let next = if expected.size == 0 {
+        let state = if expected.size == 0 {
             state.verify()?;
             None
         } else {
-            Some(Box::pin(state.read()) as NextRead)
+            Some(state)
         };
         Ok(Self {
             size: expected.size,
             emit_from: 0,
-            next,
+            state,
+            next: None,
         })
     }
 
@@ -67,9 +70,13 @@ impl LfsRead {
         self.size
     }
 
-    /// Skips bytes already held by a resuming client while hashing every part.
+    /// Starts at the part containing the client's existing prefix.
     pub(crate) fn resume_from(mut self, offset: u64) -> Self {
         self.emit_from = offset;
+        if let Some(state) = self.state.as_mut() {
+            state.offset = offset / CHUNK_BYTES as u64 * CHUNK_BYTES as u64;
+            state.verify_full = offset == 0;
+        }
         self
     }
 }
@@ -79,6 +86,12 @@ impl Stream for LfsRead {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
+            if self.next.is_none() {
+                let Some(state) = self.state.take() else {
+                    return Poll::Ready(None);
+                };
+                self.next = Some(Box::pin(state.read()));
+            }
             let Some(next) = self.next.as_mut() else {
                 return Poll::Ready(None);
             };
@@ -90,7 +103,7 @@ impl Stream for LfsRead {
                     let skip =
                         self.emit_from.saturating_sub(begin).min(bytes.len() as u64) as usize;
                     if state.offset < state.expected.size {
-                        self.next = Some(Box::pin(state.read()));
+                        self.state = Some(state);
                     }
                     if skip < bytes.len() {
                         return Poll::Ready(Some(Ok(bytes.slice(skip..))));
@@ -113,19 +126,24 @@ impl ReadState {
         let bytes = crate::external::read(
             self.store.as_ref(),
             &self.path,
-            &self.meta,
+            &self.manifest,
             self.expected.size,
             self.offset,
         )
         .await?;
         let end = self.offset + bytes.len() as u64;
         tokio::task::spawn_blocking(move || {
-            self.sha256.update(&bytes);
-            self.blake3.update(&bytes);
+            let part = self.offset / CHUNK_BYTES as u64;
+            if self.manifest.part_digest(part) != Some(*blake3::hash(&bytes).as_bytes()) {
+                return Err(LfsError::Corrupt);
+            }
+            if self.verify_full {
+                self.sha256.update(&bytes);
+            }
             self.offset = end;
-            // Withhold the final range until both hashes match. Content-Length
-            // must never let HTTP report success before verification finishes.
-            if self.offset == self.expected.size {
+            // A full download withholds its final range until the LFS OID
+            // matches. Tail reads verify each transmitted part before yielding.
+            if self.verify_full && self.offset == self.expected.size {
                 self.verify()?;
             }
             Ok((self, bytes))
@@ -134,9 +152,12 @@ impl ReadState {
     }
 
     fn verify(&self) -> Result<(), LfsError> {
-        if self.sha256.clone().finalize().as_slice() != self.expected.sha256
-            || self.blake3.finalize().as_bytes() != &self.expected.blake3
+        if self.expected.size == 0
+            && self.manifest.part_digest(0) != Some(*blake3::hash(b"").as_bytes())
         {
+            return Err(LfsError::Corrupt);
+        }
+        if self.sha256.clone().finalize().as_slice() != self.expected.sha256 {
             return Err(LfsError::Corrupt);
         }
         Ok(())
