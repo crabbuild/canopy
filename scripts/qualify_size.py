@@ -16,6 +16,8 @@ def run(*args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider-only", action="store_true")
+    parser.add_argument("--docker-volume", action="store_true")
+    parser.add_argument("--release", action="store_true")
     args = parser.parse_args()
     name = f"canopy-size-{uuid.uuid4().hex[:12]}"
     with tempfile.TemporaryDirectory(prefix=name) as temporary:
@@ -23,9 +25,9 @@ def main():
         image = "rustfs/rustfs:1.0.0-beta.8-glibc"
         owner = f"{os.getuid()}:{os.getgid()}"
         volume = None
-        if args.provider_only:
-            # Small provider probes can use VM storage when Docker cannot mount
-            # the host's separate qualification volume.
+        if args.provider_only or args.docker_volume:
+            # An isolated VM with sufficient disk can run the gate when Docker
+            # cannot mount the host's separate qualification volume.
             volume = f"{name}-data"
             data = volume
             owner = "10001:10001"
@@ -88,13 +90,16 @@ def main():
                 "bulk_refs::bulk_mirror_real_provider_round_trip",
                 "partial_clone::filtered_clones_real_provider_round_trip",
             ])
-            listed = subprocess.run(["cargo", "test", "--locked", "--test", "multi_server",
+            cargo = ["cargo", "test", "--locked", "--test", "multi_server"]
+            if args.release:
+                cargo.insert(2, "--release")
+            listed = subprocess.run([*cargo,
                                      "--", "--list"], env=env, check=True, capture_output=True,
                                     text=True, cwd=Path(__file__).resolve().parents[1]).stdout
             for test in tests:
                 if f"{test}: test" not in listed.splitlines():
                     raise RuntimeError(f"qualification test is missing: {test}")
-                subprocess.run(["cargo", "test", "--locked", "--test", "multi_server", test,
+                subprocess.run([*cargo, test,
                                 "--", "--exact", "--ignored", "--nocapture"],
                                env=env, check=True, cwd=Path(__file__).resolve().parents[1])
         except Exception:

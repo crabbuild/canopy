@@ -73,7 +73,10 @@ The fixture uses public test credentials and removes its own container and data.
 The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
 the resource-intensive provider tests. `--provider-only` runs the smaller Git
 compatibility probes against an isolated Docker volume when the host's large
-test volume is unavailable.
+test volume is unavailable. For the full gate on a Docker VM with sufficient
+dedicated disk but no host-volume sharing, use `--docker-volume`; it creates and
+removes an isolated named volume while retaining the full size assertions.
+Use `--release` to run the same gate against optimized server/test code.
 
 The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
 exceeds 512 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh

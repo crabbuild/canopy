@@ -513,7 +513,7 @@ impl RunningServer {
         // owns renewal so a long drain cannot expire the authority it is releasing.
         let renewal = AbortOnDropHandle::new(tokio::spawn(async move {
             let _stop_node = renewal_release_stop.clone().drop_guard();
-            renew_lease(
+            let result = renew_lease(
                 renewal_directory,
                 renewal_observed,
                 identity,
@@ -522,7 +522,11 @@ impl RunningServer {
                 renewal_deployment,
                 renewal_release_stop,
             )
-            .await
+            .await;
+            if let Err(error) = &result {
+                tracing::warn!(error = %error, "node lease maintenance stopped");
+            }
+            result
         }));
         let startup = async {
             deployment.require_ready().await?;
