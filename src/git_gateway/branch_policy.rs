@@ -30,7 +30,12 @@ impl PushCommands {
         }
         match request.body.packet_prefix(PREFIX_LIMIT).await {
             Ok(prefix) => {
-                let mut parsed = commands(&prefix)?;
+                let mut parsed = match commands(&prefix) {
+                    Ok(parsed) => parsed,
+                    // Count and byte limits share the native Git rejection path.
+                    Err(InputError::TooLarge) => return Ok(Self::Limited),
+                    Err(error) => return Err(error),
+                };
                 if let Self::Parsed {
                     options_requested: true,
                     options,

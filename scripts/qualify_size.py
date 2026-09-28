@@ -85,6 +85,8 @@ def main():
                 "sha256::sha256_real_provider_native_merge_candidates",
                 "push_options::signed_push_real_provider_round_trip",
                 "ssh::signed_sha256_ssh_real_provider_round_trip",
+                "bulk_refs::bulk_mirror_real_provider_round_trip",
+                "partial_clone::filtered_clones_real_provider_round_trip",
             ])
             listed = subprocess.run(["cargo", "test", "--locked", "--test", "multi_server",
                                      "--", "--list"], env=env, check=True, capture_output=True,

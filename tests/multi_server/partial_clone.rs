@@ -156,7 +156,16 @@ async fn cold_single_branch_fetch_skips_unrelated_commit_and_tree_history() -> R
 
 #[tokio::test(flavor = "multi_thread")]
 async fn filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs() -> Result {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    filtered_clones_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn filtered_clones_real_provider_round_trip() -> Result {
+    filtered_clones_round_trip(real_provider_store()?).await
+}
+
+async fn filtered_clones_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let address = available_address().await?;
     let server = CanopyServer::start(

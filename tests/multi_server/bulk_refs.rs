@@ -41,7 +41,16 @@ async fn generation(client: &reqwest::Client, api: &str) -> Result<i64> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bulk_mirror_publication_is_atomic_and_survives_restart() -> Result {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    bulk_mirror_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn bulk_mirror_real_provider_round_trip() -> Result {
+    bulk_mirror_round_trip(real_provider_store()?).await
+}
+
+async fn bulk_mirror_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let address = available_address().await?;
     let server = CanopyServer::start(
@@ -185,7 +194,15 @@ async fn bulk_mirror_publication_is_atomic_and_survives_restart() -> Result {
             .header("Idempotency-Key", &push_id)
             .body(request.clone())
     };
-    let report = post().send().await?.error_for_status()?.bytes().await?;
+    let response = post().send().await?;
+    let status = response.status();
+    let report = response.bytes().await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&report)
+    );
     assert!(
         report
             .windows(b"Canopy push command limit exceeded".len())
@@ -196,10 +213,16 @@ async fn bulk_mirror_publication_is_atomic_and_survives_restart() -> Result {
             .windows(b"pre-receive hook declined".len())
             .any(|part| part == b"pre-receive hook declined")
     );
+    let replay = post().send().await?;
+    let status = replay.status();
+    let body = replay.bytes().await?;
     assert_eq!(
-        post().send().await?.error_for_status()?.bytes().await?,
-        report
+        status,
+        reqwest::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
     );
+    assert_eq!(body, report);
     assert_eq!(generation(&client, &api).await?, before + 3);
     restored.shutdown().await?;
     Ok(())

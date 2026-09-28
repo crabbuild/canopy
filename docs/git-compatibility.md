@@ -35,10 +35,10 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 
 | Surface | Current behavior | Acceptance gate |
 | --- | --- | --- |
-| Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete and atomic generation qualified | Full-capacity and real-provider scale qualification remain |
+| Bulk refs | Up to 100,000 updates staged in SQLite; 4,096-ref mirror import/delete, atomic generation and command-limit rejection qualified against isolated RustFS | Full-capacity and cloud-provider scale qualification remain |
 | Rejection reporting | Branch policy, unsupported names, command limits, late Cell refusals, ingestion and preparation failures produce durable Git reports when commands are decoded and completion is available; clients declining reports receive HTTP 409 | Incomplete uploads, unparsed commands and unavailable/uncertain response publication can still return transport errors; qualify the remaining failure matrix |
 | Ref names | UTF-8 only, at most 255 bytes total; filesystem ref caches add host filesystem constraints | Declare raw-byte, long-name and filesystem-equivalent-name scope and test accepted names end to end |
-| Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled | Qualify supported filters with real providers and large histories; select sparse-pattern scope explicitly |
+| Partial clone | `blob:none`, `blob:limit`, `tree`, `object:type` and `combine` filters enabled; `sparse:oid` disabled; filtered clone and lazy fetch pass against isolated RustFS | Qualify large histories and cloud providers; select sparse-pattern scope explicitly |
 | Cold fetch | HTTP and SSH hydrate ref/tag targets and non-blob history reachable from requested wants; exact `blob:none` adds explicit blob wants only; native tree/type/combined filters select missing reachable blobs before hydration | Narrow size-filter hydration; measure cold/warm bytes and latency at scale |
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
 | Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
@@ -63,17 +63,17 @@ native-worker deadlines remain. These are not an unlimited-capacity claim.
 ## Provider and size qualification
 
 `python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
-`tests/multi_server/size.rs` plus the ignored SHA-256 and signed-push provider tests in
-`tests/multi_server/sha256.rs`, `tests/multi_server/push_options.rs` and
-`tests/multi_server/ssh.rs`. It requires Docker, the AWS CLI, Git, and a temporary
-directory with at least 40 GiB free. Set `TMPDIR` to the dedicated test volume.
+`tests/multi_server/size.rs` plus the ignored SHA-256, signed-push, bulk-ref and
+filtered-clone provider tests in `tests/multi_server/`. It requires Docker, the
+AWS CLI, Git, and a temporary directory with at least 40 GiB free. Set `TMPDIR`
+to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
 Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
 The fixture uses public test credentials and removes its own container and data.
 The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
-the resource-intensive provider tests. `--provider-only` runs the smaller SHA-256
-and signed-push probes against an isolated Docker volume when the host's large test volume is
-unavailable.
+the resource-intensive provider tests. `--provider-only` runs the smaller Git
+compatibility probes against an isolated Docker volume when the host's large
+test volume is unavailable.
 
 The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
 exceeds 512 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh
@@ -156,13 +156,13 @@ accepted push survives client disconnect and completes before shutdown releases
 Cells. Fresh-disk clones and strict fsck verify both outcomes.
 
 The baseline real-provider probe used Apple Git 2.50.1 and disposable RustFS
-`1.0.0-beta.8-glibc` at Canopy commit `48dfc21`; it confirmed the bulk, filter,
-push-option, signed-push and SHA-256 gaps above. Unicode failed in that baseline
-and is corrected by the Unicode validator change and permanent integration tests.
-The former 64-ref cap is also removed, and filtered clones now pass local
-integration tests. Current bulk and filter qualification uses the in-memory
-provider and does not replace the earlier real-provider baseline.
-Tests using the in-memory provider do not qualify provider outages or performance.
+`1.0.0-beta.8-glibc` at Canopy commit `48dfc21`; it exposed bulk, filter,
+push-option, signed-push and SHA-256 gaps. Unicode failed in that baseline and
+is corrected by the Unicode validator change and permanent integration tests.
+The former 64-ref cap is removed. The isolated RustFS gate now repeats the
+4,096-ref mirror and command-limit rejection, filtered clone and lazy fetch,
+signed pushes and SHA-256 recovery. These fixtures do not qualify cloud-provider
+outages, full-capacity scale or production performance.
 
 Implementation order:
 
