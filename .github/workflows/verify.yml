@@ -21,7 +21,7 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
-      - name: Qualify large storage and SHA-256 against RustFS
+      - name: Qualify storage and Git compatibility against RustFS
         run: python3 scripts/qualify_size.py
       - name: Build server
         run: cargo build --locked --bin canopy

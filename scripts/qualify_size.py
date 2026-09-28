@@ -1,4 +1,4 @@
-"""Run large-size and SHA-256 gates against an isolated RustFS bucket."""
+"""Run large-size and compatibility gates against an isolated RustFS bucket."""
 import argparse
 import os
 from pathlib import Path
@@ -15,7 +15,7 @@ def run(*args, **kwargs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sha256-only", action="store_true")
+    parser.add_argument("--provider-only", action="store_true")
     args = parser.parse_args()
     name = f"canopy-size-{uuid.uuid4().hex[:12]}"
     with tempfile.TemporaryDirectory(prefix=name) as temporary:
@@ -23,7 +23,7 @@ def main():
         image = "rustfs/rustfs:1.0.0-beta.8-glibc"
         owner = f"{os.getuid()}:{os.getgid()}"
         volume = None
-        if args.sha256_only:
+        if args.provider_only:
             # Small provider probes can use VM storage when Docker cannot mount
             # the host's separate qualification volume.
             volume = f"{name}-data"
@@ -77,12 +77,14 @@ def main():
                 raise RuntimeError("RustFS fixture did not become ready")
             env["CANOPY_TEST_S3_ENDPOINT"] = endpoint
             env["CANOPY_TEST_S3_BUCKET"] = "canopy-size"
-            tests = [] if args.sha256_only else [
+            tests = [] if args.provider_only else [
                 "size::push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore"
             ]
             tests.extend([
                 "sha256::sha256_real_provider_round_trip",
                 "sha256::sha256_real_provider_native_merge_candidates",
+                "push_options::signed_push_real_provider_round_trip",
+                "ssh::signed_sha256_ssh_real_provider_round_trip",
             ])
             listed = subprocess.run(["cargo", "test", "--locked", "--test", "multi_server",
                                      "--", "--list"], env=env, check=True, capture_output=True,

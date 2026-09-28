@@ -65,7 +65,16 @@ async fn capture_push(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn signed_push_binds_registered_key_and_preserves_audit_after_restore() -> Result {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    signed_push_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn signed_push_real_provider_round_trip() -> Result {
+    signed_push_round_trip(real_provider_store()?).await
+}
+
+async fn signed_push_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let address = available_address().await?;
     let server = CanopyServer::start(

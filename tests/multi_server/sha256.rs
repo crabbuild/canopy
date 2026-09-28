@@ -13,27 +13,6 @@ async fn sha256_real_provider_round_trip() -> Result {
     sha256_repository_round_trip(real_provider_store()?).await
 }
 
-fn real_provider_store() -> Result<Arc<dyn ObjectStore>> {
-    use object_store::{
-        aws::{AmazonS3Builder, S3CopyIfNotExists},
-        prefix::PrefixStore,
-    };
-
-    let store = AmazonS3Builder::new()
-        .with_endpoint(std::env::var("CANOPY_TEST_S3_ENDPOINT")?)
-        .with_bucket_name(std::env::var("CANOPY_TEST_S3_BUCKET")?)
-        .with_region("us-east-1")
-        .with_access_key_id("canopy-test-access")
-        .with_secret_access_key("canopy-test-secret")
-        .with_allow_http(true)
-        .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
-        .build()?;
-    Ok(Arc::new(PrefixStore::new(
-        Arc::new(store),
-        StorePath::from(format!("sha256-{}", uuid::Uuid::new_v4())),
-    )))
-}
-
 async fn sha256_repository_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let first_address = available_address().await?;

@@ -114,7 +114,16 @@ async fn known_host(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn signed_sha256_ssh_push_survives_fresh_disk_restore() -> Result {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    signed_sha256_ssh_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn signed_sha256_ssh_real_provider_round_trip() -> Result {
+    signed_sha256_ssh_round_trip(real_provider_store()?).await
+}
+
+async fn signed_sha256_ssh_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
     let host = ssh_key::PrivateKey::new(
         ssh_key::private::Ed25519Keypair::from_seed(&[19; 32]).into(),

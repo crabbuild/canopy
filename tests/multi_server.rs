@@ -636,6 +636,27 @@ fn path_str(path: &Path) -> Result<&str, &'static str> {
     path.to_str().ok_or("path is not UTF-8")
 }
 
+fn real_provider_store() -> Result<Arc<dyn ObjectStore>, Box<dyn std::error::Error>> {
+    use object_store::{
+        aws::{AmazonS3Builder, S3CopyIfNotExists},
+        prefix::PrefixStore,
+    };
+
+    let store = AmazonS3Builder::new()
+        .with_endpoint(std::env::var("CANOPY_TEST_S3_ENDPOINT")?)
+        .with_bucket_name(std::env::var("CANOPY_TEST_S3_BUCKET")?)
+        .with_region("us-east-1")
+        .with_access_key_id("canopy-test-access")
+        .with_secret_access_key("canopy-test-secret")
+        .with_allow_http(true)
+        .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+        .build()?;
+    Ok(Arc::new(PrefixStore::new(
+        Arc::new(store),
+        StorePath::from(format!("provider-{}", uuid::Uuid::new_v4())),
+    )))
+}
+
 async fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut command = Command::new("git");
     command.arg("-c").arg("credential.helper=");

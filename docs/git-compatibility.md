@@ -42,7 +42,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Cold fetch | HTTP and SSH hydrate ref/tag targets and non-blob history reachable from requested wants; exact `blob:none` adds explicit blob wants only; native tree/type/combined filters select missing reachable blobs before hydration | Narrow size-filter hydration; measure cold/warm bytes and latency at scale |
 | SSH | Optional listener, signature authentication, key scope and repository ACLs; stock transfers, recovery, shared admission, fetch cancellation and disconnected push drain tested | Storage failures, owner-loss, real-provider and capacity qualification |
 | Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
-| Signed pushes | The production gateway advertises a nonce. Native Git verifies the SSH signature; Canopy binds the signer to the authenticated account's active write key, retains certificate bytes, and rejects duplicate signed bytes in the ref transaction | Qualify real providers, malformed certificates, owner loss and large certificate staging; define an audit export contract |
+| Signed pushes | The production gateway advertises a nonce. Native Git verifies the SSH signature; Canopy binds the signer to the authenticated account's active write key, retains certificate bytes, and rejects duplicate signed bytes in the ref transaction | The isolated RustFS gate covers HTTP SHA-1 and SSH SHA-256 with fresh-disk recovery; qualify malformed certificates, owner loss and large certificate staging, then define an audit export contract |
 | SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
 | Advanced LFS | HTTP basic transfers, verified tail-range download resume, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, optimize large-offset resume reads and qualify real providers |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
@@ -60,18 +60,19 @@ Node resource admission, bounded batch/chunk sizes, protocol validation, the
 native-worker deadlines remain. These are not an unlimited-capacity claim.
 
 
-## Size qualification
+## Provider and size qualification
 
 `python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
-`tests/multi_server/size.rs` plus the ignored SHA-256 provider tests in
-`tests/multi_server/sha256.rs`. It requires Docker, the AWS CLI, Git, and a temporary
+`tests/multi_server/size.rs` plus the ignored SHA-256 and signed-push provider tests in
+`tests/multi_server/sha256.rs`, `tests/multi_server/push_options.rs` and
+`tests/multi_server/ssh.rs`. It requires Docker, the AWS CLI, Git, and a temporary
 directory with at least 40 GiB free. Set `TMPDIR` to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
 Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
 The fixture uses public test credentials and removes its own container and data.
 The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
-the resource-intensive provider tests. `--sha256-only` runs the smaller SHA-256
-probes against an isolated Docker volume when the host's large test volume is
+the resource-intensive provider tests. `--provider-only` runs the smaller SHA-256
+and signed-push probes against an isolated Docker volume when the host's large test volume is
 unavailable.
 
 The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
