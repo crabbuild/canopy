@@ -89,6 +89,7 @@ def main():
                 "ssh::signed_sha256_ssh_real_provider_round_trip",
                 "bulk_refs::bulk_mirror_real_provider_round_trip",
                 "partial_clone::filtered_clones_real_provider_round_trip",
+                "ssh::lfs::stock_lfs_ssh_real_provider_round_trip",
             ])
             cargo = ["cargo", "test", "--locked", "--test", "multi_server"]
             if args.release:

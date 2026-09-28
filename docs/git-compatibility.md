@@ -44,7 +44,7 @@ cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 | Push options | Advertised over HTTP/SSH; up to 16 ordered printable-ASCII `canopy.note=<text>` values, each at most 1,024 bytes, are saved with the completed push; other options receive a Git rejection | Additional option names and their effects require explicit product contracts; no CI or user-hook behavior is implied |
 | Signed pushes | The production gateway advertises a nonce. Native Git verifies the SSH signature; Canopy binds the signer to the authenticated account's active write key, retains certificate bytes, and rejects duplicate signed bytes in the ref transaction | The isolated RustFS gate covers HTTP SHA-1 and SSH SHA-256 with fresh-disk recovery; qualify malformed certificates, owner loss and large certificate staging, then define an audit export contract |
 | SHA-256 Git repositories | Repository identity, object IDs, graph/ref storage and native Git negotiation support SHA-256; mixed format objects and refs are rejected | Cloud S3/GCS/Azure and cross-platform qualification remain |
-| Advanced LFS | HTTP basic transfers, verified tail-range download resume, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, optimize large-offset resume reads and qualify real providers |
+| Advanced LFS | HTTP basic transfers, verified tail-range download resume, advisory locks and SSH authentication for repository/operation-scoped HTTP grants; no pure SSH, resumable upload, custom transfer or external-LFS federation | Complete selected transfer capabilities, optimize large-offset resume reads and qualify cloud providers |
 | Other transports/services | No dumb HTTP, Git daemon or remote archive endpoint | Explicitly select supported services and add stock-client tests before claiming support |
 
 Signed commits and signed tags are ordinary stored Git objects; **signed push
@@ -135,6 +135,8 @@ connection. Held fetches consume HTTP account capacity, release it on channel
 close, and cancel during node shutdown.
 Stock OpenSSH authentication is tested with Ed25519, RSA and ECDSA P-256,
 P-384 and P-521 keys.
+The isolated RustFS gate also runs stock Git LFS over SSH credentials through
+upload, fresh-disk clone, tail-range resume and advisory lock cleanup.
 The signed-push gates use stock Git and an SSH signing key over HTTP and SSH,
 including a SHA-256 repository. They reject a modified signature, a revoked key
 and replay of the original signed request after ref deletion. The HTTP audit
