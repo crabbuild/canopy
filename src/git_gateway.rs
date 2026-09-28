@@ -29,7 +29,7 @@ use crate::{
     lfs::LfsService,
     object_batch::MAX_OBJECTS,
     push::{PushCompletion, PushError},
-    refs::{REF_PAGE_SIZE, RefReadError},
+    refs::RefReadError,
 };
 
 mod branch_policy;
@@ -396,7 +396,7 @@ impl GitGateway {
                     }
                 };
                 generation = Some(page.generation);
-                let complete = page.refs.len() < REF_PAGE_SIZE;
+                let complete = !page.has_more;
                 for (name, state) in page.refs {
                     after = name.clone();
                     refs.insert(name, state);
