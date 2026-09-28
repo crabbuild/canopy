@@ -23,7 +23,7 @@ before admitting persistent customer repositories.
 | Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB without a fixed byte quota | `object_chunks`, verified before object publication |
-| Object publication | at most 128 records, 768 KiB inline payload; SQLite verification targets 64 MiB, with larger objects verified individually | `PutObjects`, operation 5, codec 2 |
+| Object publication | at most 128 records, 3 MiB aggregate inline payload; SQLite verification targets 64 MiB, with larger objects verified individually | `PutObjects`, operation 5, codec 3 |
 | Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
@@ -466,8 +466,10 @@ deletes durable objects. Acquisition and release run in tracked tasks so a
 client disconnect cannot interrupt their
 local lifecycle update. Graceful shutdown waits for those tasks before draining
 the Cell node. Lease renewal is owned by Canopy's process supervisor, outside
-Cellule's task group (which is cancelled before runtime drain). Initial lease
-issuance follows storage probing, deployment validation and local runtime setup;
+Cellule's task group (which is cancelled before runtime drain). The signed lease
+lasts thirty seconds and renewal runs every three seconds; an unclean owner may
+therefore require up to thirty seconds before takeover. Initial lease issuance
+follows storage probing, deployment validation and local runtime setup;
 preflight delay must not consume the node's advertised serving lifetime. The
 monotonic guard starts immediately before advertisement creation, so publication
 latency still consumes that lease. Server, backup and maintenance renewal use
@@ -631,8 +633,8 @@ parsing currently materialize individual bodies. Available worker memory remains
 a practical constraint; this is not production capacity qualification.
 
 Candidate existence queries group up to 128 IDs. Missing records accumulate in
-an `ObjectBatch` with at most 128 records and 768 KiB of aggregate inline bodies,
-leaving room for metadata beneath the 1 MiB operation input limit. External
+an `ObjectBatch` with at most 128 records and 3 MiB of aggregate inline bodies,
+leaving room for metadata beneath the 4 MiB operation input limit. External
 blob records count toward the record limit; their bytes are verified and
 uploaded before publication. Chunk references count toward the record limit and
 a 64 MiB aggregate verification target shared with inline bytes. An oversized
@@ -650,7 +652,7 @@ the caller's upload identity and part index, so retrying the same staging
 operation replays committed parts. Staging does not create an `objects` row:
 queries and ref validation cannot see incomplete uploads.
 
-`PutObjects` codec 2 accepts a chunk reference containing upload ID, size and
+`PutObjects` codec 3 accepts a chunk reference containing upload ID, size and
 BLAKE3. In the publication transaction it requires the exact chunk count and
 part lengths, reconstructs the body, verifies the canonical Git OID and BLAKE3,
 and then inserts the immutable object record. A failure rolls back every object
@@ -1062,7 +1064,7 @@ require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins Cellule revision
-`75462e46c203256fb3fe70903908103f619d99b2`; the runtime integration below also
+`8e5ad2903a7861705156a44e271eaec3fa36b0da`; the runtime integration below also
 requires a fresh prefix because the entity partition format changed.
 
 ### Account disablement
@@ -2393,7 +2395,7 @@ end requires the exact operation and drain proof, then uses the upstream release
 CAS. Retrying completed end returns its unchanged Ready record.
 
 The upstream contracts are implemented in pinned Cellule revision
-`75462e46c203256fb3fe70903908103f619d99b2`, specifically runtime
+`8e5ad2903a7861705156a44e271eaec3fa36b0da`, specifically runtime
 `cell/application.rs`, `recovery/release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
 admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
@@ -2411,7 +2413,7 @@ destination fencing as described below. Maintenance alone is not a backup copy.
 
 `Deployment::recover_maintenance` requires the exact active Maintenance operation
 and compiled release before opening its workspace, again after enrollment, and
-before each Cell. Its short-lived signed node has a ten-second lease, refreshed
+before each Cell. Its signed node has a thirty-second lease, refreshed
 every three seconds while recovery runs. The worker has no HTTP listener, uses
 one SQLite worker slot, and restores into disk-accounted local scratch protected
 by the same process/worker exclusion as a serving node.
@@ -2454,7 +2456,7 @@ lease failures and production-store power loss remain part of the fault matrix.
 ## Independent backup copies and isolated restore
 
 The backup worker uses the pinned Cellule `BackupPinStore` API for immutable
-runtime graphs. It enrolls a signed, renewable ten-second node lease before
+runtime graphs. It enrolls a signed, renewable thirty-second node lease before
 capture and withdraws only after copying/verifying has settled. Caller cancellation
 does not cancel that supervised task. Maintenance closes its renewal admission;
 a fenced/expired worker cannot acknowledge successful completion.
@@ -2628,7 +2630,7 @@ remain required. No new configuration surface was added for diagnostic output.
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
 `cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`75462e46c203256fb3fe70903908103f619d99b2`. `cellule-types` is transitive.
+`8e5ad2903a7861705156a44e271eaec3fa36b0da`. `cellule-types` is transitive.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.

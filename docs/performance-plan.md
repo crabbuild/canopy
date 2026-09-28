@@ -1,9 +1,23 @@
 # Repository density and latency
 
-Current dependencies: Cellule crates at `75462e46c203256fb3fe70903908103f619d99b2`.
+Current dependencies: Cellule crates at `8e5ad2903a7861705156a44e271eaec3fa36b0da`.
 Earlier runs below retain their original pins and do not establish this build’s
 density or latency.
 
+## Current large-transfer qualification
+
+The release-mode `scripts/qualify_size.py --docker-volume --release` gate passed
+against a local RustFS S3-compatible provider with this Cellule revision. A
+595,260,810-byte Git pack produced a 591,101,952-byte Repository Cell database.
+The same run uploaded a 5,377,097,728-byte LFS object, restarted with fresh
+local storage, cloned the repository, passed `git fsck --strict --full`, and
+downloaded the LFS body with matching size and SHA-256. The restored large Git
+blob also matched its independent SHA-256 reference.
+The six additional real-provider tests passed SHA-256, native merge candidates,
+signed push options, signed SSH, bulk refs, and filtered clones. Cold fetch
+preparation hydrated 901 reachable blobs (5,966,921,728 bytes) in about 109
+seconds. This is functional size and recovery proof on the local provider; it
+does not establish production-provider latency or repository density.
 
 ## Required outcome
 

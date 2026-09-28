@@ -27,14 +27,14 @@ fn maximum_batch_round_trips_below_the_operation_wire_limit() {
         );
     }
     assert!(batch.try_push(inline(INLINE_OBJECT_LIMIT)).is_ok());
-    let mut encoder = BoundedEncoder::new(1 << 20).unwrap();
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
     batch.encode(&mut encoder).unwrap();
     let encoded = encoder.finish();
-    assert!(encoded.len() < 1 << 20);
-    let mut decoder = BoundedDecoder::new(&encoded, 1 << 20).unwrap();
+    assert!(encoded.len() < INPUT_LIMIT as usize);
+    let mut decoder = BoundedDecoder::new(&encoded, INPUT_LIMIT).unwrap();
     let decoded = ObjectBatch::decode(&mut decoder).unwrap();
     decoder.finish().unwrap();
-    let mut encoder = BoundedEncoder::new(1 << 20).unwrap();
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
     decoded.encode(&mut encoder).unwrap();
     assert_eq!(encoder.finish(), encoded);
 }
@@ -42,7 +42,10 @@ fn maximum_batch_round_trips_below_the_operation_wire_limit() {
 #[test]
 fn a_full_batch_returns_the_unconsumed_record() {
     let mut batch = ObjectBatch::default();
-    assert!(batch.try_push(inline(INLINE_OBJECT_LIMIT)).is_ok());
+    assert!(batch.try_push(inline(INLINE_OBJECT_LIMIT + 1)).is_err());
+    for _ in 0..INLINE_BATCH_BYTES / INLINE_OBJECT_LIMIT {
+        assert!(batch.try_push(inline(INLINE_OBJECT_LIMIT)).is_ok());
+    }
     let leftover = match batch.try_push(inline(1)) {
         Err(object) => object,
         Ok(()) => panic!("byte budget must reject the record"),
@@ -58,22 +61,39 @@ fn a_full_batch_returns_the_unconsumed_record() {
 #[test]
 fn decoding_enforces_aggregate_bytes_and_count_before_building_a_batch() {
     for count in [0, MAX_OBJECTS + 1] {
-        let mut encoder = BoundedEncoder::new(1 << 20).unwrap();
+        let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
         encoder.write_count(count).unwrap();
         let bytes = encoder.finish();
-        let mut decoder = BoundedDecoder::new(&bytes, 1 << 20).unwrap();
+        let mut decoder = BoundedDecoder::new(&bytes, INPUT_LIMIT).unwrap();
         assert!(ObjectBatch::decode(&mut decoder).is_err());
     }
-    let mut encoder = BoundedEncoder::new(1 << 20).unwrap();
-    encoder.write_count(2).unwrap();
-    for size in [INLINE_OBJECT_LIMIT, 1] {
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
+    encoder.write_count(5).unwrap();
+    for size in [
+        INLINE_OBJECT_LIMIT,
+        INLINE_OBJECT_LIMIT,
+        INLINE_OBJECT_LIMIT,
+        INLINE_OBJECT_LIMIT,
+        1,
+    ] {
         encoder.write_bytes(&[0; 20]).unwrap();
         encoder.write_u8(0).unwrap(); // Blob.
         encoder.write_u8(0).unwrap(); // Inline.
         encoder.write_bytes(&vec![5; size]).unwrap();
     }
     let bytes = encoder.finish();
-    let mut decoder = BoundedDecoder::new(&bytes, 1 << 20).unwrap();
+    let mut decoder = BoundedDecoder::new(&bytes, INPUT_LIMIT).unwrap();
+    assert!(ObjectBatch::decode(&mut decoder).is_err());
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
+    encoder.write_count(1).unwrap();
+    encoder.write_bytes(&[0; 20]).unwrap();
+    encoder.write_u8(0).unwrap();
+    encoder.write_u8(0).unwrap();
+    encoder
+        .write_bytes(&vec![5; INLINE_OBJECT_LIMIT + 1])
+        .unwrap();
+    let bytes = encoder.finish();
+    let mut decoder = BoundedDecoder::new(&bytes, INPUT_LIMIT).unwrap();
     assert!(ObjectBatch::decode(&mut decoder).is_err());
     assert!(
         ObjectBatch::default()
