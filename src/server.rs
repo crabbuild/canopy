@@ -60,7 +60,7 @@ use residency::LoadedRepository;
 pub(crate) use residency::RepositoryRoute;
 
 const MAX_PENDING_REPOSITORIES: usize = 32;
-pub(crate) const LEASE_MS: i64 = 10_000;
+pub(crate) const LEASE_MS: i64 = 30_000;
 pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
@@ -524,7 +524,7 @@ impl RunningServer {
             )
             .await;
             if let Err(error) = &result {
-                tracing::warn!(error = %error, "node lease maintenance stopped");
+                tracing::warn!(error = ?error, "node lease maintenance stopped");
             }
             result
         }));
@@ -679,32 +679,52 @@ async fn renew_lease(
     release_stop: CancellationToken,
 ) -> Result<(), ServerError> {
     let mut progress = 1_u64;
+    let mut heartbeat =
+        tokio::time::interval_at(tokio::time::Instant::now() + RENEW_INTERVAL, RENEW_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut admission = Box::pin(check_deployment_after_interval(deployment.clone()));
     loop {
         tokio::select! {
             () = stop.cancelled() => return Ok(()),
-            () = tokio::time::sleep(RENEW_INTERVAL) => {}
-        }
-        if !release_stop.is_cancelled()
-            && let Err(error) = deployment.require_ready().await
-        {
-            tracing::warn!(error = %error, "deployment admission closed; draining node");
-            release_stop.cancel();
-        }
-        // Continue renewing while accepted work drains. Withdrawal follows SQL
-        // close, so maintenance never mistakes heartbeat expiry for closed writers.
-        guard.check()?;
-        progress = progress.checked_add(1).ok_or(ServerError::Clock)?;
-        let now_ms = unix_now_ms()?;
-        let next = identity.sign(progress, now_ms)?;
-        let mut current = observed.lock().await;
-        match directory.refresh(&current, next, now_ms).await {
-            Ok(refreshed) => {
-                *current = refreshed;
-                renew_node_lease(&guard, &current)?;
+            result = &mut admission, if !release_stop.is_cancelled() => {
+                if let Err(error) = result {
+                    tracing::warn!(error = %error, "deployment admission closed; draining node");
+                    release_stop.cancel();
+                } else {
+                    admission = Box::pin(check_deployment_after_interval(deployment.clone()));
+                }
             }
-            Err(error) => tracing::warn!(error = %error, "node lease renewal failed"),
+            _ = heartbeat.tick() => {
+                // Deployment reads may stall behind large Cell publication. Keep
+                // heartbeat renewal independent so accepted work retains authority.
+                guard.check()?;
+                progress = progress.checked_add(1).ok_or(ServerError::Clock)?;
+                let now_ms = unix_now_ms()?;
+                let next = identity.sign(progress, now_ms)?;
+                let mut current = observed.lock().await;
+                let refresh_started = Instant::now();
+                match directory.refresh(&current, next, now_ms).await {
+                    Ok(refreshed) => {
+                        *current = refreshed;
+                        renew_node_lease(&guard, &current)?;
+                    }
+                    Err(error) => tracing::warn!(error = ?error, "node lease renewal failed"),
+                }
+                if refresh_started.elapsed() > RENEW_INTERVAL {
+                    tracing::warn!(
+                        refresh_ms = refresh_started.elapsed().as_millis(),
+                        lease_remaining_ms = guard.remaining().as_millis(),
+                        "node lease refresh was slow"
+                    );
+                }
+            }
         }
     }
+}
+
+async fn check_deployment_after_interval(deployment: Deployment) -> cellule_runtime::Result<()> {
+    tokio::time::sleep(RENEW_INTERVAL).await;
+    deployment.require_ready().await
 }
 
 pub(crate) fn renew_node_lease(

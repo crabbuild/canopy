@@ -28,8 +28,17 @@ async fn status(request: reqwest::RequestBuilder, expected: StatusCode) -> Resul
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_lfs_uses_ssh_identity_for_push_pull_and_locks_after_restore() -> Result {
+    stock_lfs_ssh_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn stock_lfs_ssh_real_provider_round_trip() -> Result {
+    stock_lfs_ssh_round_trip(real_provider_store()?).await
+}
+
+async fn stock_lfs_ssh_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let host = ssh_key::PrivateKey::new(
         ssh_key::private::Ed25519Keypair::from_seed(&[22; 32]).into(),
         "test",

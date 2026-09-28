@@ -79,7 +79,10 @@ const COMMANDS: [OperationDescriptor; 9] = [
     operation(1),
     operation_with_codec(3, 4),
     operation_with_codec(4, 6),
-    operation_with_codec(5, 3),
+    OperationDescriptor {
+        input_limit: object_batch::INPUT_LIMIT,
+        ..operation_with_codec(5, 3)
+    },
     operation_with_codec(6, 2),
     operation_with_codec(7, 2),
     operation_with_codec(8, 2),

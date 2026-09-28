@@ -119,7 +119,7 @@ async fn native_changes(
     .await?;
     let fields: Vec<_> = raw.split(|b| *b == 0).filter(|v| !v.is_empty()).collect();
     let mut files = BTreeMap::new();
-    for pair in fields.chunks_exact(2) {
+    for pair in fields.as_chunks::<2>().0 {
         let header: Vec<_> = std::str::from_utf8(pair[0])?
             .trim_start_matches(':')
             .split(' ')

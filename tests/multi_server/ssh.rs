@@ -384,10 +384,19 @@ async fn ssh_push_options_cover_pack_and_delete_only_requests() -> Result {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_ssh_clone_push_fetch_filters_and_revocation_survive_disk_loss() -> Result {
+    stock_ssh_round_trip(Arc::new(InMemory::new())).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "isolated RustFS qualification"]
+async fn stock_ssh_real_provider_round_trip() -> Result {
+    stock_ssh_round_trip(real_provider_store()?).await
+}
+
+async fn stock_ssh_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
     let host = ssh_key::PrivateKey::new(
         ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]).into(),

@@ -1,4 +1,8 @@
 //! HTTP API for dynamic repository creation and Git routing.
+#![allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses without boxing each rejection"
+)]
 
 mod accounts;
 mod authorization;

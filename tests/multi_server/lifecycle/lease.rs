@@ -42,8 +42,8 @@ async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Resu
     store.arm(ControlState::Idle);
     let shutdown = tokio::spawn(server.shutdown());
     store.wait().await?;
-    // Runtime drain must retain heartbeat ownership beyond the ten-second lease.
-    tokio::time::sleep(Duration::from_secs(12)).await;
+    // Runtime drain must retain heartbeat ownership beyond the node lease.
+    tokio::time::sleep(Duration::from_secs(32)).await;
     let live = directory.is_live(session, now()?).await;
     store.proceed.notify_one();
     let drained = timeout(Duration::from_secs(10), shutdown).await??;
@@ -51,6 +51,61 @@ async fn node_lease_remains_live_through_a_drain_longer_than_one_lease() -> Resu
     drained?;
     assert!(!directory.is_live(session, now()?).await?);
     wait_for_cleanup(&data).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_deployment_read_does_not_block_node_lease_renewal() -> Result {
+    use canopy_server::{CanopyApplication, build_descriptor};
+    use cellule_app::CellApplication;
+    use cellule_runtime::{ltx::CellStorageLayout, node::NodeDirectory};
+
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let address = available_address().await?;
+    let settings = config(address, files.path().join("node"));
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../../Cargo.lock"),
+        env!("CARGO_PKG_VERSION"),
+    ))?;
+    let layout = CellStorageLayout::new(
+        cellule_store::Store::new(store.clone()),
+        settings.store_prefix.clone(),
+        *settings.application.as_bytes(),
+    );
+    let directory = NodeDirectory::new(
+        layout.clone(),
+        settings.fleet,
+        settings.image,
+        application.registry().release_digest(),
+    );
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    let now = || -> Result<i64> {
+        Ok(i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?)
+    };
+    let session = directory
+        .live(now()?, 2)
+        .await?
+        .first()
+        .ok_or("node advertisement missing")?
+        .session();
+    *store.read.lock().unwrap() = Some((layout.release_path(), 1));
+    store.wait().await?;
+    tokio::time::sleep(Duration::from_secs(32)).await;
+    let live = directory.is_live(session, now()?).await?;
+    let readiness = reqwest::Client::new()
+        .get(format!("http://{address}/readyz"))
+        .send()
+        .await?;
+    store.proceed.notify_one();
+    let drained = timeout(Duration::from_secs(10), server.shutdown()).await?;
+    assert!(live, "deployment read stalled advertisement renewal");
+    assert_eq!(readiness.status(), reqwest::StatusCode::OK);
+    drained?;
     Ok(())
 }
 
@@ -69,8 +124,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     let startup = tokio::spawn(CanopyServer::start(settings, store.clone()));
     store.wait().await?;
     // Deployment validation happens before this node owns any Cell. Its I/O
-    // must not spend the ten-second authority lease used by subsequent startup.
-    tokio::time::sleep(Duration::from_secs(11)).await;
+    // must not spend the node authority lease used by subsequent startup.
+    tokio::time::sleep(Duration::from_secs(31)).await;
     let preflight_finished = i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -111,7 +166,7 @@ async fn delayed_renewal_reply_does_not_extend_confirmed_authority() -> Result {
         .lock()
         .unwrap()
         .ok_or("renewal expiry missing")?;
-    // Delay the successful response while the initial ten-second lease is live.
+    // Delay the successful response while the initial node lease is live.
     // Its replacement still expires at the originally signed wall-clock time.
     tokio::time::sleep(Duration::from_secs(4)).await;
     store.proceed.notify_one();

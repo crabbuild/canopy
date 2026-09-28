@@ -811,7 +811,7 @@ that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
 `Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to revision
-`75462e46c203256fb3fe70903908103f619d99b2`. Canopy remains a separate
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. Canopy remains a separate
 product crate and builds without a local Cellule checkout. There are no Crab
 product/server or Xet dependencies.
 
@@ -832,7 +832,7 @@ candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
 are checked before allocation and canonical OIDs before storage. SQLite lookups
 group up to 128 candidate IDs; object publication groups up to 128 records and
-768 KiB of inline bytes in one Cell transaction, targeting 64 MiB of SQLite
+3 MiB of inline bytes in one Cell transaction, targeting 64 MiB of SQLite
 object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.

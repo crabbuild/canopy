@@ -181,23 +181,26 @@ pub(crate) async fn read(
     size: u64,
     offset: u64,
 ) -> object_store::Result<Bytes> {
-    // Pin the manifest across reads. Parts are create-only and the caller verifies
-    // the full content hashes before yielding the final bytes.
-    let (_, manifest) = bounded(
-        store,
-        path,
-        GetOptions {
-            if_match: meta.e_tag.clone(),
-            version: meta.version.clone(),
-            ..Default::default()
-        },
-        16,
-    )
-    .await?;
-    if &manifest[..8] != MAGIC || manifest[8..] != size.to_le_bytes() {
-        return Err(invalid());
-    }
     let length = (size - offset).min(PART_BYTES as u64) as usize;
+    // Parts are create-only. The caller verifies whole-body hashes before
+    // accepting the last part, so one final manifest check fences replacement
+    // without an extra provider round trip for every earlier part.
+    if offset + length as u64 == size {
+        let (_, manifest) = bounded(
+            store,
+            path,
+            GetOptions {
+                if_match: meta.e_tag.clone(),
+                version: meta.version.clone(),
+                ..Default::default()
+            },
+            16,
+        )
+        .await?;
+        if &manifest[..8] != MAGIC || manifest[8..] != size.to_le_bytes() {
+            return Err(invalid());
+        }
+    }
     let (_, bytes) = bounded(
         store,
         &part(path, offset / PART_BYTES as u64),

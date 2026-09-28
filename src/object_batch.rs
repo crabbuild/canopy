@@ -16,6 +16,9 @@ use crate::{
 
 pub(crate) const MAX_OBJECTS: usize = 128;
 pub(crate) const VERIFY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const INPUT_LIMIT: u32 = 4 * 1024 * 1024;
+// Leave room for record metadata inside Cellule's bounded command wire format.
+const INLINE_BATCH_BYTES: usize = 3 * 1024 * 1024;
 
 /// Batches small objects together and verifies oversized SQLite objects individually.
 #[derive(Default)]
@@ -38,7 +41,8 @@ impl ObjectBatch {
             ObjectStorage::External { .. } => 0,
         };
         if self.objects.len() == MAX_OBJECTS
-            || bytes > INLINE_OBJECT_LIMIT - self.inline_bytes
+            || bytes > INLINE_OBJECT_LIMIT
+            || bytes > INLINE_BATCH_BYTES - self.inline_bytes
             || i64::try_from(verified).is_err()
             || (!self.objects.is_empty()
                 && verified > VERIFY_BATCH_BYTES.saturating_sub(self.verified_bytes))
@@ -120,7 +124,9 @@ impl WireValue for ObjectBatch {
             let storage = match decoder.read_u8()? {
                 0 => {
                     let body = decoder.read_bytes()?;
-                    if body.len() > INLINE_OBJECT_LIMIT - batch.inline_bytes {
+                    if body.len() > INLINE_OBJECT_LIMIT
+                        || body.len() > INLINE_BATCH_BYTES - batch.inline_bytes
+                    {
                         return Err(CodecError::Invalid(
                             "object batch exceeds inline byte budget",
                         ));
