@@ -1,11 +1,29 @@
-# Git compatibility
+# Check Git compatibility
 
-Canopy supports ordinary SHA-1 and SHA-256 Git repositories over smart HTTP. It is not yet
-a fully compatible replacement for every Git server capability. The native
-`git-http-backend` owns protocol negotiation and pack processing; Canopy must
-also persist the accepted objects and refs before returning success.
+Use this reference to decide whether a stock Git or Git LFS workflow is supported and what remains to qualify it. Canopy supports SHA-1 and SHA-256 repositories over Git smart HTTP and an optional SSH listener. It does not claim every Git server capability or every object-store provider.
+
+Native Git negotiates the wire protocol and processes packs. Canopy authorizes the operation, verifies objects, and publishes accepted refs and retry outcomes in a Repository Cell before reporting success:
+
+```text
+stock Git client
+    │ smart HTTP or SSH
+    ▼
+Canopy gateway ──► native Git pack/protocol worker
+    │                         │ parsed result
+    └─────────────┬───────────┘
+                  ▼
+         Repository Cell transaction
+         ACL · branch rules · refs · saved reply
+                  │
+                  ▼
+           client success report
+```
+
+The [verified operations](#verified-operations) table records positive stock-client evidence. [Missing or restricted](#missing-or-restricted) lists limits and open gates. [Provider and size qualification](#provider-and-size-qualification) explains how to rerun the isolated RustFS checks; [permanent gates](#permanent-gates-and-remaining-work) links the tests.
 
 ## Verified operations
+
+These operations have stock-client coverage at the stated test boundaries. A local or isolated RustFS pass does not establish cloud-provider, cross-platform or production-load support.
 
 | Surface | Current evidence |
 | --- | --- |
@@ -25,6 +43,14 @@ also persist the accepted objects and refs before returning success.
 | SHA-256 Git repositories | Repository format selected at creation; stock HTTP/SSH push and clone, annotated tag, external blob, LFS pull, browser resolve, filtered clone, incremental fetch, reviewed pull request and required check merge, native merge/squash/rebase candidates, and fresh-disk restore; strict full `git fsck`; Git/LFS and candidate recovery also pass against isolated RustFS |
 | Recovery without original local disk | Rebuild from durable Cell state, compare every live ref/OID and run strict full fsck |
 
+For a public repository, replace the sample host, owner and name with a real Canopy URL. These are ordinary Git commands; private repositories also need a configured credential helper or SSH key:
+
+```bash
+git clone https://canopy.example.com/example/project.git
+git -C project fetch --prune origin
+git -C project fsck --strict --full
+```
+
 Local operations such as commit, diff, merge, rebase, stash and cherry-pick run
 in the client's Git checkout. They require the host to preserve Git objects
 and refs, rather than separate server implementations of those commands.
@@ -32,6 +58,8 @@ Submodule targets require their own accessible repository URLs; recursively
 cloning mixed Git/LFS submodules still needs an explicit compatibility gate.
 
 ## Missing or restricted
+
+Use this table before claiming compatibility for a new client, provider or transport. The acceptance column names the evidence still needed.
 
 | Surface | Current behavior | Acceptance gate |
 | --- | --- | --- |
@@ -63,6 +91,18 @@ native-worker deadlines remain. These are not an unlimited-capacity claim.
 
 ## Provider and size qualification
 
+Run the smaller provider checks first when the host lacks a large test volume. From the repository root, with Docker, the AWS CLI, Git and Git LFS installed:
+
+```bash
+python3 scripts/qualify_size.py --provider-only
+```
+
+Run the full release-mode gate with at least 40 GiB free in the Docker VM. `--docker-volume` gives the fixture an isolated Docker volume and removes it after the run:
+
+```bash
+python3 scripts/qualify_size.py --docker-volume --release
+```
+
 `python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
 `tests/multi_server/size.rs` plus the ignored SHA-256, signed-push, bulk-ref and
 filtered-clone provider tests in `tests/multi_server/`. It requires Docker, the
@@ -71,7 +111,7 @@ to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
 Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
 The fixture uses public test credentials and removes its own container and data.
-The Verify workflow explicitly invokes this gate; ordinary `cargo test` skips
+The Verify workflow invokes this gate, but its current `ubuntu-latest` runner does not have the required temporary space; [release CI work](../ROADMAP.md#r04-trustworthy-ci-and-release-artifacts) remains open. Ordinary `cargo test` skips
 the resource-intensive provider tests. `--provider-only` runs the smaller Git
 compatibility probes against an isolated Docker volume when the host's large
 test volume is unavailable. For the full gate on a Docker VM with sufficient

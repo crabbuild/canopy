@@ -1,7 +1,43 @@
-# Canopy persisted contracts
+# Understand Canopy's persisted contracts
 
-These are the current development contracts. Freeze them and add migrations
-before admitting persistent customer repositories.
+This reference defines the identities, storage boundaries, authorization checks and retry behavior that Canopy must preserve across node loss. It describes the current development format. [Versioned migrations](../ROADMAP.md#r01-safe-upgrades-and-schema-migration) are still required before persistent customer repositories can survive upgrades.
+
+## Find a contract
+
+| You are changing… | Start with… |
+| --- | --- |
+| IDs, object layout, refs or push replay | [Core identifiers and limits](#core-identifiers-and-limits) and [Git publication](#git-publication-and-retry) |
+| Create, rename or list repositories | [Repository creation and authorized discovery](#repository-creation-and-authorized-discovery) |
+| Repository routing, eviction or resource admission | [Repository routing and residency](#repository-routing-and-residency) |
+| Accounts, tokens, SSH keys or repository access | [Accounts and authentication](#accounts-and-authentication) |
+| Issues, checks, branch rules or pull requests | [Collaboration and policy](#collaboration-and-policy) |
+| Browse, public reads or Git LFS | [Repository browser](#repository-browser), [public visibility](#public-visibility-and-anonymous-readers) and [Git LFS locking](#git-lfs-locking) |
+| Maintenance, backup or restore | [Deployment release enrollment and maintenance](#deployment-release-enrollment-and-maintenance) and [independent backup copies](#independent-backup-copies-and-isolated-restore) |
+
+**Cell** means a fenced, durable unit of state managed by Cellule. The Directory Cell resolves accounts and repository names. Each Repository Cell owns the authoritative SQLite state for one repository UUID. A bare Git repository on local disk is a cache that Canopy may rebuild.
+
+```text
+request
+  │ authenticate and resolve name
+  ▼
+Directory Cell ── repository UUID ──► Repository Cell
+                                         │ refs, ACL, issues, PRs, checks
+                                         │ Git object metadata and small bodies
+                                         ├──► immutable large Git/LFS bodies
+                                         │      in object storage
+                                         └──► disposable native Git cache
+                                                for wire protocol work
+```
+
+The following tables and sections state limits and preconditions. They are contracts, not evidence that every release gate is closed. Use the [delivery plan](delivery-plan.md) for qualification status.
+
+## Core identifiers and limits
+
+These tables group the current format and admission contracts by concern. A larger runtime ceiling is not a measured capacity claim.
+
+### Identity and ownership
+
+The Directory Cell binds names and accounts to durable identities; the Repository Cell owns repository access and data.
 
 | Surface | Current value | Owner |
 | --- | --- | --- |
@@ -20,7 +56,14 @@ before admitting persistent customer repositories.
 | Repository partition | 33-byte entity partition derived from a canonical 16-byte UUID (versions 1–8, RFC variant) | `repository_target`, `CellType::entity_partition` |
 | Repository Cell | one SQL Cell per repository UUID | Cellule catalog and authority |
 | Local residency | a reserved Directory SQL slot and at most `max_active_repositories` repository gateway entries, bound to local or remote Cells; inactive local Cells release ownership before reuse | Repository manager and Cellule transfer preflight |
-| Git object format | SHA-1 object IDs from canonical Git type, decimal length, NUL and body | `object_id` |
+
+### Git and LFS storage
+
+Small Git objects remain in SQLite. Large Git blobs and Git LFS bodies use immutable object-store bytes with SQLite references and verification metadata.
+
+| Surface | Current value | Owner |
+| --- | --- | --- |
+| Git object ID | SHA-1 or SHA-256, according to the repository's immutable object format, over canonical Git type, decimal length, NUL and body | `object_id` |
 | Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
 | Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB without a fixed byte quota | `object_chunks`, verified before object publication |
 | Object publication | at most 128 records, 3 MiB aggregate inline payload; SQLite verification targets 64 MiB, with larger objects verified individually | `PutObjects`, operation 5, codec 3 |
@@ -28,6 +71,13 @@ before admitting persistent customer repositories.
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
 | External bodies | No fixed logical byte quota; 8 MiB immutable parts, a 16-byte Git manifest or a part-digest LFS manifest | Each conditional S3 copy handles one bounded part |
+
+### Admission and publication
+
+These limits bound individual requests and publication work. They do not cap total repository count, host memory or provider throughput.
+
+| Surface | Current value | Owner |
+| --- | --- | --- |
 | Node transfer admission | eight active Git/LFS requests across repositories; immediate 503 with `Retry-After: 1` when full | repository HTTP router |
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout with no whole-transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | No receive-pack byte quota; 64 MiB for other requests; 120-second input idle deadline | anonymous request spool |
@@ -38,6 +88,23 @@ before admitting persistent customer repositories.
 | Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
 | Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
+
+## Git publication and retry
+
+A push first stages verified objects and a ref plan. The final Repository Cell transaction rechecks authorization, branch policy and ref versions, then publishes accepted refs with the replayable result. A failure before that transaction cannot expose partial refs.
+
+```text
+stock Git receive-pack
+    │ native validation and bounded object ingestion
+    ▼
+verified object records ──► graph certificates ──► staged ref plan
+                                                    │ final Cell transaction
+                                                    ▼
+                                       refs + generation + saved response
+                                                    │
+                                                    ▼
+                                           Git report to client
+```
 
 The `objects` table stores one verified kind, size and independent BLAKE3
 digest per Git OID. External objects also store SHA-256. Readers verify the
@@ -64,6 +131,8 @@ This changes the development schema and completion codec; use a fresh deployment
 prefix, with no compatibility reader for the old inline completion shape.
 Rejected or interrupted pushes may leave unreferenced objects; collection is not
 implemented yet.
+
+### Ref snapshots and default branch
 
 The `ref_generation` singleton advances once in the same transaction as each
 accepted ref plan or default-branch update, including selecting the same branch.
@@ -94,6 +163,19 @@ prevents name reuse from retargeting a stale administrative write. Malformed
 input returns 422; stale identity/generation or an absent target in a repository
 with live branches returns 409. Forbidden repository metadata is hidden as 404;
 an authorized collaborator attempting an owner operation receives 403.
+
+For example, read the current preconditions before changing the default branch. Set `CANOPY_BASE_URL` to your HTTPS ingress and `CANOPY_TOKEN` to an active admin-scoped owner token. The branch you select must already exist unless the repository has no live branches.
+
+```bash
+export CANOPY_BASE_URL='https://canopy.example.com'
+export CANOPY_TOKEN='your_access_token_here'
+
+curl --fail-with-body --silent --show-error \
+  --header "Authorization: Bearer ${CANOPY_TOKEN}" \
+  "${CANOPY_BASE_URL}/api/repositories/example/default-branch"
+```
+
+Use the returned `repository_id` and `generation` in a later `PUT`. After a 409 or an uncertain reply, repeat the `GET` before deciding whether to retry; do not invent a new generation.
 
 The cache key includes HEAD and the coherent ref generation. New generations
 get a new, disk-accounted HEAD file; active readers retain their original cache.
@@ -175,6 +257,8 @@ certificate transaction has explicit object/byte limits, but large individual
 objects, traversal frontier memory and production-scale latency still need
 capacity qualification.
 
+### HTTP push identity and exact replay
+
 For receive-pack POSTs, `Idempotency-Key` must be one canonical lowercase,
 hyphenated UUID. Missing IDs are generated, and recorded responses include
 `X-Canopy-Push-Id`. The request digest covers the `canopy-git-push-v2` domain,
@@ -243,6 +327,10 @@ create a branch protection policy. Git's
 [receive-pack implementation](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L1428-L1454)
 otherwise rejects deletion of the branch named by HEAD even in this bare
 cache. Branch rules are enforced again in the Repository Cell transaction.
+
+## Repository creation and authorized discovery
+
+The Directory Cell reserves a name and UUID before the Repository Cell is provisioned. Listings use Directory candidates for reachability and recheck the Repository Cell for current access; a candidate never grants permission.
 
 A name reservation commits before its Repository Cell is provisioned. A retry
 reads the previously reserved UUID and completes the same Cell instead of
@@ -315,6 +403,10 @@ names return 404. It returns `owner`, `name`, `repository_id`, `clone_url`, `rol
 token scope remains an independent restriction. Repository access is checked at
 read admission, as for existing Git/LFS reads. Rename and ACL/default-branch
 changes across Cells are not presented as one atomic snapshot.
+
+## Repository routing and residency
+
+Routing uses the Directory Cell for identity and the Repository Cell for current authorization. A request pins its route until the response body finishes; resource admission limits cold transitions separately from ready local routes.
 
 Repository residency is bounded independently of the number of directory
 entries. A request pins its loaded repository before using its Cell or Git/LFS
@@ -1070,8 +1162,12 @@ require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current build pins Cellule revision
-`cfcc00a7144414e0437d490ad94b5beb9152f6a3`; the runtime integration below also
-requires a fresh prefix because the entity partition format changed.
+`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. The earlier entity-partition
+cutover also made pre-cutover prefixes incompatible; no migration is available.
+
+## Accounts and authentication
+
+Account state and credentials live in the Directory Cell. The sections below describe how current credentials, SSH keys and account status affect new requests and mutations.
 
 ### Account disablement
 
@@ -1372,6 +1468,10 @@ arbitrary wall-clock rollback/skew is not a supported expiry guarantee.
 The Directory schema and module digest change. Existing preview deployments
 need a fresh prefix; there is no automatic migration or credential reactivation.
 
+
+## Collaboration and policy
+
+Issues, checks, branch rules and pull requests live with Git state in the Repository Cell. Their writes use the same authorization and durable publication boundary, so a node change must not change the visible result.
 
 ### Issues and comments
 
@@ -2401,7 +2501,7 @@ end requires the exact operation and drain proof, then uses the upstream release
 CAS. Retrying completed end returns its unchanged Ready record.
 
 The upstream contracts are implemented in pinned Cellule revision
-`cfcc00a7144414e0437d490ad94b5beb9152f6a3`, specifically runtime
+`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`, specifically runtime
 `cell/application.rs`, `recovery/release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
 admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
@@ -2569,7 +2669,7 @@ may have its own buffers; total process RSS, outgoing socket timeouts, fairness
 and production throughput still need broader qualification.
 
 
-### Linear rebase preparation
+## Linear rebase preparation
 
 `rebase` uses the same durable intent, immutable candidate ref, current ACL,
 revision, review, check and atomic publication contracts as other candidates.
@@ -2639,7 +2739,7 @@ remain required. No new configuration surface was added for diagnostic output.
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
 `cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. `cellule-types` is transitive.
+`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. `cellule-types` is transitive.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.

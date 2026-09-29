@@ -1,13 +1,24 @@
-# Repository density and latency
+# Measure repository density and latency
 
-Current dependencies: Cellule crates at `cfcc00a7144414e0437d490ad94b5beb9152f6a3`.
-Earlier runs below retain their original pins and do not establish this build’s
-density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
-## Current large-transfer qualification
+## Read the result before the target
+
+| Question | Current answer | Where to verify it |
+| --- | --- | --- |
+| Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
+| Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
+| Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
+| Is 10,000 repositories per node a measured capacity? | No; it is a proposed reference-node target | [Required outcome](#required-outcome) and [qualification rules](#performance-qualification-rules) |
+| Is idle ownership proven at 1,000 active Cells? | No; a run on an older Cellule revision missed renewal coverage for nine Cells, and the current pin needs a repeat | [Observed idle renewal ceiling](#observed-idle-renewal-ceiling) |
+
+The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
+
+## Recorded large-transfer qualification
 
 The release-mode `scripts/qualify_size.py --docker-volume --release` gate passed
-against a local RustFS S3-compatible provider with this Cellule revision. A
+against a local RustFS S3-compatible provider with Cellule revision
+`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. A
 595,260,810-byte Git pack produced a 591,101,952-byte Repository Cell database.
 The same run uploaded a 5,377,097,728-byte LFS object, restarted with fresh
 local storage, cloned the repository, passed `git fsck --strict --full`, and
@@ -69,7 +80,20 @@ remain open.
 
 ## Node design and resource model
 
-Use three residency states independently of repository identity:
+Use three residency states independently of repository identity. Only cold and active behavior are implemented today; retained, verified database files without an open Cell are a proposed runtime capability.
+
+```text
+Cold ── request + fenced restore ──► Active
+  ▲                                  │   │
+  │ release ownership;               │   │ proposed close with
+  │ discard local files              │   │ verified retained files
+  └──────────────────────────────────┘   ▼
+                                Cached (not implemented)
+                                         │ validate root + reopen
+                                         └──────────────────────► Active
+```
+
+The states have different retained resources and request paths:
 
 | State | Retained resources | Request path |
 | --- | --- | --- |
@@ -77,7 +101,6 @@ Use three residency states independently of repository identity:
 | Cached | Verified local database/object files under a disk budget; no open SQL handle or per-repository worker | Validate authority and cache generation, then reopen through the runtime |
 | Active | Cell handle, bounded SQL state and request/background pins | Route to the owning worker; enqueue within its admission budget |
 
-The cached state is a proposed runtime contract, not implemented behavior.
 Closing a SQL handle, releasing Cell ownership and deleting cached files are
 separate decisions. Every transition must account for foreground streams and
 primitive obligations. A waiting workflow is durable state; runnable work and
@@ -403,7 +426,19 @@ python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 It verifies concurrency bounds, complete scheduled-outcome accounting, absence
 of retries, queue-delay inclusion and credential exclusion from the report.
 
-## Initial 1,000-repository read measurements
+## Measurement history
+
+Each section below records one implementation or measurement slice. A passing local or mostly empty workload is evidence only for that revision and fixture. The current status table at the top of this page summarizes what the results establish.
+
+| Follow this investigation | Start here |
+| --- | --- |
+| Baseline read and cold-routing latency | [Initial 1,000-repository reads](#initial-1000-repository-read-measurements), [Directory stall](#traced-directory-stall-with-1000-active-cells) |
+| Linux containment and recovery | [Bounded Linux density](#bounded-linux-density-qualification) |
+| Object and ref cache behavior | [Incremental body reuse](#incremental-object-body-reuse), [indexed refresh](#indexed-object-refresh), [warm ref validation](#warm-git-ref-generation-validation) |
+| Ownership and renewal safety | [Startup lease freshness](#startup-lease-freshness-during-recovery-investigation), [renewal response bounds](#renewal-response-latency-and-authority-bounds), [idle renewal ceiling](#observed-idle-renewal-ceiling) |
+| Admission and fairness | [Concurrent activation](#concurrent-repository-activation), [account transfer isolation](#account-transfer-isolation-with-bounded-burst-admission) |
+
+### Initial 1,000-repository read measurements
 
 The `34aa904` production code was exercised against RustFS
 `1.0.0-beta.8-glibc` on the shared Darwin arm64 development host, with client,
@@ -449,7 +484,7 @@ binary to `34aa904`; the fixture's end-of-run Git HEAD includes later work and i
 not the binary source revision.
 
 
-## Configured 100-Cell process qualification
+### Configured 100-Cell process qualification
 
 A development build of `d03f3cb` ran with `max_active_repositories: 100` against
 RustFS `1.0.0-beta.8-glibc`; artifact ID `canopy-active100-4a68afc585f3`.
@@ -480,7 +515,7 @@ The small corpus, short schedules, different build profile and active-set sizes
 prevent a controlled performance comparison with the initial 1,000-identity run.
 
 
-## Diagnosing metadata latency
+### Diagnosing metadata latency
 
 Enable `RUST_LOG=warn,canopy_server::server=debug,cellule_runtime::actor=debug`
 for an isolated qualification run. Canopy emits `repository request stage completed`
@@ -514,7 +549,7 @@ a runtime fence. Preserve errors and publication evidence before changing
 scheduling, deadlines or cache policy.
 
 
-## Initial 1,000-active-Cell read results
+### Initial 1,000-active-Cell read results
 
 The optimized `58eb0b5` run, artifact `canopy-active1000-119a2ac48d4f`, configured
 1,000 repository slots and 4 GiB of local disk admission. It seeded 1,000
@@ -559,7 +594,7 @@ drain can lose the authority it still needs. The next run must verify the correc
 renewal lifetime as well as request-stage latency.
 
 
-## Traced Directory stall with 1,000 active Cells
+### Traced Directory stall with 1,000 active Cells
 
 The optimized `fccf1de` rerun, artifact `canopy-active1000-fixed-1a6092e5a8ba`,
 seeded all 1,000 identities in 156.768 seconds. Its first read gate failed:
@@ -579,7 +614,7 @@ latency: the slow HTTP attempts took 2,388–2,728 ms, so the traced lookup does
 account for the entire wait. Logging, scheduling and other uninstrumented time
 remain possible contributors.
 
-The pinned runtime marks a Cell busy while quiet compaction owns the publisher,
+The runtime pinned for this measurement marks a Cell busy while quiet compaction owns the publisher,
 and its scheduler blocks queries as well as commands while busy. The existing
 upstream actor test explicitly proves commands wait during compaction. This
 contract plus the trace supports investigating read admission during compaction;
@@ -595,7 +630,7 @@ executing SIGKILL recovery and the final graceful drain. This separates verifica
 of the lease-lifetime fix from the unresolved read-latency gate.
 
 
-## Independent read and lifecycle gates
+### Independent read and lifecycle gates
 
 The next optimized `fccf1de` run, `canopy-active1000-evidence-1f3d0e0b5a45`,
 keeps read failures in the process outcome while continuing independent recovery
@@ -642,7 +677,7 @@ and this process run together qualify the corrected renewal lifetime for the
 tested SQL-only workload.
 
 
-## Synchronous logging stall confirmed
+### Synchronous logging stall confirmed
 
 The correlated `2a96b43` run (`canopy-request-trace-9b929b9401af`) completed
 seeding 1,000 identities in 742.122 seconds. Warm metadata had 273 successes
@@ -692,7 +727,7 @@ The script owns and cleans up its server process. The caller owns provider-prefi
 cleanup. Reports and server logs remain in the chosen work directory.
 
 
-## Thousand-Cell repeat with nonblocking diagnostics
+### Thousand-Cell repeat with nonblocking diagnostics
 
 The optimized `78fef9d` run, `canopy-buffered-logging-bc264a7287ff`, seeded
 1,000 identities in 77.247 seconds with 1,000 resident slots and a 4 GiB local
@@ -724,7 +759,7 @@ repeated in this focused diagnosis run; its prior proof remains separately
 recorded. Idle ownership cost, broader resource enforcement and mixed-workload
 qualification remain open.
 
-## Bounded Linux density qualification
+### Bounded Linux density qualification
 
 The repeatable `scripts/benchmark_container.py` harness materializes the checked-in
 deployment profile, verifies actual cgroup/mount/descriptor limits, and keeps
@@ -788,7 +823,7 @@ large-transfer, 5,000/10,000-Cell or production-provider qualification. Descript
 capacity was a concrete deployment failure, fixed independently of the remaining
 latency work. Retain the failed seed and the passing repeat together.
 
-## Incremental object-body reuse
+### Incremental object-body reuse
 
 The optimized process run `canopy-incremental-cache-f9c6c39fb933` exercises the
 shared object cache against colocated RustFS `1.0.0-beta.8-glibc` on the macOS
@@ -840,7 +875,7 @@ collect scanned/reused/body counts. The immutable object cache remains disposabl
 SQLite and verified external bodies are the recovery source.
 
 
-## Indexed object refresh
+### Indexed object refresh
 
 `objects.sequence` is now the insertion-ordered SQLite primary key, with a unique
 OID index. AUTOINCREMENT prevents reuse of a committed sequence; failed/ignored
@@ -892,7 +927,7 @@ scanned headers as well as body reuse; enable `canopy_server::git_gateway=debug`
 for the required diagnostic evidence. Broader capacity and pack reuse remain open.
 
 
-## Concurrent repository activation
+### Concurrent repository activation
 
 Cold activation and eviction now coordinate per repository. A semaphore reserves
 capacity before ownership/storage I/O; its permit stays with the loaded gateway
@@ -959,7 +994,7 @@ Enable `canopy_server::server::residency=debug` to capture transition timings.
 The script cleans its Canopy processes; the caller owns provider-prefix cleanup.
 
 
-## Startup lease freshness during recovery investigation
+### Startup lease freshness during recovery investigation
 
 Two profiling repeats of the 64-repository recovery probe did not reach the
 cold-read phase. Both used the `b14cc3b` implementation and binary SHA-256
@@ -1028,7 +1063,7 @@ wall-clock lifetime into a deadline at call time. The renewal work below address
 that separate defect.
 
 
-## Renewal response latency and authority bounds
+### Renewal response latency and authority bounds
 
 All three Canopy enrollment paths now call `renew_node_lease` only after their
 conditional advertisement refresh succeeds. That function samples response-time
@@ -1047,7 +1082,7 @@ runtime watchdog and HTTP endpoint through a fault-injecting storage wrapper.
 Existing startup and long-drain lease tests were moved into the same lease test
 module without changing their behavior.
 
-The pinned runtime contract is explicit: `NodeLeaseGuard::renew` computes
+The runtime contract examined for this test is explicit: `NodeLeaseGuard::renew` computes
 `Instant::now() + (expires_at_ms - now_ms)` and rejects already-fenced guards.
 Canopy must supply time measured after storage confirmation. Initial enrollment
 still starts its guard before publication, so request latency is already consumed
@@ -1086,7 +1121,7 @@ or dependency changes were introduced. Full repository primitives, bounded
 mixed-workload density and the remaining cold-restore investigation stay open.
 
 
-## Git v2 capability discovery without object hydration
+### Git v2 capability discovery without object hydration
 
 The gateway now treats the initial `GET info/refs?service=git-upload-pack`
 with `Git-Protocol: version=2` as native capability discovery. It reads the
@@ -1154,7 +1189,7 @@ logs and the original failed teardown observation are retained in the dedicated
 qualification target. Full primitive composition and mixed-workload repository
 density remain open.
 
-## Account admission for cold repository transitions
+### Account admission for cold repository transitions
 
 One authenticated account can now hold at most 16 of the node's 32 pending
 repository transitions. All of its tokens and repository endpoints share that
@@ -1200,7 +1235,7 @@ a latency improvement or SLO. Two accounts can still saturate all 32 slots;
 transfer admission, Directory admission, resource-derived restore concurrency,
 full primitive composition and thousand-repository mixed workloads remain open.
 
-## Ref discovery without full history hydration
+### Ref discovery without full history hydration
 
 Native v0 upload-pack and receive-pack advertisements, and recognized v2
 `ls-refs`, now prepare a coherent snapshot's ref targets and annotated-tag
@@ -1284,7 +1319,7 @@ files and their 2,113,001 compressed bytes. Both logs contain no warnings/errors
 Graceful shutdown and provider cleanup passed. The full primitive and production
 density gates remain open.
 
-## Ref discovery during full-history restoration
+### Ref discovery during full-history restoration
 
 Discovery's optional warm-cache lookup now uses Tokio's nonwaiting `try_lock`.
 If another request owns the mutex while preparing history, discovery builds its
@@ -1329,7 +1364,7 @@ with the final binary; it does not inject the paused read. The public-HTTP fault
 test supplies the overlap evidence. Neither run establishes a production SLO or
 full-primitive repository density.
 
-## Account transfer isolation with bounded burst admission
+### Account transfer isolation with bounded burst admission
 
 The node shares eight heavy-request slots across repositories, with four per
 account and a separate four-slot anonymous pool. All tokens for an account
@@ -1381,7 +1416,7 @@ latency SLO. A lone account cannot use more than four active transfer slots;
 combined-account fairness, large slow transfers, authentication capacity and
 full-primitive thousand-repository density remain unqualified.
 
-## Reproducing idle ownership measurements
+### Reproducing idle ownership measurements
 
 `examples/benchmark_idle.rs` runs the actual `CanopyServer` with a measured
 object-store client. It seeds empty SQL repository Cells through authenticated
@@ -1423,7 +1458,7 @@ in-process seed client. This is qualification instrumentation, not a production
 metrics endpoint or an aggregate resource limit. Normal service configuration,
 protocols, dependency revisions and stored formats are unchanged.
 
-### Observed idle renewal ceiling
+#### Observed idle renewal ceiling
 
 Run `canopy-idle-density-116abedfec0f` used Cellule revision
 `56b35ab376ff93ec85d502c70bb436c918463958`, Canopy base `542d377` plus
@@ -1450,7 +1485,7 @@ three repositories: four active Cells produced about 1.200 updates/s,
 and the fresh node with only Directory active produced about 0.300 updates/s.
 That restart used a fresh local directory, not a retained database cache.
 
-The pinned runtime explains a likely mechanism. In `cellule-runtime/src/actor.rs`,
+The runtime pinned for this run explains a likely mechanism. In `cellule-runtime/src/actor.rs`,
 `start_due_renewals` runs only on a 100-ms tick and admits at most 32 renewals.
 Renewal completion calls `continue_cell` but does not refill renewal capacity.
 Selection iterates a HashMap without deadline ordering. Thus dispatch is capped
@@ -1482,7 +1517,7 @@ instructions. Increasing the concurrency constant alone or relaxing the
 coverage assertion does not establish fair progress. No dependency or
 production server code was changed for this measurement.
 
-## Warm Git ref-generation validation
+### Warm Git ref-generation validation
 
 Warm discovery and fetch previously called `cell_refs` before inspecting the
 existing full Git cache. Every request scanned all 256-row ref pages even when
