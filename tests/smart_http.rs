@@ -32,6 +32,8 @@ mod encoded_input;
 mod native_resources;
 #[path = "smart_http/publication.rs"]
 mod publication;
+#[path = "smart_http/push_uploads.rs"]
+mod push_uploads;
 #[path = "smart_http/ref_snapshots.rs"]
 mod ref_snapshots;
 
@@ -178,6 +180,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             Err(LfsError::Forbidden)
         ));
         assert!(repository.lfs_object(revoked_oid).await?.output.is_none());
+        push_uploads::verify(&gateway).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let teardown_gateway = Arc::clone(&gateway);

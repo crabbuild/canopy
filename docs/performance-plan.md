@@ -77,6 +77,12 @@ objects publish atomically; writers for the same object ID converge while
 different IDs may hydrate in parallel. A cold concurrent stock-Git clone test
 checks complete packs and `git fsck`. This removes one serialization point;
 it does not establish hot-repository throughput or a 10,000-repository result.
+Push upload spooling uses private, budgeted scratch files and can now proceed
+concurrently for one repository. The push transaction—from idempotency check
+and gzip decoding through native Git execution and durable publication—remains
+serialized per repository. A stalled upload regression test checks that a
+second push can finish receiving before the first upload completes; it does
+not establish parallel publication capacity.
 The native walk still traverses requested history on warm requests; native Git's
 own traversal memory is not bounded by the Rust batch size. Structural hydration
 pages certified edges and retains a visited set proportional to the requested
