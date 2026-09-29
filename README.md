@@ -1,5 +1,7 @@
 # Canopy
 
+Start with the [documentation map](docs/README.md) to find the right guide, contract or qualification record.
+
 Canopy is an independent Git hosting service built on `cellule-runtime`,
 `cellule-app` and `cellule-host`. The dedicated `canopy-server` crate owns its product schema, Git gateway and HTTP API. A
 Directory Cell maps an owner and repository name to a stable UUID. Each UUID
@@ -42,9 +44,9 @@ To close admission and drain the fleet, choose a fresh operation UUID and use
 the same binary and configuration as the deployment:
 
 ```bash
-canopy maintenance config.json begin <operation-uuid>
+CANOPY_OPERATION_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+canopy maintenance config.json begin "$CANOPY_OPERATION_UUID"
 canopy maintenance config.json status
-canopy maintenance config.json end <operation-uuid>
 ```
 
 `begin` records the operation before returning. Nodes observe the closed release
@@ -56,17 +58,26 @@ owned/unpublished Cells do not count as drained. `end` requires that proof and
 the matching operation UUID, then permits the same compiled release to start.
 Retries use the same UUID while it remains the current operation. Replaying its
 completed begin does not start a new drain. Once another operation starts, do not
-replay older UUIDs; completed operation history is not retained.
+replay older UUIDs; completed operation history is not retained. Save the UUID
+outside the shell session if recovery might run later.
+
+After `status` reports `drained: true` and offline work is complete, reopen admission:
+
+```bash
+canopy maintenance config.json end "$CANOPY_OPERATION_UUID"
+```
 
 The begin/status/end commands need object-store credentials, but no Git token or
 node signing key. If a node dies during drain, wait for its lease to expire and
 run the recovery worker with the same operation UUID:
 
 ```bash
-canopy maintenance config.json recover <operation-uuid>
+canopy maintenance config.json recover "$CANOPY_OPERATION_UUID"
 canopy maintenance config.json status
-canopy maintenance config.json end <operation-uuid>
 ```
+
+When recovery finishes and `status` reports `drained: true`, run `end` with the
+same operation UUID as above.
 
 Recovery needs `CANOPY_NODE_SIGNING_KEY_HEX` and an exclusively available local
 `data_dir`. It enrolls a temporary node, fences expired owners, restores their
@@ -84,9 +95,18 @@ recovery do not provide a separate backup copy.
 Use a fresh pin UUID and disjoint prefixes in the same configured bucket/provider:
 
 ```bash
-canopy backup config.json create <pin-uuid> backups/snapshot-1
-canopy backup config.json verify <pin-uuid> backups/snapshot-1
-canopy backup config.json restore <pin-uuid> backups/snapshot-1 restored/service-1
+CANOPY_BACKUP_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+canopy backup config.json create "$CANOPY_BACKUP_UUID" backups/snapshot-1
+canopy backup config.json verify "$CANOPY_BACKUP_UUID" backups/snapshot-1
+```
+
+Record `CANOPY_BACKUP_UUID` with the backup receipt. Later verify and restore
+commands must use that same pin UUID and the same backup prefix.
+
+To restore into an unused destination prefix:
+
+```bash
+canopy backup config.json restore "$CANOPY_BACKUP_UUID" backups/snapshot-1 restored/service-1
 ```
 
 Prefixes are full object keys within the configured bucket, not URLs or paths
@@ -513,10 +533,11 @@ nonblank `message` (up to 16 KiB UTF-8). It returns `repository_id`, `candidate`
 The candidate result is `ready` with `oid` and `tree_oid`, `conflicted` with
 URL-safe unpadded `paths_base64`, or `unrelated`. GET may also show `pending`
 after interrupted preparation. Exact preparation retries return the same result.
-Only a ready candidate advertises a fetch ref:
+Only a ready candidate advertises a fetch ref. Set `fetch_ref` to the
+`fetch_ref` value returned by preparation, then inspect that exact candidate:
 
 ```sh
-git fetch origin refs/canopy/merge-candidates/<candidate-UUID>
+git fetch origin "$fetch_ref"
 git checkout --detach FETCH_HEAD
 ```
 

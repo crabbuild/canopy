@@ -1,6 +1,29 @@
-# Full repository Cell capabilities
+# Design full repository Cell capabilities
+
+This proposal explains the dependency and Canopy changes needed to put SQL, key-value data, queues, workflows and scheduled work inside each repository's existing Cell. It is a separate objective from the first production Git-hosting release: Canopy currently uses SQL Repository Cells, and every [acceptance gate](#acceptance-gates) below remains open.
+
+## One identity, several capabilities
+
+The intended design keeps one repository UUID, one fenced owner and one durable recovery root. Primitive operations may use distinct typed clients, but they must resolve to that same Cell. A queue or workflow routed to a separate namespace would not meet this objective.
+
+```text
+repository UUID ──► one Repository Cell ──► one fenced writer
+                         │                    one durable root
+                         ├── SQL: Git, ACL, issues, PRs
+                         ├── KV and Blob
+                         ├── queue and workflow
+                         └── Cron, Timer, effects, projections
+                                  │
+                                  ▼
+                         bounded node runners
+                         (including cold repositories)
+```
+
+Here, **Cell** is Cellule's unit of ownership, transaction and recovery. **Capability** is a primitive API installed in that Cell. **Autonomous progress** means queued and scheduled work advances even when no user request opens the repository.
 
 ## Required outcome
+
+The final system must satisfy both the hosting contract and the composed-Cell contract:
 
 Each repository UUID identifies one Cell with SQL, KV, queue, workflow, Blob,
 Cron, Timer, durable effects/inbox and projection capabilities. They share its
@@ -15,13 +38,15 @@ primitive-enabled repository design.
 
 ## Current contract gap
 
+The current runtime and Canopy module bind one exclusive catalog role to a Cell. The table identifies why adding schema tables alone cannot safely enable the other primitives.
+
 Canopy's `RepositoryModule` declares `CatalogRole::Sql`, registers SQL plus
 product commands, and has empty workflow-definition and activity inventories
 in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Cellule revision is `cfcc00a7144414e0437d490ad94b5beb9152f6a3`.
+The pinned Cellule revision is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`.
 Read-only inspection establishes the following constraints in that source:
 
 | Surface | Existing contract | Required change |
@@ -43,6 +68,8 @@ repository capability set or its runners. Switching dependencies alone does not
 close these gates.
 
 ## Proposed dependency work
+
+Implement these dependency changes in order. Each step preserves the existing repository identity and fencing rules while extending what can execute inside that Cell:
 
 1. **Capability metadata and identity.** Introduce a validated set of primitive
    capabilities in the namespace/catalog contract. Preserve repository UUID-derived entity
@@ -84,6 +111,8 @@ own Cargo target directory, preserving other active work.
 
 ## Canopy integration after the runtime contract is ready
 
+After Cellule can compose primitives in one Cell, use real Canopy operations to validate the API and background execution path:
+
 - Keep `RepositoryCell` as the product capability boundary. Add typed repository
   capabilities through the same target and request identity; extend the compiled
   schema and source/operation inventories together.
@@ -100,6 +129,8 @@ own Cargo target directory, preserving other active work.
   push-reply replay.
 
 ## Acceptance gates
+
+Close a gate only with black-box behavior across eviction, process loss and fresh-disk restore. Unit tests of a typed client alone cannot establish autonomous progress or shared durability.
 
 | Gate | Required black-box evidence |
 | --- | --- |

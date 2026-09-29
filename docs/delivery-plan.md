@@ -1,9 +1,21 @@
-# Deliver Canopy
+# Prove Canopy is ready to deliver
 
-The executable acceptance gates below define when Canopy can be called a Git
-hosting service. Each gate needs a black-box client action, the durable side
-effect, and the same visible result after a new node restores Cell state.
-Do not infer completion from compilation or a disposable cache test.
+Use this plan to decide which Canopy release gates are closed. The gate table states the required outcome and current status; the [qualification history](#qualification-history) keeps detailed implementation and test evidence. The [roadmap](../ROADMAP.md) orders the remaining work, while [Git compatibility](git-compatibility.md) and [performance evidence](performance-plan.md) describe protocol and capacity limits.
+
+Every gate needs three observations: a black-box client action, its durable side effect, and the same visible result after a new node restores Cell state. Compilation or a disposable-cache test does not establish durability.
+
+```text
+stock client action ──► Cell publication ──► client result
+                            │
+                      node or disk loss
+                            │
+                            ▼
+                     restored Cell state ──► same visible result
+```
+
+## Release gates at a glance
+
+`Partial` means some behavior is implemented and tested, but the listed acceptance proof remains open. `Open` means the full capability is not yet integrated. Read each row as a gate, not as a promise that every listed subfeature is missing.
 
 | Gate | Deliverable | Acceptance proof | State |
 | --- | --- | --- | --- |
@@ -19,20 +31,35 @@ Do not infer completion from compilation or a disposable cache test.
 | 9 Public service | Public visibility, organizations/teams, search and webhooks | ACL-safe anonymous reads, revocation, index rebuild and webhook retry | Partial: public Git/LFS, browser and collaboration reads, owner visibility controls and privacy revocation implemented; organizations, search, index rebuilding and webhooks remain |
 | 10 Full Repository Cell | One repository Cell with SQL, KV, queue, workflow, Blob, Cron, Timer, effects and projections; thousands of such Cells per node | Same Cell identity and atomic composition, autonomous background work, ownership/recovery faults and mixed-workload density/latency evidence | Open: Canopy currently binds SQL only; the pinned runtime uses exclusive primitive roles. See [the capability proposal](repository-cell-primitives.md) |
 
-The **internal preview** requires gates 0–5, including real storage and
-two-node owner loss. A private beta requires gates 0–8. A public release
-requires gate 9 and measured limits for repository count, hot repository
-throughput, pack size, concurrent clients, restore time and storage cost.
-The expanded repository-Cell objective also requires gate 10; earlier SQL-only
-hosting gates do not establish completion of that requirement.
-Hosted CI runners, packages, forks and GitHub API compatibility require
-separate product decisions.
+The gates accumulate by release level:
+
+```text
+internal preview          private beta                 public release
+gates 0–5                 gates 0–8                    gates 0–9
+real storage and          recovery, collaboration      measured capacity and
+two-node owner loss       and operations               public-service behavior
+
+full repository Cell objective: gate 10 is separate from SQL-only Git hosting
+```
+
+An internal preview requires gates 0–5, including real storage and two-node owner loss. A private beta adds gates 6–8. A public release adds gate 9 and measured limits for repository count, hot repository throughput, pack size, concurrent clients, restore time and storage cost. Gate 10 requires the separate [full repository Cell capability](repository-cell-primitives.md) proof. Hosted CI runners, packages, forks and GitHub API compatibility require separate product decisions.
 
 ## Next reviewable changes
 
+These are the next implementation slices. Each slice must update its contract, black-box or fault test, and gate status together; the older records below remain evidence for the revision on which they ran.
+
+| Slice | Required next proof | Related gate |
+| --- | --- | --- |
+| Node and storage faults | Owner-loss and lease fault matrix on the selected production store | 1, 8 |
+| Capacity | Mixed workloads and resource limits across larger active sets | 3, 5, 8 |
+| Push replay and retention | Failure at each publication boundary; safe cleanup of abandoned state | 4, 8 |
+| Account and security lifecycle | Deletion and broader audit coverage under revocation and recovery | 2, 8 |
+| Collaboration | One browser or API slice with a public action and recovery proof | 7 |
+| Offline operations | Maintenance, backup, cross-provider restore and fenced collection faults | 8 |
+
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The current build pins Cellule revision `75462e4` and
+   a Canopy remote. The current build pins Cellule revision `a28de7b` and
    owns a startup storage probe with cleanup on failure. Historical dependency
    qualification runs below remain evidence for their recorded revisions only.
 2. Execute the [repository-density performance plan](performance-plan.md),
@@ -115,7 +142,19 @@ Keep LFS bodies and unreferenced Git objects under conservative retention
 until a fenced collector can prove the complete root set. No automatic GC
 should remove bytes while fetch, backup or a pending merge can still read them.
 
-## Transfer-size qualification
+## Qualification history
+
+The remaining sections record completed slices and open proof at the revision where each was tested. Read the gate table above for current release status. Start with a topic below if you need the detailed acceptance record:
+
+| Topic | Representative evidence |
+| --- | --- |
+| Git object and ref publication | [Atomic object batches](#atomic-object-batch-qualification), [bounded graph certification](#bounded-graph-certification-before-ref-publication), [durable push refusals](#durable-push-preparation-refusals) |
+| Repository lifecycle and capacity | [Residency qualification](#repository-residency-qualification), [1,000-identity recovery](#completed-1000-identity-baseline-recovery), [bounded Linux profile](#bounded-linux-container-qualification) |
+| Collaboration and access | [Pull lifecycle](#pull-request-and-review-lifecycle), [public visibility](#public-repository-visibility), [account history](#account-administration-history-qualification) |
+| Operations and recovery | [Interrupted maintenance](#interrupted-maintenance-recovery), [independent backup](#independent-backup-and-isolated-restore), [managed local recovery](#managed-local-runtime-recovery-qualification) |
+| Protocol support | [SSH transport](#ssh-git-transport), [Git LFS locking](#git-lfs-locking-slice), [SHA-256 repositories](#sha-256-git-repository-format) |
+
+### Transfer-size qualification
 
 The initial 2026-09-25 streaming-response build on Darwin arm64, using Apple Git 2.50.1,
 passed `smoke_s3_process.py --large-clone` against RustFS
@@ -145,7 +184,7 @@ also proves HTTP 507 on exhausted upload admission, successful retry after
 capacity is released, and cleanup after input cancellation/disconnect.
 
 
-## Incremental object ingestion qualification
+### Incremental object ingestion qualification
 
 The batch-reader build on Darwin arm64 with Apple Git 2.50.1 passed the
 256-file process smoke against RustFS `1.0.0-beta.8-glibc`, with provider data
@@ -183,7 +222,7 @@ That build required separate `--many-objects 256` and `--large-clone` runs.
 The residency build below supports combining both extra fixture repositories
 in one process.
 
-## Atomic object batch qualification
+### Atomic object batch qualification
 
 The SQLite batch build passed the same two process workloads on Darwin arm64
 with Apple Git 2.50.1 and RustFS `1.0.0-beta.8-glibc`, using fresh bind-mounted
@@ -217,7 +256,7 @@ build pass. No dependency or schema migration was introduced. The old
 single-object publication APIs were removed; `PutObjects` owns validation and
 publication for the canonical path.
 
-## Repository residency qualification
+### Repository residency qualification
 
 The node now retains the Directory Cell and at most three Repository Cells.
 Requests pin their repository, including streamed replies. On a cold admission,
@@ -265,7 +304,7 @@ The only dependency change exposes the already locked `http-body` package as
 a direct dependency so the response wrapper can preserve data frames, trailers
 and size hints. No package version or checksum changed.
 
-## Release and cleanup fault qualification
+### Release and cleanup fault qualification
 
 Fault tests exposed and fixed two failures in the first residency build:
 removing the manager entry before local deletion lost the ability to retry a
@@ -302,7 +341,7 @@ provider still need separate fault qualification. Cache byte accounting remains
 open.
 
 
-## Git cache admission qualification
+### Git cache admission qualification
 
 Each disposable cache now owns its directory and shared disk reservation.
 Construction admits compressed object bytes, config, HEAD and refs before
@@ -351,7 +390,7 @@ process death and durable storage quotas remain open; completed-write accounting
 does not satisfy those release gates.
 
 
-## Consistent ref pagination and compressed Git requests
+### Consistent ref pagination and compressed Git requests
 
 A repository-wide generation now commits atomically with each accepted ref plan.
 Every bounded ref page includes that generation; continuations reject changes,
@@ -389,7 +428,7 @@ Darwin arm64, Apple Git 2.50.1, RustFS `1.0.0-beta.8-glibc`, fresh bind-mounted
 provider data. These are correctness/workload observations, not capacity claims.
 
 
-## Bounded gzip input qualification
+### Bounded gzip input qualification
 
 Gzip requests now validate and decode completely into a disk-admitted spool
 before Git starts. Encoded and decoded bytes share admission and independently
@@ -423,7 +462,7 @@ dependency, schema or request-digest format change. Native pack expansion, peak
 scratch usage and global request-concurrency admission remain open.
 
 
-## Node transfer admission
+### Node transfer admission
 
 Each node admits eight heavy repository requests across its entire repository
 set, with at most four per account. Git/LFS, browsing, comparisons, review-anchor
@@ -471,7 +510,7 @@ These are debug-build observations on Darwin arm64 with Apple Git 2.50.1 and
 RustFS `1.0.0-beta.8-glibc`, not production performance targets.
 
 
-## Large Git metadata objects in SQLite
+### Large Git metadata objects in SQLite
 
 Trees, commits and annotated tags above 768 KiB now use SQLite chunks, with a
 64 MiB per-object ceiling. Each staging command writes at most 512 KiB; ordinary
@@ -512,7 +551,7 @@ debug-build observations on Darwin arm64 with Apple Git 2.50.1. Scoped tests,
 formatting, Clippy, Python syntax validation and the binary build pass.
 
 
-## Bounded graph certification before ref publication
+### Bounded graph certification before ref publication
 
 Initial-history traversal no longer runs inside the ref transaction. One async
 postorder preparation path serves direct finalization and HTTP push completion.
@@ -566,7 +605,7 @@ replay pass. Environment: Darwin arm64, Apple Git 2.50.1, RustFS
 from code changes or establish production capacity. Formatting, scoped tests,
 Clippy and the binary build pass.
 
-## Durable default branch
+### Durable default branch
 
 Repository Cells now persist symbolic HEAD alongside `ref_generation`, initially
 `refs/heads/main`. The SDK changes it through one SQL compare-and-set: immutable
@@ -612,7 +651,7 @@ Branch protection, account lifecycle, repository get/list permissions, backup,
 GC, native resource ceilings, representative capacity evidence and the broader
 publication fault matrix remain open gates.
 
-## Authorized repository discovery
+### Authorized repository discovery
 
 Authenticated collaborators can now list their accessible repositories and read
 `GET /api/repositories/<name>`. Get returns identity, clone URL, membership role,
@@ -666,7 +705,7 @@ and recovery checks, not a production capacity measurement. The Directory schema
 changes require a fresh development prefix; persistent upgrade support remains
 a release gate.
 
-## Bounded cold object reads
+### Bounded cold object reads
 
 Cold hydration now reads up to 128 records and 768 KiB of inline bodies per
 page. One metadata query selects the prefix and one body query reads its exact
@@ -719,7 +758,7 @@ mixed/atomic outcomes and lost-reply replay across restart, disk loss and lease
 takeover. Full hydration, debug corpus latency, native scratch, traversal memory,
 release-build load measurements and broader production capacity remain open.
 
-## Release-build recovery timing
+### Release-build recovery timing
 
 The node now emits debug timing for Repository Cell acquisition and cache
 hydration, including page reads, body retrieval, cache writes and raw/admitted
@@ -762,7 +801,7 @@ source, so the cause remains unresolved. The successful release run does not
 close that fault gate. Canopy continues to reject unproven publication; no
 retry, deadline extension or dependency patch was introduced.
 
-## Durable token lifecycle
+### Durable token lifecycle
 
 Accounts now support multiple scoped credentials with opaque IDs and creation
 timestamps. Admins list, issue and revoke their own account's tokens; the site
@@ -811,7 +850,7 @@ finish subject to current repository ACLs. Account disable/delete, token expiry,
 issuance quotas, retained-record cleanup and audit remain open. Dependencies
 and lockfiles are unchanged.
 
-## Owner collaborator roster
+### Owner collaborator roster
 
 Repository owners can inspect explicit grants through
 `GET /api/repositories/<name>/collaborators`. The response keeps the immutable
@@ -849,7 +888,7 @@ No dependency, lockfile, schema or codec changes. This slice adds one read API;
 account disable/delete, audit records and broader collaboration gates remain open.
 
 
-## Repository-local issues and comments
+### Repository-local issues and comments
 
 The Repository Cell now stores numbered issues and comments alongside the ACL
 and Git metadata. Seven HTTP operations support creation, list/detail reads,
@@ -909,7 +948,7 @@ attachments, delete/moderation API, notifications, search or UI yet. Aggregate
 issue/comment quotas and retention policy also remain open.
 
 
-## Configured commit checks
+### Configured commit checks
 
 Commit checks now have owner-configured contexts and an explicit reporter
 account. Run creation binds a UUID to commit/context/policy version/reporter;
@@ -978,7 +1017,7 @@ check logs/artifacts, notifications, retention, quotas, PR integration and UI
 remain open, along with the broader delivery gates.
 
 
-## Branch protection
+### Branch protection
 
 Exact-branch policy now connects configured checks to authoritative publication.
 Owners replace versioned rules; enabled rules can require up to 16 check contexts,
@@ -1033,7 +1072,7 @@ hosting delivery gates above remain open. No dependency or lockfile changes;
 new schema tables and operation registrations require a fresh development prefix.
 
 
-## Pull request and review lifecycle
+### Pull request and review lifecycle
 
 Repository Cells now store proposals and immutable reviews alongside refs and ACL.
 Six HTTP operations open/list/read/edit pulls and submit/list reviews. Source/base
@@ -1095,7 +1134,7 @@ mutations and six HTTP operations, with shared validation/result handling inside
 the pull module. Full delivery gates and production capacity remain open.
 
 
-## Pull comparison and file preview
+### Pull comparison and file preview
 
 Repository HTTP now reads exact-revision changes from Cell Git objects. The
 comparison selects a unique best common ancestor and walks its tree against the
@@ -1146,7 +1185,7 @@ and atomic fast-forward publication; synthesized candidates, patches, inline
 discussions and UI remain.
 
 
-## Reviewed fast-forward merges
+### Reviewed fast-forward merges
 
 An explicit fast-forward strategy now closes the path from PR review to durable
 Git side effect. One command validates the exact proposal/ref revision, current
@@ -1218,7 +1257,7 @@ public-service functionality, remain open. Fast-forward success does not satisfy
 the synthesized-merge or full hosting gates.
 
 
-## Native merge and squash preparation
+### Native merge and squash preparation
 
 Canopy now prepares durable native Git candidates for merge commits and squash.
 Operation 10 owns reservation and completion. One application UUID fixes the
@@ -1283,7 +1322,7 @@ lifecycle remain. Hosted CI needs a Canopy remote. All gates above remain open
 until their full acceptance proof is recorded.
 
 
-## Repository browser and embedded interface
+### Repository browser and embedded interface
 
 Canopy now serves an embedded repository interface at `/`. Its bearer-authenticated
 API reads verified SQLite objects directly, with no bare-cache hydration. Default
@@ -1345,7 +1384,7 @@ fault injection, retention/quotas, backup/GC, multi-node routing, audit/metrics
 and production capacity. Hosted CI still needs a Canopy remote.
 
 
-## Issue collaboration interface qualification
+### Issue collaboration interface qualification
 
 The embedded interface now supports issue creation, open/closed/all lists,
 32-issue pages, 16-comment pages, issue/comment edits and close/reopen. New posts
@@ -1401,7 +1440,7 @@ interfaces, patches/line discussions, rebase/conflict resolution, releases/asset
 account lifecycle, public-service features and all outstanding operations and
 capacity gates remain open. The full hosting goal remains active.
 
-## Pull-request review and merge interface milestone — 2026-09-26
+### Pull-request review and merge interface milestone — 2026-09-26
 
 Classification: verified progress on collaboration gate 7. The embedded browser
 now creates and edits pull requests, handles drafts, shows revision-bound review
@@ -1485,7 +1524,7 @@ coverage, backup/GC, multi-node routing, observability, hosted CI and production
 capacity gates remain open. The earlier saved-download verification gap remains.
 
 
-## Historical pull comparisons milestone — 2026-09-26
+### Historical pull comparisons milestone — 2026-09-26
 
 Classification: verified progress. Merged requests now retain the exact
 pre-publication pull/source/base revision in the same transaction as ref movement
@@ -1557,7 +1596,7 @@ releases/assets, public-service features, account lifecycle, native resource
 bounds, backup/GC, routing, observability, hosted CI and production capacity gates
 remain open. The saved-download verification gap also remains.
 
-## Unified pull request patches milestone — 2026-09-26
+### Unified pull request patches milestone — 2026-09-26
 
 Implemented a `patch` query on the existing comparison endpoint and made unified
 hunks the default expanded-file view. Current, reviewed and merged targets retain
@@ -1634,7 +1673,7 @@ observability, hosted CI and production capacity gates remain open. Saved review
 and merges retain snapshots; independent per-push history and the earlier saved
 file-download verification gap remain outside this milestone.
 
-## Durable line discussions milestone — 2026-09-26
+### Durable line discussions milestone — 2026-09-26
 
 Implemented line discussions across repository Cell storage, HTTP and the pull
 request interface. Select a base/source line number in a text diff to start one;
@@ -1711,7 +1750,7 @@ observability, hosted CI and production capacity gates remain open. The separate
 saved-file-download proof gap and general per-push history also remain.
 
 
-## Native Git environment isolation qualification
+### Native Git environment isolation qualification
 
 On 2026-09-26, all four native Git entry points moved to
 `src/native_git.rs`: smart HTTP, post-push ref enumeration, incremental object
@@ -1745,7 +1784,7 @@ allocation overhead, crash-left cleanup, native peak memory/disk and cross-OS
 qualification remain open.
 
 
-## Managed local runtime recovery qualification
+### Managed local runtime recovery qualification
 
 On 2026-09-26, `src/server/workspace.rs` replaced anonymous node directories with
 one marked `runtime-v1/` directory beneath a locked `data_dir`. The manager retains
@@ -1789,7 +1828,7 @@ remain open. Earlier development builds' anonymous directories remain untouched;
 there is no adoption or compatibility reader for them.
 
 
-## Cancellation-safe node lifecycle qualification
+### Cancellation-safe node lifecycle qualification
 
 On 2026-09-26, `src/server/lifecycle.rs` introduced one supervisor that owns
 initialization, HTTP serving, Cell drain and local workspace exclusion.
@@ -1826,7 +1865,7 @@ The Tokio runtime must remain alive until cleanup finishes. Runtime destruction,
 panics, power loss, Windows containment, native peak resource limits and the
 remaining service delivery gates are still open.
 
-## Workspace exclusion after runtime destruction
+### Workspace exclusion after runtime destruction
 
 On 2026-09-26, a regression test destroyed Tokio after server readiness and
 reproduced premature release of the local workspace lock. A second case destroys
@@ -1859,7 +1898,7 @@ owner. No dependency, schema, configuration or wire contract changes. OS power
 loss, unusual filesystems, Windows process containment and native peak resource
 limits remain open, along with the other service delivery gates above.
 
-## Durable account disablement qualification
+### Durable account disablement qualification
 
 On 2026-09-26, `POST /api/accounts/<account>/disable` added site-owner account
 disablement. The Directory Cell checks the exact active admin credential and
@@ -1897,7 +1936,7 @@ disablement may finish under existing repository ACL rules. Re-enablement,
 deletion, account listing, administrative UI, audit records, token expiry and
 quotas remain open. The full hosting-service goal is still incomplete.
 
-## Signed HTTPS Cell routing qualification
+### Signed HTTPS Cell routing qualification
 
 On 2026-09-26, gateways gained routing to the current Directory and Repository
 Cell owners using Cellule's signed peer protocol. A repository still owns one
@@ -1957,7 +1996,7 @@ production storage and throughput, native peak resource bounds, backup/restore,
 GC and telemetry still need qualification or implementation. The service delivery
 gates remain incomplete.
 
-## Eviction admission and cross-gateway ref contention
+### Eviction admission and cross-gateway ref contention
 
 The two-node, eight-repository integration reproduced a stock Git clone failure
 while both nodes were healthy: the routing boundary returned
@@ -2004,7 +2043,7 @@ wait for one second under this pressure; the current three-gateway limit remains
 an initial bound, not production capacity. Placement races, partitions, requests
 spanning owner movement and larger hot-set throughput still need broader proof.
 
-## Public repository visibility
+### Public repository visibility
 
 On 2026-09-26, Repository Cells gained private-by-default visibility with an
 owner-only generation-checked update. Anonymous identities are typed explicitly
@@ -2062,7 +2101,7 @@ organizations/teams, search, webhooks, candidate index rebuilding/retention and
 production quotas remain open, along with the earlier operational gates.
 
 
-## Deployment admission and fleet maintenance
+### Deployment admission and fleet maintenance
 
 On 2026-09-26, `Deployment` gained durable tenant/application identity and exact
 compiled-release/image enrollment. First startup may initialize only an empty
@@ -2114,7 +2153,7 @@ partial. A crash during maintenance can leave a conservative unfinished drain;
 fenced recovery, retained operation history, backup capture/restore, upgrades,
 GC and operational telemetry still need their own acceptance evidence.
 
-## Interrupted maintenance recovery
+### Interrupted maintenance recovery
 
 On 2026-09-26, `canopy maintenance <config.json> recover <operation-uuid>` gained
 an enrolled recovery worker. It validates the exact maintenance operation and
@@ -2163,7 +2202,7 @@ restore to an isolated destination, retention/GC, upgrades and production capaci
 Gates 1 and 8 remain partial.
 
 
-## Independent backup and isolated restore
+### Independent backup and isolated restore
 
 On 2026-09-26, the backup CLI gained create, verify and restore operations.
 An enrolled worker captures a stable published cut using two complete catalog/
@@ -2217,7 +2256,7 @@ restore, automated retention/GC and production capacity remain open. Gate 8 stay
 partial.
 
 
-## Bounded streaming LFS
+### Bounded streaming LFS
 
 On 2026-09-26, LFS object PUT/GET and backup verification moved from whole-object
 buffers to bounded streaming. The batch/basic API, SHA-256 object identities and
@@ -2292,7 +2331,7 @@ Python syntax and whitespace checks also pass. No product limit or verification
 was weakened to accommodate the fixture's earlier storage exhaustion.
 
 
-## Credential expiry
+### Credential expiry
 
 On 2026-09-26, account token issuance gained optional absolute `expires_at_ms`.
 The Directory stores expiry with immutable credential identity; omitted/null
@@ -2342,7 +2381,7 @@ empty LFS objects after deletion of every original source object. The bounded
 RustFS tmpfs fixture proves process/storage-API behavior, not provider disk or
 power-loss durability or production capacity.
 
-## Credential issuance limits
+### Credential issuance limits
 
 On 2026-09-26, the Directory began enforcing 64 active credentials and 256 new
 credentials per rolling 24 hours for each target account. Initial account tokens
@@ -2400,7 +2439,7 @@ source deletion. The bounded tmpfs provider is process and storage-API evidence;
 provider disk/power-loss durability and production capacity remain unqualified.
 
 
-## Browser account and credential administration
+### Browser account and credential administration
 
 On 2026-09-26, Canopy added **Account** navigation to its embedded interface.
 Site-owner admins can page through enabled/disabled accounts, create accounts,
@@ -2460,7 +2499,7 @@ account admission/rate limits and storage retention still require implementation
 or product decisions; the browser milestone does not close the broader hosting,
 performance or operations gates.
 
-## Bounded streaming Git blobs
+### Bounded streaming Git blobs
 
 On 2026-09-26, external Git blob ingestion, cold-cache hydration and backup body
 verification moved from whole-object buffers to bounded transfers. The canonical
@@ -2538,7 +2577,7 @@ provider power-loss behavior, or provider temporary-file retention. The runtime
 heartbeat error also hides the original failed storage update after its retries;
 upstream diagnostic preservation remains follow-up work.
 
-## Native pack worker and cache budgets
+### Native pack worker and cache budgets
 
 On 2026-09-26, the shared native command boundary gained explicit pack/index
 worker, delta-window, delta-cache and mapping budgets. Smart HTTP additionally
@@ -2591,7 +2630,7 @@ all client operations and final integrity/recovery checks passed. This does not
 qualify every provider failure or establish error-free provider behavior.
 
 
-## Linear rebase candidate qualification
+### Linear rebase candidate qualification
 
 The 2026-09-26 implementation adds rebase preparation and publication through
 the existing Repository Cell candidate workflow. Original author/date and message
@@ -2640,7 +2679,7 @@ bounded linear rebase support; hard aggregate native resource limits, quotas,
 collection, fault matrices and the other open delivery gates remain open.
 
 
-## Bounded Linux container qualification
+### Bounded Linux container qualification
 
 The 2026-09-26 deployment adds a runtime Dockerfile, a Compose profile and an
 operator checker. The checker reads kernel cgroup v2 values, tmpfs capacity,
@@ -2689,7 +2728,7 @@ Direct binary use and other operating systems need their own OS boundaries.
 Per-account durable quotas, safe collection and the remaining delivery gates
 remain open; this profile establishes aggregate ceilings for one Linux node.
 
-## Account administration history qualification
+### Account administration history qualification
 
 The 2026-09-26 implementation records account creation/disablement and token
 issuance/revocation in the Directory Cell. Each event appends in the same
@@ -2733,7 +2772,7 @@ retention/export and account deletion remain open, along with the other hosting
 and production-capacity gates.
 
 
-## Warm repository routing during cold transitions
+### Warm repository routing during cold transitions
 
 On 2026-09-26, repository routing separates short registry access from awaited
 ownership transitions. A ready local entry can be pinned and routed while
@@ -2779,7 +2818,7 @@ resource-derived admission and incremental Git caches in
 warm latency targets remain unproven; all broader delivery gates remain open.
 
 
-## Bounded activation admission and CPU-sized SQL execution
+### Bounded activation admission and CPU-sized SQL execution
 
 The repository manager now bounds supervised cold/remote transitions at 32,
 including the executing operation and queued waiters. Admission happens before
@@ -2830,7 +2869,7 @@ all primitives in each repository Cell has a separate
 SQL-only changes do not complete that requirement.
 
 
-## Read-only activation of ready repositories
+### Read-only activation of ready repositories
 
 Ready directory entries now verify the immutable repository owner through the
 existing read-only access query. Admin is exclusive to the owner: collaborator
@@ -2855,7 +2894,7 @@ faults still pass. The earlier 1,000-repository measurements used the preceding
 binary; no measured latency improvement is attributed to this change yet.
 
 
-## Explicit node residency capacity
+### Explicit node residency capacity
 
 `max_active_repositories` is a required node JSON/`ServerConfig` field, accepting
 1–9,999. The manager uses it for gateway admission; Cellule receives the same
@@ -2908,7 +2947,7 @@ failed attempt remains an unresolved tail-latency/fencing finding; this repeat
 does not establish stable production performance.
 
 
-## Completed 1,000-identity baseline recovery
+### Completed 1,000-identity baseline recovery
 
 The original optimized `34aa904` run (`canopy-density-8003fccfc019`) completed
 SIGKILL, lease expiry and fresh-workspace recovery of all 1,000 repository
@@ -2923,7 +2962,7 @@ Recovery success does not convert that pressure result into a capacity pass.
 This baseline is SQL-only, mostly empty and colocated on the development host.
 
 
-## Thousand-active-Cell shutdown failure and renewal ownership
+### Thousand-active-Cell shutdown failure and renewal ownership
 
 The optimized `58eb0b5` run (`canopy-active1000-119a2ac48d4f`) admitted 1,000
 repository Cells and completed all 550 scheduled reads. Uniform metadata p95/p99
@@ -2981,7 +3020,7 @@ integration, production Linux density, resource enforcement and idle ownership
 request-cost qualification are still required.
 
 
-## Correlated latency diagnosis
+### Correlated latency diagnosis
 
 The HTTP boundary now records a debug request span with a canonical correlation
 UUID and matched route pattern, plus handler start/completion, status and elapsed
@@ -3000,7 +3039,7 @@ without private request fields. The full thousand-Cell diagnostic schedule is
 still running; instrumentation alone is not a latency improvement.
 
 
-## Logging isolated from service execution
+### Logging isolated from service execution
 
 The thousand-Cell correlated trace confirmed HTTP stacks blocked in synchronous
 stderr output. CLI diagnostics now use a 256-record nonblocking queue and one
@@ -3040,7 +3079,7 @@ controlled Linux resource envelope, representative workload/cost measurement
 and safe residency/primitive integration rather than speculative socket tuning.
 
 
-## Indexed Git object refresh
+### Indexed Git object refresh
 
 The repository stores an automatic insertion sequence beside each unique Git
 OID. Resident gateways retain a cursor with their shared verified cache. Refresh
@@ -3062,7 +3101,7 @@ with Clippy, formatting and the optimized build. This establishes incremental
 cache refresh, not production throughput or full primitive capacity.
 
 
-## Concurrent repository activation
+### Concurrent repository activation
 
 Cold activation, ownership refresh and eviction now serialize per repository.
 A reserved slot covers each in-flight activation as well as each loaded gateway.
@@ -3096,7 +3135,7 @@ See [the concurrent activation evidence](performance-plan.md#concurrent-reposito
 for the workload, binary identity, limits and repeat command.
 
 
-## Fresh startup authority after slow preflight
+### Fresh startup authority after slow preflight
 
 Server startup now timestamps the initial node lease immediately before
 enrollment, after storage probing, deployment initialization and runtime setup.
@@ -3117,7 +3156,7 @@ response accounting across server, backup and maintenance is the next lifecycle
 audit, addressed below; full primitive integration and production density remain open.
 
 
-## Renewal replies consume their signed lease lifetime
+### Renewal replies consume their signed lease lifetime
 
 Server, backup and maintenance enrollment now use one response-time conversion
 from a confirmed signed advertisement to the local monotonic guard. A delayed
@@ -3137,7 +3176,7 @@ exact file and issue recovery, and cleanup. This closes renewal reply accounting
 it does not qualify full primitive workloads or production capacity.
 
 
-## Native Git v2 discovery avoids history hydration
+### Native Git v2 discovery avoids history hydration
 
 The initial upload-pack capability GET now uses a temporary empty native Git
 cache after normal authorization and a published default-branch read. All POST
@@ -3155,7 +3194,7 @@ assertion is recorded, not declared fixed. See the
 This closes the initial capability-exchange optimization; full primitive
 composition, complete ref-query optimization and production capacity remain open.
 
-## Bound each account's cold repository admission
+### Bound each account's cold repository admission
 
 The shared residency boundary now limits one account to sixteen of thirty-two
 pending transitions, across its tokens and repository routes. Anonymous readers
@@ -3172,7 +3211,7 @@ v0/v2 recovery samples, strict fsck and cleanup. See the
 This bounds an individual account's activation share. Transfer fairness, lower
 cold latency, full primitive composition and production density remain open.
 
-## Native ref listing prepares only ref targets
+### Native ref listing prepares only ref targets
 
 Git v0 fetch/push advertisements and recognized v2 `ls-refs` now reuse a current
 full snapshot or build a temporary cache containing only ref targets and tag
@@ -3191,7 +3230,7 @@ See [ref discovery evidence](performance-plan.md#ref-discovery-without-full-hist
 Large ref sets, concurrent cache preparation, full primitive composition and
 thousand-repository mixed workloads remain open.
 
-## Ref discovery stays independent of history restoration
+### Ref discovery stays independent of history restoration
 
 A nonwaiting lookup now reuses a ready full cache or prepares the existing
 ref-target cache independently while a fetch owns the history-cache mutex.
@@ -3206,7 +3245,7 @@ This closes the history-cache mutex dependency for discovery. Required ref-body
 reads, global resource admission, full primitive integration and production
 density remain separate gates.
 
-## Account isolation for heavy repository requests
+### Account isolation for heavy repository requests
 
 One account can hold at most four of eight node transfer slots, shared across
 its tokens and repositories. Anonymous reads have their own shared four-slot
@@ -3247,7 +3286,7 @@ isolation policy, not proof of optimal throughput, scheduling fairness under
 combined-account saturation, or thousands of fully active repository Cells.
 
 
-## Historical Crab runtime migration
+### Historical Crab runtime migration
 
 Canopy previously pinned `crab-cell-runtime`, `crab-cell-app`, `crab-cell-host`, `crab-ltx`
 and `crab-storage` to Crab `main` revision
@@ -3302,7 +3341,7 @@ removed its container and volume. This is compatibility/recovery evidence,
 not a production performance or provider durability claim.
 
 
-## Hard cutover admission
+### Hard cutover admission
 
 `src/deployment/root.rs` removes the Service exception that could adopt an
 application identity without a Canopy root marker. Service, Backup and Restore
@@ -3331,7 +3370,7 @@ volume were removed. This verifies current-format startup and copy admission;
 it does not add an old-format upgrade path.
 
 
-## Partial clone and blobless preparation
+### Partial clone and blobless preparation
 
 Native smart HTTP now advertises `blob:none`, `blob:limit`, `tree`, `object:type`
 and `combine` filters. Stock clients omit filtered objects and retrieve them on
@@ -3359,7 +3398,7 @@ use the in-memory provider; hosted CI and real-provider filter qualification
 remain outstanding.
 
 
-## Durable late push refusals
+### Durable late push refusals
 
 `CompletePush` codec 3 now publishes a rejection decision together with the
 native response pointer when the final ACL, policy or ref-CAS check refuses a
@@ -3391,7 +3430,7 @@ candidate graph/path semantics; seven stream lifecycle tests; fragmented and
 malformed report tests; all-target Clippy and formatting. Hosted CI and
 real-provider qualification of this change remain pending.
 
-## SSH Git transport
+### SSH Git transport
 
 The optional SSH listener uses russh 0.63.3 with a stable configured host key.
 Directory keys identify accounts after signature verification; each exec rechecks
@@ -3434,7 +3473,7 @@ At that recorded revision, push option notes worked over HTTP and SSH while
 signed pushes and advanced LFS remained unfinished. SHA-256 repositories pass local and RustFS compatibility
 probes, with cloud-provider and cross-platform qualification still open.
 
-### SSH publication and cold blobless fetch
+#### SSH publication and cold blobless fetch
 
 The SSH publication suite shares the HTTP external-ingestion pause fixture.
 After native Git accepts an atomic push, changing branch policy or downgrading
@@ -3462,7 +3501,7 @@ HTTP partial-clone regression pass locally, along with all-target Clippy and
 formatting. These tests use an in-memory provider; hosted CI and real-provider
 fault/capacity qualification remain open.
 
-## Git LFS locking slice
+### Git LFS locking slice
 
 Implemented the standard HTTP create/list/verify/unlock API in the existing LFS
 service. Repository Cell SQLite owns exclusive paths, UUIDs, account ownership
@@ -3490,7 +3529,7 @@ publication suite pass; all-target Clippy, formatting and diff checks pass.
 The tests use an in-memory provider. Hosted CI and real-provider locking fault
 qualification have not run.
 
-## Requested blob preparation for cold fetch
+### Requested blob preparation for cold fetch
 
 HTTP and SSH now share request preparation. Their cached ref snapshots contain
 non-blob history and advertised ref/tag targets. Exact `blob:none` requests add
@@ -3522,7 +3561,7 @@ measurements. New tracing reports reachable blob counts, bytes and preparation
 time. Local tests use the in-memory provider; hosted CI has not run this slice.
 
 
-## Durable object ingestion refusals
+### Durable object ingestion refusals
 
 Once native Git has produced its acceptance report, ingestion errors now rewrite
 successful refs to explicit Git rejections. The rewritten response completes
@@ -3548,7 +3587,7 @@ run in the existing Verify workflow. Hosted CI and real-provider fault
 qualification have not run for this change. No schema or dependency changes.
 
 
-## Removing product size quotas
+### Removing product size quotas
 
 The current size contract supersedes the historical 512 MiB push/database,
 64 MiB non-blob and 5 GiB external-body ceilings recorded above. Push admission
@@ -3562,7 +3601,7 @@ This is a hard cutover: initialize a fresh storage prefix; no legacy flat-body
 reader is provided. Hashing uses the already-resolved RustCrypto 0.11 crates,
 including automatic hardware detection on ARM.
 
-See [size qualification and remaining constraints](git-compatibility.md#size-qualification)
+See [size qualification and remaining constraints](git-compatibility.md#provider-and-size-qualification)
 for the executable large-transfer gate and the distinction between removing
 product quotas and proving arbitrary runtime/provider capacity.
 
@@ -3581,7 +3620,7 @@ test-volume capacity. Net production growth is the shared segmented-body
 implementation replacing duplicated flat-body transfer paths.
 
 
-## Native filters during cold blob preparation
+### Native filters during cold blob preparation
 
 HTTP and SSH now pass supported filter specifications to the native missing-object
 walk before hydrating bodies. Tree depths, object types and combinations can omit
@@ -3612,7 +3651,7 @@ and the cold size-filter cases. Provider/scale latency qualification and the
 other compatibility requirements remain open.
 
 
-## Durable push preparation refusals
+### Durable push preparation refusals
 
 The gateway now parses the bounded command list before preparing a disposable
 repository. Cache admission, hydration, hook preparation and native execution
@@ -3655,7 +3694,7 @@ Provider outage/owner-loss combinations and uncertain-response fault injection
 remain open, together with the advanced push/LFS, SHA-256 and capacity gates.
 
 
-## SSH authentication for HTTP Git LFS
+### SSH authentication for HTTP Git LFS
 
 SSH exec now accepts `git-lfs-authenticate <repository> upload|download` in
 addition to the Git transport commands. It follows Git LFS 3.7.1's
@@ -3703,7 +3742,7 @@ Pure SSH LFS transfers, resumable/custom transfers, federation, advanced Git
 push features and SHA-256 Git remain open.
 
 
-## SHA-256 Git repository format
+### SHA-256 Git repository format
 
 Repository creation now accepts `object_format: "sha256"`; omission selects SHA-1.
 The Directory and Repository Cell persist immutable format identity. Object
@@ -3720,16 +3759,16 @@ stock SHA-1 Git refuses to push into the SHA-256 repository. The SHA-1 Repositor
 Cell test rejects mixed-format object publication. SHA-256 SSH recovery, PR/check
 workflows and real-provider qualification remain open.
 
-## Cellule runtime cutover
+### Cellule runtime cutover
 
-Canopy now pins `cellule-app`, `cellule-host`, `cellule-runtime`, `cellule-ltx`
+At this historical cutover, Canopy pinned `cellule-app`, `cellule-host`, `cellule-runtime`, `cellule-ltx`
 and `cellule-store` to immutable Cellule revision
 `75462e46c203256fb3fe70903908103f619d99b2`. The lockfile replaces the
 five direct Crab Cell crates and transitive `crab-types` with the Cellule crates
 and `cellule-types`. Cellule requires `uuid = 1.24.0`, so the direct dependency
 and lockfile use that exact version. Source, tests and examples use the Cellule
 crate paths and LTX's `LtxError`. No local path or compatibility dependency
-remains.
+remains. The current dependency pin is recorded in `Cargo.toml`.
 
 This changes the runtime release identity and storage layout. Use a fresh
 storage prefix; prior runtime prefixes and backups are not admitted. Canopy's
