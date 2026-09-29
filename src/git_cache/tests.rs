@@ -1,6 +1,42 @@
 use super::*;
 
 #[tokio::test]
+async fn concurrent_hydration_publishes_each_object_once() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    let body = b"shared by concurrent fetches".to_vec();
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
+    let mut workers = tokio::task::JoinSet::new();
+    for _ in 0..32 {
+        let cache = Arc::clone(&cache);
+        let body = body.clone();
+        workers.spawn(async move { cache.store_object(oid, ObjectKind::Blob, body).await });
+    }
+    while let Some(result) = workers.join_next().await {
+        result??;
+    }
+    assert!(cache.missing_objects(vec![oid]).await?.is_empty());
+    assert_eq!(budget.used(), tree_bytes(cache.root())?);
+    let output = tokio::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(cache.git_dir())
+        .args(["cat-file", "blob", &hex::encode(oid)])
+        .output()
+        .await?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, body);
+    Ok(())
+}
+
+#[tokio::test]
 async fn hydrated_files_remain_charged_until_the_last_reader_releases_them()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;

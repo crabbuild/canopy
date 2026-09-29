@@ -22,6 +22,7 @@ pub(crate) struct AccountAdmission {
     total_capacity: &'static str,
     account_capacity: &'static str,
     accounts: Mutex<HashMap<Option<String>, Weak<Semaphore>>>,
+    waiting_accounts: Mutex<HashMap<Option<String>, Weak<Semaphore>>>,
 }
 
 impl AccountAdmission {
@@ -37,6 +38,7 @@ impl AccountAdmission {
             total_capacity,
             account_capacity,
             accounts: Mutex::new(HashMap::new()),
+            waiting_accounts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -57,8 +59,13 @@ impl AccountAdmission {
     }
 
     pub(crate) async fn wait(&self, actor: ReadIdentity<'_>) -> Result<AdmissionPermit, Error> {
-        // Bound retained HTTP requests before waiting. Acquire the account first:
-        // a busy account must not reserve node slots needed by another account.
+        // Bound each account's waiters before the shared queue. A busy account
+        // cannot fill every pending position while another account has work.
+        let _account_waiting = self
+            .waiting_account(actor)
+            .await
+            .try_acquire_owned()
+            .map_err(|_| Error::Capacity(self.account_capacity))?;
         let _waiting = self
             .waiting
             .try_acquire()
@@ -80,19 +87,31 @@ impl AccountAdmission {
     }
 
     async fn account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
+        Self::semaphore(&self.accounts, actor, self.account_limit).await
+    }
+
+    async fn waiting_account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
+        Self::semaphore(&self.waiting_accounts, actor, self.account_limit).await
+    }
+
+    async fn semaphore(
+        entries: &Mutex<HashMap<Option<String>, Weak<Semaphore>>>,
+        actor: ReadIdentity<'_>,
+        limit: usize,
+    ) -> Arc<Semaphore> {
         let account = match actor {
             ReadIdentity::Account(account) => Some(account.to_owned()),
             ReadIdentity::Anonymous => None,
         };
         {
-            let mut accounts = self.accounts.lock().await;
+            let mut accounts = entries.lock().await;
             // Permits retain their semaphore through detached ownership work.
             // Active or waiting admission bounds this map; expired accounts need no state.
             accounts.retain(|_, semaphore| semaphore.strong_count() != 0);
             if let Some(semaphore) = accounts.get(&account).and_then(Weak::upgrade) {
                 semaphore
             } else {
-                let semaphore = Arc::new(Semaphore::new(self.account_limit));
+                let semaphore = Arc::new(Semaphore::new(limit));
                 accounts.insert(account, Arc::downgrade(&semaphore));
                 semaphore
             }
@@ -140,10 +159,8 @@ mod tests {
         let actor = ReadIdentity::Account("busy");
         let held = admission.acquire(actor).await.unwrap();
         let mut cancelled = Box::pin(admission.wait(actor));
-        let mut pending = Box::pin(admission.wait(actor));
         poll_fn(|cx| {
             assert!(cancelled.as_mut().poll(cx).is_pending());
-            assert!(pending.as_mut().poll(cx).is_pending());
             Poll::Ready(())
         })
         .await;
@@ -153,7 +170,13 @@ mod tests {
             .await
             .unwrap();
         drop(cancelled);
-        assert_eq!(admission.waiting.available_permits(), 1);
+        assert_eq!(admission.waiting.available_permits(), 2);
+        let mut pending = Box::pin(admission.wait(actor));
+        poll_fn(|cx| {
+            assert!(pending.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
         drop(held);
         let admitted = pending.await.unwrap();
         assert_eq!(admission.total.available_permits(), 0);
@@ -161,6 +184,38 @@ mod tests {
         drop(other);
         assert_eq!(admission.waiting.available_permits(), 2);
         assert_eq!(admission.total.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn one_account_cannot_fill_the_shared_waiting_queue() {
+        use std::{
+            future::{Future, poll_fn},
+            task::Poll,
+        };
+        let admission = AccountAdmission::new(8, "total", "account");
+        let busy = ReadIdentity::Account("busy");
+        let other = ReadIdentity::Account("other");
+        let mut busy_active = Vec::new();
+        for _ in 0..4 {
+            busy_active.push(admission.acquire(busy).await.unwrap());
+        }
+        let mut busy_waiters: Vec<_> = (0..4).map(|_| Box::pin(admission.wait(busy))).collect();
+        for waiter in &mut busy_waiters {
+            poll_fn(|cx| {
+                assert!(waiter.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+        }
+        assert_eq!(admission.waiting.available_permits(), 4);
+        assert!(admission.wait(busy).await.is_err());
+        let other_permit = admission.wait(other).await.unwrap();
+        assert_eq!(admission.waiting.available_permits(), 4);
+        drop(other_permit);
+        drop(busy_waiters);
+        drop(busy_active);
+        assert_eq!(admission.waiting.available_permits(), 8);
+        assert_eq!(admission.total.available_permits(), 8);
     }
 
     #[tokio::test]

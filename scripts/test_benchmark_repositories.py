@@ -78,6 +78,50 @@ class ScheduledLoad(unittest.TestCase):
             server.server_close()
             thread.join()
 
+    def test_multiple_ingresses_report_each_gateway_without_losing_arrivals(self):
+        servers = [ThreadingHTTPServer(("127.0.0.1", 0), Handler) for _ in range(2)]
+        threads = []
+        clients = []
+        for server in servers:
+            server.guard = threading.Lock()
+            server.requests = server.active = server.peak = 0
+            server.request_ids = []
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            threads.append(thread)
+            clients.append(benchmark.Client(f"http://127.0.0.1:{server.server_port}",
+                                            "fixture-token", 2))
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"version": 1, "complete": True,
+                    "requested_repositories": 1, "repositories": [{"name": "fixture", "owner": "canopy",
+                    "repository_id": str(uuid.uuid4()), "commit": None}]}))
+                args = SimpleNamespace(manifest=manifest, active_repositories=1, seed=42,
+                    duration=1, rate=20, concurrency=16, distribution="uniform",
+                    operation="metadata", timeout=2, output=root / "report.json")
+                report = benchmark.measure(args, clients, None)
+                samples = [json.loads(line) for line in
+                           (root / "report.samples.jsonl").read_text().splitlines()]
+                self.assertEqual(sorted(sample["sequence"] for sample in samples), list(range(20)))
+                self.assertEqual({sample["ingress_index"] for sample in samples}, {0, 1})
+                self.assertEqual(sum(server.requests for server in servers),
+                                 report["outcomes"].get("http_503", 0))
+                for index, server in enumerate(servers):
+                    self.assertEqual(server.requests,
+                                     report["ingresses"][index]["outcomes"].get("http_503", 0))
+                    self.assertGreater(server.requests, 0)
+                    self.assertIsNotNone(report["ingresses"][index]["service_ms"]["p95"])
+        finally:
+            for client in clients:
+                client.close()
+            for server in servers:
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join()
+
 
 if __name__ == "__main__":
     unittest.main()

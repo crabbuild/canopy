@@ -113,16 +113,20 @@ impl GitGateway {
             return Ok(());
         }
         let started = std::time::Instant::now();
-        let objects = self.objects.lock().await;
-        let shared = objects.as_ref().ok_or(GatewayError::MalformedCache)?;
+        // The shared object cache publishes loose objects atomically and
+        // coordinates duplicate OID writes. Hold the gateway lock only long
+        // enough to borrow it; slow fetches must not queue behind each other.
+        let shared = {
+            let objects = self.objects.lock().await;
+            Arc::clone(&objects.as_ref().ok_or(GatewayError::MalformedCache)?.cache)
+        };
         let roots: Vec<_> = request.wants.iter().copied().collect();
-        self.hydrate_selected(&shared.cache, request.wants).await?;
+        self.hydrate_selected(&shared, request.wants).await?;
         let unfiltered = request.filter.is_none();
         // The certified Cell graph already names every reachable blob. A full
         // fetch can hydrate those bodies during the structural walk and avoid
         // a second native traversal over the same cold history.
-        self.hydrate_structure(&shared.cache, &roots, unfiltered)
-            .await?;
+        self.hydrate_structure(&shared, &roots, unfiltered).await?;
         if unfiltered || request.filter.as_deref() == Some("blob:none") {
             return Ok(());
         }
@@ -146,7 +150,7 @@ impl GitGateway {
             if ids.is_empty() {
                 break;
             }
-            self.hydrate_objects(&shared.cache, ids, &mut stats).await?;
+            self.hydrate_objects(&shared, ids, &mut stats).await?;
         }
         walk.finish().await?;
         tracing::debug!(

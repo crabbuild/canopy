@@ -10,6 +10,7 @@ use std::{
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
 use flate2::{Compression, write::ZlibEncoder};
+use tokio::sync::Mutex;
 
 use crate::{
     ObjectKind, RefExpectation,
@@ -51,6 +52,9 @@ pub(crate) struct GitCache {
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
     objects: Option<Arc<GitCache>>,
+    // Only durable hydration writes this cache. Stripe by OID so concurrent
+    // fetches share a completed loose object without serializing all objects.
+    object_writes: [Arc<Mutex<()>>; 64],
 }
 
 impl GitCache {
@@ -82,6 +86,7 @@ impl GitCache {
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
                 objects,
+                object_writes: std::array::from_fn(|_| Arc::new(Mutex::new(()))),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
                 fs::create_dir_all(cache.git_dir().join(directory))?;
@@ -147,17 +152,8 @@ impl GitCache {
         tokio::task::spawn_blocking(move || {
             let mut missing = Vec::new();
             for oid in ids {
-                match fs::symlink_metadata(cache.object_path(oid)) {
-                    Ok(metadata) if metadata.is_file() => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(oid),
-                    Err(error) => return Err(CacheError::Io(error)),
-                    _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "invalid cached object",
-                        )
-                        .into());
-                    }
+                if !cache.object_present(oid)? {
+                    missing.push(oid);
                 }
             }
             Ok(missing)
@@ -171,6 +167,18 @@ impl GitCache {
             .join("objects")
             .join(&hex[..2])
             .join(&hex[2..])
+    }
+
+    fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
+        match fs::symlink_metadata(self.object_path(oid)) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid cached object",
+            )),
+        }
     }
 
     fn object_writer(
@@ -237,10 +245,17 @@ impl GitCache {
         kind: ObjectKind,
         body: Vec<u8>,
     ) -> Result<(), CacheError> {
+        let write = Arc::clone(&self.object_writes[oid[0] as usize % self.object_writes.len()])
+            .lock_owned()
+            .await;
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
+            let _write = write;
             if oid.format() != cache.object_format || object_id(oid.format(), kind, &body) != oid {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Git OID mismatch").into());
+            }
+            if cache.object_present(oid)? {
+                return Ok(());
             }
             let (mut encoder, temporary, destination) = cache.object_writer(oid)?;
             encoder.write_all(format!("{} {}\0", kind.git_name(), body.len()).as_bytes())?;
@@ -259,8 +274,12 @@ impl GitCache {
         mut reader: LargeBlobRead,
     ) -> Result<(), CacheError> {
         let reference = reader.reference();
+        let write =
+            Arc::clone(&self.object_writes[reference.oid[0] as usize % self.object_writes.len()])
+                .lock_owned()
+                .await;
         let cache = Arc::clone(self);
-        let (mut encoder, temporary, destination) = tokio::task::spawn_blocking(move || {
+        let pending = tokio::task::spawn_blocking(move || {
             if reference.oid.format() != cache.object_format {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -268,11 +287,17 @@ impl GitCache {
                 )
                 .into());
             }
+            if cache.object_present(reference.oid)? {
+                return Ok::<_, CacheError>(None);
+            }
             let (mut encoder, temporary, destination) = cache.object_writer(reference.oid)?;
             encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
-            Ok::<_, CacheError>((encoder, temporary, destination))
+            Ok::<_, CacheError>(Some((encoder, temporary, destination)))
         })
         .await??;
+        let Some((mut encoder, temporary, destination)) = pending else {
+            return Ok(());
+        };
         while let Some(bytes) = reader.next().await? {
             // The writer owns the cache reservation until each compression worker
             // exits, including when its async waiter is canceled.
@@ -283,6 +308,7 @@ impl GitCache {
             .await??;
         }
         tokio::task::spawn_blocking(move || {
+            let _write = write;
             drop(encoder.finish()?);
             temporary
                 .persist_noclobber(destination)

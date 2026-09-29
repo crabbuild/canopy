@@ -71,6 +71,12 @@ branch adds its blob and leaves the deleted branch absent. This runs for v0/v2
 over both transports, and establishes reduced preparation, not a latency target.
 
 Preparation logs report newly hydrated blob counts/bytes and elapsed time.
+Concurrent fetches of one repository now share the immutable object cache
+without holding its gateway mutex for the entire preparation. Verified loose
+objects publish atomically; writers for the same object ID converge while
+different IDs may hydrate in parallel. A cold concurrent stock-Git clone test
+checks complete packs and `git fsck`. This removes one serialization point;
+it does not establish hot-repository throughput or a 10,000-repository result.
 The native walk still traverses requested history on warm requests; native Git's
 own traversal memory is not bounded by the Rust batch size. Structural hydration
 pages certified edges and retains a visited set proportional to the requested
@@ -175,10 +181,12 @@ permits it.
   object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
-- Eight shared heavy-request slots, a four-slot ceiling per account, and the
-  bounded Linux profile establish containment. They do not establish latency, throughput or thousands of active
-  repositories. The profile's tmpfs charges cache bytes to memory; density
-  qualification needs a separate bounded NVMe-backed profile.
+- Eight shared heavy-request slots and four active and four pending slots per
+  account prevent one account from filling every transfer wait position. The
+  bounded Linux profile establishes containment, not latency, throughput or
+  thousands of active repositories. Its tmpfs charges cache bytes to memory;
+  density qualification needs a separate bounded NVMe-backed profile and
+  mixed-account latency measurements.
 - The Linux profile sets both process descriptor limits to 16,384. Its checker
   requires eight per admitted Repository/Directory Cell plus 1,024 headroom;
   this is a reservation check, not measured aggregate process capacity.
@@ -396,6 +404,30 @@ The default sample contains three one-commit repositories; the remainder are
 empty. This is a density smoke corpus, not realistic large-history qualification.
 An interrupted seed leaves an explicitly incomplete manifest and cannot be used
 as a complete corpus. Names have a unique prefix; the manifest records them.
+
+For a multi-gateway read run, seed the documented 10,000-repository corpus,
+start two nodes against the same deployment, and pass each ingress to `run`:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-corpus.json \
+  seed --repositories 10000 --populated 100 \
+  --work-dir /path/to/canopy-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 1000 --distribution uniform \
+  --operation refs --rate 20 --duration 120 --concurrency 32 \
+  --output /path/to/canopy-two-gateway-refs.json
+```
+
+The run assigns scheduled requests to ingresses by sequence number and records
+each ingress's outcomes and latency percentiles. Compare the same workload with one and two ingresses
+and collect node, object-store, and client resource metrics separately. This
+driver measures metadata or Git v2 discovery; it does not measure push, pack
+generation, full fetch, or LFS transfer throughput.
 
 Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
 of requests to the selected working set's first tenth. A fixed seed determines
@@ -1390,6 +1422,12 @@ positions and partial leases. Current HTTP tests retain the 4/8 ceilings,
 Retry-After response, other-account progress and disconnect recovery; a unit
 test saturates pending admission, exercises another account and cancels a waiter.
 State is bounded by active/pending work, not repository or account history.
+
+The current admission implementation also caps pending positions at four per
+account, leaving shared wait positions for other accounts. This is a scheduling
+bound, not a throughput result. Measure it under mixed-account Git and LFS
+traffic before treating it as a fairness guarantee at the 10,000-repository
+reference target.
 
 Real-provider run `canopy-transfer-fairness-013e78122a08` used release binary
 `7e5f0a173cebd77aa65cbbe646f2566b75f462875653381f72a3795ddab48b57`

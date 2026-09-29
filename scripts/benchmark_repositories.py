@@ -184,6 +184,7 @@ def percentiles(values):
 
 def measure(args, client, token):
     del token
+    clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
     if args.active_repositories > len(manifest["repositories"]):
         raise ValueError("active repository count exceeds corpus")
@@ -195,6 +196,9 @@ def measure(args, client, token):
     if total > 1_000_000:
         raise ValueError("one run is limited to one million scheduled arrivals")
     counts, latencies, service_times, dispatch_times = Counter(), [], [], []
+    ingress_counts = [Counter() for _ in clients]
+    ingress_latencies = [[] for _ in clients]
+    ingress_service_times = [[] for _ in clients]
     slots = threading.BoundedSemaphore(args.concurrency)
     lock = threading.Lock()
     started = time.monotonic()
@@ -206,30 +210,35 @@ def measure(args, client, token):
         def record(sample):
             with lock:
                 counts[sample["result"]] += 1
+                ingress_counts[sample["ingress_index"]][sample["result"]] += 1
                 if sample["elapsed_ms"] is not None:
                     latencies.append(sample["elapsed_ms"])
                     service_times.append(sample["service_ms"])
                     dispatch_times.append(sample["dispatch_delay_ms"])
+                    ingress_latencies[sample["ingress_index"]].append(sample["elapsed_ms"])
+                    ingress_service_times[sample["ingress_index"]].append(sample["service_ms"])
                 samples.write(json.dumps(sample) + "\n")
 
         def execute(sequence, entry, scheduled):
             request_id = str(uuid.uuid4())
+            ingress_index = sequence % len(clients)
+            ingress = clients[ingress_index]
             dispatched = time.monotonic()
             result = "transport_error"
             try:
                 if args.operation == "metadata":
-                    status, body = client.request(f"/api/repositories/{entry['name']}", request_id=request_id)
+                    status, body = ingress.request(f"/api/repositories/{entry['name']}", request_id=request_id)
                     decoded = json.loads(body) if status == 200 else None
                     valid = isinstance(decoded, dict) and decoded.get("repository_id") == entry["repository_id"]
                 else:
-                    status, body = client.request(f"/{entry['owner']}/{entry['name']}.git/info/refs?service=git-upload-pack", git=True, request_id=request_id)
+                    status, body = ingress.request(f"/{entry['owner']}/{entry['name']}.git/info/refs?service=git-upload-pack", git=True, request_id=request_id)
                     valid = status == 200 and body.startswith(b"000eversion 2\n")
                 result = "ok" if valid else (f"http_{status}" if status != 200 else "invalid_response")
             except (OSError, ValueError, KeyError, http.client.HTTPException):
                 pass
             finally:
                 finished = time.monotonic()
-                record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "result": result,
+                record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "ingress_index": ingress_index, "result": result,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
                         "dispatch_delay_ms": (dispatched - scheduled) * 1000})
@@ -247,6 +256,7 @@ def measure(args, client, token):
                     executor.submit(execute, sequence, entry, scheduled)
                 else:
                     record({"sequence": sequence, "repository_id": entry["repository_id"],
+                            "ingress_index": sequence % len(clients),
                             "result": "driver_busy", "elapsed_ms": None})
     elapsed = time.monotonic() - started
     result = {"version": 1, "started_at_utc": started_at,
@@ -257,6 +267,10 @@ def measure(args, client, token):
               "elapsed_including_drain_seconds": round(elapsed, 3),
               "concurrency": args.concurrency, "request_timeout_seconds": args.timeout,
               "scheduled": total, "outcomes": dict(counts),
+              "ingresses": [{"index": index, "outcomes": dict(outcomes),
+                             "scheduled_latency_ms": percentiles(ingress_latencies[index]),
+                             "service_ms": percentiles(ingress_service_times[index])}
+                            for index, outcomes in enumerate(ingress_counts)],
               "failed_arrivals": total - counts["ok"],
               "scheduled_latency_ms": percentiles(latencies),
               "service_ms": percentiles(service_times), "dispatch_delay_ms": percentiles(dispatch_times),
@@ -278,6 +292,8 @@ def positive(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
+    parser.add_argument("--additional-base-url", action="append", default=[],
+                        help="additional gateway ingress for round-robin run requests")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--timeout", type=positive, default=10)
     parser.add_argument("--seed", type=int, default=20260926)
@@ -302,12 +318,17 @@ def main():
         parser.error("CANOPY_GIT_TOKEN is required")
     if args.command == "run" and args.concurrency > 256:
         parser.error("driver concurrency is limited to 256")
-    client = Client(args.base_url, token, args.timeout)
+    if args.command != "run" and args.additional_base_url:
+        parser.error("additional gateways are supported only for run")
+    clients = [Client(base, token, args.timeout)
+               for base in [args.base_url, *args.additional_base_url]]
     try:
+        client = clients if args.command == "run" else clients[0]
         result = {"seed": seed, "verify": verify, "run": measure}[args.command](args, client, token)
         print(json.dumps(result, indent=2))
     finally:
-        client.close()
+        for client in clients:
+            client.close()
     if args.command == "run" and result["failed_arrivals"]:
         raise SystemExit(1)
 
