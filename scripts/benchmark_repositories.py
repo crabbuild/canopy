@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Seed disposable repository identities and measure scheduled HTTP read load.
+"""Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata or Git v2 discovery; clone, push and LFS throughput need their
-own qualification. Seed and verify use stock Git for a declared corpus sample.
+measures metadata, Git v2 discovery, full clone, cold fetch or unique-ref push;
+incremental fetch, pull and LFS throughput need their own qualification. Seed
+and verify use stock Git for a declared corpus sample.
 """
 
 import argparse
@@ -19,6 +20,7 @@ from pathlib import Path
 import random
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from urllib.parse import quote, urlsplit
@@ -31,6 +33,7 @@ class Client:
         if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment:
             raise ValueError("base URL must be HTTP(S), without credentials, query or fragment")
         self.connection_type = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
+        self.base_url = base.rstrip("/")
         self.host, self.port, self.prefix = url.hostname, url.port, url.path.rstrip("/")
         self.token, self.timeout = token, timeout
         self.local = threading.local()
@@ -67,7 +70,7 @@ class Client:
             connection.close()
 
 
-def git(*args, cwd, token):
+def git(*args, cwd, token, timeout=120, request_id=None):
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("GIT_", "AWS_", "RUSTFS_", "CANOPY_"))}
     environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
@@ -75,8 +78,11 @@ def git(*args, cwd, token):
                        GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="",
                        GIT_CONFIG_KEY_1="http.extraHeader",
                        GIT_CONFIG_VALUE_1=f"Authorization: Bearer {token}")
+    if request_id is not None:
+        environment.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_2="http.extraHeader",
+                           GIT_CONFIG_VALUE_2=f"X-Request-ID: {request_id}")
     result = subprocess.run(["git", *args], cwd=cwd, env=environment,
-                            capture_output=True, timeout=120, check=False)
+                            capture_output=True, timeout=timeout, check=False)
     if result.returncode:
         raise RuntimeError(f"Git {args[0]} failed (exit {result.returncode})")
     return result.stdout.strip().decode()
@@ -182,19 +188,68 @@ def percentiles(values):
             for name, q in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}
 
 
+def git_transfer(operation, url, entry, token, work_dir, timeout, request_id):
+    """Run one disposable stock-Git transfer and validate its advertised tip."""
+    with tempfile.TemporaryDirectory(prefix="canopy-git-read-", dir=work_dir) as temporary:
+        destination = Path(temporary) / "repo"
+        if operation == "clone":
+            git("clone", "--quiet", url, str(destination), cwd=temporary, token=token,
+                timeout=timeout, request_id=request_id)
+            tip = git("rev-parse", "HEAD", cwd=destination, token=token, timeout=timeout)
+            readme = destination / "README.md"
+            return tip == entry["commit"] and readme.is_file() and (
+                hashlib.sha256(readme.read_bytes()).hexdigest() == entry["readme_sha256"])
+        if operation == "cold_fetch":
+            git("init", "--bare", "--quiet", str(destination), cwd=temporary,
+                token=token, timeout=timeout)
+            git("fetch", "--quiet", url, "refs/heads/main", cwd=destination,
+                token=token, timeout=timeout, request_id=request_id)
+            return git("rev-parse", "FETCH_HEAD", cwd=destination, token=token,
+                       timeout=timeout) == entry["commit"]
+        raise ValueError("unsupported Git transfer operation")
+
+
+def push_branch(url, source, reference, token, timeout, request_id):
+    """Publish one unique benchmark ref; Git checks the receive-pack report."""
+    git("push", "--quiet", url, f"HEAD:{reference}", cwd=source, token=token,
+        timeout=timeout, request_id=request_id)
+
+
 def measure(args, client, token):
-    del token
     clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
-    if args.active_repositories > len(manifest["repositories"]):
-        raise ValueError("active repository count exceeds corpus")
-    generator = random.Random(args.seed)
-    active = generator.sample(manifest["repositories"], args.active_repositories)
-    # Skew has a declared hot tenth, not an implicit warm-cache assumption.
-    hot = active[:max(1, len(active) // 10)]
+    git_read = args.operation in ("clone", "cold_fetch")
+    git_write = args.operation == "push_branch"
+    git_operation = git_read or git_write
+    eligible = ([entry for entry in manifest["repositories"] if entry["commit"] is not None]
+                if git_read else manifest["repositories"])
+    if args.active_repositories > len(eligible):
+        raise ValueError("active repository count exceeds eligible corpus")
     total = math.ceil(args.duration * args.rate)
     if total > 1_000_000:
         raise ValueError("one run is limited to one million scheduled arrivals")
+    samples_path = args.output.with_suffix(".samples.jsonl")
+    if args.output.exists() or samples_path.exists():
+        raise ValueError("run requires new output paths")
+    if git_operation:
+        if args.work_dir is None:
+            raise ValueError("stock-Git runs require --work-dir")
+        args.work_dir.mkdir(parents=True, exist_ok=False)
+    push_run_id = uuid.uuid4().hex if git_write else None
+    source = args.work_dir / "source" if git_write else None
+    push_commit = None
+    if git_write:
+        git("init", "-b", "main", str(source), cwd=args.work_dir, token=token)
+        git("config", "user.name", "Canopy Benchmark", cwd=source, token=token)
+        git("config", "user.email", "benchmark@example.invalid", cwd=source, token=token)
+        (source / "README.md").write_text(f"benchmark run {push_run_id}\n")
+        git("add", "README.md", cwd=source, token=token)
+        git("commit", "-m", "Benchmark fixture", cwd=source, token=token)
+        push_commit = git("rev-parse", "HEAD", cwd=source, token=token)
+    generator = random.Random(args.seed)
+    active = generator.sample(eligible, args.active_repositories)
+    # Skew has a declared hot tenth, not an implicit warm-cache assumption.
+    hot = active[:max(1, len(active) // 10)]
     counts, latencies, service_times, dispatch_times = Counter(), [], [], []
     ingress_counts = [Counter() for _ in clients]
     ingress_latencies = [[] for _ in clients]
@@ -203,9 +258,6 @@ def measure(args, client, token):
     lock = threading.Lock()
     started = time.monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
-    samples_path = args.output.with_suffix(".samples.jsonl")
-    if args.output.exists() or samples_path.exists():
-        raise ValueError("run requires new output paths")
     with samples_path.open("x") as samples:
         def record(sample):
             with lock:
@@ -230,10 +282,24 @@ def measure(args, client, token):
                     status, body = ingress.request(f"/api/repositories/{entry['name']}", request_id=request_id)
                     decoded = json.loads(body) if status == 200 else None
                     valid = isinstance(decoded, dict) and decoded.get("repository_id") == entry["repository_id"]
-                else:
+                elif args.operation == "refs":
                     status, body = ingress.request(f"/{entry['owner']}/{entry['name']}.git/info/refs?service=git-upload-pack", git=True, request_id=request_id)
                     valid = status == 200 and body.startswith(b"000eversion 2\n")
-                result = "ok" if valid else (f"http_{status}" if status != 200 else "invalid_response")
+                elif git_read:
+                    url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
+                    valid = git_transfer(args.operation, url, entry, token, args.work_dir,
+                                         args.git_timeout, request_id)
+                else:
+                    url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
+                    reference = f"refs/heads/canopy-benchmark/{push_run_id}/{sequence:07d}"
+                    push_branch(url, source, reference, token, args.git_timeout, request_id)
+                    valid = True
+                result = ("ok" if valid else
+                          (f"http_{status}" if not git_operation and status != 200 else "invalid_response"))
+            except subprocess.TimeoutExpired:
+                result = "client_timeout"
+            except RuntimeError:
+                result = "git_error"
             except (OSError, ValueError, KeyError, http.client.HTTPException):
                 pass
             finally:
@@ -261,11 +327,14 @@ def measure(args, client, token):
     elapsed = time.monotonic() - started
     result = {"version": 1, "started_at_utc": started_at,
               "corpus_repositories": len(manifest["repositories"]),
+              "eligible_repositories": len(eligible),
               "active_repositories": len(active), "distribution": args.distribution,
               "operation": args.operation, "seed": args.seed,
               "offered_rps": args.rate, "schedule_seconds": args.duration,
               "elapsed_including_drain_seconds": round(elapsed, 3),
               "concurrency": args.concurrency, "request_timeout_seconds": args.timeout,
+              "git_timeout_seconds": args.git_timeout if git_operation else None,
+              "push_run_id": push_run_id, "push_commit": push_commit,
               "scheduled": total, "outcomes": dict(counts),
               "ingresses": [{"index": index, "outcomes": dict(outcomes),
                              "scheduled_latency_ms": percentiles(ingress_latencies[index]),
@@ -274,7 +343,7 @@ def measure(args, client, token):
               "failed_arrivals": total - counts["ok"],
               "scheduled_latency_ms": percentiles(latencies),
               "service_ms": percentiles(service_times), "dispatch_delay_ms": percentiles(dispatch_times),
-              "latency_population": "all completed HTTP attempts, including errors; driver_busy arrivals are counted failures without fabricated latency",
+              "latency_population": "all completed HTTP or stock-Git attempts, including errors and client validation; driver_busy arrivals are counted failures without fabricated latency",
               "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest()}
     if sum(counts.values()) != total:
         raise RuntimeError("benchmark lost scheduled outcomes")
@@ -307,10 +376,12 @@ def main():
     run = commands.add_parser("run")
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
-    run.add_argument("--operation", choices=("metadata", "refs"), default="metadata")
+    run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch", "push_branch"), default="metadata")
     run.add_argument("--rate", type=positive, default=20)
     run.add_argument("--duration", type=positive, default=30)
     run.add_argument("--concurrency", type=positive, default=32)
+    run.add_argument("--work-dir", type=Path, help="new client directory for stock-Git operations")
+    run.add_argument("--git-timeout", type=positive, default=120)
     run.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     token = os.environ.get("CANOPY_GIT_TOKEN")

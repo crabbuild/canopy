@@ -427,13 +427,42 @@ python3 -B scripts/benchmark_repositories.py \
   run --active-repositories 1000 --distribution uniform \
   --operation refs --rate 20 --duration 120 --concurrency 32 \
   --output /path/to/canopy-two-gateway-refs.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 100 --distribution skewed \
+  --operation clone --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-client-clone-scratch \
+  --output /path/to/canopy-two-gateway-clones.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 1000 --distribution uniform \
+  --operation push_branch --rate 5 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-client-push-source \
+  --output /path/to/canopy-two-gateway-pushes.json
 ```
 
 The run assigns scheduled requests to ingresses by sequence number and records
-each ingress's outcomes and latency percentiles. Compare the same workload with one and two ingresses
-and collect node, object-store, and client resource metrics separately. This
-driver measures metadata or Git v2 discovery; it does not measure push, pack
-generation, full fetch, or LFS transfer throughput.
+each ingress's outcomes and latency percentiles. Compare the same workload with
+one and two ingresses and collect node, object-store, and client resource metrics
+separately. `clone` measures a stock-Git full clone and verifies the seeded commit
+and README hash. `cold_fetch` initializes an empty bare client and fetches
+`refs/heads/main`; substitute it for `clone` with a separate fresh client work
+directory and report. Both select only populated repositories, so the sample
+above exercises 100 of the 10,000 identities. Disposable client checkouts are
+removed after each attempt; the caller-supplied work directory itself remains.
+Client Git and disk work is included in latency. `push_branch` creates one local
+commit and pushes it to a unique `refs/heads/canopy-benchmark/<run-id>/<sequence>`
+ref for each arrival. The report records the run ID and commit; pushed refs
+remain in the disposable corpus for inspection and must be included in its
+eventual cleanup. The first push to a repository transfers objects, while later
+pushes of the same commit mainly measure ref publication. Source commit setup is
+outside the scheduled interval. Interpret those as
+different workloads. These runs do not measure incremental fetch, pull, LFS,
+or large-history throughput.
 
 Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
 of requests to the selected working set's first tenth. A fixed seed determines
@@ -441,13 +470,14 @@ working-set selection and offered arrivals. The driver never calls a working set
 warm automatically: its count is not the server's resident count. Prewarm a set
 that fits the node before claiming warm latency, or label the run as cold/mixed.
 
-Each worker reuses an HTTP connection. Arrivals follow a fixed clock schedule;
+Each HTTP worker reuses a connection; stock-Git attempts use fresh client
+repositories. Arrivals follow a fixed clock schedule;
 end-to-end latency starts at the scheduled instant and includes driver dispatch
 delay and complete response consumption. A bounded semaphore limits outstanding
 requests. Saturation records `driver_busy` instead of accumulating an unbounded
-client queue. HTTP errors and transport failures are recorded without retries.
-`--timeout` bounds individual socket operations; it is not a whole-request
-deadline. All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
+client queue. HTTP and Git failures are recorded without retries. `--timeout`
+bounds individual HTTP socket operations; `--git-timeout` bounds each Git process.
+All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
 error totals, scheduled/service/dispatch latency percentiles and the manifest
 SHA-256. `started_at_utc` anchors the run to server logs; each sample's
 scheduled offset is `sequence / offered_rps`, while latency continues to use the
@@ -455,14 +485,16 @@ monotonic clock. Dropped arrivals have no fabricated zero latency. Any failure y
 exit status 1 after reports are written. Latency percentiles include completed
 errors; always read them alongside error/drop counts.
 
-The driver unit test runs a real HTTP server that deliberately rejects requests:
+The driver tests run a real HTTP server that deliberately rejects requests and
+stock Git against a disposable local bare repository:
 
 ```sh
 python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 ```
 
-It verifies concurrency bounds, complete scheduled-outcome accounting, absence
-of retries, queue-delay inclusion and credential exclusion from the report.
+They verify concurrency bounds, complete scheduled-outcome accounting, absence
+of retries, queue-delay inclusion, Git tip/content checks and credential
+exclusion from the report.
 
 ## Measurement history
 
