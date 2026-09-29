@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `47a302b79962ee16c698e121315cf4e85ec49549`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
 ## Read the result before the target
 
@@ -13,6 +13,17 @@ Use this plan to design capacity work and interpret Canopy benchmark results. It
 | Is idle ownership proven at 1,000 active Cells? | No; a run on an older Cellule revision missed renewal coverage for nine Cells, and the current pin needs a repeat | [Observed idle renewal ceiling](#observed-idle-renewal-ceiling) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
+
+The current Cellule pin dispatches due owner renewals oldest-first and refills
+the bounded 32-task renewal window when I/O completes. A 100-ms scan rebuilds
+pending candidates, removing stale generations and departed Cells. This removes
+the earlier 320-starts/s *scheduler* ceiling; it does not lower the one-control-
+update-per-active-Cell cost or prove that a provider can sustain the required
+update rate. Repeat the real-store idle coverage gate before raising the active
+Cell limit or claiming 1,000- or 10,000-Cell residency. This dependency and
+lockfile change also changes Canopy's compiled release digest; test against a
+fresh store prefix or use the documented maintenance upgrade path for an
+existing deployment.
 
 ## Recorded large-transfer qualification
 
@@ -1654,12 +1665,14 @@ The dispatch ceiling is source-backed; exact starvation causality still needs
 a controlled scheduler regression. The existing
 `idle_owner_progress_is_renewed_without_a_per_cell_task` test covers one Cell.
 
-Before raising active density, implement and qualify these runtime changes:
+The current Cellule pin addresses the dispatch-order and refill mechanism with
+a sorted scan every 100 ms. Before raising active density, qualify the change:
 
-1. Dispatch the oldest eligible overdue renewal first, with bounded concurrency
-   and capacity refill after completion. Avoid a full Cell scan per completion;
-   use a deadline index with generation checks and bounded stale-entry cleanup.
-2. Preserve coordination admission, publisher exclusivity, node lease checks,
+1. Measure scan and sort CPU at 1,000 through 10,000 active Cells. The current
+   pending vector is rebuilt each tick and bounded by active count; use a
+   deadline index only if measured scan cost warrants the extra invalidation
+   and generation bookkeeping.
+2. Verify coordination admission, publisher exclusivity, node lease checks,
    effect/generation fencing and shutdown behavior. Foreground publication,
    compaction, transfer and release share these invariants.
 3. Prove progress above the old dispatch ceiling, including slow storage,
