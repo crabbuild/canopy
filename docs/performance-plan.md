@@ -256,8 +256,9 @@ cold repository converge on one serving entry. All pins, denied/lost release,
 cleanup failure, cancellation and shutdown tests continue to pass. The lock
 isolation part is implemented. The automated bounded-container run still measures
 metadata and Git v2 discovery, with stock Git sampling and full identity recovery
-checks. The standalone driver can schedule clone, cold/incremental fetch, pull and
-unique-ref push, but those workloads have not been qualified at target scale.
+checks. The standalone driver can schedule clone, cold/incremental fetch, pull,
+unique-ref push and direct-basic LFS transfers, but those workloads have not
+been qualified at target scale.
 Transition queue/service timings are logged. Comprehensive resource metrics and
 independent load-generator deployment remain open.
 
@@ -508,6 +509,42 @@ elapsed time is recorded separately. These runs measure one-commit incremental
 transfers, not large histories or cold-cache startup. Client-side shared clone
 setup is included in each attempt's latency. Report node and generator resource
 usage alongside the latency distribution.
+
+For LFS basic-transfer load, seed a separate disposable corpus with a declared
+body size, then run both read and write workloads through the two ingresses:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  seed --repositories 10000 --populated 100 --lfs-fixture-bytes 4194304 \
+  --work-dir /path/to/canopy-lfs-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  run --active-repositories 100 --operation lfs_download \
+  --rate 2 --duration 120 --concurrency 8 \
+  --output /path/to/canopy-lfs-download.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  run --active-repositories 1000 --operation lfs_upload \
+  --lfs-bytes 1048576 --rate 2 --duration 120 --concurrency 8 \
+  --output /path/to/canopy-lfs-upload.json
+```
+
+Seed stores one LFS object per populated repository and `verify` checks its
+size and SHA-256. Download attempts stream and hash the full response. Upload
+attempts use unique object IDs; their IDs are in the sample file and the
+objects remain in the disposable corpus. The driver uses Canopy's direct basic
+PUT/GET endpoints, not a stock `git-lfs` batch/checkout flow. It limits fixture
+and per-upload bodies to 16 MiB and nominal concurrent payload bytes to
+256 MiB; that is not a process-memory ceiling. The separate large-transfer
+qualification covers multi-GiB objects. As with
+Git, client CPU/disk and network placement must be reported to attribute
+throughput.
 
 Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
 of requests to the selected working set's first tenth. A fixed seed determines

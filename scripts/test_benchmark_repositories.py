@@ -39,6 +39,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.active -= 1
 
 
+class LfsHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args):
+        pass
+
+    def do_PUT(self):
+        size = int(self.headers["Content-Length"])
+        body = self.rfile.read(size)
+        oid = self.path.rsplit("/", 1)[-1]
+        status = 200 if hashlib.sha256(body).hexdigest() == oid else 422
+        if status == 200:
+            with self.server.guard:
+                self.server.blobs[self.path] = body
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        with self.server.guard:
+            body = self.server.blobs.get(self.path)
+        self.send_response(200 if body is not None else 404)
+        self.send_header("Content-Length", str(len(body) if body is not None else 0))
+        self.end_headers()
+        if body is not None:
+            self.wfile.write(body)
+
+
 class ScheduledLoad(unittest.TestCase):
     def test_incremental_seed_and_verify_preserve_both_commits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -49,6 +77,7 @@ class ScheduledLoad(unittest.TestCase):
             class LocalClient:
                 def __init__(self):
                     self.entries = {}
+                    self.lfs = {}
 
                 def request(self, path, payload=None):
                     if payload is not None:
@@ -64,16 +93,30 @@ class ScheduledLoad(unittest.TestCase):
                     name = path.rsplit("/", 1)[-1]
                     return 200, json.dumps(self.entries[name]).encode()
 
+                def lfs_put(self, path, content, request_id=None):
+                    if hashlib.sha256(content).hexdigest() != path.rsplit("/", 1)[-1]:
+                        return 422
+                    self.lfs[path] = content
+                    return 200
+
+                def lfs_get(self, path, expected_size, request_id=None):
+                    body = self.lfs.get(path)
+                    if body is None:
+                        return 404, 0, None
+                    return 200, len(body), hashlib.sha256(body).hexdigest()
+
             client = LocalClient()
             manifest = root / "manifest.json"
             args = SimpleNamespace(manifest=manifest, work_dir=root / "seed", seed=42,
                                    repositories=2, populated=1, incremental_fixture=True,
+                                   lfs_fixture_bytes=128,
                                    base_url=remotes.as_uri())
             self.assertEqual(benchmark.seed(args, client, "fixture-token")["populated"], 1)
             entries = benchmark.corpus(manifest)["repositories"]
             populated = [entry for entry in entries if entry["commit"] is not None]
             self.assertEqual(len(populated), 1)
             self.assertNotEqual(populated[0]["base_commit"], populated[0]["commit"])
+            self.assertEqual(populated[0]["lfs_size"], 128)
             check = SimpleNamespace(manifest=manifest, work_dir=root / "verified",
                                     base_url=remotes.as_uri())
             self.assertEqual(benchmark.verify(check, client, "fixture-token")
@@ -81,6 +124,7 @@ class ScheduledLoad(unittest.TestCase):
             baseline_manifest = root / "baseline.json"
             baseline = SimpleNamespace(manifest=baseline_manifest, work_dir=root / "baseline-seed",
                 seed=42, repositories=1, populated=1, incremental_fixture=False,
+                lfs_fixture_bytes=0,
                 base_url=remotes.as_uri())
             benchmark.seed(baseline, client, "fixture-token")
             self.assertEqual(benchmark.corpus(baseline_manifest)["version"], 1)
@@ -197,6 +241,75 @@ class ScheduledLoad(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_lfs_upload_and_streamed_download_across_ingresses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = b"LFS fixture\n" * (3 * 1024 * 1024 // len(b"LFS fixture\n"))
+            oid = hashlib.sha256(body).hexdigest()
+            path = f"/canopy/fixture.git/info/lfs/objects/{oid}"
+            blobs = {path: body}
+            guard = threading.Lock()
+            servers = [ThreadingHTTPServer(("127.0.0.1", 0), LfsHandler) for _ in range(2)]
+            threads = []
+            clients = []
+            for server in servers:
+                server.blobs = blobs
+                server.guard = guard
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                threads.append(thread)
+                clients.append(benchmark.Client(f"http://127.0.0.1:{server.server_port}",
+                                                "fixture-token", 5))
+            try:
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"version": 1, "complete": True,
+                    "requested_repositories": 1, "repositories": [
+                        {"name": "fixture", "owner": "canopy",
+                         "repository_id": str(uuid.uuid4()), "commit": None,
+                         "lfs_oid": oid, "lfs_size": len(body)}]}))
+                args = SimpleNamespace(manifest=manifest, active_repositories=1, seed=42,
+                    duration=1, rate=2, concurrency=2, distribution="uniform",
+                    operation="lfs_download", timeout=5, output=root / "download.json")
+                report = benchmark.measure(args, clients, "fixture-token")
+                self.assertEqual(report["outcomes"], {"ok": 2})
+                self.assertEqual([item["outcomes"] for item in report["ingresses"]],
+                                 [{"ok": 1}, {"ok": 1}])
+                with guard:
+                    blobs[path] = b"X" + body[1:]
+                args.output = root / "corrupt-download.json"
+                report = benchmark.measure(args, clients, "fixture-token")
+                self.assertEqual(report["outcomes"], {"invalid_response": 2})
+                self.assertEqual(report["failed_arrivals"], 2)
+                with guard:
+                    blobs[path] = body
+                args.operation = "lfs_upload"
+                args.lfs_bytes = 1024
+                args.output = root / "upload.json"
+                report = benchmark.measure(args, clients, "fixture-token")
+                self.assertEqual(report["outcomes"], {"ok": 2})
+                samples = [json.loads(line) for line in
+                           (root / "upload.samples.jsonl").read_text().splitlines()]
+                self.assertEqual(len({sample["lfs_oid"] for sample in samples}), 2)
+                for sample in samples:
+                    uploaded = blobs[f"/canopy/fixture.git/info/lfs/objects/{sample['lfs_oid']}"]
+                    self.assertEqual(len(uploaded), 1024)
+                    self.assertEqual(hashlib.sha256(uploaded).hexdigest(), sample["lfs_oid"])
+                self.assertNotIn("fixture-token", args.output.read_text())
+                args.lfs_bytes = 16 * 1024 * 1024
+                args.concurrency = 32
+                args.output = root / "too-large.json"
+                with self.assertRaises(ValueError):
+                    benchmark.measure(args, clients, "fixture-token")
+                self.assertFalse(args.output.exists())
+            finally:
+                for client in clients:
+                    client.close()
+                for server in servers:
+                    server.shutdown()
+                    server.server_close()
+                for thread in threads:
+                    thread.join()
 
     def test_stock_git_clone_and_cold_fetch_validate_populated_repositories(self):
         with tempfile.TemporaryDirectory() as directory:

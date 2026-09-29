@@ -2,10 +2,10 @@
 """Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata, Git v2 discovery, clone, fetch, pull or unique-ref push;
-LFS throughput needs its own qualification. Seed and verify use stock Git for
-a declared corpus sample. Incremental workloads require an opt-in two-commit
-corpus.
+measures metadata, Git v2 discovery, clone, fetch, pull, unique-ref push or
+direct-basic LFS transfers. Seed and verify use stock Git for a declared corpus
+sample. Incremental workloads require an opt-in two-commit corpus. Production
+throughput still needs separate qualification.
 """
 
 import argparse
@@ -41,13 +41,17 @@ class Client:
         self.connections = []
         self.lock = threading.Lock()
 
-    def request(self, path, payload=None, *, git=False, request_id=None):
+    def connection(self):
         connection = getattr(self.local, "connection", None)
         if connection is None:
             connection = self.connection_type(self.host, self.port, timeout=self.timeout)
             self.local.connection = connection
             with self.lock:
                 self.connections.append(connection)
+        return connection
+
+    def request(self, path, payload=None, *, git=False, request_id=None):
+        connection = self.connection()
         headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
         if request_id is not None:
             headers["X-Request-ID"] = request_id
@@ -63,6 +67,47 @@ class Client:
             return response.status, body
         except BaseException:
             # Reuse this bounded per-thread connection object after reconnecting.
+            connection.close()
+            raise
+
+    def lfs_put(self, path, content, request_id=None):
+        connection = self.connection()
+        headers = {"Authorization": f"Bearer {self.token}",
+                   "Content-Type": "application/octet-stream",
+                   "Content-Length": str(len(content))}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+        try:
+            connection.request("PUT", self.prefix + path, body=content, headers=headers)
+            response = connection.getresponse()
+            if len(response.read(2 * 1024 * 1024 + 1)) > 2 * 1024 * 1024:
+                raise ValueError("LFS upload response exceeds 2 MiB")
+            return response.status
+        except BaseException:
+            connection.close()
+            raise
+
+    def lfs_get(self, path, expected_size, request_id=None):
+        connection = self.connection()
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
+        try:
+            connection.request("GET", self.prefix + path, headers=headers)
+            response = connection.getresponse()
+            if response.status != 200:
+                if len(response.read(2 * 1024 * 1024 + 1)) > 2 * 1024 * 1024:
+                    raise ValueError("LFS error response exceeds 2 MiB")
+                return response.status, 0, None
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := response.read(1024 * 1024):
+                size += len(chunk)
+                if size > expected_size:
+                    raise ValueError("LFS response exceeds declared size")
+                digest.update(chunk)
+            return response.status, size, digest.hexdigest()
+        except BaseException:
             connection.close()
             raise
 
@@ -148,6 +193,15 @@ def seed(args, client, token):
                 git("push", url, *refs, cwd=local, token=token)
                 record["commit"] = git("rev-parse", "HEAD", cwd=local, token=token)
                 record["readme_sha256"] = hashlib.sha256(content).hexdigest()
+                if args.lfs_fixture_bytes:
+                    lfs_body = hashlib.shake_256(
+                        f"{prefix}/{name}/{args.seed}".encode()).digest(args.lfs_fixture_bytes)
+                    lfs_oid = hashlib.sha256(lfs_body).hexdigest()
+                    path = f"/{entry['owner']}/{name}.git/info/lfs/objects/{lfs_oid}"
+                    if client.lfs_put(path, lfs_body) != 200:
+                        raise RuntimeError("LFS seed upload failed")
+                    record["lfs_oid"] = lfs_oid
+                    record["lfs_size"] = len(lfs_body)
             if (index + 1) % 25 == 0:
                 save(args.manifest, manifest)
                 print(f"seeded {index + 1}/{args.repositories} repositories", flush=True)
@@ -168,6 +222,12 @@ def corpus(path):
         if any(not re.fullmatch(r"[A-Za-z0-9_-]+", entry[key]) for key in ("name", "owner")):
             raise ValueError("manifest contains invalid repository names")
         uuid.UUID(entry["repository_id"])
+        if "lfs_oid" in entry:
+            oid, size = entry["lfs_oid"], entry.get("lfs_size")
+            if not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{64}", oid):
+                raise ValueError("corpus has an invalid LFS object ID")
+            if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+                raise ValueError("corpus has an invalid LFS object size")
         if manifest["version"] == 2 and entry["commit"] is not None:
             base_commit = entry.get("base_commit")
             digest = entry.get("incremental_sha256")
@@ -190,6 +250,11 @@ def verify(args, client, token):
             print(f"verified {index + 1}/{len(manifest['repositories'])} identities", flush=True)
         if entry["commit"] is None:
             continue
+        if "lfs_oid" in entry:
+            path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{entry['lfs_oid']}"
+            status, size, digest = client.lfs_get(path, entry["lfs_size"])
+            if (status, size, digest) != (200, entry["lfs_size"], entry["lfs_oid"]):
+                raise RuntimeError("restored LFS bytes differ from manifest")
         for protocol in ("0", "2"):
             clone = args.work_dir / f"{entry['name']}-v{protocol}"
             url = f"{args.base_url.rstrip('/')}/{entry['owner']}/{entry['name']}.git"
@@ -293,7 +358,14 @@ def measure(args, client, token):
     git_read = args.operation in ("clone", "cold_fetch") or incremental
     git_write = args.operation == "push_branch"
     git_operation = git_read or git_write
-    eligible = ([entry for entry in manifest["repositories"] if entry.get("base_commit") is not None]
+    lfs_download = args.operation == "lfs_download"
+    lfs_upload = args.operation == "lfs_upload"
+    if lfs_upload and (args.lfs_bytes == 0 or
+                       args.lfs_bytes * args.concurrency > 256 * 1024 * 1024):
+        raise ValueError("LFS uploads require positive bytes and at most 256 MiB in-flight payloads")
+    eligible = ([entry for entry in manifest["repositories"] if entry.get("lfs_oid") is not None]
+                if lfs_download else
+                [entry for entry in manifest["repositories"] if entry.get("base_commit") is not None]
                 if incremental else
                 [entry for entry in manifest["repositories"] if entry["commit"] is not None]
                 if git_read else manifest["repositories"])
@@ -310,6 +382,9 @@ def measure(args, client, token):
             raise ValueError("stock-Git runs require --work-dir")
         args.work_dir.mkdir(parents=True, exist_ok=False)
     push_run_id = uuid.uuid4().hex if git_write else None
+    lfs_run_id = uuid.uuid4().hex if lfs_upload else None
+    lfs_tail = (hashlib.shake_256(lfs_run_id.encode()).digest(max(0, args.lfs_bytes - 32))
+                if lfs_upload else None)
     source = args.work_dir / "source" if git_write else None
     push_commit = None
     if git_write:
@@ -357,6 +432,7 @@ def measure(args, client, token):
             ingress = clients[ingress_index]
             dispatched = time.monotonic()
             result = "transport_error"
+            uploaded_oid = None
             try:
                 if args.operation == "metadata":
                     status, body = ingress.request(f"/api/repositories/{entry['name']}", request_id=request_id)
@@ -370,11 +446,24 @@ def measure(args, client, token):
                     valid = git_transfer(args.operation, url, entry, token, args.work_dir,
                                          args.git_timeout, request_id,
                                          templates.get(entry["repository_id"]))
-                else:
+                elif git_write:
                     url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
                     reference = f"refs/heads/canopy-benchmark/{push_run_id}/{sequence:07d}"
                     push_branch(url, source, reference, token, args.git_timeout, request_id)
                     valid = True
+                elif lfs_download:
+                    path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{entry['lfs_oid']}"
+                    status, size, digest = ingress.lfs_get(path, entry["lfs_size"], request_id)
+                    valid = (status, size, digest) == (200, entry["lfs_size"], entry["lfs_oid"])
+                elif lfs_upload:
+                    marker = hashlib.sha256(f"{lfs_run_id}:{sequence}".encode()).digest()
+                    body = (marker + lfs_tail)[:args.lfs_bytes]
+                    uploaded_oid = hashlib.sha256(body).hexdigest()
+                    path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{uploaded_oid}"
+                    status = ingress.lfs_put(path, body, request_id)
+                    valid = status == 200
+                else:
+                    raise ValueError("unsupported benchmark operation")
                 result = ("ok" if valid else
                           (f"http_{status}" if not git_operation and status != 200 else "invalid_response"))
             except subprocess.TimeoutExpired:
@@ -386,6 +475,7 @@ def measure(args, client, token):
             finally:
                 finished = time.monotonic()
                 record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "ingress_index": ingress_index, "result": result,
+                        "lfs_oid": uploaded_oid,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
                         "dispatch_delay_ms": (dispatched - scheduled) * 1000})
@@ -417,6 +507,8 @@ def measure(args, client, token):
               "concurrency": args.concurrency, "request_timeout_seconds": args.timeout,
               "git_timeout_seconds": args.git_timeout if git_operation else None,
               "push_run_id": push_run_id, "push_commit": push_commit,
+              "lfs_run_id": lfs_run_id,
+              "lfs_size_bytes": args.lfs_bytes if lfs_upload else None,
               "scheduled": total, "outcomes": dict(counts),
               "ingresses": [{"index": index, "outcomes": dict(outcomes),
                              "scheduled_latency_ms": percentiles(ingress_latencies[index]),
@@ -440,6 +532,13 @@ def positive(value):
     return parsed
 
 
+def bounded_lfs_bytes(value):
+    parsed = int(value)
+    if not 0 <= parsed <= 16 * 1024 * 1024:
+        raise argparse.ArgumentTypeError("LFS benchmark body must be 0 to 16 MiB")
+    return parsed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
@@ -454,6 +553,8 @@ def main():
     create.add_argument("--populated", type=positive, default=3)
     create.add_argument("--incremental-fixture", action="store_true",
                         help="seed a second commit and benchmark-base ref for incremental fetch/pull")
+    create.add_argument("--lfs-fixture-bytes", type=bounded_lfs_bytes, default=0,
+                        help="also upload one direct-basic LFS object per populated repository")
     create.add_argument("--work-dir", type=Path, required=True)
     check = commands.add_parser("verify")
     check.add_argument("--work-dir", type=Path, required=True)
@@ -461,13 +562,16 @@ def main():
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
     run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch",
-                                           "incremental_fetch", "incremental_pull", "push_branch"),
+                                           "incremental_fetch", "incremental_pull", "push_branch",
+                                           "lfs_download", "lfs_upload"),
                      default="metadata")
     run.add_argument("--rate", type=positive, default=20)
     run.add_argument("--duration", type=positive, default=30)
     run.add_argument("--concurrency", type=positive, default=32)
     run.add_argument("--work-dir", type=Path, help="new client directory for stock-Git operations")
     run.add_argument("--git-timeout", type=positive, default=120)
+    run.add_argument("--lfs-bytes", type=bounded_lfs_bytes, default=1024 * 1024,
+                     help="unique LFS upload bytes per scheduled arrival, at most 16 MiB")
     run.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     token = os.environ.get("CANOPY_GIT_TOKEN")
