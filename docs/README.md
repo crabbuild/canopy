@@ -57,6 +57,19 @@ For a protocol or storage change, use this order:
 
 This order keeps a working implementation, a durable guarantee and a measured capacity claim separate.
 
+## Detailed reference pages
+
+The long-form material is split by reader task so you can scan the landing page and open only the reference you need:
+
+| Page | Use it to… |
+| --- | --- |
+| [User guide](user-guide.md) | Browse repositories, collaborate, use Git LFS, and administer accounts |
+| [API reference](api-reference.md) | Automate repository, collaboration, merge, checks, token, and SSH operations |
+| [Operations runbook](operations.md) | Drain nodes, recover owners, back up state, restore deployments, and replay uncertain pushes |
+| [Implementation and verification](implementation.md) | Understand limits, residency, cache hydration, and build or smoke-test evidence |
+
+These pages preserve the detailed README material while giving each surface its own entry point.
+
 ## Contribution checklist
 
 Update the related documentation when you change behavior:
