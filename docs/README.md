@@ -2,6 +2,8 @@
 
 Use this page to choose a document by task. Canopy's hosting core supports stock Git and Git LFS, but the [roadmap](../ROADMAP.md) and [delivery gates](delivery-plan.md) still list work required before an unattended team deployment. A result from one test revision or storage provider does not automatically apply to another.
 
+> **Status rule:** an implemented behavior is not automatically a production guarantee. Read the evidence and release gate for the exact revision, provider, workload, and hardware.
+
 ## Choose a starting point
 
 | If you need to… | Read | What you will find |
@@ -21,6 +23,16 @@ The Directory Cell resolves names and accounts. Each repository has its own Repo
 ![Canopy gateway, Directory Cell, Repository Cell, object store and disposable Git cache](architecture.svg)
 
 The diagram shows ownership, not a second copy of authority in the Git cache. After local disk loss, Canopy restores published Cell state from the object store and rebuilds that cache. Read the [persisted contracts](contracts.md) for the exact publication and recovery rules.
+
+```mermaid
+flowchart LR
+    request[Request] --> gateway[Gateway]
+    gateway --> directory[Directory Cell<br/>identity and name lookup]
+    directory --> uuid[Repository UUID]
+    uuid --> repository[Repository Cell<br/>durable authority]
+    repository --> bodies[(Immutable bodies)]
+    repository -. hydrate .-> cache[Disposable Git cache]
+```
 
 ## Interpret evidence correctly
 
@@ -44,3 +56,28 @@ For a protocol or storage change, use this order:
 4. Update the contract, a stock-client or fault test, and the recorded gate result together.
 
 This order keeps a working implementation, a durable guarantee and a measured capacity claim separate.
+
+## Detailed reference pages
+
+The long-form material is split by reader task so you can scan the landing page and open only the reference you need:
+
+| Page | Use it to… |
+| --- | --- |
+| [User guide](user-guide.md) | Browse repositories, collaborate, use Git LFS, and administer accounts |
+| [API reference](api-reference.md) | Automate repository, collaboration, merge, checks, token, and SSH operations |
+| [Operations runbook](operations.md) | Drain nodes, recover owners, back up state, restore deployments, and replay uncertain pushes |
+| [Implementation and verification](implementation.md) | Understand limits, residency, cache hydration, and build or smoke-test evidence |
+
+These pages preserve the detailed README material while giving each surface its own entry point.
+
+## Contribution checklist
+
+Update the related documentation when you change behavior:
+
+1. Add or revise the persisted contract.
+2. Add a stock-client, API, or fault test.
+3. Record the revision, provider, workload, and hardware for any measurement.
+4. Update the matching delivery gate and compatibility table.
+5. Add a diagram when a reader must understand ownership, sequencing, or recovery.
+
+Keep examples executable, label code fences, use sentence-case headings, and prefer tables or lists when a paragraph contains three or more independent items.

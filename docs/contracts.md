@@ -2,6 +2,8 @@
 
 This reference defines the identities, storage boundaries, authorization checks and retry behavior that Canopy must preserve across node loss. It describes the current development format. [Versioned migrations](../ROADMAP.md#r01-safe-upgrades-and-schema-migration) are still required before persistent customer repositories can survive upgrades.
 
+> **Document type:** Reference. **Goal:** preserve durable behavior and make conflicts, retries, and recovery observable.
+
 ## Find a contract
 
 | You are changing… | Start with… |
@@ -30,6 +32,25 @@ Directory Cell ── repository UUID ──► Repository Cell
 ```
 
 The following tables and sections state limits and preconditions. They are contracts, not evidence that every release gate is closed. Use the [delivery plan](delivery-plan.md) for qualification status.
+
+### The contract boundary
+
+Every durable mutation follows the same boundary: identify the repository, authorize the actor, validate the expected version, commit the state and replay record together, then report the result.
+
+```mermaid
+sequenceDiagram
+    participant A as Client
+    participant D as Directory Cell
+    participant R as Repository Cell
+    participant O as Object store
+    A->>D: authenticate and resolve owner/name
+    D-->>A: repository UUID and access context
+    A->>R: submit mutation with identity and preconditions
+    R->>O: publish immutable external bodies when needed
+    R->>R: validate ACL, version, graph, and policy
+    R-->>A: commit result or conflict
+    Note over R: The mutation and replay record share one durable boundary.
+```
 
 ## Core identifiers and limits
 
