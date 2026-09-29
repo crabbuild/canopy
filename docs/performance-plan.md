@@ -2,6 +2,17 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
+> **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
+
+```mermaid
+flowchart LR
+    workload[Defined workload] --> setup[Revision, provider, host, limits]
+    setup --> run[Repeatable benchmark]
+    run --> metrics[Latency, resources, errors, recovery]
+    metrics --> claim[Scoped result]
+    claim -. not proof of .-> capacity[Unmeasured production capacity]
+```
+
 ## Read the result before the target
 
 | Question | Current answer | Where to verify it |

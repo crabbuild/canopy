@@ -1,6 +1,8 @@
 # Design full repository Cell capabilities
 
-This proposal explains the dependency and Canopy changes needed to put SQL, key-value data, queues, workflows and scheduled work inside each repository's existing Cell. It is a separate objective from the first production Git-hosting release: Canopy currently uses SQL Repository Cells, and every [acceptance gate](#acceptance-gates) below remains open.
+This proposal explains the dependency and Canopy changes needed to put SQL, key-value data, queues, workflows, and scheduled work inside each repository's existing Cell. It is separate from the first SQL-backed Git-hosting release. Canopy currently uses SQL Repository Cells, and every [acceptance gate](#acceptance-gates) below remains open.
+
+> **Document type:** Conceptual proposal. **Goal:** evaluate one Cell identity with several durable capabilities and define the black-box proof required before implementation.
 
 ## One identity, several capabilities
 
@@ -17,6 +19,21 @@ repository UUID ──► one Repository Cell ──► one fenced writer
                                   ▼
                          bounded node runners
                          (including cold repositories)
+```
+
+```mermaid
+sequenceDiagram
+    participant User as Git or API request
+    participant Cell as Repository Cell
+    participant Queue as Durable queue or workflow
+    participant Runner as Bounded node runner
+    User->>Cell: commit repository mutation
+    Cell->>Queue: enqueue work in the same Cell boundary
+    Cell-->>User: durable response
+    Runner->>Queue: claim due work
+    Queue-->>Runner: lease and payload
+    Runner->>Cell: execute with the same fenced identity
+    Cell-->>Queue: acknowledge or schedule retry
 ```
 
 Here, **Cell** is Cellule's unit of ownership, transaction and recovery. **Capability** is a primitive API installed in that Cell. **Autonomous progress** means queued and scheduled work advances even when no user request opens the repository.

@@ -1,6 +1,8 @@
 # Prove Canopy is ready to deliver
 
-Use this plan to decide which Canopy release gates are closed. The gate table states the required outcome and current status; the [qualification history](#qualification-history) keeps detailed implementation and test evidence. The [roadmap](../ROADMAP.md) orders the remaining work, while [Git compatibility](git-compatibility.md) and [performance evidence](performance-plan.md) describe protocol and capacity limits.
+Use this plan to decide whether a Canopy release gate is closed. The gate table states the required outcome and current status. The [qualification history](#qualification-history) records implementation and test evidence. The [roadmap](../ROADMAP.md) orders remaining work, while [Git compatibility](git-compatibility.md) and [performance evidence](performance-plan.md) define protocol and capacity boundaries.
+
+> **Document type:** Reference. **Goal:** decide whether a release gate is closed from black-box evidence, not from implementation intent.
 
 Every gate needs three observations: a black-box client action, its durable side effect, and the same visible result after a new node restores Cell state. Compilation or a disposable-cache test does not establish durability.
 
@@ -11,6 +13,17 @@ stock client action ──► Cell publication ──► client result
                             │
                             ▼
                      restored Cell state ──► same visible result
+```
+
+```mermaid
+flowchart LR
+    action[Black-box client action] --> publish[Durable Cell publication]
+    publish --> result[Visible client result]
+    publish --> loss{Node or disk loss}
+    loss --> restore[Fresh owner restores Cell state]
+    restore --> replay[Same read or retry result]
+    result --> gate[Gate evidence]
+    replay --> gate
 ```
 
 ## Release gates at a glance

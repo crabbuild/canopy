@@ -2,6 +2,8 @@
 
 Use this reference to decide whether a stock Git or Git LFS workflow is supported and what remains to qualify it. Canopy supports SHA-1 and SHA-256 repositories over Git smart HTTP and an optional SSH listener. It does not claim every Git server capability or every object-store provider.
 
+> **Document type:** Reference. **Goal:** choose a supported client workflow and identify the evidence still required for a new transport, provider, or repository size.
+
 Native Git negotiates the wire protocol and processes packs. Canopy authorizes the operation, verifies objects, and publishes accepted refs and retry outcomes in a Repository Cell before reporting success:
 
 ```text
@@ -17,6 +19,20 @@ Canopy gateway ──► native Git pack/protocol worker
                   │
                   ▼
            client success report
+```
+
+```mermaid
+sequenceDiagram
+    participant G as Stock Git
+    participant C as Canopy gateway
+    participant N as Native Git worker
+    participant R as Repository Cell
+    G->>C: smart HTTP or SSH request
+    C->>N: parse or generate Git protocol data
+    N-->>C: objects, refs, or native result
+    C->>R: authorize, verify, and publish
+    R-->>C: durable result
+    C-->>G: Git response
 ```
 
 The [verified operations](#verified-operations) table records positive stock-client evidence. [Missing or restricted](#missing-or-restricted) lists limits and open gates. [Provider and size qualification](#provider-and-size-qualification) explains how to rerun the isolated RustFS checks; [permanent gates](#permanent-gates-and-remaining-work) links the tests.
