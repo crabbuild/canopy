@@ -254,10 +254,12 @@ Acceptance: paused ownership lookup and release do not block an unrelated warm
 repository's metadata or stock Git discovery. Concurrent requests for the same
 cold repository converge on one serving entry. All pins, denied/lost release,
 cleanup failure, cancellation and shutdown tests continue to pass. The lock
-isolation part is implemented. The initial density driver below measures metadata
-and Git v2 discovery, with stock Git sampling and full identity recovery checks.
-Transition queue/service timings are logged. Other workload classes, comprehensive
-resource metrics and independent load-generator deployment remain open.
+isolation part is implemented. The automated bounded-container run still measures
+metadata and Git v2 discovery, with stock Git sampling and full identity recovery
+checks. The standalone driver can schedule clone, cold/incremental fetch, pull and
+unique-ref push, but those workloads have not been qualified at target scale.
+Transition queue/service timings are logged. Comprehensive resource metrics and
+independent load-generator deployment remain open.
 
 ### 2. Measured active-Cell admission
 
@@ -412,6 +414,10 @@ The default sample contains three one-commit repositories; the remainder are
 empty. This is a density smoke corpus, not realistic large-history qualification.
 An interrupted seed leaves an explicitly incomplete manifest and cannot be used
 as a complete corpus. Names have a unique prefix; the manifest records them.
+The default seed remains a version-1, one-commit corpus. Use
+`seed --incremental-fixture` with a new manifest and storage prefix to create
+version 2: each populated repository has a `benchmark-base` ref at its first
+commit and `main` one commit ahead. `verify` accepts both versions.
 
 For a multi-gateway read run, seed the documented 10,000-repository corpus,
 start two nodes against the same deployment, and pass each ingress to `run`:
@@ -462,9 +468,46 @@ ref for each arrival. The report records the run ID and commit; pushed refs
 remain in the disposable corpus for inspection and must be included in its
 eventual cleanup. The first push to a repository transfers objects, while later
 pushes of the same commit mainly measure ref publication. Source commit setup is
-outside the scheduled interval. Interpret those as
-different workloads. These runs do not measure incremental fetch, pull, LFS,
-or large-history throughput.
+outside the scheduled interval. Interpret those as different workloads. The
+version-1 runs above do not measure incremental fetch, pull, LFS, or
+large-history throughput.
+
+For an incremental fetch and pull run, use a separate version-2 corpus. The
+driver first fetches each selected base ref into a local bare template, outside
+the arrival clock, then gives every arrival a fresh client that shares that
+base object store. `incremental_fetch` fetches `main` into a bare client;
+`incremental_pull` fast-forwards a checked-out client and verifies the new
+file. Use distinct fresh work directories and output paths:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  seed --repositories 10000 --populated 100 --incremental-fixture \
+  --work-dir /path/to/canopy-incremental-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  run --active-repositories 100 --operation incremental_fetch \
+  --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-incremental-fetch-clients \
+  --output /path/to/canopy-incremental-fetch.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  run --active-repositories 100 --operation incremental_pull \
+  --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-incremental-pull-clients \
+  --output /path/to/canopy-incremental-pull.json
+```
+
+Template preparation is real server traffic and can warm both gateways; its
+elapsed time is recorded separately. These runs measure one-commit incremental
+transfers, not large histories or cold-cache startup. Client-side shared clone
+setup is included in each attempt's latency. Report node and generator resource
+usage alongside the latency distribution.
 
 Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
 of requests to the selected working set's first tenth. A fixed seed determines
@@ -495,8 +538,8 @@ python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 ```
 
 They verify concurrency bounds, complete scheduled-outcome accounting, absence
-of retries, queue-delay inclusion, Git tip/content checks and credential
-exclusion from the report.
+of retries, queue-delay inclusion, version-1/version-2 corpus and Git
+tip/content checks, and credential exclusion from the report.
 
 ## Measurement history
 

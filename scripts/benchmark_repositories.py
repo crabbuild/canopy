@@ -2,9 +2,10 @@
 """Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata, Git v2 discovery, full clone, cold fetch or unique-ref push;
-incremental fetch, pull and LFS throughput need their own qualification. Seed
-and verify use stock Git for a declared corpus sample.
+measures metadata, Git v2 discovery, clone, fetch, pull or unique-ref push;
+LFS throughput needs its own qualification. Seed and verify use stock Git for
+a declared corpus sample. Incremental workloads require an opt-in two-commit
+corpus.
 """
 
 import argparse
@@ -101,7 +102,8 @@ def seed(args, client, token):
     generator = random.Random(args.seed)
     selected = set(generator.sample(range(args.repositories), min(args.populated, args.repositories)))
     prefix = f"density-{uuid.uuid4().hex[:12]}"
-    manifest = {"version": 1, "complete": False, "prefix": prefix, "seed": args.seed,
+    manifest = {"version": 2 if args.incremental_fixture else 1,
+                "complete": False, "prefix": prefix, "seed": args.seed,
                 "requested_repositories": args.repositories, "repositories": [],
                 "git_version": git("--version", cwd=args.work_dir, token=token)}
     started = time.monotonic()
@@ -120,6 +122,8 @@ def seed(args, client, token):
             record = {key: entry[key] for key in ("name", "owner", "repository_id")}
             record["create_ms"] = round(create_ms, 3)
             record["commit"] = None
+            if args.incremental_fixture:
+                record["base_commit"] = None
             manifest["repositories"].append(record)
             if index in selected:
                 local = args.work_dir / name
@@ -130,8 +134,18 @@ def seed(args, client, token):
                 (local / "README.md").write_bytes(content)
                 git("add", "README.md", cwd=local, token=token)
                 git("commit", "-m", "Density fixture", cwd=local, token=token)
+                if args.incremental_fixture:
+                    record["base_commit"] = git("rev-parse", "HEAD", cwd=local, token=token)
+                    git("branch", "benchmark-base", cwd=local, token=token)
+                    increment = f"{name}\nincremental={args.seed}\n".encode()
+                    (local / "incremental.txt").write_bytes(increment)
+                    git("add", "incremental.txt", cwd=local, token=token)
+                    git("commit", "-m", "Incremental fixture", cwd=local, token=token)
+                    record["incremental_sha256"] = hashlib.sha256(increment).hexdigest()
                 url = f"{args.base_url.rstrip('/')}/{entry['owner']}/{name}.git"
-                git("push", url, "HEAD:refs/heads/main", cwd=local, token=token)
+                refs = (["HEAD:refs/heads/main", "benchmark-base:refs/heads/benchmark-base"]
+                        if args.incremental_fixture else ["HEAD:refs/heads/main"])
+                git("push", url, *refs, cwd=local, token=token)
                 record["commit"] = git("rev-parse", "HEAD", cwd=local, token=token)
                 record["readme_sha256"] = hashlib.sha256(content).hexdigest()
             if (index + 1) % 25 == 0:
@@ -148,12 +162,19 @@ def seed(args, client, token):
 def corpus(path):
     manifest = json.loads(path.read_text())
     entries = manifest["repositories"]
-    if manifest["version"] != 1 or not manifest["complete"] or len(entries) != manifest["requested_repositories"]:
-        raise ValueError("manifest must contain a complete version-1 corpus")
+    if manifest["version"] not in (1, 2) or not manifest["complete"] or len(entries) != manifest["requested_repositories"]:
+        raise ValueError("manifest must contain a complete version-1 or version-2 corpus")
     for entry in entries:
         if any(not re.fullmatch(r"[A-Za-z0-9_-]+", entry[key]) for key in ("name", "owner")):
             raise ValueError("manifest contains invalid repository names")
         uuid.UUID(entry["repository_id"])
+        if manifest["version"] == 2 and entry["commit"] is not None:
+            base_commit = entry.get("base_commit")
+            digest = entry.get("incremental_sha256")
+            if not isinstance(base_commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_commit):
+                raise ValueError("version-2 corpus has an invalid base commit")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("version-2 corpus has an invalid incremental digest")
     return manifest
 
 
@@ -177,6 +198,12 @@ def verify(args, client, token):
                 raise RuntimeError("restored commit differs from manifest")
             if hashlib.sha256((clone / "README.md").read_bytes()).hexdigest() != entry["readme_sha256"]:
                 raise RuntimeError("restored file bytes differ from manifest")
+            if manifest["version"] == 2:
+                if git("rev-parse", "refs/remotes/origin/benchmark-base", cwd=clone,
+                       token=token) != entry["base_commit"]:
+                    raise RuntimeError("restored incremental base differs from manifest")
+                if hashlib.sha256((clone / "incremental.txt").read_bytes()).hexdigest() != entry["incremental_sha256"]:
+                    raise RuntimeError("restored incremental bytes differ from manifest")
             git("fsck", "--strict", "--full", cwd=clone, token=token)
         populated += 1
     return {"verified_repositories": len(manifest["repositories"]), "git_v0_v2_samples": populated}
@@ -188,7 +215,31 @@ def percentiles(values):
             for name, q in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}
 
 
-def git_transfer(operation, url, entry, token, work_dir, timeout, request_id):
+def prepare_incremental(active, clients, token, work_dir, timeout):
+    """Stage base-only Git repositories before the arrival clock starts."""
+    root = work_dir / "incremental-templates"
+    root.mkdir()
+    templates = {}
+    for index, entry in enumerate(active):
+        destination = root / entry["repository_id"]
+        ingress = clients[index % len(clients)]
+        url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
+        git("init", "--bare", "-b", "benchmark-base", str(destination),
+            cwd=root, token=token, timeout=timeout)
+        git("fetch", "--quiet", url,
+            "refs/heads/benchmark-base:refs/heads/benchmark-base",
+            cwd=destination, token=token, timeout=timeout)
+        if git("rev-parse", "HEAD", cwd=destination, token=token,
+               timeout=timeout) != entry["base_commit"]:
+            raise RuntimeError("incremental template differs from manifest")
+        templates[entry["repository_id"]] = destination
+        if (index + 1) % 25 == 0:
+            print(f"prepared {index + 1}/{len(active)} incremental clients", flush=True)
+    return templates
+
+
+def git_transfer(operation, url, entry, token, work_dir, timeout, request_id,
+                 template=None):
     """Run one disposable stock-Git transfer and validate its advertised tip."""
     with tempfile.TemporaryDirectory(prefix="canopy-git-read-", dir=work_dir) as temporary:
         destination = Path(temporary) / "repo"
@@ -206,6 +257,26 @@ def git_transfer(operation, url, entry, token, work_dir, timeout, request_id):
                 token=token, timeout=timeout, request_id=request_id)
             return git("rev-parse", "FETCH_HEAD", cwd=destination, token=token,
                        timeout=timeout) == entry["commit"]
+        if operation in ("incremental_fetch", "incremental_pull"):
+            if template is None:
+                raise ValueError("incremental transfer requires a prepared base")
+            clone_args = (["clone", "--quiet", "--shared", "--bare"]
+                          if operation == "incremental_fetch" else
+                          ["clone", "--quiet", "--shared"])
+            git(*clone_args, str(template), str(destination), cwd=temporary,
+                token=token, timeout=timeout)
+            if operation == "incremental_fetch":
+                git("fetch", "--quiet", url, "refs/heads/main", cwd=destination,
+                    token=token, timeout=timeout, request_id=request_id)
+                return git("rev-parse", "FETCH_HEAD", cwd=destination,
+                           token=token, timeout=timeout) == entry["commit"]
+            git("pull", "--quiet", "--ff-only", url, "refs/heads/main",
+                cwd=destination, token=token, timeout=timeout, request_id=request_id)
+            incremental = destination / "incremental.txt"
+            return (git("rev-parse", "HEAD", cwd=destination, token=token,
+                        timeout=timeout) == entry["commit"] and
+                    incremental.is_file() and
+                    hashlib.sha256(incremental.read_bytes()).hexdigest() == entry["incremental_sha256"])
         raise ValueError("unsupported Git transfer operation")
 
 
@@ -218,10 +289,13 @@ def push_branch(url, source, reference, token, timeout, request_id):
 def measure(args, client, token):
     clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
-    git_read = args.operation in ("clone", "cold_fetch")
+    incremental = args.operation in ("incremental_fetch", "incremental_pull")
+    git_read = args.operation in ("clone", "cold_fetch") or incremental
     git_write = args.operation == "push_branch"
     git_operation = git_read or git_write
-    eligible = ([entry for entry in manifest["repositories"] if entry["commit"] is not None]
+    eligible = ([entry for entry in manifest["repositories"] if entry.get("base_commit") is not None]
+                if incremental else
+                [entry for entry in manifest["repositories"] if entry["commit"] is not None]
                 if git_read else manifest["repositories"])
     if args.active_repositories > len(eligible):
         raise ValueError("active repository count exceeds eligible corpus")
@@ -248,6 +322,12 @@ def measure(args, client, token):
         push_commit = git("rev-parse", "HEAD", cwd=source, token=token)
     generator = random.Random(args.seed)
     active = generator.sample(eligible, args.active_repositories)
+    templates = {}
+    setup_started = time.monotonic()
+    if incremental:
+        templates = prepare_incremental(active, clients, token, args.work_dir,
+                                        args.git_timeout)
+    setup_seconds = round(time.monotonic() - setup_started, 3)
     # Skew has a declared hot tenth, not an implicit warm-cache assumption.
     hot = active[:max(1, len(active) // 10)]
     counts, latencies, service_times, dispatch_times = Counter(), [], [], []
@@ -288,7 +368,8 @@ def measure(args, client, token):
                 elif git_read:
                     url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
                     valid = git_transfer(args.operation, url, entry, token, args.work_dir,
-                                         args.git_timeout, request_id)
+                                         args.git_timeout, request_id,
+                                         templates.get(entry["repository_id"]))
                 else:
                     url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
                     reference = f"refs/heads/canopy-benchmark/{push_run_id}/{sequence:07d}"
@@ -332,6 +413,7 @@ def measure(args, client, token):
               "operation": args.operation, "seed": args.seed,
               "offered_rps": args.rate, "schedule_seconds": args.duration,
               "elapsed_including_drain_seconds": round(elapsed, 3),
+              "incremental_client_setup_seconds": setup_seconds if incremental else None,
               "concurrency": args.concurrency, "request_timeout_seconds": args.timeout,
               "git_timeout_seconds": args.git_timeout if git_operation else None,
               "push_run_id": push_run_id, "push_commit": push_commit,
@@ -370,13 +452,17 @@ def main():
     create = commands.add_parser("seed")
     create.add_argument("--repositories", type=positive, default=1000)
     create.add_argument("--populated", type=positive, default=3)
+    create.add_argument("--incremental-fixture", action="store_true",
+                        help="seed a second commit and benchmark-base ref for incremental fetch/pull")
     create.add_argument("--work-dir", type=Path, required=True)
     check = commands.add_parser("verify")
     check.add_argument("--work-dir", type=Path, required=True)
     run = commands.add_parser("run")
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
-    run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch", "push_branch"), default="metadata")
+    run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch",
+                                           "incremental_fetch", "incremental_pull", "push_branch"),
+                     default="metadata")
     run.add_argument("--rate", type=positive, default=20)
     run.add_argument("--duration", type=positive, default=30)
     run.add_argument("--concurrency", type=positive, default=32)

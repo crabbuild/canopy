@@ -40,6 +40,56 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ScheduledLoad(unittest.TestCase):
+    def test_incremental_seed_and_verify_preserve_both_commits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remotes = root / "remotes"
+            remotes.mkdir()
+
+            class LocalClient:
+                def __init__(self):
+                    self.entries = {}
+
+                def request(self, path, payload=None):
+                    if payload is not None:
+                        name = payload["name"]
+                        entry = {"name": name, "owner": "canopy",
+                                 "repository_id": str(uuid.uuid4())}
+                        self.entries[name] = entry
+                        remote = remotes / "canopy" / f"{name}.git"
+                        remote.parent.mkdir(exist_ok=True)
+                        benchmark.git("init", "--bare", "-b", "main", str(remote),
+                                      cwd=root, token="fixture-token")
+                        return 200, json.dumps(entry).encode()
+                    name = path.rsplit("/", 1)[-1]
+                    return 200, json.dumps(self.entries[name]).encode()
+
+            client = LocalClient()
+            manifest = root / "manifest.json"
+            args = SimpleNamespace(manifest=manifest, work_dir=root / "seed", seed=42,
+                                   repositories=2, populated=1, incremental_fixture=True,
+                                   base_url=remotes.as_uri())
+            self.assertEqual(benchmark.seed(args, client, "fixture-token")["populated"], 1)
+            entries = benchmark.corpus(manifest)["repositories"]
+            populated = [entry for entry in entries if entry["commit"] is not None]
+            self.assertEqual(len(populated), 1)
+            self.assertNotEqual(populated[0]["base_commit"], populated[0]["commit"])
+            check = SimpleNamespace(manifest=manifest, work_dir=root / "verified",
+                                    base_url=remotes.as_uri())
+            self.assertEqual(benchmark.verify(check, client, "fixture-token")
+                             ["git_v0_v2_samples"], 1)
+            baseline_manifest = root / "baseline.json"
+            baseline = SimpleNamespace(manifest=baseline_manifest, work_dir=root / "baseline-seed",
+                seed=42, repositories=1, populated=1, incremental_fixture=False,
+                base_url=remotes.as_uri())
+            benchmark.seed(baseline, client, "fixture-token")
+            self.assertEqual(benchmark.corpus(baseline_manifest)["version"], 1)
+            check = SimpleNamespace(manifest=baseline_manifest,
+                                    work_dir=root / "baseline-verified",
+                                    base_url=remotes.as_uri())
+            self.assertEqual(benchmark.verify(check, client, "fixture-token")
+                             ["git_v0_v2_samples"], 1)
+
     def test_overload_has_no_hidden_retries_or_missing_arrivals(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.guard = threading.Lock()
@@ -198,6 +248,31 @@ class ScheduledLoad(unittest.TestCase):
                 token="fixture-token").splitlines()
             self.assertEqual(refs, [report["push_commit"]] * 2)
             self.assertNotIn("fixture-token", args.output.read_text())
+            entry["base_commit"] = entry["commit"]
+            benchmark.git("branch", "benchmark-base", cwd=source, token="fixture-token")
+            increment = b"new commit for an incremental transfer\n"
+            (source / "incremental.txt").write_bytes(increment)
+            benchmark.git("add", "incremental.txt", cwd=source, token="fixture-token")
+            benchmark.git("commit", "-m", "Incremental", cwd=source, token="fixture-token")
+            entry["commit"] = benchmark.git("rev-parse", "HEAD", cwd=source,
+                                            token="fixture-token")
+            entry["incremental_sha256"] = hashlib.sha256(increment).hexdigest()
+            benchmark.git("push", str(remote), "HEAD:refs/heads/main",
+                          "benchmark-base:refs/heads/benchmark-base", cwd=source,
+                          token="fixture-token")
+            manifest.write_text(json.dumps({"version": 2, "complete": True,
+                "requested_repositories": 1, "repositories": [entry]}))
+            for operation in ("incremental_fetch", "incremental_pull"):
+                args = SimpleNamespace(manifest=manifest, active_repositories=1, seed=42,
+                    duration=1, rate=2, concurrency=2, distribution="uniform",
+                    operation=operation, timeout=2, git_timeout=30,
+                    work_dir=root / f"{operation}-scratch", output=root / f"{operation}.json")
+                report = benchmark.measure(args, ingresses, "fixture-token")
+                self.assertEqual(report["outcomes"], {"ok": 2})
+                self.assertIsNotNone(report["incremental_client_setup_seconds"])
+                self.assertEqual([item["outcomes"] for item in report["ingresses"]],
+                                 [{"ok": 1}, {"ok": 1}])
+                self.assertNotIn("fixture-token", args.output.read_text())
 
 
 if __name__ == "__main__":
