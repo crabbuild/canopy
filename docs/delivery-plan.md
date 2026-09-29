@@ -1,6 +1,6 @@
 # Prove Canopy is ready to deliver
 
-Use this plan to decide whether a Canopy release gate is closed. The gate table states the required outcome and current status. The [qualification history](#qualification-history) records implementation and test evidence. The [roadmap](../ROADMAP.md) orders remaining work, while [Git compatibility](git-compatibility.md) and [performance evidence](performance-plan.md) define protocol and capacity boundaries.
+Use this plan to decide which Canopy release gates are closed. The gate table states the required outcome and current status; the [qualification history](#qualification-history) keeps detailed implementation and test evidence. The [roadmap](../ROADMAP.md) orders the remaining work, while [Git compatibility](git-compatibility.md) and [performance evidence](performance-plan.md) describe protocol and capacity limits.
 
 > **Document type:** Reference. **Goal:** decide whether a release gate is closed from black-box evidence, not from implementation intent.
 

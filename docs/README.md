@@ -1,45 +1,28 @@
-# Canopy documentation
+# Find the right Canopy document
 
-This hub helps you choose the shortest path through Canopy's technical documentation. The root [README](../README.md) gets a node running. These documents explain compatibility, durable behavior, qualification evidence, capacity work, and future Cell capabilities.
+Use this page to choose a document by task. Canopy's hosting core supports stock Git and Git LFS, but the [roadmap](../ROADMAP.md) and [delivery gates](delivery-plan.md) still list work required before an unattended team deployment. A result from one test revision or storage provider does not automatically apply to another.
 
 > **Status rule:** an implemented behavior is not automatically a production guarantee. Read the evidence and release gate for the exact revision, provider, workload, and hardware.
 
 ## Choose a starting point
 
-| If you need to… | Read | Document type |
+| If you need to… | Read | What you will find |
 | --- | --- | --- |
-| Run Canopy or create a repository | [Project README](../README.md) | Tutorial |
-| Deploy one constrained Linux node | [Bounded Linux deployment](../deploy/README.md) | How-to |
-| Check whether a Git workflow works | [Git compatibility](git-compatibility.md) | Reference |
-| Implement API or storage behavior | [Persisted contracts](contracts.md) | Reference |
-| Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Reference |
-| Plan a capacity experiment | [Performance plan](performance-plan.md) | How-to |
-| Evaluate future SQL, KV, queue, and workflow composition | [Repository Cell primitives](repository-cell-primitives.md) | Conceptual |
-| Track product and operational gaps | [Roadmap](../ROADMAP.md) | Reference |
+| Understand the server and try a local deployment | [Project README](../README.md) and [bounded deployment](../deploy/README.md) | Configuration, runtime commands, resource boundary and recovery procedures |
+| Decide which Git operations work | [Git compatibility](git-compatibility.md) | Stock-client evidence, restrictions and provider qualification commands |
+| Implement an API or storage change | [Persisted contracts](contracts.md) | Identity, authorization, protocol, durability and HTTP behavior |
+| Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
+| Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
+| Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |
+| Track production-readiness work | [Roadmap](../ROADMAP.md) | Milestones and checklists across operations, product features and scale |
 
-## Follow the evidence chain
+## Understand where data lives
 
-Use the documents in this order when a change affects a protocol, storage rule, or resource boundary:
+The Directory Cell resolves names and accounts. Each repository has its own Repository Cell, which owns the durable Git and collaboration state. Native Git uses a disposable cache for wire protocols. Large Git blobs and Git LFS bodies live in immutable object-store objects referenced by the repository's SQLite state.
 
-```mermaid
-flowchart TD
-    change[Proposed change] --> contract[Persisted contract]
-    contract --> test[Black-box or fault test]
-    test --> evidence[Recorded result]
-    evidence --> gate[Delivery gate]
-    gate --> README[User-facing behavior]
-    evidence -. capacity impact .-> performance[Performance plan]
-```
+![Canopy gateway, Directory Cell, Repository Cell, object store and disposable Git cache](architecture.svg)
 
-This chain keeps three claims separate:
-
-- **Implemented**: the current code has the behavior described
-- **Measured**: a recorded run passed or failed for its stated setup
-- **Target or open gate**: the desired behavior still needs implementation or qualification
-
-## Understand the storage model
-
-The Directory Cell resolves accounts and repository names. Each repository UUID identifies a Repository Cell that owns durable Git and collaboration state. Native Git files are a disposable cache. Large Git and LFS bodies live in immutable object-store objects referenced by SQLite state.
+The diagram shows ownership, not a second copy of authority in the Git cache. After local disk loss, Canopy restores published Cell state from the object store and rebuilds that cache. Read the [persisted contracts](contracts.md) for the exact publication and recovery rules.
 
 ```mermaid
 flowchart LR
@@ -51,19 +34,28 @@ flowchart LR
     repository -. hydrate .-> cache[Disposable Git cache]
 ```
 
-The [architecture SVG](architecture.svg) provides a visual version of this model. The [persisted contracts](contracts.md) define publication, ownership, recovery, and retry behavior.
+## Interpret evidence correctly
 
-## Read a document effectively
+Each technical document distinguishes three kinds of statements:
 
-Each long reference starts with a navigation table and a summary. Use the section headings to jump to one surface, then check its limits and acceptance evidence before changing code.
-
-| You are reviewing… | Check these sections first |
+| Label | Meaning |
 | --- | --- |
-| A new endpoint or mutation | Identity, authorization, idempotency, conflict behavior, and response limits in [contracts](contracts.md) |
-| Git or LFS support | Verified operations and restrictions in [compatibility](git-compatibility.md) |
-| A release decision | Gate table first, then the matching qualification record in [delivery plan](delivery-plan.md) |
-| A latency or density claim | Workload definition, setup, measurements, and caveats in [performance](performance-plan.md) |
-| A Cellule runtime change | Current contract gap and acceptance gates in [repository Cell primitives](repository-cell-primitives.md) |
+| **Implemented** | The current code has the behavior described; the linked test or contract gives its boundary |
+| **Measured** | A recorded run passed or failed for its stated revision, provider, workload and hardware |
+| **Target or open gate** | The desired behavior still needs implementation, qualification or both |
+
+The [delivery plan](delivery-plan.md) is the source of record for release gates. The [performance plan](performance-plan.md) records capacity evidence and proposed targets; its 10,000-repository reference target is not measured capacity. The [roadmap](../ROADMAP.md) orders the remaining work without replacing either source.
+
+## Follow a change through the docs
+
+For a protocol or storage change, use this order:
+
+1. Read the current behavior and limits in [Git compatibility](git-compatibility.md) or [persisted contracts](contracts.md).
+2. Find the corresponding acceptance gate in the [delivery plan](delivery-plan.md).
+3. If the change affects resource use, compare it with the workload and measurements in the [performance plan](performance-plan.md).
+4. Update the contract, a stock-client or fault test, and the recorded gate result together.
+
+This order keeps a working implementation, a durable guarantee and a measured capacity claim separate.
 
 ## Contribution checklist
 
