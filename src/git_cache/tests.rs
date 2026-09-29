@@ -12,6 +12,7 @@ async fn concurrent_hydration_publishes_each_object_once() -> Result<(), Box<dyn
         crate::ObjectFormat::Sha1,
     )
     .await?;
+    assert!(cache.object_writes.get().is_none());
     let body = b"shared by concurrent fetches".to_vec();
     let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
     let mut workers = tokio::task::JoinSet::new();
@@ -23,6 +24,7 @@ async fn concurrent_hydration_publishes_each_object_once() -> Result<(), Box<dyn
     while let Some(result) = workers.join_next().await {
         result??;
     }
+    assert!(cache.object_writes.get().is_some());
     assert!(cache.missing_objects(vec![oid]).await?.is_empty());
     assert_eq!(budget.used(), tree_bytes(cache.root())?);
     let output = tokio::process::Command::new("git")
@@ -154,6 +156,7 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
             Some(Arc::clone(&objects)),
         )
         .await?;
+        assert!(cache.object_writes.get().is_none());
         cache
             .store_refs(&BTreeMap::from([(
                 name.into(),

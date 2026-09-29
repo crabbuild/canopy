@@ -74,7 +74,9 @@ Preparation logs report newly hydrated blob counts/bytes and elapsed time.
 Concurrent fetches of one repository now share the immutable object cache
 without holding its gateway mutex for the entire preparation. Verified loose
 objects publish atomically; writers for the same object ID converge while
-different IDs may hydrate in parallel. A cold concurrent stock-Git clone test
+different IDs may hydrate in parallel. Writer locks allocate only when an object
+cache first hydrates an object, not for each disposable ref snapshot. A cold
+concurrent stock-Git clone test
 checks complete packs and `git fsck`. This removes one serialization point;
 it does not establish hot-repository throughput or a 10,000-repository result.
 Push upload spooling uses private, budgeted scratch files and can now proceed

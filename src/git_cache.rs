@@ -5,7 +5,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
@@ -54,7 +54,7 @@ pub(crate) struct GitCache {
     objects: Option<Arc<GitCache>>,
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
-    object_writes: [Arc<Mutex<()>>; 64],
+    object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
 }
 
 impl GitCache {
@@ -86,7 +86,7 @@ impl GitCache {
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
                 objects,
-                object_writes: std::array::from_fn(|_| Arc::new(Mutex::new(()))),
+                object_writes: OnceLock::new(),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
                 fs::create_dir_all(cache.git_dir().join(directory))?;
@@ -181,6 +181,13 @@ impl GitCache {
         }
     }
 
+    fn object_write_lock(&self, oid: crate::ObjectId) -> Arc<Mutex<()>> {
+        let stripes = self
+            .object_writes
+            .get_or_init(|| std::array::from_fn(|_| Arc::new(Mutex::new(()))));
+        Arc::clone(&stripes[oid[0] as usize % stripes.len()])
+    }
+
     fn object_writer(
         self: &Arc<Self>,
         oid: crate::ObjectId,
@@ -245,9 +252,7 @@ impl GitCache {
         kind: ObjectKind,
         body: Vec<u8>,
     ) -> Result<(), CacheError> {
-        let write = Arc::clone(&self.object_writes[oid[0] as usize % self.object_writes.len()])
-            .lock_owned()
-            .await;
+        let write = self.object_write_lock(oid).lock_owned().await;
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _write = write;
@@ -274,10 +279,7 @@ impl GitCache {
         mut reader: LargeBlobRead,
     ) -> Result<(), CacheError> {
         let reference = reader.reference();
-        let write =
-            Arc::clone(&self.object_writes[reference.oid[0] as usize % self.object_writes.len()])
-                .lock_owned()
-                .await;
+        let write = self.object_write_lock(reference.oid).lock_owned().await;
         let cache = Arc::clone(self);
         let pending = tokio::task::spawn_blocking(move || {
             if reference.oid.format() != cache.object_format {
