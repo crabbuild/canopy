@@ -1,139 +1,213 @@
 # Canopy
 
-Start with the [documentation map](docs/README.md) to find the right guide, contract or qualification record.
+Canopy is a Git hosting service built on Cellule. It accepts stock Git over smart
+HTTP and optional SSH, stores each repository's durable state in its own SQLite
+Repository Cell, and uses an object store for recovery and large Git/LFS bodies.
+Its Git hosting core works, but [production readiness is still in progress](ROADMAP.md).
 
-Canopy is an independent Git hosting service built on `cellule-runtime`,
-`cellule-app` and `cellule-host`. The dedicated `canopy-server` crate owns its product schema, Git gateway and HTTP API. A
-Directory Cell maps an owner and repository name to a stable UUID. Each UUID
-identifies its own SQLite Repository Cell. Ordinary Git objects, refs and LFS
-metadata live in that Cell; large Git blob and LFS bytes use immutable
-repository-scoped external objects. Canopy has no Crab product or Xet
-dependency.
+**Start here:** [Run a node](#run-a-local-node) · [Create and use a repository](#create-and-use-a-repository) · [Use the browser and Git LFS](#use-canopy) · [Operate a deployment](#operate-a-deployment) · [API reference](#api-reference) · [Documentation map](docs/README.md)
 
-## Current implementation
+## What works today
 
-See [Git compatibility](docs/git-compatibility.md) for verified operations,
-current limits and remaining transport and object-format qualification.
+| Area | Current capability | Read more |
+| --- | --- | --- |
+| Git | SHA-1 and SHA-256 repositories, smart HTTP, optional SSH, push/clone/fetch, partial and shallow clone | [Compatibility and evidence](docs/git-compatibility.md) |
+| Collaboration | Private and public repositories, scoped accounts and grants, issues, pull requests, reviews, line discussions, merge candidates, checks and branch rules | [Use Canopy](#use-canopy) and [API reference](#api-reference) |
+| Git LFS | Basic upload/download, verified immutable bodies, advisory locks, SSH-issued HTTP grants | [LFS behavior](#git-lfs-storage) |
+| Recovery | Fresh local-disk restoration, signed Cell routing between nodes, maintenance drain/recovery, same-provider backup and restore | [Operate a deployment](#operate-a-deployment) |
+| Browser | Embedded repository, issue, pull-request and account views | [Repository browser](#repository-browser) |
 
-This repository is an implementation under construction. The `canopy` binary
-starts one leased Cellule node and serves repositories created through its API.
-It probes the object store's fencing capabilities, publishes and renews a signed node
-advertisement, and restores the repository Cell from object storage when its
-local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
-handling, including protocol v2 negotiation. The SQLite Cell is the durable
-authority, and a bare Git repository is only a rebuildable cache. Integration
-tests use stock `git` and `git-lfs` clients to push and clone, including a
-restart with a fresh local SQLite file.
+These are implementation capabilities, not a production capacity guarantee.
+The [roadmap](ROADMAP.md) lists remaining work such as migrations, full fault
+qualification, collection, provider qualification, observability and a repeatable
+deployment. The [delivery plan](docs/delivery-plan.md) records release gates;
+the [performance plan](docs/performance-plan.md) separates measured results from
+targets. For a concrete Git workflow, check [compatibility](docs/git-compatibility.md)
+before relying on a feature in a new environment.
 
-Nodes sharing a deployment can serve requests for Cells owned by another live
-node. Repository creation acquires its Cell on the receiving node; other gateways
-use signed HTTPS Cell RPCs to that owner. Git caches stay disposable on each
-gateway. The Directory Cell has one owner, with on-demand recovery after release
-or lease expiry. Automatic fleet balancing and production capacity qualification
-remain pending.
+## How Canopy stores a repository
 
-### Deployment maintenance
+![Diagram of Git clients, Canopy gateway, Directory Cell, Repository Cell, object store and disposable Git cache](docs/architecture.svg)
 
-Each storage prefix has one durable tenant/application identity and a selected
-compiled release. First startup initializes an empty deployment; later nodes
-must match its release and configured image identity. A nonempty catalog without
-release metadata is rejected. Existing preview prefixes require explicit future
-migration; do not point this build at them as an upgrade.
+The **Directory Cell** maps an owner and repository name to a stable repository
+UUID and owns accounts. Each UUID identifies a **Repository Cell** containing
+authoritative refs, Git metadata, ACLs and collaboration records. Large Git
+blobs and LFS bodies are immutable external objects referenced by that Cell.
+Native Git handles wire protocols using a **disposable cache**: after local disk
+loss, Canopy restores published Cell state from the object store and rebuilds
+the cache. See the [persisted contracts](docs/contracts.md) for publication and
+recovery rules.
 
-To close admission and drain the fleet, choose a fresh operation UUID and use
-the same binary and configuration as the deployment:
+## Run a local node
 
-```bash
-CANOPY_OPERATION_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-canopy maintenance config.json begin "$CANOPY_OPERATION_UUID"
-canopy maintenance config.json status
-```
+This is a development path for one node with an existing S3-compatible object
+store. The [bounded Linux deployment](deploy/README.md) describes the container
+profile and its resource limits. Use a **new storage prefix** for this build;
+there is no migration from earlier preview layouts yet.
 
-`begin` records the operation before returning. Nodes observe the closed release
-during lease renewal, stop ingress, drain accepted work, close SQLite and withdraw
-their advertisements. The binary exits after supervised shutdown. `status` emits
-JSON with the release, advertised session count, unsettled Cell count and
-`drained`. Offline work must wait for `drained: true`. Expired advertisements and
-owned/unpublished Cells do not count as drained. `end` requires that proof and
-the matching operation UUID, then permits the same compiled release to start.
-Retries use the same UUID while it remains the current operation. Replaying its
-completed begin does not start a new drain. Once another operation starts, do not
-replay older UUIDs; completed operation history is not retained. Save the UUID
-outside the shell session if recovery might run later.
+1. Install Rust 1.97 or newer and Git with `http-backend`,
+   `merge-tree --write-tree` (`-z --name-only --no-messages`) and `commit-tree`.
+   Git 2.50.1 is the qualified version. Install `git-lfs` if you plan to use
+   LFS or run the integration tests, and Python 3 for the optional secret and
+   UUID generation commands below.
+2. Copy [`config.example.json`](config.example.json) to `deploy/config.json`
+   (which Git ignores): `cp config.example.json deploy/config.json`. Set
+   `storage_url` to a fresh prefix in your store;
+   choose stable tenant/application IDs, fleet/image digests and owner name.
+   Give the node a unique `node_id`, a writable `data_dir`, and the local
+   `listen`/`public_url` addresses. `peer_endpoint` is the node's reachable
+   HTTPS origin when using multiple nodes. Adjust the disk and active-repository
+   limits for the machine. The example values are illustrative, not a
+   deployment identity.
+3. Make provider credentials available through that provider's environment.
+   Set `CANOPY_GIT_TOKEN` to the owner's bootstrap credential and
+   `CANOPY_NODE_SIGNING_KEY_HEX` to a private 32-byte key encoded as 64 hex
+   characters. Save both securely; keep the same owner credential and node key
+   across restarts. The token bootstraps a durable admin account. For a new
+   local prefix, generate both values with the commands below, then place them
+   in your secret environment. The first output is the owner token; the second
+   is the node signing key.
 
-After `status` reports `drained: true` and offline work is complete, reopen admission:
+   ```bash
+   python3 -c 'import secrets; print("cnp_" + secrets.token_hex(32))'
+   python3 -c 'import secrets; print(secrets.token_hex(32))'
+   ```
 
-```bash
-canopy maintenance config.json end "$CANOPY_OPERATION_UUID"
-```
+4. From the repository root, start the service:
 
-The begin/status/end commands need object-store credentials, but no Git token or
-node signing key. If a node dies during drain, wait for its lease to expire and
-run the recovery worker with the same operation UUID:
+   ```bash
+   cargo run --release --locked --bin canopy -- deploy/config.json
+   ```
 
-```bash
-canopy maintenance config.json recover "$CANOPY_OPERATION_UUID"
-canopy maintenance config.json status
-```
-
-When recovery finishes and `status` reports `drained: true`, run `end` with the
-same operation UUID as above.
-
-Recovery needs `CANOPY_NODE_SIGNING_KEY_HEX` and an exclusively available local
-`data_dir`. It enrolls a temporary node, fences expired owners, restores their
-Cells one at a time and releases them. It opens no HTTP listener and needs no Git
-token. Live owners, conflicting recovery claims, unresolved follower logs and
-failed root verification return an error. Retry the same operation after the
-reported condition is resolved; recovery never resumes serving automatically.
-Do not remove authority records or force `drained` to bypass an error.
-
-Upgrade/migration and object collection remain pending. Maintenance and owner
-recovery do not provide a separate backup copy.
-
-### Backup and restore
-
-Use a fresh pin UUID and disjoint prefixes in the same configured bucket/provider:
+Check liveness and Cell readiness at the configured listener:
 
 ```bash
-CANOPY_BACKUP_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-canopy backup config.json create "$CANOPY_BACKUP_UUID" backups/snapshot-1
-canopy backup config.json verify "$CANOPY_BACKUP_UUID" backups/snapshot-1
+curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/readyz
 ```
 
-Record `CANOPY_BACKUP_UUID` with the backup receipt. Later verify and restore
-commands must use that same pin UUID and the same backup prefix.
+`/healthz` reports process liveness; `/readyz` reports Cell readiness. Stop
+with SIGINT or SIGTERM so the server drains admitted requests and withdraws
+its node advertisement. The object store must support conditional create/update
+and ranged reads; startup probes those capabilities. Keep provider credentials
+out of configuration files. The node locks its local data directory; do not
+run a second process against the same directory.
 
-To restore into an unused destination prefix:
+### Create and use a repository
+
+In a second terminal outside the Canopy checkout, make `CANOPY_GIT_TOKEN`
+available and create a private SHA-1 repository (the default format):
 
 ```bash
-canopy backup config.json restore "$CANOPY_BACKUP_UUID" backups/snapshot-1 restored/service-1
+curl --fail-with-body \
+  --header "Authorization: Bearer $CANOPY_GIT_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"example"}' \
+  http://127.0.0.1:8080/api/repositories
+git clone http://127.0.0.1:8080/canopy/example.git
 ```
 
-Prefixes are full object keys within the configured bucket, not URLs or paths
-relative to `storage_url`. Each command needs provider credentials, the node
-signing key and an exclusively available `data_dir`; no Git token or HTTP listener
-is required. Successful commands emit a JSON receipt with Cell/body counts.
-For S3, Canopy uses conditional multipart copy; the store and credentials must
-support that operation.
+Replace `canopy` in the clone URL with your configured `owner`, or use the
+`clone_url` returned by creation. For a private repository, Git prompts for
+HTTP Basic credentials: use the owner name as username and the bootstrap token
+as password. A Git credential helper can remember them for later fetches and
+pushes. Do not place tokens in the remote URL. The [browser](#repository-browser)
+can create repositories too.
 
-Capture requires the selected release to remain Ready. It reads every catalog
-head and Cell control twice and rejects concurrent changes. On busy deployments,
-stop nodes cleanly without entering Maintenance, then capture. Retry an uncertain
-operation with the same UUID and destination; a new snapshot needs a new UUID.
+In the cloned directory, make the first commit and push:
 
-The copy includes runtime roots, SQLite state, external Git blobs and LFS bodies.
-Verification reads only the backup prefix, so the original prefix may be lost.
-Restore preserves the pinned identity and release and needs matching configuration
-and binary. Point a fresh node's `storage_url` at the completed destination.
-An atomic prefix reservation prevents serving backups or incomplete restores.
-Occupied destinations and different operations are rejected; retry the same
-failed operation after repairing its reported cause. Replaying a completed restore
-does not reset subsequently published service state.
+```bash
+cd example
+printf '%s\n' '# Example' > README.md
+git add README.md
+git -c user.name='Example Author' -c user.email='author@example.com' commit -m 'Initial commit'
+git push -u origin main
+```
 
-This is a same-provider copy, not protection from losing the entire bucket or
-provider. Cross-provider export, old-release migration, automated retention and
-the complete interruption fault matrix remain pending. Do not use older binaries
-that lack prefix reservations with these backup/restore destinations.
+To create a SHA-256 repository instead, send
+`{"name":"example-sha256","object_format":"sha256"}` and use a compatible
+Git client. The object format is fixed when the repository is created.
+
+## Use Canopy
+
+The embedded browser covers common tasks; the API supports automation and
+operations that have no browser control yet. Git clients use
+`/<owner>/<repository>.git` over HTTP, or the optional SSH listener. Private
+Git and LFS requests use an active account token plus a repository grant.
+
+### Common paths
+
+| Task | Where to begin |
+| --- | --- |
+| Browse code, issues and pull requests | Open `/` on the Canopy listener; connect with an existing token for private repositories. |
+| Change visibility or collaborators | Use the repository browser for visibility; use the [access API](#accounts-and-repository-access) for grants. |
+| Manage account tokens | Open **Account**; use the [token API](#token-lifecycle) for automation. |
+| Add Git LFS | Install `git-lfs`, run `git lfs install` in your client, then track and push files through the normal Git remote. |
+| Protect a branch | Configure a check reporter and [branch rules](#checks-and-branch-rules), then use a reviewed pull request. |
+| Diagnose a refused request | Inspect `401` credentials, `403` scope/grant, `409` version or policy conflict, `503` admission/retry, or `507` local disk budget in the relevant section below. |
+
+### Repository browser
+
+Open `/` on the Canopy HTTP listener to browse public repositories or connect
+using your existing access token. The embedded interface lists authorized
+repositories and creates repositories with an owner token. It selects branches
+and tags, browses directories, previews or downloads small files, and follows
+first-parent commit history. Merge commits
+link to each parent. No separate frontend build or asset service is required.
+The token remains in tab memory and clears on disconnect or reload. Use HTTPS
+at the deployment ingress. Repository text is displayed literally; HTML,
+Markdown, symlinks, submodules and LFS pointers are never executed or followed.
+
+Views pin an immutable object ID after selecting a reference. Use **Refresh
+branch** to resolve its latest tip. Directory/history pages contain up to 32
+entries; previews/downloads contain at most 256 KiB. Larger files require Git.
+The **Issues** tab supports open/closed filters, paged discussions, issue/comment
+creation, edits and close/reopen. Write-scoped tokens may participate; authors
+and repository writers can edit. Discussion text is displayed literally.
+If a submission reply is lost, keep the page open and use **Retry submission**
+to recover the same post. Edit conflicts preserve your draft for copying and
+require **Reload current version** before another edit. Drafts are not retained
+across navigation, disconnect or reload.
+
+The **Pull requests** tab opens, edits, closes and reopens requests between local
+branches. It includes draft state, paged reviews, unified text diffs, current
+approval requirements and commit check results. Reviews bind the displayed pull
+version and both branch tips. Writers can fast-forward or prepare a merge/squash/rebase
+candidate, inspect its files, fetch it for testing, then explicitly publish it.
+Publication rechecks the revision, permissions, reviews and required checks.
+Stale or conflicting candidates cannot be published. Check reporting, branch
+policy configuration and access management remain API operations. Line
+discussions can be opened from diff line numbers, replied to, and resolved or
+reopened. Their original file/line snapshots remain available after
+branch changes. Conflict resolution is pending. Merged requests retain
+their pre-merge comparison, and **View reviewed changes** opens the exact version
+bound to a review, including after branch movement or deletion.
+See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
+paths, pagination, limits and authorization behavior.
+
+### Public repositories
+
+Repositories start private. An owner with an admin-scoped token can use **Change
+visibility** in the repository browser, or `GET` then
+`PUT /api/repositories/<name>/visibility`. The PUT body contains `repository_id`,
+`expected_generation` from the GET, and `visibility` (`private` or `public`).
+A stale generation returns 409; after an uncertain response, read current state
+before retrying. Visibility shares the repository ref generation, so concurrent
+pushes or default-branch edits can require a refresh too.
+
+Public repositories allow anonymous discovery, stock Git clone/fetch, LFS
+batch/download, code browsing, issues, pull requests, reviews and check reads.
+Authenticated readers with write-scoped tokens can participate in discussions;
+Git/LFS writes, approvals and merges still require explicit repository write
+access. Anonymous mutations are denied. Supplied invalid credentials return 401,
+even on public repositories. Collaborator rosters remain owner-only.
+
+Making a repository private blocks newly authorized anonymous reads. Requests
+already admitted can finish, and downloaded copies cannot be recalled. Successful
+data responses and Git/LFS responses use `Cache-Control: no-store`. Public
+discovery candidates are retained and rechecked against the Repository Cell on
+every listing; a stale index entry
+never grants access.
 
 ### Git LFS storage
 
@@ -169,66 +243,6 @@ grants both support these lock operations. Lock pages contain
 at most 100 entries, with continuation cursors; paths are canonical relative
 UTF-8 strings up to 4096 bytes. This adds an unreleased SQLite table and requires
 a fresh development storage prefix when switching from older builds.
-
-### Public repositories
-
-Repositories start private. An owner with an admin-scoped token can use **Change
-visibility** in the repository browser, or `GET` then
-`PUT /api/repositories/<name>/visibility`. The PUT body contains `repository_id`,
-`expected_generation` from the GET, and `visibility` (`private` or `public`).
-A stale generation returns 409; after an uncertain response, read current state
-before retrying. Visibility shares the repository ref generation, so concurrent
-pushes or default-branch edits can require a refresh too.
-
-Public repositories allow anonymous discovery, stock Git clone/fetch, LFS
-batch/download, code browsing, issues, pull requests, reviews and check reads.
-Authenticated readers with write-scoped tokens can participate in discussions;
-Git/LFS writes, approvals and merges still require explicit repository write
-access. Anonymous mutations are denied. Supplied invalid credentials return 401,
-even on public repositories. Collaborator rosters remain owner-only.
-
-Making a repository private blocks newly authorized anonymous reads. Requests
-already admitted can finish, and downloaded copies cannot be recalled. Successful
-data responses and Git/LFS responses use `Cache-Control: no-store`. Public discovery candidates are retained and
-rechecked against the Repository Cell on every listing; a stale index entry
-never grants access.
-
-### Repository browser
-
-Open `/` on the Canopy HTTP listener to browse public repositories or connect
-using your existing access token. The embedded interface lists authorized
-repositories, creates repositories with an owner token, selects branches/tags, browses directories, previews or
-downloads small files, and follows first-parent commit history. Merge commits
-link to each parent. No separate frontend build or asset service is required.
-The token remains in tab memory and clears on disconnect or reload. Use HTTPS
-at the deployment ingress. Repository text is displayed literally; HTML,
-Markdown, symlinks, submodules and LFS pointers are never executed or followed.
-
-Views pin an immutable object ID after selecting a reference. Use **Refresh
-branch** to resolve its latest tip. Directory/history pages contain up to 32
-entries; previews/downloads contain at most 256 KiB. Larger files require Git.
-The **Issues** tab supports open/closed filters, paged discussions, issue/comment
-creation, edits and close/reopen. Write-scoped tokens may participate; authors
-and repository writers can edit. Discussion text is displayed literally.
-If a submission reply is lost, keep the page open and use **Retry submission**
-to recover the same post. Edit conflicts preserve your draft for copying and
-require **Reload current version** before another edit. Drafts are not retained
-across navigation, disconnect or reload.
-
-The **Pull requests** tab opens, edits, closes and reopens requests between local
-branches. It includes draft state, paged reviews, unified text diffs, current
-approval requirements and commit check results. Reviews bind the displayed pull
-version and both branch tips. Writers can fast-forward or prepare a merge/squash/rebase
-candidate, inspect its files, fetch it for testing, then explicitly publish it.
-Publication rechecks the revision, permissions, reviews and required checks.
-Stale or conflicting candidates cannot be published. Check reporting, branch
-policy configuration and access management remain API operations. Line discussions can be opened from diff line numbers, replied to and
-resolved/reopened. Their original file/line snapshots remain available after
-branch changes. Conflict resolution is pending. Merged requests retain
-their pre-merge comparison, and **View reviewed changes** opens the exact version
-bound to a review, including after branch movement or deletion.
-See [browser API contracts](docs/contracts.md#repository-browser) for raw-byte
-paths, pagination, limits and authorization behavior.
 
 ### Account administration
 
@@ -274,7 +288,15 @@ credential digests are excluded. History and the change commit atomically in the
 Directory Cell and restore together. Repository-policy changes, denied attempts,
 retention/export and account deletion remain separate work.
 
-### Repository API
+## API reference
+
+The routes below are a behavior reference. Replace `<name>`, `<account>`, UUIDs,
+object IDs and generations with values returned by your deployment. JSON
+examples containing angle-bracketed strings illustrate the required shape;
+those strings are not usable IDs. Read [persisted contracts](docs/contracts.md)
+for exact limits and failure semantics.
+
+### Repository creation, discovery, and rename
 
 `POST /api/repositories` with `{"name":"example"}` creates a repository for the
 configured owner and returns its UUID and clone URL. `GET /api/repositories`
@@ -297,6 +319,8 @@ Git and LFS use
 Directory Cell, provisions its own Repository Cell, then marks the name ready.
 Later requests recover that Cell on demand from the directory.
 
+### Default branch
+
 `GET /api/repositories/<name>/default-branch` returns `repository_id`, the fully
 qualified `reference` (initially `refs/heads/main`), and `generation`.
 Repository readers can inspect it. An owner with an admin-scoped token can
@@ -307,6 +331,8 @@ returns 409; read current state before retrying. The target must exist unless
 there are no live branches. Stock Git discovery and clone use this durable HEAD,
 including after restart. Protocol v2 also reports an unborn target. Branch
 deletion preserves HEAD's name; recreating the branch makes it live again.
+
+### Accounts and repository access
 
 The configured token bootstraps a durable owner account in the Directory Cell.
 `POST /api/accounts` creates another account with a client-generated `cnp_`
@@ -332,6 +358,8 @@ and `next_after`. The owner is separate from explicit collaborator grants.
 Pages contain up to 32 grants ordered by account name; pass `?after=<next_after>`
 until the cursor is null. Each page observes current membership independently;
 changes before the cursor require a fresh scan.
+
+### Issues and comments
 
 Issues and comments live in the same Repository Cell as Git and its ACL:
 
@@ -364,6 +392,8 @@ lists optionally accept `state=open` or `state=closed`; the default includes bot
 Pages observe current state independently. Bodies are returned as raw text; no
 Markdown or HTML rendering, attachments, labels, assignees, or deletion API yet.
 
+### Pull requests and reviews
+
 Pull requests and reviews are repository-local SQLite records:
 
 | Method | Path | Action |
@@ -382,8 +412,9 @@ Pull requests and reviews are repository-local SQLite records:
 
 To open a pull, POST `repository_id`, a fresh UUID `id`, `title`, `body`, `draft`,
 `source_ref`, `source_oid`, `base_ref`, and `base_oid`. Use fully qualified branch
-names and current lowercase SHA-1 tips from Git. Both branches must exist in this
-repository and point to different commits. Creation returns `{"number":1}`.
+names and current lowercase object IDs from Git in the repository's format.
+Both branches must exist in this repository and point to different commits.
+Creation returns `{"number":1}`.
 Exact UUID/payload retries preserve the original number and later edits.
 
 GET returns editorial `version`, source/base objects with `reference`, current
@@ -399,9 +430,9 @@ Review POST supplies `repository_id`, a fresh UUID `id`, `kind` (`comment`,
 ```json
 {
   "pull_version": 1,
-  "source_oid": "<source SHA-1>",
+  "source_oid": "<source object ID>",
   "source_version": 1,
-  "base_oid": "<base SHA-1>",
+  "base_oid": "<base object ID>",
   "base_version": 1
 }
 ```
@@ -419,6 +450,8 @@ revoke/regrant invalidate earlier decisions. Repeating an unchanged membership
 grant does not. Lists return up to 32 pull summaries or 16 reviews with numeric
 `after` / `next_after`; pulls support an optional `state` filter. Text limits match
 issues: 256-byte titles, 16 KiB bodies; review comments must be nonblank.
+
+### Compare revisions and discuss lines
 
 Comparison POSTs are read operations and require current repository read access,
 `repository_id`, a tagged `target`, and one of the queries below. Use
@@ -497,6 +530,8 @@ required approvals or checks. See [line discussion contracts](docs/contracts.md#
 This unreleased schema adds discussion tables and requires a fresh development
 storage prefix; there is no upgrade migration yet.
 
+### Merge and rebase
+
 Merge POSTs require a write-scoped token and current repository write access:
 
 ```json
@@ -505,9 +540,9 @@ Merge POSTs require a write-scoped token and current repository write access:
   "id": "<new merge request UUID>",
   "revision": {
     "pull_version": 1,
-    "source_oid": "<source SHA-1>",
+    "source_oid": "<source object ID>",
     "source_version": 1,
-    "base_oid": "<base SHA-1>",
+    "base_oid": "<base object ID>",
     "base_version": 1
   },
   "strategy": "fast_forward"
@@ -536,7 +571,7 @@ after interrupted preparation. Exact preparation retries return the same result.
 Only a ready candidate advertises a fetch ref. Set `fetch_ref` to the
 `fetch_ref` value returned by preparation, then inspect that exact candidate:
 
-```sh
+```bash
 git fetch origin "$fetch_ref"
 git checkout --detach FETCH_HEAD
 ```
@@ -564,6 +599,8 @@ these results cannot publish. Resolve conflicts or rewrite unsupported history
 locally and push, then prepare a new candidate. A conflict at any intermediate
 commit stops replay even when the final source tree would merge cleanly.
 Conflict resolution in the browser, forks and retargeting remain to be delivered.
+
+### Checks and branch rules
 
 Commit checks record results from a configured reporter; they do not execute CI
 jobs. Exact-branch rules can require successful results.
@@ -640,7 +677,8 @@ old approval retries, new comments and revoke/regrant cannot restore eligibility
 Ordinary pushes retain allowed sibling refs when another ref is rejected;
 `git push --atomic` rejects the group. The final Cell transaction rechecks policy,
 so a concurrent rule/check change rejects the accepted group through Git
-report-status before any success report is sent. Ref names are at most 255 UTF-8 bytes. Push
+report-status before any success report is sent. Ref names must be UTF-8;
+native Git and the host filesystem still impose path constraints. Push
 preflight accepts at most 100,000 updates within 40 MiB of packet-line commands.
 Plans are staged in bounded SQLite chunks and published in one transaction;
 ref format and command limits receive native Git rejection reports.
@@ -652,6 +690,8 @@ Signed pushes use `git push --signed=true` with `gpg.format=ssh` and a
 `user.signingkey` whose public key is registered with write scope on the
 authenticated Canopy account. Git verifies the signature and nonce; the Repository Cell
 records certificate bytes and prevents replay under a different push ID.
+
+### Token lifecycle
 
 Accounts can hold multiple scoped tokens. An admin-scoped token can manage its
 own account's tokens; the configured owner can manage any account's tokens:
@@ -679,7 +719,6 @@ its expiry to free active capacity; revocation and expiry do not erase issuance
 history. Exact active-record retries do not consume another slot. Limits apply
 to the target account, including issuance by the site owner, and survive recovery.
 
-
 For rotation, issue a replacement, verify it, update clients, then revoke the old
 token. For the site owner, also update `CANOPY_GIT_TOKEN` in the deployment before
 retiring its configured credential: startup requires an active owner admin token.
@@ -689,6 +728,8 @@ recheck the authorizing credential and expiry in their mutation transaction.
 Expiry uses the Directory owner's clock at execution; keep fleet clocks
 synchronized.
 Bootstrap and initial account credentials are non-expiring.
+
+### SSH keys and transport
 
 SSH public keys have a separate durable registry, managed by the same account/site
 admin tokens. The optional SSH listener supports stock Git clone, push and fetch.
@@ -718,14 +759,17 @@ Enable SSH by adding a listener and a stable OpenSSH private host key to the
 server configuration:
 
 ```json
-"ssh": {
-  "listen": "0.0.0.0:2222",
-  "host_key": "/run/secrets/canopy_ssh_host_ed25519_key"
+{
+  "ssh": {
+    "listen": "0.0.0.0:2222",
+    "host_key": "/run/secrets/canopy_ssh_host_ed25519_key"
+  }
 }
 ```
 
-Generate the host key with `ssh-keygen -t ed25519 -N '' -f <path>` and preserve it
-across restarts. The configured key must be decrypted and readable by the server.
+Generate the host key with `ssh-keygen -t ed25519 -N '' -f /path/to/host_key`
+and preserve it across restarts. The configured key must be decrypted and
+readable by the server.
 Publish its fingerprint to clients through a trusted channel. Git URLs use the
 SSH user `git`, for example `ssh://git@example.com:2222/canopy/project.git`.
 The registered client key identifies the account; repository permissions and key
@@ -751,6 +795,201 @@ remain unsupported.
 The local compatibility suite covers stock Git transfers and fresh-disk recovery;
 late policy/access refusal and disconnected-push drain are also covered locally.
 Provider failure, owner-loss and capacity qualification remain open.
+
+## Operate a deployment
+
+For an installation with resource ceilings, start with the
+[bounded Linux profile](deploy/README.md). Save operation UUIDs and backup
+receipts outside the shell session. The commands below use an installed `canopy`
+binary and the `deploy/config.json` file from the local setup; substitute your
+deployment's binary and configuration paths.
+
+### Multiple nodes
+
+Use the same storage prefix, tenant/application IDs, fleet/image digests, owner,
+active bootstrap credential and application build on all nodes. Give each node a
+distinct `node_id`, signing key, data directory and reachable `peer_endpoint`.
+That endpoint must be an HTTPS origin whose TLS ingress forwards
+`POST /internal/cell` unchanged to the node's HTTP listener. Public Git/API URLs
+may point to a load balancer; requests do not require a sticky session.
+
+Peer clients verify TLS certificates and hostnames using public trust roots.
+For a private CA, set the optional `peer_ca_certificate` configuration field to
+its PEM file path. There is no insecure TLS mode. Requests are separately signed
+with the sending node's enrolled key and checked against its live advertisement.
+Keep signing keys and object-store write access restricted to trusted fleet nodes:
+the peer capability permits internal Cell operations, including Directory SQL.
+TLS termination is trusted infrastructure; this transport does not claim mTLS.
+
+Unknown owners and in-progress movement can return 503. After an owner stops,
+the surviving gateway restores the Directory on demand; Repository Cells are
+reacquired on the next request. An unclean exit requires lease expiry before
+takeover. Cross-node placement races and larger hot sets still need qualification.
+
+### Deployment maintenance
+
+Each storage prefix has one durable tenant/application identity and a selected
+compiled release. First startup initializes an empty deployment; later nodes
+must match its release and configured image identity. A nonempty catalog without
+release metadata is rejected. Existing preview prefixes require explicit future
+migration; do not point this build at them as an upgrade.
+
+To close admission and drain the fleet, choose a fresh operation UUID and use
+the same binary and configuration as the deployment:
+
+```bash
+CANOPY_OPERATION_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+canopy maintenance deploy/config.json begin "$CANOPY_OPERATION_UUID"
+canopy maintenance deploy/config.json status
+```
+
+`begin` records the operation before returning. Nodes observe the closed release
+during lease renewal, stop ingress, drain accepted work, close SQLite and withdraw
+their advertisements. The binary exits after supervised shutdown. `status` emits
+JSON with the release, advertised session count, unsettled Cell count and
+`drained`. Offline work must wait for `drained: true`. Expired advertisements and
+owned/unpublished Cells do not count as drained. `end` requires that proof and
+the matching operation UUID, then permits the same compiled release to start.
+Retries use the same UUID while it remains the current operation. Replaying its
+completed begin does not start a new drain. Once another operation starts, do not
+replay older UUIDs; completed operation history is not retained. Save the UUID
+outside the shell session if recovery might run later.
+
+After `status` reports `drained: true` and offline work is complete, reopen admission:
+
+```bash
+canopy maintenance deploy/config.json end "$CANOPY_OPERATION_UUID"
+```
+
+The begin/status/end commands need object-store credentials, but no Git token or
+node signing key. If a node dies during drain, wait for its lease to expire and
+run the recovery worker with the same operation UUID:
+
+```bash
+canopy maintenance deploy/config.json recover "$CANOPY_OPERATION_UUID"
+canopy maintenance deploy/config.json status
+```
+
+When recovery finishes and `status` reports `drained: true`, run `end` with the
+same operation UUID as above.
+
+Recovery needs `CANOPY_NODE_SIGNING_KEY_HEX` and an exclusively available local
+`data_dir`. It enrolls a temporary node, fences expired owners, restores their
+Cells one at a time and releases them. It opens no HTTP listener and needs no Git
+token. Live owners, conflicting recovery claims, unresolved follower logs and
+failed root verification return an error. Retry the same operation after the
+reported condition is resolved; recovery never resumes serving automatically.
+Do not remove authority records or force `drained` to bypass an error.
+
+Upgrade/migration and object collection remain pending. Maintenance and owner
+recovery do not provide a separate backup copy.
+
+### Backup and restore
+
+Use a fresh pin UUID and disjoint prefixes in the same configured bucket/provider:
+
+```bash
+CANOPY_BACKUP_UUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+canopy backup deploy/config.json create "$CANOPY_BACKUP_UUID" backups/snapshot-1
+canopy backup deploy/config.json verify "$CANOPY_BACKUP_UUID" backups/snapshot-1
+```
+
+Record `CANOPY_BACKUP_UUID` with the backup receipt. Later verify and restore
+commands must use that same pin UUID and the same backup prefix.
+
+To restore into an unused destination prefix:
+
+```bash
+canopy backup deploy/config.json restore "$CANOPY_BACKUP_UUID" backups/snapshot-1 restored/service-1
+```
+
+Prefixes are full object keys within the configured bucket, not URLs or paths
+relative to `storage_url`. Each command needs provider credentials, the node
+signing key and an exclusively available `data_dir`; no Git token or HTTP listener
+is required. Successful commands emit a JSON receipt with Cell/body counts.
+For S3, Canopy uses conditional multipart copy; the store and credentials must
+support that operation.
+
+Capture requires the selected release to remain Ready. It reads every catalog
+head and Cell control twice and rejects concurrent changes. On busy deployments,
+stop nodes cleanly without entering Maintenance, then capture. Retry an uncertain
+operation with the same UUID and destination; a new snapshot needs a new UUID.
+
+The copy includes runtime roots, SQLite state, external Git blobs and LFS bodies.
+Verification reads only the backup prefix, so the original prefix may be lost.
+Restore preserves the pinned identity and release and needs matching configuration
+and binary. Point a fresh node's `storage_url` at the completed destination.
+An atomic prefix reservation prevents serving backups or incomplete restores.
+Occupied destinations and different operations are rejected; retry the same
+failed operation after repairing its reported cause. Replaying a completed restore
+does not reset subsequently published service state.
+
+This is a same-provider copy, not protection from losing the entire bucket or
+provider. Cross-provider export, old-release migration, automated retention and
+the complete interruption fault matrix remain pending. Do not use older binaries
+that lack prefix reservations with these backup/restore destinations.
+
+### Recover a lost push reply
+
+For a receive-pack POST, a client or proxy can supply `Idempotency-Key` as one
+canonical lowercase, hyphenated UUID. Use one ID per logical operation. Canopy
+binds it to the repository, authenticated account and request digest. Repeating
+the same request returns the recorded status, headers and per-ref report without
+applying the refs again, including after owner takeover. Reusing an ID with
+different request bytes or another account returns HTTP 409. Current token
+scope and repository access are checked on every replay.
+
+Replay requires the same body, content type and Git protocol setting. A new
+`git push` invocation may generate different pack bytes; reusing its header does
+not guarantee replay. An HTTP client or proxy must retain the original request.
+Recorded replies include `X-Canopy-Push-Id`. If no ID was supplied, the server
+generates one; a client that loses that reply cannot discover the generated ID.
+Advertisements and fetches ignore this header.
+
+The Repository Cell stages the reply in SQLite chunks, then publishes its
+pointer and accepted ref updates in one transaction. Git rejection and no-op
+reports are recorded too. Once a complete command list is decoded, cache
+preparation and native execution failures produce durable per-ref rejections.
+Retry with a new ID after recovery; the original ID replays its refusal.
+Incomplete uploads, decode failures and unavailable or uncertain response
+publication can still return transport errors. Response bodies are limited to
+64 MiB and serialized response headers to 64 KiB. Completed records and abandoned
+staging chunks currently have no expiry or collector and consume repository storage.
+
+## Implementation details and limits
+
+See [Git compatibility](docs/git-compatibility.md) for verified operations,
+current limits and remaining transport and object-format qualification.
+
+This repository is an implementation under construction. The `canopy` binary
+starts one leased Cellule node and serves repositories created through its API.
+It probes the object store's fencing capabilities, publishes and renews a signed node
+advertisement, and restores the repository Cell from object storage when its
+local SQLite file is lost. `git-http-backend` supplies Git smart HTTP wire
+handling, including protocol v2 negotiation. The SQLite Cell is the durable
+authority, and a bare Git repository is only a rebuildable cache. Integration
+tests use stock `git` and `git-lfs` clients to push and clone, including a
+restart with a fresh local SQLite file.
+
+Nodes sharing a deployment can serve requests for Cells owned by another live
+node. Repository creation acquires its Cell on the receiving node; other gateways
+use signed HTTPS Cell RPCs to that owner. Git caches stay disposable on each
+gateway. The Directory Cell has one owner, with on-demand recovery after release
+or lease expiry. Automatic fleet balancing and production capacity qualification
+remain pending.
+
+### Resource and scaling limits
+
+These are current admission limits, not measured production throughput:
+
+| Resource | Current behavior |
+| --- | --- |
+| Concurrent Git/LFS transfers | Eight per node; excess requests return `503` and `Retry-After: 1`. |
+| Fetch request body | Up to 64 MiB; clone/fetch response packs stream with backpressure. |
+| Push report | Buffered up to 64 MiB; push bodies have no fixed byte quota. |
+| Git blob and LFS body | Immutable 8 MiB parts, with no fixed logical file-size quota. |
+| Active repository gateways | `max_active_repositories` per node (1–9,999); stored repositories may exceed this. |
+| Local admitted disk | Set by `local_disk_limit_bytes`; exhaustion returns `507`. |
 
 The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
@@ -789,6 +1028,9 @@ smaller files retain delta compression. Merge operations retain ordinary text
 semantics. These are resource policies, not hard process or filesystem limits.
 See [native pack policy](docs/contracts.md#native-pack-resource-policy) and
 [container containment](docs/contracts.md#bounded-linux-container).
+
+### Local workspace and shutdown
+
 The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
@@ -802,8 +1044,11 @@ release the workspace early. A failed node drain or destruction of the Tokio
 runtime before confirmed drain retains the workspace lock until process restart.
 Keep the runtime alive until shutdown finishes for graceful cleanup.
 
-Local recovery uses SQLite's representable database range without a Canopy byte quota. The node reserves a
-SQL slot for Directory ownership and admits `max_active_repositories` repository
+### Repository residency and routing
+
+Local recovery uses SQLite's representable database range without a Canopy byte
+quota. The node reserves a SQL slot for Directory ownership and admits
+`max_active_repositories` repository
 gateways, each bound to a local or remote Cell. This required configuration field
 accepts 1–9,999; the SQL pool receives that limit plus the Directory slot.
 `config.example.json` uses 100. Choose a limit from the node's measured memory,
@@ -834,9 +1079,11 @@ that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
 `Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to revision
-`cfcc00a7144414e0437d490ad94b5beb9152f6a3`. Canopy remains a separate
+`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. Canopy remains a separate
 product crate and builds without a local Cellule checkout. There are no Crab
 product/server or Xet dependencies.
+
+### Storage compatibility and graph verification
 
 Use a **fresh storage prefix** for this build. Cellule derives a 33-byte entity
 partition from the repository UUID; the UUID is also persisted in repository
@@ -860,6 +1107,8 @@ object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.
 
+### Cache hydration and partial clone
+
 Cold cache hydration reads insertion-ordered pages of at most 128 records and 768 KiB
 of inline bodies. It verifies inline identities on a blocking worker; chunked
 and external bodies retain their own verification before cache writes. Pages
@@ -878,85 +1127,15 @@ retry without skipping bytes. Native output stays private until it is
 published to the Cell and subsequently verified into the reusable cache. See the
 [process proof and remaining limits](docs/performance-plan.md#indexed-object-refresh).
 
-## Recover a lost push reply
+## Verify a build
 
-For a receive-pack POST, a client or proxy can supply `Idempotency-Key` as one
-canonical lowercase, hyphenated UUID. Use one ID per logical operation. Canopy
-binds it to the repository, authenticated account and request digest. Repeating
-the same request returns the recorded status, headers and per-ref report without
-applying the refs again, including after owner takeover. Reusing an ID with
-different request bytes or another account returns HTTP 409. Current token
-scope and repository access are checked on every replay.
+Choose a writable Cargo target directory with enough room for the build and
+tests. The repository's `target/` directory is ignored by Git:
 
-Replay requires the same body, content type and Git protocol setting. A new
-`git push` invocation may generate different pack bytes; reusing its header does
-not guarantee replay. An HTTP client or proxy must retain the original request.
-Recorded replies include `X-Canopy-Push-Id`. If no ID was supplied, the server
-generates one; a client that loses that reply cannot discover the generated ID.
-Advertisements and fetches ignore this header.
-
-The Repository Cell stages the reply in SQLite chunks, then publishes its
-pointer and accepted ref updates in one transaction. Git rejection and no-op
-reports are recorded too. Once a complete command list is decoded, cache
-preparation and native execution failures produce durable per-ref rejections.
-Retry with a new ID after recovery; the original ID replays its refusal.
-Incomplete uploads, decode failures and unavailable or uncertain response
-publication can still return transport errors. Response bodies are limited to
-64 MiB and serialized response headers to 64 KiB. Completed records and abandoned
-staging chunks currently have no expiry or collector and consume repository storage.
-
-## Run the current service
-
-The server requires Git with `http-backend`, modern `merge-tree --write-tree`
-(`-z --name-only --no-messages`) and `commit-tree` on `PATH`. This slice was
-qualified with Git 2.50.1; an unsupported native command fails preparation.
-
-Copy [config.example.json](config.example.json) and set the object storage URL,
-tenant and application IDs, owner name, network addresses and data
-directory. The object store must support
-conditional create/update and ranged reads; startup probes these operations.
-Configure credentials through the provider's environment variables. Set
-`CANOPY_GIT_TOKEN` and `CANOPY_NODE_SIGNING_KEY_HEX` (a 32-byte key encoded as
-64 hex characters) in the process environment. Then run:
-
-```sh
-CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo run --release --locked --bin canopy -- config.json
-```
-
-`GET /healthz` reports process liveness and `GET /readyz` reports Cell
-readiness. Git and LFS requests require `Authorization: Bearer <token>` or
-HTTP Basic credentials using the matching account name and token. Stop with
-SIGINT or SIGTERM to drain requests and withdraw the node advertisement.
-
-### Multiple nodes
-
-Use the same storage prefix, tenant/application IDs, fleet/image digests, owner,
-active bootstrap credential and application build on all nodes. Give each node a
-distinct `node_id`, signing key, data directory and reachable `peer_endpoint`.
-That endpoint must be an HTTPS origin whose TLS ingress forwards
-`POST /internal/cell` unchanged to the node's HTTP listener. Public Git/API URLs
-may point to a load balancer; requests do not require a sticky session.
-
-Peer clients verify TLS certificates and hostnames using public trust roots.
-For a private CA, set the optional `peer_ca_certificate` configuration field to
-its PEM file path. There is no insecure TLS mode. Requests are separately signed
-with the sending node's enrolled key and checked against its live advertisement.
-Keep signing keys and object-store write access restricted to trusted fleet nodes:
-the peer capability permits internal Cell operations, including Directory SQL.
-TLS termination is trusted infrastructure; this transport does not claim mTLS.
-
-Unknown owners and in-progress movement can return 503. After an owner stops,
-the surviving gateway restores the Directory on demand; Repository Cells are
-reacquired on the next request. An unclean exit requires lease expiry before
-takeover. Cross-node placement races and larger hot sets still need qualification.
-
-## Verify the current slice
-
-Use a checkout-specific target directory on the mounted Workspace volume:
-
-```sh
-CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo test --locked
-CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo clippy --all-targets --locked -- -D warnings
+```bash
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
 ```
 
@@ -968,65 +1147,43 @@ For a black-box process smoke, build the optimized `canopy` binary, provide a
 test S3-compatible bucket and credentials through the provider's environment
 variables, and run:
 
-```sh
-CARGO_TARGET_DIR=$HOME/Workspace/crabbuild-target/canopy-local cargo build --release --locked --bin canopy
+```bash
+cargo build --release --locked --bin canopy
 python3 scripts/smoke_s3_process.py \
-  --binary "$HOME/Workspace/crabbuild-target/canopy-local/release/canopy" \
+  --binary "$CARGO_TARGET_DIR/release/canopy" \
   --storage-url s3://your-test-bucket \
-  --work-parent "$HOME/Workspace/crabbuild-target/canopy-local"
+  --work-parent "$CARGO_TARGET_DIR"
 ```
 
-The script requires `openssl` on `PATH`, `CANOPY_NODE_SIGNING_KEY_HEX` and
-provider credentials in the environment. It pushes two repositories with stock Git and LFS, grants a
-collaborator access, renames one repository, restarts with fresh local databases,
-kills the new owner, waits for lease expiry, and clones from a third process.
-It verifies collaborator access and the owner roster after takeover, then denial
-and roster removal after revocation. Edited issues/comments and original-create
-retries are checked before shutdown, after restart and after forced takeover.
-Check policies/results retain the newest attempt even after an old start retry.
-It rotates a collaborator token before restart, then checks the retired token
-remains denied for API, Git and LFS after restart and owner takeover.
-It also verifies that a deleted branch stays absent through takeover and can
-then be recreated through stock Git.
-Mixed push checks prove accepted refs survive recovery, rejected refs stay
-absent, and `git push --atomic` rejects the entire mixed update.
-A proxy drops a successful push reply; replay after takeover returns the original
-report without undoing a later branch deletion.
-A final phase runs two nodes behind local HTTPS proxies with a private test CA,
-pushes and clones eight Git/LFS repositories through the opposite owner, kills
-one node, and verifies Directory and repository takeover through the surviving gateway
-without restarting it. It writes under a unique prefix in the supplied bucket.
-The backup phase creates a separate fixture, copies it, deletes that fixture's
-original prefix, then verifies and restores Git/LFS bytes and issue data from the
-backup using the real CLI and a fresh server process. Its fixtures include an
-80 MiB ordinary Git blob, an 80 MiB LFS-tracked file and an empty LFS object.
+The script needs `openssl` on `PATH`, `CANOPY_NODE_SIGNING_KEY_HEX` and provider
+credentials in the environment. It writes under a unique prefix in the supplied
+bucket. Its default run covers:
 
-Add `--large-clone` to send two 80 MiB random blobs in a single push, then clone the
-repository using protocol v0 and v2 after takeover. Each clone must receive a
-pack larger than 64 MiB, reproduce both file hashes and pass `git fsck`. This is
-a transfer-size qualification; it does not establish production capacity.
+| Stage | Evidence checked |
+| --- | --- |
+| Repository lifecycle | Two stock Git/LFS repositories, collaborator grant and revocation, rename, fresh local-database restart, lease-expiry takeover, then clone from a third process. |
+| Authorization and records | Owner roster and collaborator access after takeover; retired token denied for API, Git and LFS; edited issues/comments and original-create retries survive restart and takeover. |
+| Git publication | Branch deletion remains absent through takeover and can be recreated; mixed push accepts only allowed refs; atomic push rejects the whole mixed update. |
+| Lost replies and checks | A proxy drops a successful push reply; replay after takeover returns the original report without undoing a later deletion. An old check-start retry cannot replace the newest attempt. |
+| Two-node routing | Local HTTPS proxies with a private test CA route eight Git/LFS repositories through the opposite owner; after one node dies, the surviving gateway takes over Directory and repository Cells without restarting. |
+| Backup and restore | The real CLI copies a separate fixture, deletes its original prefix, then verifies and restores Git/LFS bytes and issue data into a fresh process. Fixtures include an 80 MiB Git blob, an 80 MiB LFS file and an empty LFS object. |
 
-Add `--many-objects 256` to qualify a 256-file initial push, a one-file update
-with an annotated tag, and a verified clone after takeover. Combine it with
-`--large-clone` to exercise four repositories through resident eviction and
-verify Git/LFS recovery on the same node before restart. For local container
-stores, verify that the intended host data/log volume is actually shared into
-the container VM before binding it; an unshared host path can instead consume
-the VM root disk. Check free inodes and bytes, including provider temporary
-storage. The 80 MiB backup fixture on RustFS `1.0.0-beta.8-glibc` exhausted a
-4 GiB tmpfs and completed on a dedicated Docker volume, ending at 5.4 GiB with
-5.1 GiB under its internal temporary directory. Size the test store accordingly;
-this observation does not establish a production storage bound.
+Optional flags expand the qualification:
 
+| Flag | What it exercises |
+| --- | --- |
+| `--large-clone` | Push two 80 MiB random blobs, then clone with protocol v0 and v2 after takeover. Each pack exceeds 64 MiB; both file hashes and `git fsck` must match. This checks transfer size, not production capacity. |
+| `--many-objects 256` | Push 256 files, update one file with an annotated tag, then clone after takeover. Combined with `--large-clone`, exercise resident eviction across four repositories and Git/LFS recovery before restart. |
+| `--sqlite-chunks` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify raw bytes and OIDs after takeover with strict `git fsck`. |
+| `--corpus-repository /path/to/existing/repository` | Read that checkout's HEAD history, bundle it into temporary fixtures under `--work-parent`, then compare every reachable object's type, size and bytes in v0/v2 clones after takeover, with strict `git fsck`. Other source branches and tags are outside this check. |
 
-Add `--sqlite-chunks` to push a 32,000-entry tree and commit/tag messages above
-1 MiB, then verify exact raw bytes and OIDs after takeover with a strict fsck.
-This exercises SQLite chunk storage independently of external large blobs.
-Add `--corpus-repository /path/to/existing/repository` to qualify that checkout's
-HEAD history. The script only reads the source, creates a bundle and temporary
-fixtures under `--work-parent`, then verifies every reachable object's type,
-size and bytes in protocol v0/v2 clones after takeover, plus strict `git fsck`.
-Other source branches and tags are outside this qualification.
+For a local container store, verify that the intended data/log volume is shared
+into the container VM. An unshared host path can consume the VM root disk.
+Check free inodes and bytes, including provider temporary storage. On RustFS
+`1.0.0-beta.8-glibc`, the 80 MiB backup fixture exhausted a 4 GiB tmpfs and
+completed on a dedicated Docker volume, ending at 5.4 GiB with 5.1 GiB under
+its internal temporary directory. Size the test store accordingly; this is an
+observation from that run, not a production storage bound.
 
 To measure cold recovery, set
 `RUST_LOG=warn,canopy_server::git_gateway=debug,canopy_server::server::residency=debug`.

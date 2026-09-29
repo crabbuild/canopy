@@ -10,13 +10,13 @@
   <text x="36" y="45" fill="#0f172a" font-family="system-ui, sans-serif" font-size="24" font-weight="700">From request to durable state</text>
   <text x="36" y="72" fill="#475569" font-family="system-ui, sans-serif" font-size="14">Repository Cells own Git and collaboration state; native Git files are rebuildable.</text>
 
-  <path d="M196 190 H226" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M426 163 C461 163 466 140 500 140" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M426 222 C461 222 467 285 500 285" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M715 140 C775 140 865 188 865 240" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M715 300 H775" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M330 245 V330" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M510 340 C476 340 474 395 436 395" fill="none" stroke="#475569" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <path d="M196 190 H234" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M426 163 C461 163 466 140 508 140" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M426 222 C461 222 467 300 508 300" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M715 140 C775 140 865 188 865 248" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M715 300 H783" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M331 245 V343" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M510 340 C476 340 470 395 428 395" fill="none" stroke="#475569" stroke-width="2" stroke-dasharray="5 4" stroke-dashoffset="-3" marker-end="url(#arrow)"/>
 
   <rect x="36" y="140" width="160" height="100" rx="12" fill="#e2e8f0" stroke="#94a3b8"/>
   <text x="55" y="174" fill="#0f172a" font-family="system-ui, sans-serif" font-size="17" font-weight="700">Git client</text>
