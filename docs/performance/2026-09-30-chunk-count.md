@@ -100,7 +100,9 @@ must not be compared with a successful full round trip as an end-to-end speedup.
 | Final-source cache smoke after fixture repairs | Passed: incremental file reuse, bounded cursor reads, cold discovery, 301 live refs, fresh-owner integrity and shutdown |
 | Final-source real-store two-owner process smoke | Passed: eight Git/LFS repositories through opposite HTTPS owners, survivor takeover, public-read revocation and interrupted maintenance recovery |
 | Final-source in-memory idle scheduler diagnostic | Passed: 100, 500 and 1,000 active repositories, released state and fresh-workspace identity samples |
-| Fresh 10,000-identity corpus | Seeding on the final release server with the existing 100-slot limit; not yet complete or verified |
+| Original final-release 10,000-identity seed | Failed after 8,374 recorded identities with a 30-second creation-response timeout; the next identity was later found readable |
+| First reconciliation | Failed at 9,830 recorded identities with another 30-second creation-response timeout; its incomplete manifest is retained |
+| Diagnostic-owner reconciled corpus | Complete: 10,000 identities and 100 populated fixtures; same release and 100-slot limit, full verification is running |
 | Single-/two-ingress throughput and real-store idle density | Pending |
 
 The intermediate integration binary was built after the production count
@@ -217,11 +219,61 @@ during maintenance followed by enrolled recovery, owner fencing, fresh Git/LFS
 verification and release. Its retained workspace is
 `/tmp/canopy-chunk-count-30671d5-v6uDrfLl/canopy-process-col8wzjw`.
 
-A new corpus uses 10,000 identities, 100 populated two-commit repositories,
+A new corpus targets 10,000 identities, 100 populated two-commit repositories,
 128-byte LFS fixtures, a fresh store prefix and a 100-repository residency limit.
-Live state and client scratch are internal. It has started seeding at
-`/tmp/canopy-chunk-count-30671d5-v6uDrfLl`; neither a partial manifest nor the
+Live state and client scratch are internal at
+`/tmp/canopy-chunk-count-30671d5-v6uDrfLl`. Neither a partial manifest nor the
 small recovery/idle fixtures above close the 10,000-repository gate.
+
+### Preserve the interrupted seed and resolve its ambiguous create
+
+The original run stopped after 4,094.5 s with 8,374 recorded identities and
+85 populated fixtures. Its next creation waited 30 seconds for an HTTP response
+then timed out. The queued verifier exited without using the incomplete
+manifest or restarting the seed. The original manifest remains unchanged:
+SHA-256 `a2f0df946280387783f5fe1a9780f6d0198d93c61acb9aa0d521af546e586302`.
+
+| Observation | What it establishes |
+| --- | --- |
+| Authenticated lookup of timed-out name returned UUID `4dbf65de-9173-4223-8b9a-10733a7b4fa0`; stock Git listed no refs | The name already resolves to an empty repository; do not issue another create for it |
+| Last 374 acknowledged creates: p95 3.144 s, p99 11.056 s, max 23.878 s | The accepted-request tail grew before the timeout; these exclude the failed request |
+| Nearby node lease refreshes took 3.0–3.6 s | Other publication work was slow too; no precise cause is established |
+| Provider had 23 GiB free and about 231 million free inodes | This failure was not the earlier Docker-volume inode exhaustion |
+| Post-failure provider HEAD/PUT probes succeeded; three unique creates took 246–340 ms | The timeout did not reproduce in these probes; the provider CLI timings include startup |
+| Shared host had about 18.2 GiB swap used and load averages 34/44/38 on 12 logical CPUs | The environment was heavily shared, not a controlled reference runner |
+
+A one-shot reconciliation wrote **a separate manifest**, not a successful
+replacement for the failed run. It carries the original manifest digest,
+records the existing UUID instead of retrying its POST, and requires every
+remaining name to be absent before creation. Unexpected existing names or any
+new failure stop it. Original refs and fixture bytes are left unchanged. The
+same 30-second timeout remains; the resolved create has no fabricated success
+latency. Three diagnostic repositories exist outside the measured corpus.
+
+That reconciliation also stopped: after 689.508 s, it had 9,830 recorded
+identities and 99 populated fixtures. Another create timed out after 30 seconds.
+Its name later resolved to UUID `a12d0362-e932-4dd3-a9f4-9909a0229498`.
+The second incomplete manifest is retained with SHA-256
+`ce7ba45a697b696f9e9a989c024070f802f9df0ae573bf82bd6334e447a77d6c`.
+Nearby node refreshes took up to 5.148 s. RustFS had no cgroup OOM events or
+CPU-quota throttling; these counters do not exclude provider or host stalls.
+
+The original server then exited gracefully with status zero. A distinct node
+started the exact same binary into fresh local state, preserving the old files,
+with existing request/transition debug timings enabled. The second timed-out
+UUID remained readable through that fresh owner. A diagnostic-owner
+reconciliation adopted that known empty identity and created only the final
+169 absent names. It completed in 157.329 s without changing the timeout or
+original refs. Its separate manifest binds both earlier failed manifests:
+SHA-256 `4ac5370e0c014163caf1e08fde3260152dc24ebfd1b87d1a4e833d939e04089b`.
+Full verification of its 10,000 identities and 100 Git/LFS fixtures is running
+with concurrency four.
+
+This is setup recovery, not a timeout fix, uninterrupted seed pass or capacity
+result. The restart, local-state reset and logging change prevent a controlled
+speed comparison; the precise timeout cause remains unproven. Only a complete,
+separately verified manifest may enter workload windows. A fresh fetch still
+confirmed the pinned Cellule revision as `origin/main` after these failures.
 
 ## Measure ref listing separately from capabilities
 
@@ -315,6 +367,12 @@ Local logs are retained under experiment
 - `write-ack-verifier-final.log`
 - `write-ack-verifier-sha256.log`
 - `write-ack-verifier-published.log`
+- `corpus-initial-verification.log` (refused the original incomplete seed)
+- `create-timeout-diagnostic.jsonl`
+- `corpus-seed-reconciliation.log`
+- `corpus-trace-server.log`
+- `corpus-trace-reconciliation.log`
+- `corpus-trace-verification.log`
 
 Use the [performance plan](../performance-plan.md#performance-qualification-rules)
 for the remaining capacity gates. This fix reduces transaction work; it does
