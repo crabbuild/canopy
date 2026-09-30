@@ -121,6 +121,18 @@ workspace-reopen test with the same `WouldBlock` error, while the serial library
 run passed. That does not establish the precise cause of the intermittent
 failures; both failed runs remain part of this record.
 
+A later focused run of all five workspace tests passed with four test threads.
+A disposable standalone probe reproduced one possible mechanism three times:
+a paused forked child retained the parent's file-lock description even though
+its descriptor was close-on-exec. Dropping the parent's handle then reopening
+returned `WouldBlock`; reopening succeeded after the child exited. The no-fork
+drop/reopen control succeeded. Close-on-exec does not close descriptors during
+the interval before exec. This explains a possible transient overlap with
+concurrent process spawning, not the precise cause of the original failures:
+their failing lock boundary and child lifetime were not captured. No production
+unlock, retry, deadline or workspace-fencing behavior was changed. The probe
+source is explicitly marked debug material outside the repository.
+
 ## Final-source real-store fixture
 
 The release server's SHA-256 is
@@ -225,8 +237,10 @@ The HTTP regression failed before implementation, then confirmed actual
 `ls-refs` POSTs, correlation IDs, exact tip validation and rejection of wrong
 tips. It also confirms that the legacy capability operation issues no such
 POST. Git performs the output-pattern filtering client-side; the test does
-not require a wire prefix filter. All 16 Python harness tests passed after
-the addition. A direct call against one populated live Canopy fixture matched
+not require a wire prefix filter. SHA-1 and SHA-256 fixtures both validate the
+correct advertised tip; the SHA-256 case also checks negotiated object format.
+All 16 Python harness tests passed after the addition, and again after adding
+the SHA-256 fixture in 17.664 s. A direct call against one populated live Canopy fixture matched
 its tip; that is a driver smoke, not a partial-corpus capacity measurement.
 
 The old Docker data filesystem exhausted its inodes. A later read-only check
@@ -276,6 +290,9 @@ Local logs are retained under experiment
 - `ls-remote-regression-green.log` (initial wire-prefix expectation was incorrect)
 - `python-ls-remote-final.log`
 - `ls-remote-live-driver-smoke.log`
+- `python-ls-remote-formats.log`
+- `workspace-focused-parallel.log`
+- `workspace-fork-mechanism.log` (standalone possible-mechanism probe)
 
 Use the [performance plan](../performance-plan.md#performance-qualification-rules)
 for the remaining capacity gates. This fix reduces transaction work; it does

@@ -86,8 +86,9 @@ class GitRefsHandler(BaseHTTPRequestHandler):
         return f"{len(body) + 4:04x}".encode() + body
 
     def do_GET(self):
+        algorithm = "sha256" if len(self.server.oid) == 64 else "sha1"
         self.reply(self.packet("version 2\n") + self.packet("ls-refs\n")
-                   + self.packet("object-format=sha1\n") + b"0000",
+                   + self.packet(f"object-format={algorithm}\n") + b"0000",
                    "application/x-git-upload-pack-advertisement")
 
     def do_POST(self):
@@ -112,16 +113,19 @@ class ScheduledLoad(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 manifest = root / "manifest.json"
-                manifest.write_text(json.dumps({"version": 1, "complete": True,
+                corpus = {"version": 1, "complete": True,
                     "requested_repositories": 2, "repositories": [
                         {"name": "fixture", "owner": "canopy",
                          "repository_id": str(uuid.uuid4()), "commit": server.oid},
                         {"name": "empty", "owner": "canopy",
-                         "repository_id": str(uuid.uuid4()), "commit": None}]}))
-                for name, advertised, expected in (
-                        ("valid", "1" * 40, "ok"),
-                        ("wrong-tip", "2" * 40, "invalid_response")):
+                         "repository_id": str(uuid.uuid4()), "commit": None}]}
+                for name, advertised, expected_tip, expected in (
+                        ("valid", "1" * 40, "1" * 40, "ok"),
+                        ("wrong-tip", "2" * 40, "1" * 40, "invalid_response"),
+                        ("sha256", "3" * 64, "3" * 64, "ok")):
                     server.oid = advertised
+                    corpus["repositories"][0]["commit"] = expected_tip
+                    manifest.write_text(json.dumps(corpus))
                     args = SimpleNamespace(manifest=manifest, active_repositories=1, seed=42,
                         duration=1, rate=2, concurrency=2, distribution="uniform",
                         operation="ls_remote", timeout=2, git_timeout=2,
@@ -131,12 +135,14 @@ class ScheduledLoad(unittest.TestCase):
                     self.assertEqual(report["eligible_repositories"], 1)
                     self.assertEqual(report["git_discovery_kind"], "v2_ls_refs_main_tip")
                     self.assertNotIn("fixture-token", args.output.read_text())
-                self.assertEqual(len(server.commands), 4)
+                self.assertEqual(len(server.commands), 6)
                 for command in server.commands:
                     self.assertIn(b"command=ls-refs\n", command["body"])
                     self.assertNotIn(b"command=fetch\n", command["body"])
                     self.assertEqual(command["protocol"], "version=2")
                     uuid.UUID(command["request_id"])
+                for command in server.commands[-2:]:
+                    self.assertIn(b"object-format=sha256", command["body"])
 
                 before = len(server.commands)
                 args.operation = "refs"
