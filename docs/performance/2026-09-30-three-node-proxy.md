@@ -59,12 +59,13 @@ credentials were not changed. No authority check or TLS verification was disable
 | --- | --- |
 | Proxy socket regressions | Binary body larger than relay chunks, half-close, keep-alive, unchanged authorization, dead backend with no retry, connection-limit rejection |
 | Creation driver regressions | Unique names/UUID validation, every arrival counted, HTTP errors and invalid identities rejected, exact recovery receipts, corrupted evidence rejected before requests |
-| Python harness and fixture checks | 37 passed in 32.937 seconds: proxy, creation, public-URL wiring, forced-shutdown accounting and campaign input/resource guards; retained in `python-tests-campaign-uuid.log` |
+| Python harness and fixture checks | 41 passed in 32.139 seconds, including critical-probe receipt guards and isolated Git execution; retained in `python-tests-critical.log` |
 | Initial fleet startup | Failed: an old ephemeral RustFS port no longer accepted connections |
 | Initial 10,000 seed | Failed at the first create with HTTP 503; zero identities recorded, `complete: false` |
 | Cause of that seed's storage failure | Node logs show connection refusal and fencing; the old provider disappeared during concurrent Docker maintenance |
 | Replacement fleet | Three live nodes behind one proxy; matching UUID read through each node |
 | Fresh 10,000 seed | Running; its manifest remains incomplete until the entire requested seed succeeds |
+| Critical stock-Git probe through ingress | Passed 17 functional steps against the live RustFS fixture; exact nine-ref inventories in two repositories, v0/v2 mirror clones and strict full fsck |
 | Scheduled load matrix | Not yet qualified |
 | Three-owner loss and fresh-state recovery | Not yet qualified |
 
@@ -102,7 +103,7 @@ and client timeouts. Keep failures in the report rather than hiding them in a re
 | `incremental_fetch`, `incremental_pull` | Prepared base-only client outside arrival clock, exact new tip and pull body |
 | `push_branch` | Unique publication ref, stock receive-pack acknowledgement; later verify exact ref/body and strict fsck |
 | `lfs_upload`, `lfs_download` | Unique upload bodies; exact size and SHA-256, including recovery |
-| Other critical Git operations | Atomic multi-ref updates, tags, mirror/force/delete, shallow/filtered fetches and access rejection through this ingress remain to be checked |
+| Other critical Git operations | Initial ingress probe passed atomic multi-ref updates/refusal, mixed refusal, tags/notes/Unicode refs, mirror push, correct/stale force-with-lease, delete/prune, shallow/deepen/unshallow, filtered lazy fetch and invalid-token refusal; repetition under load and after owner loss remains open |
 
 Reports include scheduled p50/p95/p99, service and dispatch times, error fraction,
 successful completions inside the offered-load window and successful throughput
@@ -210,3 +211,44 @@ fleets for each configured node admission limit. The runner does not raise limit
 reseed failed corpora, restart owners or remove any store data. `campaign.json`
 distinguishes completion of the declared windows from success of all arrivals;
 neither field establishes recovery or the full hosting-service qualification.
+
+### Check critical Git behavior and retain recovery expectations
+
+The initial functional probe used the seeding fleet, with the same release server
+and RustFS artifact identities above. It ran alongside the incomplete corpus seed.
+Its timing fields include compound setup/validation work and are **not** scheduled
+load latency or throughput. Receipt `critical-initial.json` has SHA-256
+`136fe79e3bfd6ae5beda021f48e88ecf728537ca0cd53bf26c39ff2e96b4edf2`.
+
+| Durable fixture | Repository UUID |
+| --- | --- |
+| `critical-f3810ecc247d-source` | `84b77852-6ddd-41a5-9189-62f55a4cb801` |
+| `critical-f3810ecc247d-mirror` | `783a7c01-1288-4407-8c6c-99d685428758` |
+
+The nine final refs include an annotated Unicode tag, a lightweight tag, Unicode
+branches, a custom ref and Git notes. A blob offered as a branch target is remotely
+rejected: non-atomic publication retains the accepted sibling, while atomic refusal
+retains neither sibling. A correct force-with-lease moves only its intended branch;
+a stale lease is a client refusal and leaves the inventory unchanged. Filtered v0/v2
+clones must actually omit the payload before exact lazy-fetch validation.
+
+```sh
+python3 -B scripts/check_proxy_git.py \
+  --base-url http://127.0.0.1:PROXY_PORT \
+  --work-dir /dedicated-volume/new-critical-probe \
+  --receipt /dedicated-volume/critical.json \
+  seed --binary /path/to/qualified/canopy
+
+# After separately recording process loss, lease expiry and fresh node state:
+python3 -B scripts/check_proxy_git.py \
+  --base-url http://127.0.0.1:RECOVERY_PROXY_PORT \
+  --work-dir /dedicated-volume/new-critical-recovery \
+  --receipt /dedicated-volume/critical.json \
+  verify --output /dedicated-volume/critical-recovery.json
+```
+
+The verifier compares both repository identities, every live ref/OID, payload bytes
+and Git notes, using v0/v2 mirror clones and strict full fsck. An incomplete receipt,
+duplicate/nil identities or invalid fixture names are rejected before network work.
+This recovery check is additional to the full original corpus and acknowledged
+creation/push/LFS ledgers; it does not replace them or establish node loss itself.

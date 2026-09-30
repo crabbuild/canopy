@@ -116,7 +116,8 @@ class Client:
             connection.close()
 
 
-def git(*args, cwd, token, timeout=120, request_id=None):
+def git_result(*args, cwd, token, timeout=120, request_id=None):
+    """Run stock Git with isolated configuration; caller may inspect rejection."""
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("GIT_", "AWS_", "RUSTFS_", "CANOPY_"))}
     environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
@@ -127,8 +128,12 @@ def git(*args, cwd, token, timeout=120, request_id=None):
     if request_id is not None:
         environment.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_2="http.extraHeader",
                            GIT_CONFIG_VALUE_2=f"X-Request-ID: {request_id}")
-    result = subprocess.run(["git", *args], cwd=cwd, env=environment,
-                            capture_output=True, timeout=timeout, check=False)
+    return subprocess.run(["git", *args], cwd=cwd, env=environment,
+                          capture_output=True, timeout=timeout, check=False)
+
+
+def git(*args, cwd, token, timeout=120, request_id=None):
+    result = git_result(*args, cwd=cwd, token=token, timeout=timeout, request_id=request_id)
     if result.returncode:
         raise RuntimeError(f"Git {args[0]} failed (exit {result.returncode})")
     return result.stdout.strip().decode()
