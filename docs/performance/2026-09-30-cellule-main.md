@@ -16,6 +16,9 @@ These results describe the dependency-only update at Canopy `06367a3`.
 The [subsequent chunk-count optimization](2026-09-30-chunk-count.md) records
 follow-up work on the transaction deadline failure and a host-backed provider
 fixture. It does not replace the failures retained here.
+The [cold-owner race follow-up](2026-09-30-cold-owner-race.md) records the newest
+gateway candidate's passing debug/release suites and acknowledged-write recovery,
+but also its failed full-corpus replay. The dependency pin remains the same.
 
 ## Identify the run
 

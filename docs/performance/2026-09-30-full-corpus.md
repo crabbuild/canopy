@@ -10,12 +10,16 @@ This follows the [dependency update](2026-09-30-cellule-main.md) and
 [chunk-count optimization](2026-09-30-chunk-count.md). Their failed runs remain
 recorded; later passes do not replace them.
 
+This report's matrices used the chunk-count artifact below. The subsequent
+[cold-owner race candidate](2026-09-30-cold-owner-race.md) changes gateway code
+and has separate executable digests, tests, recovery and load results.
+
 ## Scope and provenance
 
 | Input | Value |
 | --- | --- |
 | Cellule revision | `30671d5f8a729dd9ccd3a0c2d0e36c7abb89a988`; confirmed as remote `main` again before recovery checks |
-| Production Canopy source | `bedc169`; subsequent commits change tests, drivers and documentation only |
+| Production Canopy source for this report | `bedc169`; follow-up tests, drivers and docs before `78483a9` do not change its server artifact |
 | Release server SHA-256 | `30cfbb21670566691e292e2ed80c3e78aad6abfbdc41b3c1fa3f97faa198afb2` |
 | Corpus | 10,000 repository identities; 100 populated with two Git commits and a 128-byte LFS fixture each |
 | Manifest SHA-256 | `4ac5370e0c014163caf1e08fde3260152dc24ebfd1b87d1a4e833d939e04089b` |
@@ -132,12 +136,96 @@ The read-only `verify-writes` command ran through the second fresh ingress:
 | Git protocol checks | v0 and v2; exact commit/README object IDs and strict fsck |
 | Acknowledged LFS uploads | All 60 one-MiB objects matched size and SHA-256 |
 | Unacknowledged arrivals | One push remains excluded; no rollback assertion |
-| Complete seeded corpus through fresh two-node deployment | Running; not yet a recorded pass |
-| Two-ingress load matrix | Pending; run after correctness checks finish |
+| Complete seeded corpus through fresh two-node deployment | Failed after the 7,000-identity progress checkpoint: one cold metadata transition returned HTTP 503 |
+| Two-ingress load matrix | Failed five of 3,880 arrivals; the failed recovery gate remains open |
 
 The verifier checks data, not the fact of a restart. The process kill, fresh
 node directories, lease wait and launcher readiness establish that boundary
 separately. This is owner-recovery correctness, not a throughput scaling claim.
+
+### Retain the full recovery failure
+
+The four-worker verifier exited with status 1 on manifest index 7,018,
+`density-ba4cafedcba3-07018` (UUID `033de104-3a4d-442b-ab89-6ae6020e137e`).
+The failed request was `ff7a99ec-d582-413f-96bc-8ef053897213`. Directory
+authentication and lookup succeeded; the repository transition failed in
+0.392 seconds and the handler returned HTTP 503. Its generic runtime error
+did not record the underlying cause. The progress checkpoint is not a complete
+count of every successful request in the final batch.
+
+| Subsequent one-shot read | HTTP status | Elapsed | Identity result |
+| --- | --- | --- | --- |
+| Original ingress | 503 | 83.526 ms | No identity response |
+| Peer ingress | 200 | 357.181 ms | Exact manifest UUID |
+| Original ingress after the peer acquired it | 200 | 103.485 ms | Exact manifest UUID through forwarding |
+
+These probes establish that the peer could restore the identity; they do not
+turn the failed full run into a pass or fix the local acquisition failure. A
+local SQLite image remained after the failed transition. A read-only stock
+SQLite probe rejected it, but Cellule's restored files are deliberately sparse
+and require its writable VFS to supply missing pages. That probe is not evidence
+of durable corruption or a valid integrity check of an activated Cell. No local
+file was removed and no fencing or deadline was weakened.
+
+The verifier previously described both non-200 responses and changed UUIDs as
+an identity mismatch. A real HTTP regression failed before the diagnostic
+repair. It now reports HTTP status, repository name/expected UUID and a valid
+request correlation UUID; malformed JSON/identity responses are separate,
+with no response-body or credential logging. A second regression covers those
+malformed responses. All 20 Python harness tests passed in 17.574 seconds.
+These driver changes do not alter the server artifact or resolve its failure.
+
+## Two-gateway diagnostic load windows
+
+The same matrix and seed ran round-robin through two ingress nodes, each with a
+100-repository residency cap. Both used the original artifact recorded above;
+the later race candidate was not running. The complete manifest had passed
+single-owner verification, but the fresh deployment's full replay had failed.
+Consequently these windows are diagnostics, not a closed recovery or capacity
+gate. No other verification/benchmark workload ran concurrently with the matrix.
+
+All 3,880 arrivals are accounted for: 3,875 succeeded, three were `driver_busy`,
+one metadata request returned HTTP 503, and one stock-Git ref-listing command
+failed. The matrix exited with status 1. Rates, durations, client limits and
+working sets match the single-gateway table.
+
+| Window | Successful / scheduled | p95 / p99 ms | Failure |
+| --- | --- | --- | --- |
+| Metadata, prewarmed uniform | 600 / 600 | 380.292 / 495.977 | None |
+| Metadata, prewarmed skewed | 1,197 / 1,200 | 424.092 / 752.608 | Three unsent arrivals |
+| Metadata, 1,000-entry working set | 600 / 600 | 520.638 / 668.165 | None |
+| Metadata, 10,000-entry working set | 599 / 600 | 530.061 / 651.629 | One HTTP 503 |
+| Git v2 capabilities only | 300 / 300 | 545.165 / 653.120 | None |
+| Stock Git v2 `ls-remote` | 299 / 300 | 1,147.287 / 1,352.303 | One Git error; server returned 503 |
+| Clone | 30 / 30 | 1,430.472 / 2,020.800 | None |
+| Empty-client fetch | 30 / 30 | 1,840.613 / 1,894.024 | None |
+| Incremental fetch | 20 / 20 | 2,051.332 / 2,291.189 | None |
+| Incremental pull | 20 / 20 | 2,175.242 / 2,682.598 | None |
+| LFS download | 90 / 90 | 307.309 / 339.373 | None |
+| LFS upload | 60 / 60 | 3,131.063 / 3,717.088 | None |
+| Unique-branch push | 30 / 30 | 2,096.522 / 2,801.681 | None |
+
+The metadata 503 occurred on UUID `192ab416-8bca-41a7-bf84-5fd553b891e3`
+in overlapping arrivals 103 and 104, through opposite gateways. The peer
+acquired it successfully while the original ingress failed, then a later
+original-ingress read succeeded through forwarding. Ref-listing arrivals 11 and
+12 similarly overlapped on UUID `d31cc5dd-da70-48c9-a069-1fc95e49e6c2`.
+The losing route logged `Node("node session is not expired")` and returned 503;
+the winner and a later forwarded request succeeded. This is evidence of a
+competing-owner routing window, not proof of the earlier index-7,018 failure's
+cause. The [cold-owner race follow-up](2026-09-30-cold-owner-race.md) records the
+separate regression and candidate.
+
+Across 574 one-second snapshots, maximum combined server-parent RSS was
+220,064 KiB (214.9 MiB) and summed server/descendant RSS was 221,312 KiB
+(216.1 MiB), with at most seven processes observed. Individual parent
+descriptor counts at endpoints ranged from 568 to 807; no sampler errors were
+recorded. These are sampled sums for two servers, not per-node peaks or a hard
+resource ceiling. Proxy/launcher memory is excluded. Host swap use fell from
+about 16.7 to 16.5 GiB while competing
+load changed. Both TLS test proxies also belong to the fixture. Their overhead
+has not been isolated, so slower warm tails do not establish a production
+two-node cost or linear scaling result.
 
 ## Repeat the checks
 
@@ -180,12 +268,19 @@ under experiment `canopy-latest-U6wUjSnB/qualification-iPz0ULZ6`.
 | `single-gateway-windows/summary.json` | `d22f387e47235f5c3594d7cc72bb72bab93f712cbb8c867e6e8676e8aee9aeca` |
 | `matched-metadata-windows/summary.json` | `34fa3facea22af2c121ede0bcc93c2b7e4310ab7ea1898c7c27b277752a06504` |
 | `single-acks-restored-two-node.json` | `4865de9207e3a93985bbe7734fa0cad66381c24aae7eae5c862d7b1732442d55` |
+| Failed fresh two-node corpus verification log | `c14922821efcfeab177179a722dd6d8b8cd0b6edc30d2963323d9b6252ad4820` |
+| `two-gateway-windows/summary.json` | `af18e04ca37d2617eafa22f15591e36935a253bbdb3b7944af7a84e85bd7576e` |
 
 Each workload report binds its per-arrival sample file and corpus by SHA-256.
 Keep those files, resource observations, failed setup/startup logs and fresh-node
 logs together. The local paths are retained evidence, not portable download links.
+The failed run is `two-node-full-verification.log`; its subsequent probes are
+`failed-cold-7018-*.txt`. The diagnostic regression logs are
+`verify-diagnostics-red.log`, `verify-diagnostics-green.log` and
+`verify-diagnostics-all-harness.log`.
 
-Remaining gates include two-ingress load and write recovery, real-store
+Remaining gates include fixing and repeating full fresh-state recovery,
+two-ingress load and write recovery, real-store
 100/500/1,000-active-Cell renewal coverage on this final artifact, independent
 Git concurrency sweeps, long mixed-load/noisy-neighbor tests, and off-node
 clients on the documented 8-vCPU/32-GiB Linux/NVMe/same-region reference setup.

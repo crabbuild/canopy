@@ -12,7 +12,21 @@ record all 10,000 identities and 100 seeded Git/LFS fixtures passing verificatio
 The single-gateway matrix dropped eight scheduled arrivals, and matched warm
 metadata windows missed latency targets. All 29 acknowledged generated Git refs
 and 60 acknowledged LFS uploads survived owner kill and fresh-state recovery.
-These shared-Mac results do not qualify the Linux reference target.
+A separate full seeded-corpus recovery attempt through fresh gateways failed
+with a cold-transition HTTP 503. The two-ingress matrix also failed five arrivals;
+it is diagnostic while that gate remains open. These shared-Mac results do not
+qualify the Linux reference target.
+
+The [cold-owner race follow-up](performance/2026-09-30-cold-owner-race.md)
+adds a synchronized regression and live-owner routing fix. Its debug and release
+suites passed, and 59 acknowledged refs plus 120 LFS uploads survived fresh-state
+recovery after both old gateways were killed. Its separate complete-corpus
+replay still failed on a cold transition at index 4,757; the peer subsequently
+restored the exact UUID. Its own matrix also failed: 2,104 of 3,880 arrivals
+succeeded on the heavily loaded shared host. After another two-owner kill,
+all 73 acknowledged refs and 149 LFS uploads across three matrices survived
+fresh-state recovery. Neither passing suites nor acknowledged-write recovery
+close the full-recovery, load or latency gates.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -33,7 +47,7 @@ flowchart LR
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Is 10,000 repositories per node a measured capacity? | No; the current-pin reconciled corpus passed full verification, but its single-gateway load matrix had dropped arrivals and the reference Linux workload remains unqualified | [Current-pin corpus and load](performance/2026-09-30-full-corpus.md), [historical real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | In a local SQL-only RustFS fixture, yes: the merged pin passed 10- and 30-second renewal-coverage windows. The reference Linux node and foreground load remain unqualified | [Merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) |
+| Is idle ownership proven at 1,000 active Cells? | An earlier `a3fbfb0` pin passed local SQL-only RustFS renewal-coverage windows. Repetition on the current final artifact, the reference Linux node and foreground load remains unqualified | [Historical merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) and [current artifact's open gates](performance/2026-09-30-full-corpus.md#retained-evidence-and-open-gates) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
 
@@ -42,8 +56,9 @@ the bounded 32-task renewal window when I/O completes. A 100-ms scan rebuilds
 pending candidates, removing stale generations and departed Cells. This removes
 the earlier 320-starts/s *scheduler* ceiling; it does not lower the one-control-
 update-per-active-Cell cost or prove that a provider can sustain the required
-update rate. The local SQL-only RustFS gate now covers 1,000 active Cells, but
-repeat it on the reference Linux node under foreground load before raising the
+update rate. Historical local SQL-only RustFS proof covers 1,000 active Cells
+on `a3fbfb0`, not this final artifact. Repeat it on the current artifact and
+the reference Linux node under foreground load before raising the
 active Cell limit or claiming 1,000- or 10,000-Cell production residency. This
 dependency and lockfile change also changes Canopy's compiled release digest;
 test against a fresh store prefix or use the documented maintenance upgrade
@@ -1880,15 +1895,17 @@ This tool intentionally makes no Git-throughput or full-primitive capacity claim
 
 Use a caller-owned disposable S3 bucket/prefix and credentials already provided
 through the normal provider environment. Each invocation adds a unique storage
-prefix. The output directory must be new and belong on the mounted workspace
-volume. For this checkout:
+prefix. The output directory must be new and use a local filesystem
+representative of the intended deployment. Build artifacts may use a separate
+volume; do not move live SQLite state there without checking synchronous-write
+performance. For example:
 
 ```bash
 CARGO_INCREMENTAL=0 \
 CARGO_TARGET_DIR="$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f" \
 cargo run --release --locked --example benchmark_idle -- \
   s3://disposable-bucket/idle-qualification \
-  "$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f/idle-qualification" \
+  /tmp/canopy-idle-real-store-qualification \
   0,100,500,1000 30
 ```
 

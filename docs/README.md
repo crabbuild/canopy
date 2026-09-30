@@ -16,6 +16,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | Check the latest Cellule dependency update | [September 30 requalification](performance/2026-09-30-cellule-main.md) | Exact revision, passing checks, failed suites and storage-blocked performance gates |
 | Understand the large-object deadline fix | [Count chunks once per transaction](performance/2026-09-30-chunk-count.md) | Snapshot safety, query-work regression, phase timings and remaining verification |
 | Inspect current-pin full-corpus load and recovery results | [Complete-corpus diagnostics](performance/2026-09-30-full-corpus.md) | All-identity verification, dropped arrivals, latency windows and acknowledged-write recovery |
+| Understand concurrent cold-request routing | [Cold-owner race follow-up](performance/2026-09-30-cold-owner-race.md) | Synchronized failure, live-owner routing fix and candidate verification |
 | Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |
 | Track production-readiness work | [Roadmap](../ROADMAP.md) | Milestones and checklists across operations, product features and scale |
 

@@ -10,6 +10,11 @@ or reducing the object fixture.
 > intermittent workspace-lock failures. Performance qualification is still in
 > progress; the 10,000-repository reference target is unqualified.
 
+The final-source labels in this report refer to the chunk-count artifact
+identified below. The subsequent [cold-owner race candidate](2026-09-30-cold-owner-race.md)
+changes gateway code and executable digests; its verification and load results
+are recorded separately, including another failed full-corpus recovery attempt.
+
 ## What changes
 
 An object with `n` SQLite chunks previously ran `COUNT(*)` over its entire
@@ -105,7 +110,8 @@ must not be compared with a successful full round trip as an end-to-end speedup.
 | Diagnostic-owner reconciled corpus | Passed full verification: 10,000 UUIDs and all 100 populated fixtures, Git v0/v2, exact refs/files, strict fsck and LFS size/hash; same release and 100-slot limit |
 | Single-ingress workload windows | Completed with eight dropped arrivals; see [full-corpus diagnostics](2026-09-30-full-corpus.md) |
 | Acknowledged single-ingress writes after owner kill and fresh-state recovery | Passed: 29 Git refs through v0/v2 and 60 one-MiB LFS uploads; one unacknowledged push excluded |
-| Two-ingress throughput and final-artifact real-store idle density | Pending |
+| Full seeded corpus through fresh two-node deployment | Failed after the 7,000-identity checkpoint with one cold-transition HTTP 503; peer and subsequent forwarded reads matched its UUID |
+| Two-ingress throughput and final-artifact real-store idle density | Matrix completed with five failed arrivals; fresh-state recovery and final-artifact idle density remain unqualified |
 
 The intermediate integration binary was built after the production count
 optimization and timing-probe removal, but before correcting two new unit-test
