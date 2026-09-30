@@ -64,20 +64,20 @@ contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
 The pinned Cellule revision is
-`30671d5f8a729dd9ccd3a0c2d0e36c7abb89a988`. Read-only inspection of that exact
-revision confirms the following constraints still apply. The latest ownership
-read and release-retention improvements do not add composed repository
+`70bd25f142f1976fdd63ffe60e46e15ae276ffdc`. Read-only inspection of that exact
+revision confirms the following constraints still apply. The latest routing
+and provider-read improvements do not add composed repository
 capabilities or close these acceptance gates:
 
 | Surface | Existing contract | Required change |
 | --- | --- | --- |
-| `cellule-runtime/src/cell/catalog/mod.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
-| `cellule-runtime/src/primitives/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
-| `cellule-runtime/src/primitives/queue/api/mod.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
-| `cellule-runtime/src/primitives/workflow/api/mod.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
-| `cellule-runtime/src/registry/schemas/validation.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
-| `cellule-runtime/src/primitives/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
-| `cellule-runtime/src/registry/handlers.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
+| `crates/cellule-runtime/src/cell/catalog/mod.rs` | A catalog entry has one exclusive `CatalogRole` | Describe the primitive capabilities of a single Cell independently of its entity partition |
+| `crates/cellule-runtime/src/primitives/kv/api.rs` | `KvNamespace::new` requires role KV and hashes scope to shard Cells | Bind a KV capability to an explicit repository Cell target |
+| `crates/cellule-runtime/src/primitives/queue/api/mod.rs` | `QueueNamespace` requires role Queue and routes producer/shard identities | Bind queue operations to the existing repository target and registered queue policy |
+| `crates/cellule-runtime/src/primitives/workflow/api/mod.rs` | `WorkflowNamespace` requires role Workflow | Bind workflow operations/definitions to the repository target |
+| `crates/cellule-runtime/src/registry/schemas/validation.rs` | `validate_queue_bindings` rejects a Queue binding unless its namespace has role Queue; workflow/Cron/Timer validation also uses exclusive roles | Validate capability membership, operation inventory, codecs and effect destinations for composed Cells |
+| `crates/cellule-runtime/src/primitives/maintenance.rs` | Persisted-work and transfer inspection checks Queue/Workflow/Blob/Cron/Timer state conditionally on the exclusive role | Inspect every installed primitive when scheduling, moving, retiring or releasing a Cell |
+| `crates/cellule-runtime/src/registry/handlers.rs` | Raw primitive transaction access is crate-private | Retain trusted native procedures and typed module composition |
 
 Registering a queue command against the existing SQL namespace is insufficient:
 registry validation rejects it, and role-based work inspection would omit live

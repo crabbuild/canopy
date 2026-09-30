@@ -1,13 +1,13 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `30671d5f8a729dd9ccd3a0c2d0e36c7abb89a988`, the fetched `origin/main` snapshot used for the [September 30 requalification](performance/2026-09-30-cellule-main.md). Earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`, the fetched `origin/main` snapshot used for the [workspace and RustFS verification](performance/2026-09-30-workspace-rustfs.md). Earlier runs below retain their original pins and do not establish this build's density or latency.
 
 The [chunk-count follow-up](performance/2026-09-30-chunk-count.md) removes
 quadratic upload scans from command verification and records its verification
 state separately. This transaction optimization is not a 10,000-repository
 throughput qualification.
 
-The [current-pin complete-corpus diagnostics](performance/2026-09-30-full-corpus.md)
+The [earlier `30671d5` complete-corpus diagnostics](performance/2026-09-30-full-corpus.md)
 record all 10,000 identities and 100 seeded Git/LFS fixtures passing verification.
 The single-gateway matrix dropped eight scheduled arrivals, and matched warm
 metadata windows missed latency targets. All 29 acknowledged generated Git refs
@@ -46,8 +46,8 @@ flowchart LR
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
-| Is 10,000 repositories per node a measured capacity? | No; the current-pin reconciled corpus passed full verification, but its single-gateway load matrix had dropped arrivals and the reference Linux workload remains unqualified | [Current-pin corpus and load](performance/2026-09-30-full-corpus.md), [historical real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | An earlier `a3fbfb0` pin passed local SQL-only RustFS renewal-coverage windows. Repetition on the current final artifact, the reference Linux node and foreground load remains unqualified | [Historical merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) and [current artifact's open gates](performance/2026-09-30-full-corpus.md#retained-evidence-and-open-gates) |
+| Is 10,000 repositories per node a measured capacity? | No; the earlier `30671d5` reconciled corpus passed full verification, but its single-gateway load matrix had dropped arrivals. Current-pin capacity and the reference Linux workload remain unqualified | [Earlier corpus and load](performance/2026-09-30-full-corpus.md), [latest verification](performance/2026-09-30-workspace-rustfs.md) and [qualification rules](#performance-qualification-rules) |
+| Is idle ownership proven at 1,000 active Cells? | An earlier `a3fbfb0` pin passed local SQL-only RustFS renewal-coverage windows. Repetition on the current final artifact, the reference Linux node and foreground load remains unqualified | [Historical merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) and [latest artifact's open gates](performance/2026-09-30-workspace-rustfs.md#verification-gates) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
 
