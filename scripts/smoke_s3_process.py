@@ -78,12 +78,12 @@ def wait_ready(process, address, log, timeout=30):
 
 
 def start(binary, directory, settings, instance, *, data_instance=None, listen_address=None,
-          signing_key=None, ready_timeout=30):
+          signing_key=None, ready_timeout=30, public_url=None):
     address = listen_address or f"127.0.0.1:{port()}"
     config = {
         **settings,
         "listen": address,
-        "public_url": f"http://{address}",
+        "public_url": public_url or f"http://{address}",
         "data_dir": str(directory / (data_instance or instance)),
     }
     path = directory / f"{instance}.json"
