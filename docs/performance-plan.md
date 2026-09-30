@@ -20,7 +20,7 @@ flowchart LR
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
-| Is 10,000 repositories per node a measured capacity? | No; it is a proposed reference-node target | [Required outcome](#required-outcome) and [qualification rules](#performance-qualification-rules) |
+| Is 10,000 repositories per node a measured capacity? | No; a debug, in-memory 100-slot seed completed, but the reference Linux/object-store target remains unqualified | [Local churn diagnostic](#local-10000-identity-churn-diagnostic) and [qualification rules](#performance-qualification-rules) |
 | Is idle ownership proven at 1,000 active Cells? | Not on a real store; the current pin passed 1,000 in-memory Cells, but its RustFS run fenced owners beyond 800 | [Current scheduler and provider observations](#current-pin-scheduler-and-provider-observations) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
@@ -715,6 +715,46 @@ recorded LTX publication lag peaked at 547 ms during seeding/reads. Those timing
 do not explain the earlier failure, whose runtime publication tracing was off.
 The small corpus, short schedules, different build profile and active-set sizes
 prevent a controlled performance comparison with the initial 1,000-identity run.
+
+### Local 10,000-identity churn diagnostic
+
+Canopy `52279e9` with Cellule `21bed5e` completed a sequential seed of 10,000
+repository identities on a shared macOS arm64 host. This was a **debug build with
+an in-process `memory:///` store**, `max_active_repositories: 100`, and an 8-GiB
+local disk-admission setting. One hundred repositories had two commits, an
+incremental base ref, and a 128-byte LFS object. The manifest completed in
+1,731.784 seconds; no seed request failed. Creation medians were 125.65 ms for
+the first 100 and 159.18 ms for the last 100. These are observed client times,
+not a sustained throughput or reference-node result.
+
+The preceding build stopped at identity 3,125 with HTTP 503 after an idle Cell
+began draining between inventory and release preflight. The current build
+rescans up to eight other idle candidates on that exact transient error, leaving
+other release failures on their recovery path. Passing this one rerun supports
+the fix for sequential churn; it does not prove the race absent under concurrency.
+
+| Follow-up operation | Active set; schedule | Outcomes | Scheduled p95 / p99 |
+| --- | --- | --- | --- |
+| Metadata, uniform | 1,000; 10/s for 60 s | 600/600 OK | 193.626 / 244.862 ms |
+| Git v2 refs, skewed | 100; 5/s for 60 s | 300/300 OK | 150.051 / 206.867 ms |
+| Stock-Git full clone, uniform | 100 populated; 1/s for 30 s | 30/30 OK | 602.675 / 672.942 ms |
+| Incremental stock-Git fetch, uniform | 20 populated; 1/s for 20 s | 20/20 OK | 635.725 / 760.475 ms |
+| LFS download, uniform | 100 populated; 3/s for 30 s | 90/90 OK on rerun | 66.137 / 86.393 ms |
+| LFS upload, uniform | 100; 2/s for 30 s | 60/60 OK | 94.869 / 147.461 ms |
+| Unique-branch stock-Git push, uniform | 100; 1/s for 30 s | 30/30 OK on rerun | 533.859 / 559.576 ms |
+
+The first LFS download window returned 401 for all 90 requests, and the first
+push window recorded Git errors for all 30 requests. Both same-workload reruns
+passed; a five-request push check and a manual stock-Git push also passed.
+The original failures remain unexplained and are **not** counted as successful
+qualification. The driver keeps per-arrival outcome records, but its Git-error
+category does not retain the underlying process response. Repeat with correlated
+server diagnostics before making an availability claim.
+
+The run did not exercise a real object store, Linux resource containment,
+500/1,000 resident slots, two gateways, large bodies, recovery after restart,
+or sustained mixed-client load. None of the measured percentiles is a production
+SLO result or evidence that the 10,000-repository reference target is met.
 
 
 ### Diagnosing metadata latency
