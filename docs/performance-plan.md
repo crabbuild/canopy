@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `47a302b79962ee16c698e121315cf4e85ec49549`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `21bed5e99b7483da185766eebd4d175edb70712d`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
 ## Read the result before the target
 
@@ -206,15 +206,16 @@ permits it.
   object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
-- Demand-driven `release_idle_cell` and automatic pressure shedding share
-  Cellule's two-movements-per-second, two-in-flight budget. A successful
-  release also deletes the local SQLite state. At 100 active slots, a
-  first-pass scan of 10,000 distinct locally owned repositories requires at
-  least 9,900 releases: the budget alone implies at least 4,950 seconds
-  (82.5 minutes), before restore, Git work or network time. This is a lower
-  bound from code, not a measured scan. Bursts can instead receive a capacity
-  error after Canopy's single one-second retry. Do not interpret the 10,000
-  identity target as a uniform-access pass until this path is qualified.
+- Demand-driven `release_idle_cell` now has a separate 32-in-flight,
+  32-completions-per-second budget; automatic pressure shedding retains its
+  two-in-flight, two-completions-per-second budget. A successful release also
+  deletes the local SQLite state. At 100 active slots, a first-pass scan of
+  10,000 distinct locally owned repositories requires at least 9,900 releases:
+  even a saturated requested-release budget needs about 310 one-second
+  windows, before restore, Git work or network time. This is a code-derived
+  rate bound, not a measured scan. Bursts can still receive a capacity error
+  after Canopy's single one-second retry. Do not interpret the 10,000 identity
+  target as a uniform-access pass until this path is qualified.
 - Eight shared heavy-request slots and four active and four pending slots per
   account prevent one account from filling every transfer wait position. The
   bounded Linux profile establishes containment, not latency, throughput or
@@ -393,11 +394,11 @@ count dropped arrivals and timeouts as failures, never omit them from results.
 Run skewed and uniform distributions across 10,000 identities, each with 100,
 500 and 1,000 active repositories. Vary simultaneous pack workers independently.
 For uniform access, report successful releases per second, movement-budget
-rejections, retry outcomes and cold-admission failures. A future demand-driven
-release budget must retain generation checks, settled-work preflight and
-authoritative release, while keeping automatic pressure shedding paced and
-preserving bounded memory/disk use. Raise no shared movement limit solely to
-make a benchmark pass.
+rejections, retry outcomes and cold-admission failures. The new demand-driven
+release budget retains generation checks, settled-work preflight and
+authoritative release while keeping automatic pressure shedding paced; measure
+whether its configured rate is sustainable for memory, disk and the object
+store. A higher admission limit alone is not a capacity result.
 Report cold activation latency by database size, local cache state and restore
 bytes. Report clone/fetch first-byte latency, throughput, CPU per transferred GiB
 and object-store cost. Write latency includes durable acknowledgement.
@@ -1697,7 +1698,7 @@ a controlled scheduler regression. The existing
 
 #### Current pin: scheduler and provider observations
 
-The current Cellule pin is `47a302b`. A debug Canopy example on shared macOS
+The Cellule pin at the time of this run was `47a302b`. A debug Canopy example on shared macOS
 arm64 measured these SQL-only, otherwise idle windows; each active count also
 includes the Directory Cell. The in-memory run passed its final graceful drain,
 fresh-workspace restart, released-only window, and three identity restorations.
