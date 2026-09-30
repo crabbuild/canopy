@@ -1,6 +1,6 @@
 # Qualify three Canopy nodes behind a proxy
 
-**Status: baseline failed; fresh-state recovery in progress.** This campaign preserves the documented 10,000-repository
+**Status: baseline and post-load full-corpus recovery failed; qualification in progress.** This campaign preserves the documented 10,000-repository
 reference target. A ready fleet, small socket tests or an incomplete seed does
 not qualify throughput, latency, recovery or production capacity.
 
@@ -94,7 +94,7 @@ recorded baseline and produce their own artifact bindings.
 | Initial three-owner loss | All three verified seeding-node PIDs killed; process absence recorded, followed by 32.006 seconds of unchanged lease-expiry wait; no data deleted |
 | Critical-fixture fresh-state recovery | Passed: both original identities, four exact nine-ref inventories across v0/v2, payload, Git notes and strict full fsck |
 | Full-corpus recovery / preflight | Passed: all 10,000 original identities and all 100 populated fixtures through three fresh node directories and the new ingress; v0/v2 clones, exact Git/incremental/LFS bytes and strict full fsck; four verification workers, no retries |
-| Post-load acknowledged-write recovery | All 136 acknowledged creations passed after observed three-owner failure and fresh-state startup. No Git/LFS load writes existed because those phases had not started; full original-corpus recheck remains in progress |
+| Post-load acknowledged-write recovery | All 136 acknowledged creations passed after observed three-owner failure and fresh-state startup. No Git/LFS load writes existed because those phases had not started; full original-corpus recheck failed with an identity-read timeout |
 
 The old seed is not resumed or merged into a passing manifest. The replacement
 uses an independent provider, bucket and deployment prefix. The original 30-second
@@ -278,8 +278,14 @@ Its proxy is separate from the user's UI preview.
 
 The recovery run passed all 136 creation ACKs and both critical Git fixtures:
 four exact ref inventories across v0/v2 mirror clones, exact payload/notes and
-strict full fsck. It is now checking the full original corpus with four bounded
-workers and no retries. The critical receipt's digest matches the earlier
+strict full fsck. Its full original-corpus check then failed with four bounded
+workers and no retries. The last complete progress checkpoint was 300/10,000;
+the identity request for `density-ea9283d2648c-00355`
+(`ed794e34-158b-4cc1-9e71-d21d7405ab2b`, request ID
+`b8333796-0a12-47a9-b37a-0f4ffa56fbd0`) timed out at the unchanged 30-second
+deadline. The verifier process exited with code 1 and its result records
+`completed: false`, `error: RuntimeError`; this is not a complete recovery pass.
+The critical receipt's digest matches the earlier
 recovery result because its expected fixture content did not change; the new
 owner boundary and fleet binding are recorded separately, not inferred from
 that content hash. Successful creation/critical recovery does not close the
@@ -296,6 +302,28 @@ it cannot replace verification of writes made by this failed baseline.
 | `fleet-node100-after-failure/ready.json` | `47bd95391d667be68403dd55d02f0349d3dc874f908b64ced3ab112611056062` |
 | `creation-after-failure-verification.json` | `45127974487f1b0e272a1d7603886b84b2afe5c3255a8a04653e380c5a41db14` |
 | `critical-after-failure-verification.json` | `2aac52dcca5973fbe9ed8badebd5eda2c97563e091d94816df5735f76f9c0c5d` |
+| `recovery-after-failure.json`, terminal failed attempt | `5113e16b0fee7c59a5165c98d48810e47090a16df6a44425b53e97150d791430` |
+| `verify-failed-baseline.log` | `af6ac6a69c47acc935aa7aa0b8d4ce3926111b043bb438d5394ec6cd26ec36e5` |
+| `failed-recovery-read-probes.json`, separate diagnostic | `596888de9b9db6184b7fd5fe4cc72b13ea08941a3fa10bf1f8406eb19d2a1844` |
+
+After the failed verifier exited, all three recovery nodes remained live and
+readiness succeeded. Separate, explicitly diagnostic requests each checked
+Directory authentication and the failed repository identity, with new request
+IDs and no hidden retries. All six returned 200; identity checks matched exactly.
+Directory reads took 1,303.672, 6.145 and 399.635 ms; repository reads took
+789.856, 1,572.026 and 841.882 ms. The earlier timed-out read may have left the
+repository resident. These measurements occurred while the separate candidate
+build ran on the shared host: they are neither a cold recovery retry nor a warm
+reference-capacity result. The failed full-corpus record remains unchanged.
+
+The new dependency build uses a separate artifact-volume target directory and
+one Cargo build job; it does not replace any running server or recreate a
+workspace `target` directory. Release admission binds the Cargo lockfile and
+compiled release. The new binary therefore requires its own fresh prefix;
+old-release migration is unsupported and admission must not be bypassed to
+reuse the baseline's store. The original 10,000 identities and creation ACKs
+remain retained for baseline recovery diagnosis, not reseeded as a passing
+replacement.
 
 ### Diagnosis boundaries
 

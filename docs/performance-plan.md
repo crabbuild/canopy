@@ -12,7 +12,8 @@ and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ff
 That baseline stopped after 20 fully bound windows and one interrupted creation
 window when all three owners fenced. All 136 acknowledged creations and both
 critical Git fixtures passed fresh-state recovery. The full original corpus
-recheck remains in progress before further load; failed results stay in the record.
+recheck failed with a 30-second identity-read timeout; separate successful read
+probes do not turn that attempt into a pass. Failed results stay in the record.
 Earlier results do not establish the new candidate's density or latency.
 
 The [chunk-count follow-up](performance/2026-09-30-chunk-count.md) removes
