@@ -148,14 +148,25 @@ Git timings include client setup/validation where declared. Pack first-byte,
 bytes/s, CPU and provider cost still need independent measurements.
 
 The campaign samples each node, the proxy launcher and its own driver once per
-second with `ps`: RSS, cumulative process CPU seconds and lifetime CPU percentage.
+second with `ps`: RSS, cumulative process CPU seconds and raw CPU percentage.
 Resource boundary snapshots include preparation and drain, separately from the
 driver's arrival clock. Front/peer byte counters include HTTP headers and Git
 framing, not just payload. These observations can distinguish driver, proxy and
 server pressure; they do not measure RustFS VM CPU, S3 request cost, pack first-byte
-latency or per-payload-GiB CPU. Never label lifetime CPU percentage as interval CPU.
+latency or per-payload-GiB CPU. The current resource field
+`ps_lifetime_cpu_percent` is misnamed on macOS: its `ps` manual defines `%cpu` as a
+decaying average over up to a minute, not a lifetime or window average. Preserve
+the raw field but use differences of cumulative `cpu_seconds` for interval CPU;
+the running campaign's bound source is not changed mid-measurement.
 These process samples also exclude native Git child CPU, so they cannot support
 a complete server CPU-per-GiB claim.
+
+A separate read-only observer records dedicated RustFS container CPU/memory
+samples about every six seconds, beginning during full-corpus preflight. Its
+binding includes the observer digest, campaign PID, container ID and start time;
+errors and sampling gaps remain in `provider-samples.jsonl`. Docker's raw display
+units and rounding are retained. These container samples are not whole-VM CPU,
+S3 request cost or exact per-window wire-byte counts; `NetIO` is cumulative.
 
 `push_branch` reuses one commit and therefore measures ref publication, not fresh
 pack ingestion. `push_commit` clones prepared base objects locally, creates a new
