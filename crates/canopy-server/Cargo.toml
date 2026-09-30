@@ -15,11 +15,11 @@ axum = "0.8.9"
 base64 = "0.22"
 blake3 = "1.8"
 bytes = "1.11"
-cellule-app = { git = "https://github.com/crabbuild/cellule.git", rev = "70bd25f142f1976fdd63ffe60e46e15ae276ffdc" }
-cellule-host = { git = "https://github.com/crabbuild/cellule.git", rev = "70bd25f142f1976fdd63ffe60e46e15ae276ffdc" }
-cellule-ltx = { git = "https://github.com/crabbuild/cellule.git", rev = "70bd25f142f1976fdd63ffe60e46e15ae276ffdc", features = ["replica"] }
-cellule-runtime = { git = "https://github.com/crabbuild/cellule.git", rev = "70bd25f142f1976fdd63ffe60e46e15ae276ffdc" }
-cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "70bd25f142f1976fdd63ffe60e46e15ae276ffdc" }
+cellule-app = { git = "https://github.com/crabbuild/cellule.git", rev = "e07670e2348231ed401cc7280a47e3ab97596ffe" }
+cellule-host = { git = "https://github.com/crabbuild/cellule.git", rev = "e07670e2348231ed401cc7280a47e3ab97596ffe" }
+cellule-ltx = { git = "https://github.com/crabbuild/cellule.git", rev = "e07670e2348231ed401cc7280a47e3ab97596ffe", features = ["replica"] }
+cellule-runtime = { git = "https://github.com/crabbuild/cellule.git", rev = "e07670e2348231ed401cc7280a47e3ab97596ffe" }
+cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "e07670e2348231ed401cc7280a47e3ab97596ffe" }
 ed25519-dalek = "2"
 flate2 = "1.1"
 futures-core = "0.3"

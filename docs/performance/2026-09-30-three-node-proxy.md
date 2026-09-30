@@ -37,7 +37,7 @@ handshake overhead and transport buffers are separate from the chunk size.
 | Input | Current campaign |
 | --- | --- |
 | Canopy base | `origin/main` at `615a48d`, merged PR #14 |
-| Production equivalence | Production manifests, lockfile and crates match the previously tested `a62180e` tree |
+| Baseline source equivalence | The retained artifact's production manifests, lockfile and crates match the previously tested `a62180e` tree; the new dependency candidate below is separate |
 | Release server SHA-256 | `dac1ff8f0300c60e26f1b44a02479218379a68467ac740472314561183eb47b6` |
 | Cellule | `70bd25f142f1976fdd63ffe60e46e15ae276ffdc` |
 | RustFS release | `1.0.0-glibc`, registry index `sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858` |
@@ -52,6 +52,24 @@ The ARM64 manifest and image config are different digests from the
 multi-architecture index. A private anonymous Docker configuration avoids a
 stalled Desktop credential helper for public-image downloads; global Docker
 credentials were not changed. No authority check or TLS verification was disabled.
+
+## Prepare the next upstream candidate
+
+Cellule `origin/main` advanced during the running baseline. Canopy's manifests
+and six Cellule lockfile entries now select
+`e07670e2348231ed401cc7280a47e3ab97596ffe`. Dependency resolution and locked
+metadata validation passed without updating unrelated packages or creating a
+local Cargo target directory. Compilation and verification of this candidate
+remain open; the measurements in this document still use the retained
+`70bd25f` binary, not the new source pin.
+
+The intervening commits add [fenced route reuse and coalesced owner discovery](https://github.com/crabbuild/cellule/pull/32)
+and [single-enrollment-read follower append authorization](https://github.com/crabbuild/cellule/pull/31).
+Their relevance to the observed directory/latency failures is a hypothesis,
+not a measured fix. The live campaign's scripts, binary and provider configuration
+remain unchanged. CI verification can run independently; local compilation,
+fresh-state recovery and matched performance comparisons must follow the
+recorded baseline and produce their own artifact bindings.
 
 ## Retain failed setup and incomplete work
 

@@ -1,6 +1,13 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`, the fetched `origin/main` snapshot used for the [workspace and RustFS verification](performance/2026-09-30-workspace-rustfs.md). Earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results.
+It separates demonstrated behavior from proposed targets. The current Cellule
+dependency candidate is `e07670e2348231ed401cc7280a47e3ab97596ffe`, fetched from
+`origin/main` during the [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md#prepare-the-next-upstream-candidate).
+Its build, end-to-end and performance verification remain separate open gates.
+The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
+and running three-node baseline retain `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
+Earlier results do not establish the new candidate's density or latency.
 
 The [chunk-count follow-up](performance/2026-09-30-chunk-count.md) removes
 quadratic upload scans from command verification and records its verification
