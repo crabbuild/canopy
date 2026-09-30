@@ -2,7 +2,7 @@
 """Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata, Git v2 capabilities, stock-Git ref listing, clone, fetch, pull, unique-ref push or
+measures repository creation, metadata, Git v2 capabilities, stock-Git ref listing, clone, fetch, pull, unique-ref push or
 direct-basic LFS transfers. Seed and verify use stock Git for a declared corpus
 sample. Incremental workloads require an opt-in two-commit corpus. Production
 throughput still needs separate qualification.
@@ -146,6 +146,17 @@ def file_sha256(path):
         while block := source.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def canonical_repository_uuid(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        identifier = uuid.UUID(value)
+    except ValueError:
+        return False
+    return (str(identifier) == value and identifier.variant == uuid.RFC_4122
+            and identifier.version is not None and 1 <= identifier.version <= 8)
 
 
 def seed(args, client, token):
@@ -461,6 +472,96 @@ def percentiles(values):
             for name, q in (("p50", .5), ("p95", .95), ("p99", .99), ("max", 1))}
 
 
+def creation_runs(paths, manifest_path):
+    """Validate the complete, digest-bound arrival ledger before recovery I/O."""
+    manifest_digest = file_sha256(manifest_path)
+    runs, identifiers, names, identities = [], set(), set(), set()
+    total = 0
+    for path in paths:
+        with path.open("rb") as source:
+            raw = source.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("creation report exceeds 2 MiB")
+        report = json.loads(raw)
+        if not isinstance(report, dict) or report.get("version") != 1 or report.get("operation") != "create":
+            raise ValueError("creation verification requires a create report")
+        run_id, scheduled, outcomes = report.get("create_run_id"), report.get("scheduled"), report.get("outcomes")
+        failed = report.get("failed_arrivals")
+        if (not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+                or run_id in identifiers or report.get("manifest_sha256") != manifest_digest):
+            raise ValueError("creation report has an invalid identity or provenance")
+        identifiers.add(run_id)
+        if (not isinstance(scheduled, int) or isinstance(scheduled, bool) or not 1 <= scheduled <= 1_000_000
+                or not isinstance(outcomes, dict)
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in outcomes.values())
+                or sum(outcomes.values()) != scheduled
+                or not isinstance(failed, int) or isinstance(failed, bool)
+                or failed != scheduled - outcomes.get("ok", 0)):
+            raise ValueError("creation report has inconsistent arrivals")
+        total += scheduled
+        if total > 1_000_000:
+            raise ValueError("creation verification exceeds one million arrivals")
+        samples_path = path.with_suffix(".samples.jsonl")
+        if file_sha256(samples_path) != report.get("samples_sha256"):
+            raise ValueError("creation samples have changed")
+        seen, observed, acknowledged, digest = set(), Counter(), [], hashlib.sha256()
+        with samples_path.open("rb") as samples:
+            for line in iter(lambda: samples.readline(16 * 1024 + 1), b""):
+                if len(line) > 16 * 1024:
+                    raise ValueError("creation sample exceeds 16 KiB")
+                digest.update(line)
+                sample = json.loads(line)
+                if not isinstance(sample, dict):
+                    raise ValueError("creation sample must be an object")
+                sequence, result = sample.get("sequence"), sample.get("result")
+                if (not isinstance(sequence, int) or isinstance(sequence, bool)
+                        or not 0 <= sequence < scheduled or sequence in seen
+                        or not isinstance(result, str) or result not in outcomes
+                        or sample.get("created_name") != f"create-{run_id}-{sequence:07d}"):
+                    raise ValueError("creation sample has an invalid arrival")
+                seen.add(sequence)
+                observed[result] += 1
+                if result == "ok":
+                    identifier = sample.get("created_repository_id")
+                    if (not canonical_repository_uuid(identifier)
+                            or identifier in identities or sample["created_name"] in names):
+                        raise ValueError("creation receipt has an invalid or duplicate repository identity")
+                    names.add(sample["created_name"])
+                    identities.add(identifier)
+                    acknowledged.append((sample["created_name"], identifier))
+        if (digest.hexdigest() != report["samples_sha256"] or len(seen) != scheduled
+                or observed != Counter(outcomes)):
+            raise ValueError("creation samples do not match the report")
+        runs.append((report, acknowledged, hashlib.sha256(raw).hexdigest()))
+    if not identities:
+        raise ValueError("creation verification requires an acknowledged arrival")
+    return runs
+
+
+def verify_creations(args, client, token):
+    corpus(args.manifest)
+    if args.output.exists():
+        raise ValueError("creation verification requires a new output")
+    runs = creation_runs(args.reports, args.manifest)
+    count = 0
+    for _, acknowledged, _ in runs:
+        for name, identifier in acknowledged:
+            status, body = client.request(f"/api/repositories/{name}", request_id=str(uuid.uuid4()))
+            if status != 200:
+                raise RuntimeError(f"acknowledged repository recovery failed with HTTP {status}: {name}")
+            decoded = json.loads(body)
+            if not isinstance(decoded, dict) or decoded.get("repository_id") != identifier or decoded.get("name") != name:
+                raise RuntimeError(f"acknowledged repository recovery differs: {name}")
+            count += 1
+    result = {"version": 1, "verified_creations": count,
+              "manifest_sha256": file_sha256(args.manifest),
+              "creation_report_sha256": [digest for _, _, digest in runs],
+              "unacknowledged_arrivals_not_asserted": sum(report["failed_arrivals"] for report, _, _ in runs),
+              "owner_recovery": "not established by this verifier; caller must record owner restart evidence"}
+    save(args.output, result)
+    return result
+
+
 def prepare_incremental(active, clients, token, work_dir, timeout):
     """Stage base-only Git repositories before the arrival clock starts."""
     root = work_dir / "incremental-templates"
@@ -537,11 +638,13 @@ def push_branch(url, source, reference, token, timeout, request_id):
 
 
 def measure(args, client, token):
+    driver_sha256 = file_sha256(Path(__file__))
     clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
     incremental = args.operation in ("incremental_fetch", "incremental_pull")
     git_read = args.operation in ("ls_remote", "clone", "cold_fetch") or incremental
     git_write = args.operation == "push_branch"
+    creation = args.operation == "create"
     git_operation = git_read or git_write
     lfs_download = args.operation == "lfs_download"
     lfs_upload = args.operation == "lfs_upload"
@@ -554,7 +657,7 @@ def measure(args, client, token):
                 if incremental else
                 [entry for entry in manifest["repositories"] if entry["commit"] is not None]
                 if git_read else manifest["repositories"])
-    if args.active_repositories > len(eligible):
+    if not creation and (args.active_repositories is None or args.active_repositories > len(eligible)):
         raise ValueError("active repository count exceeds eligible corpus")
     total = math.ceil(args.duration * args.rate)
     if total > 1_000_000:
@@ -567,6 +670,7 @@ def measure(args, client, token):
             raise ValueError("stock-Git runs require --work-dir")
         args.work_dir.mkdir(parents=True, exist_ok=False)
     push_run_id = uuid.uuid4().hex if git_write else None
+    create_run_id = uuid.uuid4().hex if creation else None
     lfs_run_id = uuid.uuid4().hex if lfs_upload else None
     lfs_tail = (hashlib.shake_256(lfs_run_id.encode()).digest(max(0, args.lfs_bytes - 32))
                 if lfs_upload else None)
@@ -581,7 +685,7 @@ def measure(args, client, token):
         git("commit", "-m", "Benchmark fixture", cwd=source, token=token)
         push_commit = git("rev-parse", "HEAD", cwd=source, token=token)
     generator = random.Random(args.seed)
-    active = generator.sample(eligible, args.active_repositories)
+    active = [] if creation else generator.sample(eligible, args.active_repositories)
     templates = {}
     setup_started = time.monotonic()
     if incremental:
@@ -591,6 +695,8 @@ def measure(args, client, token):
     # Skew has a declared hot tenth, not an implicit warm-cache assumption.
     hot = active[:max(1, len(active) // 10)]
     counts, latencies, service_times, dispatch_times = Counter(), [], [], []
+    completed_in_window = 0
+    created_identities = set()
     ingress_counts = [Counter() for _ in clients]
     ingress_latencies = [[] for _ in clients]
     ingress_service_times = [[] for _ in clients]
@@ -600,8 +706,20 @@ def measure(args, client, token):
     started_at = datetime.now(timezone.utc).isoformat()
     with samples_path.open("x") as samples:
         def record(sample):
+            nonlocal completed_in_window
             with lock:
+                if creation and sample["result"] == "ok":
+                    identifier = sample["created_repository_id"]
+                    if identifier in created_identities:
+                        sample["result"] = "invalid_response"
+                        sample["receipt_error"] = "duplicate_created_identity"
+                        sample["created_repository_id"] = None
+                    else:
+                        created_identities.add(identifier)
                 counts[sample["result"]] += 1
+                if (sample["result"] == "ok" and
+                        sample.get("completion_offset_seconds", math.inf) <= args.duration):
+                    completed_in_window += 1
                 ingress_counts[sample["ingress_index"]][sample["result"]] += 1
                 if sample["elapsed_ms"] is not None:
                     latencies.append(sample["elapsed_ms"])
@@ -618,8 +736,25 @@ def measure(args, client, token):
             dispatched = time.monotonic()
             result = "transport_error"
             uploaded_oid = None
+            created_id = None
+            created_name = f"create-{create_run_id}-{sequence:07d}" if creation else None
             try:
-                if args.operation == "metadata":
+                if creation:
+                    status, body = ingress.request("/api/repositories",
+                        {"name": created_name}, request_id=request_id)
+                    valid = False
+                    if status == 200:
+                        try:
+                            decoded = json.loads(body)
+                            identifier = decoded["repository_id"]
+                            valid = (decoded["name"] == created_name and
+                                     isinstance(decoded["owner"], str) and
+                                     re.fullmatch(r"[A-Za-z0-9_-]+", decoded["owner"]) is not None and
+                                     canonical_repository_uuid(identifier))
+                            created_id = identifier if valid else None
+                        except (ValueError, KeyError, TypeError):
+                            pass
+                elif args.operation == "metadata":
                     status, body = ingress.request(f"/api/repositories/{entry['name']}", request_id=request_id)
                     decoded = json.loads(body) if status == 200 else None
                     valid = isinstance(decoded, dict) and decoded.get("repository_id") == entry["repository_id"]
@@ -661,6 +796,8 @@ def measure(args, client, token):
                 finished = time.monotonic()
                 record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "ingress_index": ingress_index, "result": result,
                         "lfs_oid": uploaded_oid,
+                        "created_name": created_name, "created_repository_id": created_id,
+                        "completion_offset_seconds": finished - started,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
                         "dispatch_delay_ms": (dispatched - scheduled) * 1000})
@@ -673,19 +810,30 @@ def measure(args, client, token):
                 if delay > 0:
                     time.sleep(delay)
                 population = hot if args.distribution == "skewed" and generator.random() < .9 else active
-                entry = generator.choice(population)
+                entry = {"repository_id": None} if creation else generator.choice(population)
                 if slots.acquire(blocking=False):
                     executor.submit(execute, sequence, entry, scheduled)
                 else:
                     record({"sequence": sequence, "repository_id": entry["repository_id"],
                             "ingress_index": sequence % len(clients),
+                            "created_name": f"create-{create_run_id}-{sequence:07d}" if creation else None,
+                            "created_repository_id": None,
                             "result": "driver_busy", "elapsed_ms": None})
+            # Observe the full offered-load window even when the last request
+            # completes before its final inter-arrival interval expires.
+            remaining = started + args.duration - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
     elapsed = time.monotonic() - started
     result = {"version": 1, "started_at_utc": started_at,
+              "driver_sha256": driver_sha256,
               "corpus_repositories": len(manifest["repositories"]),
-              "eligible_repositories": len(eligible),
-              "active_repositories": len(active), "distribution": args.distribution,
+              "eligible_repositories": None if creation else len(eligible),
+              "active_repositories": None if creation else len(active), "distribution": args.distribution,
+              "acknowledged_created_repositories": len(created_identities) if creation else None,
               "operation": args.operation, "seed": args.seed,
+              "create_run_id": create_run_id,
+              "creation_population": "unique new names, not selected corpus identities" if creation else None,
               "git_discovery_kind": ("v2_capabilities_only" if args.operation == "refs" else
                                      "v2_ls_refs_main_tip" if args.operation == "ls_remote" else None),
               "offered_rps": args.rate, "schedule_seconds": args.duration,
@@ -702,6 +850,10 @@ def measure(args, client, token):
                              "service_ms": percentiles(ingress_service_times[index])}
                             for index, outcomes in enumerate(ingress_counts)],
               "failed_arrivals": total - counts["ok"],
+              "successful_rps_including_drain": round(counts["ok"] / elapsed, 3),
+              "successful_completions_in_schedule_window": completed_in_window,
+              "successful_rps_in_schedule_window": round(completed_in_window / args.duration, 3),
+              "error_fraction": (total - counts["ok"]) / total,
               "scheduled_latency_ms": percentiles(latencies),
               "service_ms": percentiles(service_times), "dispatch_delay_ms": percentiles(dispatch_times),
               "latency_population": "all completed HTTP or stock-Git attempts, including errors and client validation; driver_busy arrivals are counted failures without fabricated latency",
@@ -754,10 +906,14 @@ def main():
     writes.add_argument("--work-dir", type=Path, required=True)
     writes.add_argument("--output", type=Path, required=True)
     writes.add_argument("--git-timeout", type=positive, default=120)
+    creations = commands.add_parser("verify-creations", help="check every acknowledged created repository")
+    creations.add_argument("--report", type=Path, action="append", dest="reports", required=True)
+    creations.add_argument("--output", type=Path, required=True)
     run = commands.add_parser("run")
-    run.add_argument("--active-repositories", type=positive, required=True)
+    run.add_argument("--active-repositories", type=positive,
+                     help="required except for creation, which targets unique new names")
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
-    run.add_argument("--operation", choices=("metadata", "refs", "ls_remote", "clone", "cold_fetch",
+    run.add_argument("--operation", choices=("create", "metadata", "refs", "ls_remote", "clone", "cold_fetch",
                                            "incremental_fetch", "incremental_pull", "push_branch",
                                            "lfs_download", "lfs_upload"),
                      default="metadata")
@@ -775,6 +931,8 @@ def main():
         parser.error("CANOPY_GIT_TOKEN is required")
     if args.command == "run" and args.concurrency > 256:
         parser.error("driver concurrency is limited to 256")
+    if args.command == "run" and args.operation != "create" and args.active_repositories is None:
+        parser.error("--active-repositories is required for non-creation operations")
     if args.command == "verify" and args.concurrency > 32:
         parser.error("verify concurrency is limited to 32")
     if args.command != "run" and args.additional_base_url:
@@ -784,6 +942,7 @@ def main():
     try:
         client = clients if args.command == "run" else clients[0]
         result = {"seed": seed, "verify": verify, "verify-writes": verify_writes,
+                  "verify-creations": verify_creations,
                   "run": measure}[args.command](args, client, token)
         print(json.dumps(result, indent=2))
     finally:
