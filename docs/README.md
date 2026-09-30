@@ -11,6 +11,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | Understand the server and try a local deployment | [Project README](../README.md) and [bounded deployment](../deploy/README.md) | Configuration, runtime commands, resource boundary and recovery procedures |
 | Decide which Git operations work | [Git compatibility](git-compatibility.md) | Stock-client evidence, restrictions and provider qualification commands |
 | Implement an API or storage change | [Persisted contracts](contracts.md) | Identity, authorization, protocol, durability and HTTP behavior |
+| Find the right Rust crate | [Rust workspace](workspace.md) | Crate ownership, dependencies and build commands |
 | Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
 | Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
 | Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |

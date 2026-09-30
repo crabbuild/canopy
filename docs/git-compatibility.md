@@ -155,7 +155,7 @@ proof of unlimited capacity.
 
 `tests/multi_server/compatibility.rs` exercises the working transport matrix
 above through real Git processes, HTTP and Cell persistence. The existing
-default-branch test now uses a Unicode branch. `src/refs.rs` compares the shared
+default-branch test now uses a Unicode branch. `crates/canopy-server/src/refs.rs` compares the shared
 name validator against `git check-ref-format` for ASCII restrictions and Unicode.
 The existing `Verify` workflow runs these tests through `cargo test --locked`.
 Bulk tests additionally cover 1,001 distinct graph roots, namespace conflicts
