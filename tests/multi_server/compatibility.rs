@@ -77,6 +77,45 @@ async fn stock_git_history_refs_and_shallow_fetch_survive_fresh_disk_restore() -
         run_git(Some(&source), &["branch", branch]).await?;
     }
     run_git(Some(&source), &["-c", AUTH, "push", "--mirror", &url]).await?;
+    // All clones target one cold object cache at once. They must not race to
+    // publish duplicate loose objects or return incomplete packs.
+    let concurrent: Vec<_> = (0..4)
+        .map(|index| workspace.path().join(format!("concurrent-{index}")))
+        .collect();
+    tokio::try_join!(
+        async {
+            run_git(
+                None,
+                &["-c", AUTH, "clone", &url, path_str(&concurrent[0])?],
+            )
+            .await
+        },
+        async {
+            run_git(
+                None,
+                &["-c", AUTH, "clone", &url, path_str(&concurrent[1])?],
+            )
+            .await
+        },
+        async {
+            run_git(
+                None,
+                &["-c", AUTH, "clone", &url, path_str(&concurrent[2])?],
+            )
+            .await
+        },
+        async {
+            run_git(
+                None,
+                &["-c", AUTH, "clone", &url, path_str(&concurrent[3])?],
+            )
+            .await
+        },
+    )?;
+    for clone in &concurrent {
+        run_git(Some(clone), &["fsck", "--strict", "--full"]).await?;
+        assert_eq!(tokio::fs::read(clone.join("file")).await?, b"revision 3\n");
+    }
     for protocol in ["0", "1", "2"] {
         let clone = workspace.path().join(format!("clone-{protocol}"));
         run_git(

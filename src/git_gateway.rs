@@ -190,10 +190,13 @@ impl GitGateway {
             if !request.authenticated {
                 return Err(GatewayError::Unauthorized);
             }
-            let _push = self.push.lock().await;
             let request = self.receive(request, None, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
             let digest = request_digest(&request).await?;
+            // Upload spooling uses a private, budgeted scratch file. Serialize
+            // the push-ID check, decode, native Git work and publication, but
+            // do not let one slow client block another client's upload.
+            let _push = self.push.lock().await;
             if self.repository.begin_push(id, actor, digest).await? {
                 return Ok(http_body(with_push_id(
                     self.repository.completed_response(id).await?,

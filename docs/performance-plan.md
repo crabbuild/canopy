@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `47a302b79962ee16c698e121315cf4e85ec49549`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -21,9 +21,20 @@ flowchart LR
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Is 10,000 repositories per node a measured capacity? | No; it is a proposed reference-node target | [Required outcome](#required-outcome) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | No; a run on an older Cellule revision missed renewal coverage for nine Cells, and the current pin needs a repeat | [Observed idle renewal ceiling](#observed-idle-renewal-ceiling) |
+| Is idle ownership proven at 1,000 active Cells? | Not on a real store; the current pin passed 1,000 in-memory Cells, but its RustFS run fenced owners beyond 800 | [Current scheduler and provider observations](#current-pin-scheduler-and-provider-observations) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
+
+The current Cellule pin dispatches due owner renewals oldest-first and refills
+the bounded 32-task renewal window when I/O completes. A 100-ms scan rebuilds
+pending candidates, removing stale generations and departed Cells. This removes
+the earlier 320-starts/s *scheduler* ceiling; it does not lower the one-control-
+update-per-active-Cell cost or prove that a provider can sustain the required
+update rate. Repeat the real-store idle coverage gate before raising the active
+Cell limit or claiming 1,000- or 10,000-Cell residency. This dependency and
+lockfile change also changes Canopy's compiled release digest; test against a
+fresh store prefix or use the documented maintenance upgrade path for an
+existing deployment.
 
 ## Recorded large-transfer qualification
 
@@ -40,6 +51,12 @@ signed push options, signed SSH, bulk refs, and filtered clones. Cold fetch
 preparation hydrated 901 reachable blobs (5,966,921,728 bytes) in about 109
 seconds. This is functional size and recovery proof on the local provider; it
 does not establish production-provider latency or repository density.
+
+The current PR's GitHub-hosted size gate has not repeated that pass. RustFS
+returned a write-quorum HTTP 500 while staging the large Git blob, and the
+runner then reported `No space left on device`. The gate now checks for at least
+40 GiB free on both its scratch and provider volumes before uploading; it still
+requires the full non-sparse Git and LFS round trip on a suitable runner.
 
 ## Required outcome
 
@@ -82,6 +99,20 @@ branch adds its blob and leaves the deleted branch absent. This runs for v0/v2
 over both transports, and establishes reduced preparation, not a latency target.
 
 Preparation logs report newly hydrated blob counts/bytes and elapsed time.
+Concurrent fetches of one repository now share the immutable object cache
+without holding its gateway mutex for the entire preparation. Verified loose
+objects publish atomically; writers for the same object ID converge while
+different IDs may hydrate in parallel. Writer locks allocate only when an object
+cache first hydrates an object, not for each disposable ref snapshot. A cold
+concurrent stock-Git clone test
+checks complete packs and `git fsck`. This removes one serialization point;
+it does not establish hot-repository throughput or a 10,000-repository result.
+Push upload spooling uses private, budgeted scratch files and can now proceed
+concurrently for one repository. The push transaction—from idempotency check
+and gzip decoding through native Git execution and durable publication—remains
+serialized per repository. A stalled upload regression test checks that a
+second push can finish receiving before the first upload completes; it does
+not establish parallel publication capacity.
 The native walk still traverses requested history on warm requests; native Git's
 own traversal memory is not bounded by the Rust batch size. Structural hydration
 pages certified edges and retains a visited set proportional to the requested
@@ -186,10 +217,21 @@ permits it.
   object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
-- Eight shared heavy-request slots, a four-slot ceiling per account, and the
-  bounded Linux profile establish containment. They do not establish latency, throughput or thousands of active
-  repositories. The profile's tmpfs charges cache bytes to memory; density
-  qualification needs a separate bounded NVMe-backed profile.
+- Demand-driven `release_idle_cell` and automatic pressure shedding share
+  Cellule's two-movements-per-second, two-in-flight budget. A successful
+  release also deletes the local SQLite state. At 100 active slots, a
+  first-pass scan of 10,000 distinct locally owned repositories requires at
+  least 9,900 releases: the budget alone implies at least 4,950 seconds
+  (82.5 minutes), before restore, Git work or network time. This is a lower
+  bound from code, not a measured scan. Bursts can instead receive a capacity
+  error after Canopy's single one-second retry. Do not interpret the 10,000
+  identity target as a uniform-access pass until this path is qualified.
+- Eight shared heavy-request slots and four active and four pending slots per
+  account prevent one account from filling every transfer wait position. The
+  bounded Linux profile establishes containment, not latency, throughput or
+  thousands of active repositories. Its tmpfs charges cache bytes to memory;
+  density qualification needs a separate bounded NVMe-backed profile and
+  mixed-account latency measurements.
 - The Linux profile sets both process descriptor limits to 16,384. Its checker
   requires eight per admitted Repository/Directory Cell plus 1,024 headroom;
   this is a reservation check, not measured aggregate process capacity.
@@ -249,10 +291,13 @@ Acceptance: paused ownership lookup and release do not block an unrelated warm
 repository's metadata or stock Git discovery. Concurrent requests for the same
 cold repository converge on one serving entry. All pins, denied/lost release,
 cleanup failure, cancellation and shutdown tests continue to pass. The lock
-isolation part is implemented. The initial density driver below measures metadata
-and Git v2 discovery, with stock Git sampling and full identity recovery checks.
-Transition queue/service timings are logged. Other workload classes, comprehensive
-resource metrics and independent load-generator deployment remain open.
+isolation part is implemented. The automated bounded-container run still measures
+metadata and Git v2 discovery, with stock Git sampling and full identity recovery
+checks. The standalone driver can schedule clone, cold/incremental fetch, pull,
+unique-ref push and direct-basic LFS transfers, but those workloads have not
+been qualified at target scale.
+Transition queue/service timings are logged. Comprehensive resource metrics and
+independent load-generator deployment remain open.
 
 ### 2. Measured active-Cell admission
 
@@ -358,6 +403,12 @@ count dropped arrivals and timeouts as failures, never omit them from results.
 
 Run skewed and uniform distributions across 10,000 identities, each with 100,
 500 and 1,000 active repositories. Vary simultaneous pack workers independently.
+For uniform access, report successful releases per second, movement-budget
+rejections, retry outcomes and cold-admission failures. A future demand-driven
+release budget must retain generation checks, settled-work preflight and
+authoritative release, while keeping automatic pressure shedding paced and
+preserving bounded memory/disk use. Raise no shared movement limit solely to
+make a benchmark pass.
 Report cold activation latency by database size, local cache state and restore
 bytes. Report clone/fetch first-byte latency, throughput, CPU per transferred GiB
 and object-store cost. Write latency includes durable acknowledgement.
@@ -407,6 +458,136 @@ The default sample contains three one-commit repositories; the remainder are
 empty. This is a density smoke corpus, not realistic large-history qualification.
 An interrupted seed leaves an explicitly incomplete manifest and cannot be used
 as a complete corpus. Names have a unique prefix; the manifest records them.
+The default seed remains a version-1, one-commit corpus. Use
+`seed --incremental-fixture` with a new manifest and storage prefix to create
+version 2: each populated repository has a `benchmark-base` ref at its first
+commit and `main` one commit ahead. `verify` accepts both versions.
+
+For a multi-gateway read run, seed the documented 10,000-repository corpus,
+start two nodes against the same deployment, and pass each ingress to `run`:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-corpus.json \
+  seed --repositories 10000 --populated 100 \
+  --work-dir /path/to/canopy-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 1000 --distribution uniform \
+  --operation refs --rate 20 --duration 120 --concurrency 32 \
+  --output /path/to/canopy-two-gateway-refs.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 100 --distribution skewed \
+  --operation clone --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-client-clone-scratch \
+  --output /path/to/canopy-two-gateway-clones.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 1000 --distribution uniform \
+  --operation push_branch --rate 5 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-client-push-source \
+  --output /path/to/canopy-two-gateway-pushes.json
+```
+
+The run assigns scheduled requests to ingresses by sequence number and records
+each ingress's outcomes and latency percentiles. Compare the same workload with
+one and two ingresses and collect node, object-store, and client resource metrics
+separately. `clone` measures a stock-Git full clone and verifies the seeded commit
+and README hash. `cold_fetch` initializes an empty bare client and fetches
+`refs/heads/main`; substitute it for `clone` with a separate fresh client work
+directory and report. Both select only populated repositories, so the sample
+above exercises 100 of the 10,000 identities. Disposable client checkouts are
+removed after each attempt; the caller-supplied work directory itself remains.
+Client Git and disk work is included in latency. `push_branch` creates one local
+commit and pushes it to a unique `refs/heads/canopy-benchmark/<run-id>/<sequence>`
+ref for each arrival. The report records the run ID and commit; pushed refs
+remain in the disposable corpus for inspection and must be included in its
+eventual cleanup. The first push to a repository transfers objects, while later
+pushes of the same commit mainly measure ref publication. Source commit setup is
+outside the scheduled interval. Interpret those as different workloads. The
+version-1 runs above do not measure incremental fetch, pull, LFS, or
+large-history throughput.
+
+For an incremental fetch and pull run, use a separate version-2 corpus. The
+driver first fetches each selected base ref into a local bare template, outside
+the arrival clock, then gives every arrival a fresh client that shares that
+base object store. `incremental_fetch` fetches `main` into a bare client;
+`incremental_pull` fast-forwards a checked-out client and verifies the new
+file. Use distinct fresh work directories and output paths:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  seed --repositories 10000 --populated 100 --incremental-fixture \
+  --work-dir /path/to/canopy-incremental-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  run --active-repositories 100 --operation incremental_fetch \
+  --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-incremental-fetch-clients \
+  --output /path/to/canopy-incremental-fetch.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-incremental-corpus.json \
+  run --active-repositories 100 --operation incremental_pull \
+  --rate 2 --duration 120 --concurrency 8 \
+  --work-dir /path/to/new-incremental-pull-clients \
+  --output /path/to/canopy-incremental-pull.json
+```
+
+Template preparation is real server traffic and can warm both gateways; its
+elapsed time is recorded separately. These runs measure one-commit incremental
+transfers, not large histories or cold-cache startup. Client-side shared clone
+setup is included in each attempt's latency. Report node and generator resource
+usage alongside the latency distribution.
+
+For LFS basic-transfer load, seed a separate disposable corpus with a declared
+body size, then run both read and write workloads through the two ingresses:
+
+```bash
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  seed --repositories 10000 --populated 100 --lfs-fixture-bytes 4194304 \
+  --work-dir /path/to/canopy-lfs-seed
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  run --active-repositories 100 --operation lfs_download \
+  --rate 2 --duration 120 --concurrency 8 \
+  --output /path/to/canopy-lfs-download.json
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-lfs-corpus.json \
+  run --active-repositories 1000 --operation lfs_upload \
+  --lfs-bytes 1048576 --rate 2 --duration 120 --concurrency 8 \
+  --output /path/to/canopy-lfs-upload.json
+```
+
+Seed stores one LFS object per populated repository and `verify` checks its
+size and SHA-256. Download attempts stream and hash the full response. Upload
+attempts use unique object IDs; their IDs are in the sample file and the
+objects remain in the disposable corpus. The driver uses Canopy's direct basic
+PUT/GET endpoints, not a stock `git-lfs` batch/checkout flow. It limits fixture
+and per-upload bodies to 16 MiB and nominal concurrent payload bytes to
+256 MiB; that is not a process-memory ceiling. The separate large-transfer
+qualification covers multi-GiB objects. As with
+Git, client CPU/disk and network placement must be reported to attribute
+throughput.
 
 Run `--operation refs` for Git v2 discovery or `--distribution skewed` for 90%
 of requests to the selected working set's first tenth. A fixed seed determines
@@ -414,13 +595,14 @@ working-set selection and offered arrivals. The driver never calls a working set
 warm automatically: its count is not the server's resident count. Prewarm a set
 that fits the node before claiming warm latency, or label the run as cold/mixed.
 
-Each worker reuses an HTTP connection. Arrivals follow a fixed clock schedule;
+Each HTTP worker reuses a connection; stock-Git attempts use fresh client
+repositories. Arrivals follow a fixed clock schedule;
 end-to-end latency starts at the scheduled instant and includes driver dispatch
 delay and complete response consumption. A bounded semaphore limits outstanding
 requests. Saturation records `driver_busy` instead of accumulating an unbounded
-client queue. HTTP errors and transport failures are recorded without retries.
-`--timeout` bounds individual socket operations; it is not a whole-request
-deadline. All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
+client queue. HTTP and Git failures are recorded without retries. `--timeout`
+bounds individual HTTP socket operations; `--git-timeout` bounds each Git process.
+All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
 error totals, scheduled/service/dispatch latency percentiles and the manifest
 SHA-256. `started_at_utc` anchors the run to server logs; each sample's
 scheduled offset is `sequence / offered_rps`, while latency continues to use the
@@ -428,14 +610,16 @@ monotonic clock. Dropped arrivals have no fabricated zero latency. Any failure y
 exit status 1 after reports are written. Latency percentiles include completed
 errors; always read them alongside error/drop counts.
 
-The driver unit test runs a real HTTP server that deliberately rejects requests:
+The driver tests run a real HTTP server that deliberately rejects requests and
+stock Git against a disposable local bare repository:
 
 ```sh
 python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 ```
 
-It verifies concurrency bounds, complete scheduled-outcome accounting, absence
-of retries, queue-delay inclusion and credential exclusion from the report.
+They verify concurrency bounds, complete scheduled-outcome accounting, absence
+of retries, queue-delay inclusion, version-1/version-2 corpus and Git
+tip/content checks, and credential exclusion from the report.
 
 ## Measurement history
 
@@ -1402,6 +1586,12 @@ Retry-After response, other-account progress and disconnect recovery; a unit
 test saturates pending admission, exercises another account and cancels a waiter.
 State is bounded by active/pending work, not repository or account history.
 
+The current admission implementation also caps pending positions at four per
+account, leaving shared wait positions for other accounts. This is a scheduling
+bound, not a throughput result. Measure it under mixed-account Git and LFS
+traffic before treating it as a fairness guarantee at the 10,000-repository
+reference target.
+
 Real-provider run `canopy-transfer-fairness-013e78122a08` used release binary
 `7e5f0a173cebd77aa65cbbe646f2566b75f462875653381f72a3795ddab48b57`
 (base `549f775` plus this patch), macOS arm64 and RustFS
@@ -1448,6 +1638,15 @@ cargo run --release --locked --example benchmark_idle -- \
   s3://disposable-bucket/idle-qualification \
   "$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f/idle-qualification" \
   0,100,500,1000 30
+```
+
+For a scheduler-only diagnostic, use `memory:///` with a different new output
+directory. The report labels this provider as in-memory; a passing result
+cannot replace the S3-compatible gate or establish provider throughput.
+
+```bash
+cargo run --locked --example benchmark_idle -- \
+  memory:/// /tmp/canopy-idle-memory-diagnostic 100,500,1000 30
 ```
 
 Each phase waits four seconds after foreground work, then measures without HTTP
@@ -1507,12 +1706,40 @@ The dispatch ceiling is source-backed; exact starvation causality still needs
 a controlled scheduler regression. The existing
 `idle_owner_progress_is_renewed_without_a_per_cell_task` test covers one Cell.
 
-Before raising active density, implement and qualify these runtime changes:
+#### Current pin: scheduler and provider observations
 
-1. Dispatch the oldest eligible overdue renewal first, with bounded concurrency
-   and capacity refill after completion. Avoid a full Cell scan per completion;
-   use a deadline index with generation checks and bounded stale-entry cleanup.
-2. Preserve coordination admission, publisher exclusivity, node lease checks,
+The current Cellule pin is `47a302b`. A debug Canopy example on shared macOS
+arm64 measured these SQL-only, otherwise idle windows; each active count also
+includes the Directory Cell. The in-memory run passed its final graceful drain,
+fresh-workspace restart, released-only window, and three identity restorations.
+The beta.8 RustFS container was capped at 2 CPUs and 4 GiB.
+
+| Store | Active repository Cells | Window | Control updates/s | Distinct Cells updated | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| In-memory | 100 | 30 s | 32.629 | 101/101 | Passed |
+| In-memory | 500 | 30 s | 161.616 | 501/501 | Passed |
+| In-memory | 1,000 | 30 s | 326.830 | 1,001/1,001 | Passed |
+| RustFS beta.8 | 100 | 10 s | 32.793 | 101/101 | Passed |
+| RustFS beta.8 | 500 | 10 s | 163.759 | 501/501 | Passed |
+
+All listed windows had zero failed PUTs and no root changes. The in-memory
+1,000-Cell window exceeds the former 320-starts/s tick ceiling, isolating the
+scheduler improvement. It does **not** qualify real-store density. During the
+beta.8 run, repository creation stopped advancing at 812 after many Cell
+renewals returned `Fenced`; the process did not complete the 1,000-Cell window
+or its graceful shutdown and was terminated for diagnosis. A basic provider
+bucket check still responded. This is a failed/incomplete real-store gate, not
+proof of a single root cause; node-lease refresh, provider latency and shutdown
+drain need investigation before increasing active density.
+
+The current Cellule pin addresses the dispatch-order and refill mechanism with
+a sorted scan every 100 ms. Before raising active density, qualify the change:
+
+1. Measure scan and sort CPU at 1,000 through 10,000 active Cells. The current
+   pending vector is rebuilt each tick and bounded by active count; use a
+   deadline index only if measured scan cost warrants the extra invalidation
+   and generation bookkeeping.
+2. Verify coordination admission, publisher exclusivity, node lease checks,
    effect/generation fencing and shutdown behavior. Foreground publication,
    compaction, transfer and release share these invariants.
 3. Prove progress above the old dispatch ceiling, including slow storage,

@@ -2,15 +2,35 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
 import uuid
 
+MIN_FREE_BYTES = 40 * 1024**3
+
 
 def run(*args, **kwargs):
     result = subprocess.run(args, check=True, capture_output=True, text=True, **kwargs)
     return (result.stdout + (result.stderr if args[:2] == ("docker", "logs") else "")).strip()
+
+
+def require_size_capacity(directory: Path, container: str):
+    """Check both scratch and provider volumes before the non-sparse 5 GiB gate."""
+    scratch_free = shutil.disk_usage(directory).free
+    output = run("docker", "exec", container, "df", "-B1", "/data")
+    try:
+        provider_free = int(output.splitlines()[-1].split()[3])
+    except (IndexError, ValueError) as error:
+        raise RuntimeError("could not read free space on RustFS /data") from error
+    if min(scratch_free, provider_free) < MIN_FREE_BYTES:
+        gib = 1024**3
+        raise RuntimeError(
+            "large Git/LFS qualification requires at least 40 GiB free on both "
+            f"scratch and RustFS /data (scratch={scratch_free / gib:.1f} GiB, "
+            f"provider={provider_free / gib:.1f} GiB); use a larger runner/volume"
+        )
 
 
 def main():
@@ -77,6 +97,8 @@ def main():
                 time.sleep(1)
             else:
                 raise RuntimeError("RustFS fixture did not become ready")
+            if not args.provider_only:
+                require_size_capacity(directory, name)
             env["CANOPY_TEST_S3_ENDPOINT"] = endpoint
             env["CANOPY_TEST_S3_BUCKET"] = "canopy-size"
             tests = [] if args.provider_only else [

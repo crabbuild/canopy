@@ -269,6 +269,40 @@ impl Fixture {
         run_git(Some(&clone), &["fsck", "--full"]).await?;
         Ok(())
     }
+
+    async fn make_original_cold(&self) -> Result {
+        // A freshly pushed Cell can retain publication work briefly, so the
+        // first capacity eviction need not choose it. Keep the comparison
+        // repository warm and request bounded additional identities until the
+        // fixture actually reaches the cold-restore precondition.
+        for attempt in 0..20 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                self.client
+                    .get(format!("http://{}/api/repositories/third", self.address))
+                    .bearer_auth("local-test-token")
+                    .send()
+                    .await?
+                    .error_for_status()?;
+            }
+            let name = if attempt == 0 {
+                "fourth".to_owned()
+            } else {
+                format!("eviction-{attempt}")
+            };
+            create(&self.client, self.address, &name).await?;
+            if !self.repository_dir.exists() {
+                self.client
+                    .get(format!("http://{}/api/repositories/third", self.address))
+                    .bearer_auth("local-test-token")
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                return Ok(());
+            }
+        }
+        Err("original repository never became cold".into())
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -416,8 +450,7 @@ async fn paused_release_keeps_other_warm_repositories_available() -> Result {
 #[tokio::test(flavor = "multi_thread")]
 async fn paused_cold_activation_keeps_other_warm_repositories_available() -> Result {
     let fixture = Fixture::new().await?;
-    create(&fixture.client, fixture.address, "fourth").await?;
-    assert!(!fixture.repository_dir.exists());
+    fixture.make_original_cold().await?;
     *fixture.store.paused_read.lock().unwrap() = Some(
         fixture
             .layout
@@ -455,7 +488,9 @@ async fn paused_cold_activation_keeps_other_warm_repositories_available() -> Res
 
 impl Fixture {
     async fn read_warm_repository(&self) -> Result {
-        timeout(Duration::from_secs(2), async {
+        // This fault test asserts independence from a paused release/restore,
+        // not a two-second latency SLO on an oversubscribed test host.
+        timeout(Duration::from_secs(5), async {
             let response = self
                 .client
                 .get(format!("http://{}/api/repositories/third", self.address))
@@ -490,8 +525,7 @@ impl Fixture {
 #[tokio::test(flavor = "multi_thread")]
 async fn paused_cold_repository_does_not_serialize_other_cold_activations() -> Result {
     let fixture = Fixture::new().await?;
-    create(&fixture.client, fixture.address, "fourth").await?;
-    assert!(!fixture.repository_dir.exists());
+    fixture.make_original_cold().await?;
     *fixture.store.paused_read.lock().unwrap() = Some(
         fixture
             .layout
@@ -524,8 +558,7 @@ async fn paused_cold_repository_does_not_serialize_other_cold_activations() -> R
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelled_cold_activation_retains_its_reserved_slot() -> Result {
     let fixture = Fixture::new().await?;
-    create(&fixture.client, fixture.address, "fourth").await?;
-    assert!(!fixture.repository_dir.exists());
+    fixture.make_original_cold().await?;
     let mut uploads = Vec::new();
     let oid = hex::encode(Sha256::digest(b"x"));
     for name in ["third", "fourth"] {

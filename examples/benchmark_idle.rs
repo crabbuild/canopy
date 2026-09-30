@@ -21,7 +21,9 @@ type Result<T = ()> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
-    #[error("usage: benchmark_idle <s3-url> <new-work-dir> <counts-csv> <window-seconds>=10")]
+    #[error(
+        "usage: benchmark_idle <s3-url|memory:///> <new-work-dir> <counts-csv> <window-seconds>=10"
+    )]
     Usage,
     #[error("benchmark invariant failed: {0}")]
     Invalid(&'static str),
@@ -98,7 +100,7 @@ async fn run() -> Result {
         return Err(Error::Usage);
     }
     let url = url::Url::parse(&args[0])?;
-    if url.scheme() != "s3"
+    if !matches!(url.scheme(), "s3" | "memory")
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -146,7 +148,13 @@ async fn run() -> Result {
         token: format!("cnp_{}", hex::encode(Sha256::digest(key))),
         active_limit,
     };
+    let provider_kind = if url.scheme() == "memory" {
+        "in-memory scheduler diagnostic; not a real-store qualification"
+    } else {
+        "S3-compatible provider"
+    };
     let mut report = json!({"passed":false,"cell_capabilities":"SQL only","requested_counts":counts,"window_seconds":seconds,
+        "provider_kind":provider_kind,
         "binary_sha256":hex::encode(Sha256::digest(std::fs::read(std::env::current_exe()?)?)),"store_prefix":fixture.prefix.to_string(),
         "counting_boundary":"object_store API, not provider HTTP attempts; list/delete/multipart parts are not counted",
         "windows":[],"seeded_repositories":[],"shutdown_passed":false});
