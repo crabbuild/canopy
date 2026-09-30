@@ -13,6 +13,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | Implement an API or storage change | [Persisted contracts](contracts.md) | Identity, authorization, protocol, durability and HTTP behavior |
 | Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
 | Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
+| Check the latest Cellule dependency update | [September 30 requalification](performance/2026-09-30-cellule-main.md) | Exact revision, passing checks, failed suites and storage-blocked performance gates |
 | Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |
 | Track production-readiness work | [Roadmap](../ROADMAP.md) | Milestones and checklists across operations, product features and scale |
 

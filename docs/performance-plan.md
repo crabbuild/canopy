@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a3fbfb0115a1ae2519ee8f8e0cf6b8e72fdaa303`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `30671d5f8a729dd9ccd3a0c2d0e36c7abb89a988`, the fetched `origin/main` snapshot used for the [September 30 requalification](performance/2026-09-30-cellule-main.md). Earlier runs below retain their original pins and do not establish this build's density or latency.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
