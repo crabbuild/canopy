@@ -35,7 +35,10 @@ impl ReleaseStore {
     }
 
     async fn wait(&self) -> Result {
-        timeout(Duration::from_secs(5), self.entered.notified()).await?;
+        // This waits for fixture setup and transfer preflight, not the warm
+        // request latency assertion below. Full-suite Git tests can contend
+        // for the shared CI runner before the injected store call is reached.
+        timeout(Duration::from_secs(30), self.entered.notified()).await?;
         Ok(())
     }
 }
@@ -225,24 +228,60 @@ impl Fixture {
         &self,
         fault: ReleaseFault,
     ) -> Result<tokio::task::JoinHandle<reqwest::Result<reqwest::Response>>> {
+        // Pin both other resident routes so the injected fault can only hit
+        // original. LRU order alone is not deterministic while publication and
+        // background maintenance decide which idle Cells are transferable.
+        let oid = hex::encode(Sha256::digest(b"release-fault-open-upload"));
+        let mut pins = Vec::new();
+        for name in ["second", "third"] {
+            let mut stream = TcpStream::connect(self.address).await?;
+            stream.write_all(format!(
+                "PUT /canopy/{name}.git/info/lfs/objects/{oid} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer local-test-token\r\nContent-Length: 1\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+                self.address
+            ).as_bytes()).await?;
+            let mut response = vec![0; b"HTTP/1.1 100 Continue\r\n\r\n".len()];
+            timeout(Duration::from_secs(5), stream.read_exact(&mut response)).await??;
+            assert_eq!(response, b"HTTP/1.1 100 Continue\r\n\r\n");
+            pins.push(stream);
+        }
         self.store.arm(
             self.layout.control_path(self.target.cell_id().as_bytes()),
             fault,
         );
-        let request = self
-            .client
-            .post(format!("http://{}/api/repositories", self.address))
-            .bearer_auth("local-test-token")
-            .json(&serde_json::json!({"name":"fourth"}));
-        let request = tokio::spawn(async move { request.send().await });
-        self.store.wait().await?;
-        assert!(self.repository_dir.join("repository.sqlite").exists());
-        let control = CellAuthority::new(self.layout.clone())
-            .load(self.target.cell_id())
-            .await?
-            .ok_or("authority missing")?;
-        assert_eq!(control.value().state, ControlState::Serving);
-        Ok(request)
+        // The pushed original can briefly be ineligible while its publication
+        // settles. Retry only a preflight 503; with the other two routes pinned,
+        // a completed 200 would mean the fixture released the wrong Cell.
+        for attempt in 0..20 {
+            let request = self
+                .client
+                .post(format!("http://{}/api/repositories", self.address))
+                .bearer_auth("local-test-token")
+                .json(&serde_json::json!({"name":format!("fault-trigger-{attempt}")}));
+            let mut request = tokio::spawn(async move { request.send().await });
+            tokio::select! {
+                reached_store = self.store.wait() => {
+                    reached_store?;
+                    drop(pins);
+                    assert!(self.repository_dir.join("repository.sqlite").exists());
+                    let control = CellAuthority::new(self.layout.clone())
+                        .load(self.target.cell_id())
+                        .await?
+                        .ok_or("authority missing")?;
+                    assert_eq!(control.value().state, ControlState::Serving);
+                    return Ok(request);
+                }
+                finished = &mut request => {
+                    let status = finished??.status();
+                    if status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                        return Err(format!(
+                            "repository creation returned {status} before the original Cell release was reached"
+                        ).into());
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Err("original Cell never became eligible for the injected release".into())
     }
 
     async fn clone_original(&self, address: std::net::SocketAddr) -> Result {

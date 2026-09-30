@@ -52,11 +52,17 @@ preparation hydrated 901 reachable blobs (5,966,921,728 bytes) in about 109
 seconds. This is functional size and recovery proof on the local provider; it
 does not establish production-provider latency or repository density.
 
-The current PR's GitHub-hosted size gate has not repeated that pass. RustFS
-returned a write-quorum HTTP 500 while staging the large Git blob, and the
-runner then reported `No space left on device`. The gate now checks for at least
-40 GiB free on both its scratch and provider volumes before uploading; it still
-requires the full non-sparse Git and LFS round trip on a suitable runner.
+The GitHub-hosted size gate has not repeated that pass. RustFS returned a
+write-quorum HTTP 500 while staging the large Git blob, and the runner then
+reported `No space left on device`. Ordinary CI now runs the smaller
+`--provider-only` compatibility suite. The separate manual
+`Qualify large Git and LFS transfers` workflow requires a runner labeled
+`canopy-large-transfer`; provision at least 40 GiB free on both scratch and
+Docker's data volume, plus Rust 1.97 or newer and Docker daemon access. Its
+preflight checks both before uploading, and it still
+requires the full non-sparse Git and LFS round trip before a release claim.
+If no such runner is connected, this gate remains unqualified rather than
+silently passing on an undersized GitHub-hosted runner.
 
 ## Required outcome
 
