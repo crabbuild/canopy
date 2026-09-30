@@ -63,8 +63,11 @@ in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Cellule revision is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`.
-Read-only inspection establishes the following constraints in that source:
+The pinned Cellule revision is
+`30671d5f8a729dd9ccd3a0c2d0e36c7abb89a988`. Read-only inspection of that exact
+revision confirms the following constraints still apply. The latest ownership
+read and release-retention improvements do not add composed repository
+capabilities or close these acceptance gates:
 
 | Surface | Existing contract | Required change |
 | --- | --- | --- |
