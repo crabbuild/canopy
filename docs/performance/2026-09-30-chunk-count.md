@@ -102,8 +102,10 @@ must not be compared with a successful full round trip as an end-to-end speedup.
 | Final-source in-memory idle scheduler diagnostic | Passed: 100, 500 and 1,000 active repositories, released state and fresh-workspace identity samples |
 | Original final-release 10,000-identity seed | Failed after 8,374 recorded identities with a 30-second creation-response timeout; the next identity was later found readable |
 | First reconciliation | Failed at 9,830 recorded identities with another 30-second creation-response timeout; its incomplete manifest is retained |
-| Diagnostic-owner reconciled corpus | Complete: 10,000 identities and 100 populated fixtures; same release and 100-slot limit, full verification is running |
-| Single-/two-ingress throughput and real-store idle density | Pending |
+| Diagnostic-owner reconciled corpus | Passed full verification: 10,000 UUIDs and all 100 populated fixtures, Git v0/v2, exact refs/files, strict fsck and LFS size/hash; same release and 100-slot limit |
+| Single-ingress workload windows | Completed with eight dropped arrivals; see [full-corpus diagnostics](2026-09-30-full-corpus.md) |
+| Acknowledged single-ingress writes after owner kill and fresh-state recovery | Passed: 29 Git refs through v0/v2 and 60 one-MiB LFS uploads; one unacknowledged push excluded |
+| Two-ingress throughput and final-artifact real-store idle density | Pending |
 
 The intermediate integration binary was built after the production count
 optimization and timing-probe removal, but before correcting two new unit-test
@@ -266,8 +268,11 @@ reconciliation adopted that known empty identity and created only the final
 169 absent names. It completed in 157.329 s without changing the timeout or
 original refs. Its separate manifest binds both earlier failed manifests:
 SHA-256 `4ac5370e0c014163caf1e08fde3260152dc24ebfd1b87d1a4e833d939e04089b`.
-Full verification of its 10,000 identities and 100 Git/LFS fixtures is running
-with concurrency four.
+Full verification then passed with concurrency four: all 10,000 identities,
+all 100 populated repositories through Git v0/v2 with exact seeded refs and
+file hashes, strict fsck, and every declared LFS fixture's size/SHA-256. The
+verifier exited with status zero. This closes the reconciled-corpus identity
+and fixture-integrity check, not the uninterrupted seeding or throughput gates.
 
 This is setup recovery, not a timeout fix, uninterrupted seed pass or capacity
 result. The restart, local-state reset and logging change prevent a controlled
@@ -307,10 +312,15 @@ separate; a timeout is not interpreted as rollback.
 Two regressions failed before implementation. The expanded 18-test Python suite
 then passed, including SHA-1/SHA-256 pushes, wrong refs and exact-body mismatches,
 corrupt LFS, omitted acknowledgements and inconsistent or tampered evidence.
-This is verification-driver coverage, not a recovered-Canopy load-test result.
+This suite is verification-driver coverage, not itself a recovered-Canopy result.
 The caller must establish and record the owner restart before running the
 [acknowledged-write check](../performance-plan.md#verify-writes-acknowledged-during-load).
 No server artifact or in-progress corpus release changed.
+
+The later [complete-corpus run](2026-09-30-full-corpus.md#recover-acknowledged-writes-through-fresh-gateways)
+used the verifier after a recorded owner kill, production lease-expiry wait
+and fresh two-node startup. All acknowledged single-gateway writes survived;
+the dropped push remains separate.
 
 The old Docker data filesystem exhausted its inodes. A later read-only check
 found about 9,700 free inodes, enough to start a small probe container. A

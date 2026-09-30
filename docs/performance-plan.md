@@ -7,6 +7,13 @@ quadratic upload scans from command verification and records its verification
 state separately. This transaction optimization is not a 10,000-repository
 throughput qualification.
 
+The [current-pin complete-corpus diagnostics](performance/2026-09-30-full-corpus.md)
+record all 10,000 identities and 100 seeded Git/LFS fixtures passing verification.
+The single-gateway matrix dropped eight scheduled arrivals, and matched warm
+metadata windows missed latency targets. All 29 acknowledged generated Git refs
+and 60 acknowledged LFS uploads survived owner kill and fresh-state recovery.
+These shared-Mac results do not qualify the Linux reference target.
+
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
 ```mermaid
@@ -25,7 +32,7 @@ flowchart LR
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
-| Is 10,000 repositories per node a measured capacity? | No; local 100-slot RustFS seeding and clean-shutdown recovery passed, but the reference Linux throughput and mixed workload remain unqualified | [Real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
+| Is 10,000 repositories per node a measured capacity? | No; the current-pin reconciled corpus passed full verification, but its single-gateway load matrix had dropped arrivals and the reference Linux workload remains unqualified | [Current-pin corpus and load](performance/2026-09-30-full-corpus.md), [historical real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
 | Is idle ownership proven at 1,000 active Cells? | In a local SQL-only RustFS fixture, yes: the merged pin passed 10- and 30-second renewal-coverage windows. The reference Linux node and foreground load remain unqualified | [Merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
