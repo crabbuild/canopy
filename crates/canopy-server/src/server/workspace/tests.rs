@@ -3,6 +3,36 @@ use super::*;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
+fn releasing_ownership_unlocks_descriptors_retained_by_an_unrelated_child() -> Result {
+    let directory = tempfile::TempDir::new()?;
+    let workspace = Workspace::open(directory.path())?;
+    // A duplicate shares the open file description, just like a descriptor
+    // inherited by a concurrent fork before the child reaches exec.
+    let inherited = workspace
+        .owner
+        .as_ref()
+        .ok_or("owner lock")?
+        .0
+        .try_clone()?;
+    drop(workspace);
+    let _restored = Workspace::open(directory.path())?;
+    drop(inherited);
+    Ok(())
+}
+
+#[test]
+fn failed_initialization_releases_ownership_with_a_retained_descriptor() -> Result {
+    let directory = tempfile::TempDir::new()?;
+    let owner = OwnerLock::acquire(&directory.path().join(".canopy-owner.lock"))?;
+    let inherited = owner.0.try_clone()?;
+    // Initialization errors drop the guard before a Workspace is constructed.
+    drop(owner);
+    let _workspace = Workspace::open(directory.path())?;
+    drop(inherited);
+    Ok(())
+}
+
+#[test]
 fn live_owner_blocks_cleanup_and_restart_reclaims_only_managed_state() -> Result {
     let directory = tempfile::TempDir::new()?;
     let workspace = Workspace::open(directory.path())?;

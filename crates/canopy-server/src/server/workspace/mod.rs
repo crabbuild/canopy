@@ -10,9 +10,30 @@ use std::{
 const MARKER: &str = ".canopy-runtime";
 const FORMAT: &[u8] = b"canopy-runtime-v1\n";
 
+struct OwnerLock(File);
+
+impl OwnerLock {
+    fn acquire(path: &Path) -> io::Result<Self> {
+        let file = crate::native_git::lock_file(path)?;
+        file.try_lock().map_err(io::Error::from)?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        // A concurrent fork can retain this open file description until exec,
+        // even with CLOEXEC. Release ownership explicitly so those unrelated
+        // children cannot delay restart or a retry after failed initialization.
+        if let Err(error) = self.0.unlock() {
+            tracing::error!(%error, "failed to release workspace owner lock");
+        }
+    }
+}
+
 pub(crate) struct Workspace {
     root: PathBuf,
-    owner: Option<File>,
+    owner: Option<OwnerLock>,
     requires_drain: AtomicBool,
 }
 
@@ -20,8 +41,7 @@ impl Workspace {
     pub(crate) fn open(directory: &Path) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         let directory = fs::canonicalize(directory)?;
-        let owner = crate::native_git::lock_file(&directory.join(".canopy-owner.lock"))?;
-        owner.try_lock().map_err(io::Error::from)?;
+        let owner = OwnerLock::acquire(&directory.join(".canopy-owner.lock"))?;
         let root = directory.join("runtime-v1");
         #[cfg(unix)]
         let created = {
