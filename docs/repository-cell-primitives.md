@@ -59,7 +59,7 @@ The current runtime and Canopy module bind one exclusive catalog role to a Cell.
 
 Canopy's `RepositoryModule` declares `CatalogRole::Sql`, registers SQL plus
 product commands, and has empty workflow-definition and activity inventories
-in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
+in `crates/canopy-server/src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 

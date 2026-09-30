@@ -14,6 +14,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | You want to… | Start with |
 | --- | --- |
 | Understand the storage model | [How Canopy stores a repository](#how-canopy-stores-a-repository) |
+| Navigate the Rust crates | [Rust workspace](docs/workspace.md) |
 | Run a development node | [Run a local node](#run-a-local-node) |
 | Create, clone, and push a repository | [Create and use a repository](#create-and-use-a-repository) |
 | Use the browser, collaboration, or Git LFS | [Use Canopy](docs/user-guide.md) |
@@ -205,4 +206,4 @@ Keep behavior, tests, and documentation aligned when you change Canopy:
 
 ## License
 
-Canopy declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in `Cargo.toml`.
+Each workspace crate declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in its `Cargo.toml`.

@@ -1886,7 +1886,7 @@ full-primitive thousand-repository density remain unqualified.
 
 ### Reproducing idle ownership measurements
 
-`examples/benchmark_idle.rs` runs the actual `CanopyServer` with a measured
+`crates/canopy-server/examples/benchmark.rs` runs the actual `CanopyServer` with a measured
 object-store client. It seeds empty SQL repository Cells through authenticated
 HTTP, observes idle windows at increasing active counts, drains the node, then
 starts a fresh local node with the same durable identities and measures them
@@ -1903,7 +1903,7 @@ performance. For example:
 ```bash
 CARGO_INCREMENTAL=0 \
 CARGO_TARGET_DIR="$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f" \
-cargo run --release --locked --example benchmark_idle -- \
+cargo run --release --locked --example benchmark -- \
   s3://disposable-bucket/idle-qualification \
   /tmp/canopy-idle-real-store-qualification \
   0,100,500,1000 30
@@ -1914,7 +1914,7 @@ directory. The report labels this provider as in-memory; a passing result
 cannot replace the S3-compatible gate or establish provider throughput.
 
 ```bash
-cargo run --locked --example benchmark_idle -- \
+cargo run --locked --example benchmark -- \
   memory:/// /tmp/canopy-idle-memory-diagnostic 100,500,1000 30
 ```
 
@@ -2028,7 +2028,7 @@ production server code was changed for this measurement.
 
 #### Merged-pin real-store idle qualification
 
-Canopy `ca87eb7` with Cellule `a3fbfb0` ran the unchanged `benchmark_idle`
+Canopy `ca87eb7` with Cellule `a3fbfb0` ran the unchanged `benchmark`
 example against a fresh prefix on local RustFS `1.0.0-beta.8-glibc`. The shared
 macOS arm64 client/server host was not isolated; the RustFS container was capped
 at two CPUs and 4 GiB. The debug example binary SHA-256 was

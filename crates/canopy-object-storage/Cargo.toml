@@ -1,0 +1,17 @@
+[package]
+name = "canopy-object-storage"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+canopy-git-format = { path = "../canopy-git-format" }
+blake3 = "1.8"
+bytes = "1.11"
+hex = "0.4"
+object_store = "0.14.1"
+sha2 = "0.11"
+thiserror = "2.0"
+tokio = { version = "1.49", features = ["io-util", "rt-multi-thread", "time"] }
+tracing = "0.1"
+uuid = { version = "=1.24.0", features = ["v4"] }
