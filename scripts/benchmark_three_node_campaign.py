@@ -208,6 +208,9 @@ def campaign(args, token):
             concurrency=args.verify_concurrency), client, token)
         result["preflight"] = {**checked, **bindings}
         benchmark.save(args.output_dir / "preflight.json", result["preflight"])
+        # Executors use new worker threads in each window. Their thread-local
+        # keep-alive sockets must not survive into the next window's budget.
+        client.close()
         def check_bindings():
             if (benchmark.file_sha256(args.manifest) != bindings["manifest_sha256"]
                     or benchmark.file_sha256(Path(benchmark.__file__)) != bindings["driver_sha256"]
@@ -229,10 +232,15 @@ def campaign(args, token):
             print(f"window {index + 1}/{len(schedule)}: {tag}", flush=True)
             result["current_window"] = tag
             benchmark.save(args.output_dir / "campaign.json", result)
-            with Monitor(args.fleet_dir, ready, observation):
-                before = observe(args.fleet_dir, ready)
-                report = benchmark.measure(parameters, client, token)
-                after = observe(args.fleet_dir, ready)
+            client = benchmark.Client(ready["proxy_url"], token, args.timeout)
+            try:
+                with Monitor(args.fleet_dir, ready, observation):
+                    before = observe(args.fleet_dir, ready)
+                    report = benchmark.measure(parameters, client, token)
+                    client.close()
+                    after = observe(args.fleet_dir, ready)
+            finally:
+                client.close()
             check_bindings()
             if report["manifest_sha256"] != bindings["manifest_sha256"] or report["driver_sha256"] != bindings["driver_sha256"]:
                 raise RuntimeError("load report does not match campaign bindings")

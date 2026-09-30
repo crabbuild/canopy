@@ -59,8 +59,8 @@ credentials were not changed. No authority check or TLS verification was disable
 | --- | --- |
 | Proxy socket regressions | Binary body larger than relay chunks, half-close, keep-alive, unchanged authorization, dead backend with no retry, connection-limit rejection |
 | Creation driver regressions | Unique names/UUID validation, every arrival counted, HTTP errors and invalid identities rejected, exact recovery receipts, corrupted evidence rejected before requests |
-| Python harness and fixture checks | 43 passed on Python 3.12 and 3.14, including fresh-payload push/receipt checks against local stock Git; `python312-push-timing.log` and `python314-push-timing.log` |
-| Hosted CI | The original `2ba8c81` Rust job passed format, clippy, tests, isolated RustFS compatibility and build. The `94d135f` harness job exposed a Python 3.12 fixture-mock defect; fix and latest-head CI verification are recorded separately, not relabeled as a historical pass |
+| Python harness and fixture checks | 44 passed on Python 3.12 and 3.14, including real-TCP repeated-window connection cleanup; `python312-connection-lifecycle.log` and `python314-connection-lifecycle.log` |
+| Hosted CI | The original `2ba8c81` Rust job passed format, clippy, tests, isolated RustFS compatibility and build. The `94d135f` harness job exposed a Python 3.12 fixture-mock defect; after its fix, both `e85bda4` Linux harness jobs passed. Later-head CI remains a separate gate |
 | Initial fleet startup | Failed: an old ephemeral RustFS port no longer accepted connections |
 | Initial 10,000 seed | Failed at the first create with HTTP 503; zero identities recorded, `complete: false` |
 | Cause of that seed's storage failure | Node logs show connection refusal and fencing; the old provider disappeared during concurrent Docker maintenance |
@@ -86,6 +86,11 @@ population. It verifies all corpus identities and populated v0/v2 Git/LFS bodies
 before starting the arrival clocks. Repeated windows are declared explicitly;
 failed windows stay in the campaign rather than being retried or discarded.
 Each load report and resource log has a SHA-256 binding in the campaign index.
+Preflight and each window have separately owned HTTP clients. The real-TCP
+regression reproduced an artificial admission failure when old thread-local
+keep-alive connections survived into later windows; it now passes with the same
+two-connection proxy cap and no backend/admission errors. The real fleet cap and
+production timeouts were not raised to accommodate the driver.
 
 ## Measure the requested operations
 
@@ -121,6 +126,8 @@ driver's arrival clock. Front/peer byte counters include HTTP headers and Git
 framing, not just payload. These observations can distinguish driver, proxy and
 server pressure; they do not measure RustFS VM CPU, S3 request cost, pack first-byte
 latency or per-payload-GiB CPU. Never label lifetime CPU percentage as interval CPU.
+These process samples also exclude native Git child CPU, so they cannot support
+a complete server CPU-per-GiB claim.
 
 `push_branch` reuses one commit and therefore measures ref publication, not fresh
 pack ingestion. `push_commit` clones prepared base objects locally, creates a new

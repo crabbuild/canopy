@@ -1,9 +1,11 @@
 """Campaign orchestration tests are not server capacity measurements."""
 
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -11,6 +13,7 @@ import uuid
 
 import benchmark_repositories as benchmark
 import benchmark_three_node_campaign as campaign
+from local_tcp_proxy import LocalProxy
 
 
 def fixture():
@@ -27,6 +30,56 @@ def fixture():
 
 
 class CampaignTests(unittest.TestCase):
+    def test_http_connections_are_closed_between_repeated_windows(self):
+        manifest, plan = fixture()
+        for entry in manifest["repositories"]:
+            entry.update(commit=None)
+        plan["windows"][0].update(rate=1, concurrency=1)
+        entries = {entry["name"]: entry for entry in manifest["repositories"]}
+        class Metadata(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def log_message(self, *_):
+                pass
+            def do_GET(self):
+                body = json.dumps(entries[self.path.rsplit("/", 1)[-1]]).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        class FakeMonitor:
+            def __init__(self, directory, ready, path):
+                self.path = path
+            def __enter__(self):
+                self.path.write_text('{"test": "not a resource measurement"}\n')
+            def __exit__(self, *_):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Metadata)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory, \
+                 LocalProxy([f"127.0.0.1:{server.server_port}"], max_connections=2) as proxy:
+                root = Path(directory)
+                fleet = root / "fleet"
+                fleet.mkdir()
+                ready = {"proxy_url": proxy.url, "fixture_id": "regression-only"}
+                benchmark.save(fleet / "ready.json", ready)
+                manifest_path, plan_path = root / "manifest.json", root / "plan.json"
+                benchmark.save(manifest_path, manifest)
+                benchmark.save(plan_path, plan)
+                args = SimpleNamespace(manifest=manifest_path, plan=plan_path, fleet_dir=fleet,
+                    output_dir=root / "results", timeout=2, git_timeout=30, seed=42, verify_concurrency=1)
+                with patch.object(campaign, "validate_fleet", return_value=ready), \
+                     patch.object(campaign, "observe", return_value={}), \
+                     patch.object(campaign, "Monitor", FakeMonitor), patch("builtins.print"):
+                    result = campaign.campaign(args, "fixture-token")
+                self.assertTrue(result["all_arrivals_succeeded"], (result["outcomes"], proxy.snapshot()))
+                self.assertEqual(proxy.snapshot()["rejected_connections"], 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
     def test_expansion_preserves_explicit_repetitions_and_eligible_sets(self):
         manifest, plan = fixture()
         rows = campaign.windows(plan, manifest)
