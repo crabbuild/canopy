@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 import smoke_s3_cache as smoke
@@ -52,6 +53,11 @@ class CacheFixtureTests(unittest.TestCase):
             calls = []
 
             def start(*_args):
+                settings = _args[2]
+                identifiers = [uuid.UUID(settings[key]) for key in ("tenant_id", "application_id", "node_id")]
+                identifiers.append(uuid.UUID(settings["storage_url"].rsplit("/", 1)[1]))
+                self.assertEqual(len(set(identifiers)), 4)
+                self.assertTrue(all(identifier.version == 4 for identifier in identifiers))
                 (args.work_dir / "first.log").write_text(
                     "hydrated Git cache objects=0 scanned=260 "
                     "from_sequence=0 through_sequence=260 bytes=0\n")
@@ -67,12 +73,14 @@ class CacheFixtureTests(unittest.TestCase):
                     raise StopBeforeIncrement
                 return b"fixture-oid"
 
+            random_bytes = os.urandom
             with patch.dict(os.environ, {"CANOPY_GIT_TOKEN": "local-test-token"}), \
                  patch.object(smoke, "start", side_effect=start), \
                  patch.object(smoke, "create_repository", return_value=("http://fixture/repo.git", {})), \
                  patch.object(smoke, "git", side_effect=git), \
                  patch.object(smoke, "cached_objects", return_value={str(i): [1, 1] for i in range(260)}), \
-                 patch.object(smoke.os, "urandom", return_value=b"fixture-body"):
+                 patch.object(smoke.os, "urandom", side_effect=lambda size:
+                              b"fixture-body" if size == 2 * 1024**2 else random_bytes(size)):
                 with self.assertRaises(StopBeforeIncrement):
                     smoke.qualify(args)
 
