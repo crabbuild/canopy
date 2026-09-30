@@ -271,8 +271,8 @@ permits it.
   requires eight per admitted Repository/Directory Cell plus 1,024 headroom;
   this is a reservation check, not measured aggregate process capacity.
 
-These facts come from `src/server.rs`, `src/server/residency.rs`,
-`src/git_gateway.rs`, `src/git_cache.rs`, `src/repository_http.rs`,
+These facts come from `crates/canopy-server/src/server/mod.rs` and its residency
+module, the server crate's Git gateway, Git cache and repository HTTP modules,
 `deploy/compose.yaml`, and the pinned Cellule runtime/worker and LTX/db sources.
 
 ## Idle ownership cost
