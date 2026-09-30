@@ -250,9 +250,26 @@ def verify(args, client, token):
     manifest = corpus(args.manifest)
     args.work_dir.mkdir(parents=True, exist_ok=False)
     def verify_one(entry):
-        status, body = client.request(f"/api/repositories/{quote(entry['name'])}")
-        if status != 200 or json.loads(body)["repository_id"] != entry["repository_id"]:
-            raise RuntimeError("restored repository identity differs from manifest")
+        request_id = str(uuid.uuid4())
+        context = f"{entry['name']} ({entry['repository_id']}), request_id={request_id}"
+        try:
+            status, body = client.request(f"/api/repositories/{quote(entry['name'])}",
+                                          request_id=request_id)
+        except (TimeoutError, OSError, ValueError, http.client.HTTPException) as error:
+            # Include no response body, authorization header or provider secrets.
+            raise RuntimeError(f"identity request failed ({type(error).__name__}) for {context}") from None
+        if status != 200:
+            raise RuntimeError(f"HTTP {status} verifying repository {context}")
+        try:
+            decoded = json.loads(body)
+            identity = decoded["repository_id"]
+            if not isinstance(identity, str):
+                raise ValueError("identity is not a string")
+            uuid.UUID(identity)
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+            raise RuntimeError(f"malformed identity response for {context}") from None
+        if identity != entry["repository_id"]:
+            raise RuntimeError(f"restored repository identity differs from manifest for {context}")
         if entry["commit"] is None:
             return 0
         if "lfs_oid" in entry:

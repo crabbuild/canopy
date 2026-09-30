@@ -103,6 +103,69 @@ class GitRefsHandler(BaseHTTPRequestHandler):
 
 
 class ScheduledLoad(unittest.TestCase):
+    def test_verify_reports_http_failure_without_claiming_identity_mismatch(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.guard = threading.Lock()
+        server.requests = server.active = server.peak = 0
+        server.request_ids, server.auth_headers = [], []
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        client = benchmark.Client(f"http://127.0.0.1:{server.server_port}", "fixture-token", 2)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repository_id = str(uuid.uuid4())
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"version": 1, "complete": True,
+                    "requested_repositories": 1, "repositories": [{"name": "fixture",
+                        "owner": "canopy", "repository_id": repository_id, "commit": None}]}))
+                args = SimpleNamespace(manifest=manifest, work_dir=root / "verified",
+                                       concurrency=1)
+                with self.assertRaises(RuntimeError) as caught:
+                    benchmark.verify(args, client, "fixture-token")
+                message = str(caught.exception)
+                self.assertIn("HTTP 503", message)
+                self.assertIn("fixture", message)
+                self.assertIn(repository_id, message)
+                self.assertNotIn("identity differs", message)
+                self.assertNotIn("fixture-token", message)
+                self.assertEqual(server.requests, 1, "verification must not hide a retry")
+                request_id = server.request_ids[0]
+                uuid.UUID(request_id)
+                self.assertIn(f"request_id={request_id}", message)
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_verify_reports_malformed_identity_without_logging_response_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_id = str(uuid.uuid4())
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"version": 1, "complete": True,
+                "requested_repositories": 1, "repositories": [{"name": "fixture",
+                    "owner": "canopy", "repository_id": repository_id, "commit": None}]}))
+            for index, body in enumerate((b"fixture-token", b"[]", b"{}",
+                                           b'{"repository_id":123}')):
+                class MalformedClient:
+                    def request(self, path, **kwargs):
+                        self.request_id = kwargs.get("request_id")
+                        return 200, body
+                client = MalformedClient()
+                args = SimpleNamespace(manifest=manifest,
+                                       work_dir=root / f"verified-{index}", concurrency=1)
+                with self.assertRaises(RuntimeError) as caught:
+                    benchmark.verify(args, client, "fixture-token")
+                message = str(caught.exception)
+                self.assertIn("malformed identity response", message)
+                self.assertIn("fixture", message)
+                self.assertIn(repository_id, message)
+                uuid.UUID(client.request_id)
+                self.assertIn(f"request_id={client.request_id}", message)
+                self.assertNotIn("fixture-token", message)
+
     def test_ls_remote_uses_stock_git_v2_and_rejects_wrong_tips(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), GitRefsHandler)
         server.guard, server.commands, server.oid = threading.Lock(), [], "1" * 40
@@ -168,7 +231,7 @@ class ScheduledLoad(unittest.TestCase):
                 "requested_repositories": 2, "repositories": entries}))
 
             class MismatchClient:
-                def request(self, path):
+                def request(self, path, request_id=None):
                     entry = next(entry for entry in entries if path.endswith(entry["name"]))
                     identity = entry["repository_id"] if entry is entries[0] else str(uuid.uuid4())
                     return 200, json.dumps({"repository_id": identity}).encode()
@@ -189,7 +252,7 @@ class ScheduledLoad(unittest.TestCase):
                     self.entries = {}
                     self.lfs = {}
 
-                def request(self, path, payload=None):
+                def request(self, path, payload=None, request_id=None):
                     if payload is not None:
                         name = payload["name"]
                         entry = {"name": name, "owner": "canopy",

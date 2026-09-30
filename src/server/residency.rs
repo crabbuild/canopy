@@ -252,14 +252,14 @@ impl RepositoryManager {
                     Err(_) => self.evict_repository().await?,
                 },
             };
-            let remote = self.peer.remote_owner(&target).await?;
+            let mut remote = self.peer.remote_owner(&target).await?;
             let client = if remote {
                 self.peer.client()
             } else {
                 let directory = self.local.path().join(hex::encode(entry.repository_id));
                 tokio::fs::create_dir_all(&directory).await?;
                 let started = Instant::now();
-                let handle = acquire_sql_cell(
+                let acquired = acquire_sql_cell(
                     &self.node,
                     &self.layout,
                     &self.node_directory,
@@ -272,9 +272,24 @@ impl RepositoryManager {
                     self.session,
                     &self.endpoint,
                 )
-                .await?;
-                tracing::debug!(repository = %hex::encode(entry.repository_id), elapsed_seconds = started.elapsed().as_secs_f64(), "acquired repository Cell");
-                CellClient::local(self.node.application().registry(), handle)
+                .await;
+                match acquired {
+                    Ok(handle) => {
+                        tracing::debug!(repository = %hex::encode(entry.repository_id), elapsed_seconds = started.elapsed().as_secs_f64(), "acquired repository Cell");
+                        CellClient::local(self.node.application().registry(), handle)
+                    }
+                    Err(error) => {
+                        // Another gateway can win after our initial owner read.
+                        // No repository command has been sent by this request.
+                        // Follow only freshly validated, live remote authority;
+                        // never retry the claim or replay an accepted mutation.
+                        if !matches!(self.peer.remote_owner(&target).await, Ok(true)) {
+                            return Err(error);
+                        }
+                        remote = true;
+                        self.peer.client()
+                    }
+                }
             };
             self.loaded.lock().await.insert(
                 entry.repository_id,

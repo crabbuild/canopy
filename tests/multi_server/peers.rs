@@ -4,6 +4,9 @@ use serde_json::json;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+#[path = "peers/cold_activation.rs"]
+mod cold_activation;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

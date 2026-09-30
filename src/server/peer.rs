@@ -53,6 +53,7 @@ impl NodePeer {
         let resolver = Arc::new(Resolver {
             node: Arc::clone(&node),
             layout: layout.clone(),
+            session,
         });
         let dispatcher = PeerDispatcher::new(
             Arc::clone(&registry),
@@ -296,6 +297,7 @@ impl PeerRoundTrip for NodePeer {
 struct Resolver {
     node: Arc<CellNode>,
     layout: CellStorageLayout,
+    session: SessionId,
 }
 impl Resolver {
     async fn local_handle(
@@ -320,7 +322,39 @@ impl Resolver {
         else {
             return Ok(None);
         };
-        runtime.local_handle(proof, &control).await
+        let handle = runtime.local_handle(proof.clone(), &control).await?;
+        if handle.is_some()
+            || control
+                .value()
+                .owner
+                .as_ref()
+                .is_none_or(|owner| owner.session != self.session)
+            || !matches!(
+                control.value().state,
+                cellule_runtime::control::ControlState::Recovering
+                    | cellule_runtime::control::ControlState::Serving
+            )
+        {
+            return Ok(handle);
+        }
+        // A winning claim is visible before restore/actor admission finishes.
+        // Wait for that node's own capability, without acquiring again or
+        // dispatching any SQL. Runtime lookups retain node-lease checks. The
+        // caller's signed RPC deadline still applies; this bounds a missing
+        // capability even when the transport does not cancel first.
+        match tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                if let Some(handle) = runtime.local_handle(proof.clone(), &control).await? {
+                    return Ok(Some(handle));
+                }
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Ok(None),
+        }
     }
 }
 impl PeerCellResolver for Resolver {
