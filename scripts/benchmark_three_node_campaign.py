@@ -22,7 +22,7 @@ import benchmark_repositories as benchmark
 
 
 OPERATIONS = {"create", "metadata", "refs", "ls_remote", "clone", "cold_fetch",
-              "incremental_fetch", "incremental_pull", "push_branch", "lfs_upload", "lfs_download"}
+              "incremental_fetch", "incremental_pull", "push_branch", "push_commit", "lfs_upload", "lfs_download"}
 GIT_READS = {"ls_remote", "clone", "cold_fetch", "incremental_fetch", "incremental_pull"}
 
 
@@ -70,7 +70,7 @@ def windows(plan, manifest):
         eligible = (sum(entry.get("lfs_oid") is not None for entry in entries) if operation == "lfs_download"
                     else sum(entry.get("base_commit") is not None for entry in entries)
                     if operation in ("incremental_fetch", "incremental_pull")
-                    else sum(entry["commit"] is not None for entry in entries) if operation in GIT_READS
+                    else sum(entry["commit"] is not None for entry in entries) if operation in GIT_READS or operation == "push_commit"
                     else len(entries))
         if operation == "create":
             if active is not None:
@@ -82,8 +82,13 @@ def windows(plan, manifest):
             raise ValueError("invalid LFS payload size")
         if operation == "lfs_upload" and size * row["concurrency"] > 256 * 1024 * 1024:
             raise ValueError("LFS in-flight payload exceeds driver bound")
+        git_size = row.get("git_payload_bytes", 256 * 1024)
+        if (not integer(git_size, 1, 16 * 1024 * 1024)
+                or operation == "push_commit" and git_size * row["concurrency"] > 256 * 1024 * 1024):
+            raise ValueError("invalid or excessive new Git payload")
         for repetition in range(row["repetitions"]):
             expanded.append({**row, "active_repositories": active, "lfs_bytes": size,
+                             "git_payload_bytes": git_size,
                              "repetition": repetition + 1})
     if len(expanded) > 1000:
         raise ValueError("expanded campaign exceeds 1000 windows")
@@ -217,7 +222,8 @@ def campaign(args, token):
             output = args.output_dir / f"{tag}.json"
             observation = args.output_dir / f"{tag}.resources.jsonl"
             parameters = SimpleNamespace(**{key: window[key] for key in (
-                "operation", "active_repositories", "distribution", "rate", "duration", "concurrency", "lfs_bytes")},
+                "operation", "active_repositories", "distribution", "rate", "duration", "concurrency", "lfs_bytes",
+                "git_payload_bytes")},
                 manifest=args.manifest, seed=args.seed, timeout=args.timeout,
                 git_timeout=args.git_timeout, output=output, work_dir=args.output_dir / f"{tag}-clients")
             print(f"window {index + 1}/{len(schedule)}: {tag}", flush=True)

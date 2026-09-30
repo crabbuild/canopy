@@ -336,8 +336,8 @@ def write_runs(paths, manifest_path, entries):
         if not isinstance(report, dict):
             raise ValueError("write report must be a JSON object")
         operation = report.get("operation")
-        if report.get("version") != 1 or operation not in ("push_branch", "lfs_upload"):
-            raise ValueError("write verification requires a push_branch or lfs_upload report")
+        if report.get("version") != 1 or operation not in ("push_branch", "push_commit", "lfs_upload"):
+            raise ValueError("write verification requires a push_branch, push_commit or lfs_upload report")
         if report.get("manifest_sha256") != manifest_digest:
             raise ValueError("write report does not match the corpus digest")
         scheduled, outcomes = report.get("scheduled"), report.get("outcomes")
@@ -351,7 +351,7 @@ def write_runs(paths, manifest_path, entries):
         total += scheduled
         if total > 1_000_000:
             raise ValueError("write verification is limited to one million total arrivals")
-        run_id = report.get("push_run_id" if operation == "push_branch" else "lfs_run_id")
+        run_id = report.get("push_run_id" if operation in ("push_branch", "push_commit") else "lfs_run_id")
         if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
             raise ValueError("write report has an invalid run identifier")
         if (operation, run_id) in identifiers:
@@ -361,6 +361,11 @@ def write_runs(paths, manifest_path, entries):
             commit = report.get("push_commit")
             if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
                 raise ValueError("write report has an invalid push commit")
+        elif operation == "push_commit":
+            size = report.get("git_payload_size_bytes")
+            if (not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 16 * 1024 * 1024
+                    or report.get("push_payload_file") != "canopy-benchmark.bin"):
+                raise ValueError("write report has an invalid Git payload declaration")
         else:
             size = report.get("lfs_size_bytes")
             if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 16 * 1024 * 1024:
@@ -388,6 +393,13 @@ def write_runs(paths, manifest_path, entries):
                 seen.add(sequence)
                 observed[sample["result"]] += 1
                 if sample["result"] == "ok":
+                    if operation == "push_commit":
+                        commit = sample.get("push_commit")
+                        entry = entries[sample["repository_id"]]
+                        if (not isinstance(commit, str) or entry.get("commit") is None
+                                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
+                                or len(commit) != len(entry["commit"])):
+                            raise ValueError("acknowledged Git sample has an invalid new commit")
                     if operation == "lfs_upload" and (
                             not isinstance(sample.get("lfs_oid"), str)
                             or not re.fullmatch(r"[0-9a-f]{64}", sample["lfs_oid"])):
@@ -430,14 +442,15 @@ def verify_writes(args, client, token):
             continue
         by_repository = {}
         for sample in acknowledged:
-            by_repository.setdefault(sample["repository_id"], []).append(
-                f"refs/heads/canopy-benchmark/{report['push_run_id']}/{sample['sequence']:07d}")
-        commit = report["push_commit"]
-        algorithm = "sha256" if len(commit) == 64 else "sha1"
-        body = f"benchmark run {report['push_run_id']}\n".encode()
-        expected_blob = hashlib.new(algorithm, f"blob {len(body)}\0".encode() + body).hexdigest()
-        for repository_id, references in by_repository.items():
+            by_repository.setdefault(sample["repository_id"], []).append(sample)
+        for repository_id, repository_samples in by_repository.items():
             entry = entries[repository_id]
+            commit = report["push_commit"] if report["operation"] == "push_branch" else None
+            algorithm = "sha256" if len(commit or entry["commit"]) == 64 else "sha1"
+            references = [f"refs/heads/canopy-benchmark/{report['push_run_id']}/{sample['sequence']:07d}"
+                          for sample in repository_samples]
+            expected_commits = {reference: commit or sample["push_commit"]
+                                for reference, sample in zip(references, repository_samples)}
             url = f"{client.base_url}/{entry['owner']}/{entry['name']}.git"
             for protocol in ("0", "2"):
                 local = args.work_dir / f"run-{index}-{repository_id}-v{protocol}.git"
@@ -453,11 +466,23 @@ def verify_writes(args, client, token):
                         raise RuntimeError("could not fetch acknowledged Git refs") from error
                     for reference in page:
                         if git("rev-parse", reference, cwd=local, token=token,
-                               timeout=args.git_timeout) != commit:
+                               timeout=args.git_timeout) != expected_commits[reference]:
                             raise RuntimeError("acknowledged Git ref differs")
-                if git("rev-parse", f"{commit}:README.md", cwd=local, token=token,
-                       timeout=args.git_timeout) != expected_blob:
-                    raise RuntimeError("acknowledged Git body differs")
+                for reference, sample in zip(references, repository_samples):
+                    expected_commit = expected_commits[reference]
+                    if report["operation"] == "push_commit":
+                        body = push_payload(report["push_run_id"], sample["sequence"], report["git_payload_size_bytes"])
+                        filename = "canopy-benchmark.bin"
+                        if git("rev-parse", f"{expected_commit}^", cwd=local, token=token,
+                               timeout=args.git_timeout) != entry["commit"]:
+                            raise RuntimeError("acknowledged Git parent differs")
+                    else:
+                        body = f"benchmark run {report['push_run_id']}\n".encode()
+                        filename = "README.md"
+                    expected_blob = hashlib.new(algorithm, f"blob {len(body)}\0".encode() + body).hexdigest()
+                    if git("rev-parse", f"{expected_commit}:{filename}", cwd=local, token=token,
+                           timeout=args.git_timeout) != expected_blob:
+                        raise RuntimeError("acknowledged Git body differs")
                 git("fsck", "--strict", "--full", cwd=local, token=token, timeout=args.git_timeout)
             refs += len(references)
             repositories.add(repository_id)
@@ -590,6 +615,52 @@ def prepare_incremental(active, clients, token, work_dir, timeout):
     return templates
 
 
+def prepare_push(active, clients, token, work_dir, timeout):
+    """Stage the original corpus tip before measuring independent child pushes."""
+    root = work_dir / "push-templates"
+    root.mkdir()
+    templates = {}
+    for index, entry in enumerate(active):
+        destination = root / entry["repository_id"]
+        ingress = clients[index % len(clients)]
+        url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
+        git("clone", "--quiet", "--bare", "--single-branch", "--branch=main", url, str(destination),
+            cwd=root, token=token, timeout=timeout)
+        if git("rev-parse", "HEAD", cwd=destination, token=token, timeout=timeout) != entry["commit"]:
+            raise RuntimeError("push template differs from the corpus tip")
+        git("fsck", "--strict", "--full", cwd=destination, token=token, timeout=timeout)
+        templates[entry["repository_id"]] = destination
+    return templates
+
+
+def push_payload(run_id, sequence, size):
+    return hashlib.shake_256(f"canopy-new-push:{run_id}:{sequence}".encode()).digest(size)
+
+
+def push_new_commit(url, template, reference, run_id, sequence, size, token, work_dir,
+                    timeout, request_id, receipt):
+    """Publish distinct objects in an independent child of the original main tip."""
+    preparation_started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="canopy-git-write-", dir=work_dir) as temporary:
+        destination = Path(temporary) / "repo"
+        git("clone", "--quiet", "--shared", str(template), str(destination), cwd=temporary,
+            token=token, timeout=timeout)
+        body = push_payload(run_id, sequence, size)
+        (destination / "canopy-benchmark.bin").write_bytes(body)
+        git("add", "canopy-benchmark.bin", cwd=destination, token=token, timeout=timeout)
+        git("-c", "user.name=Canopy Benchmark", "-c", "user.email=benchmark@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", f"Benchmark {run_id}/{sequence}",
+            cwd=destination, token=token, timeout=timeout)
+        receipt["push_commit"] = git("rev-parse", "HEAD", cwd=destination, token=token, timeout=timeout)
+        receipt["git_client_preparation_ms"] = (time.monotonic() - preparation_started) * 1000
+        command_started = time.monotonic()
+        try:
+            git("push", "--quiet", url, f"HEAD:{reference}", cwd=destination, token=token,
+                timeout=timeout, request_id=request_id)
+        finally:
+            receipt["git_push_command_ms"] = (time.monotonic() - command_started) * 1000
+
+
 def git_transfer(operation, url, entry, token, work_dir, timeout, request_id,
                  template=None):
     """Run one disposable stock-Git transfer and validate its advertised tip."""
@@ -648,7 +719,12 @@ def measure(args, client, token):
     manifest = corpus(args.manifest)
     incremental = args.operation in ("incremental_fetch", "incremental_pull")
     git_read = args.operation in ("ls_remote", "clone", "cold_fetch") or incremental
-    git_write = args.operation == "push_branch"
+    fresh_push = args.operation == "push_commit"
+    git_write = args.operation in ("push_branch", "push_commit")
+    git_payload_bytes = getattr(args, "git_payload_bytes", 256 * 1024)
+    if fresh_push and (not 1 <= git_payload_bytes <= 16 * 1024 * 1024
+                       or git_payload_bytes * args.concurrency > 256 * 1024 * 1024):
+        raise ValueError("new-commit pushes require positive bytes and at most 256 MiB in-flight payloads")
     creation = args.operation == "create"
     git_operation = git_read or git_write
     lfs_download = args.operation == "lfs_download"
@@ -661,7 +737,7 @@ def measure(args, client, token):
                 [entry for entry in manifest["repositories"] if entry.get("base_commit") is not None]
                 if incremental else
                 [entry for entry in manifest["repositories"] if entry["commit"] is not None]
-                if git_read else manifest["repositories"])
+                if git_read or fresh_push else manifest["repositories"])
     if not creation and (args.active_repositories is None or args.active_repositories > len(eligible)):
         raise ValueError("active repository count exceeds eligible corpus")
     total = math.ceil(args.duration * args.rate)
@@ -679,9 +755,9 @@ def measure(args, client, token):
     lfs_run_id = uuid.uuid4().hex if lfs_upload else None
     lfs_tail = (hashlib.shake_256(lfs_run_id.encode()).digest(max(0, args.lfs_bytes - 32))
                 if lfs_upload else None)
-    source = args.work_dir / "source" if git_write else None
+    source = args.work_dir / "source" if args.operation == "push_branch" else None
     push_commit = None
-    if git_write:
+    if args.operation == "push_branch":
         git("init", "-b", "main", str(source), cwd=args.work_dir, token=token)
         git("config", "user.name", "Canopy Benchmark", cwd=source, token=token)
         git("config", "user.email", "benchmark@example.invalid", cwd=source, token=token)
@@ -696,10 +772,13 @@ def measure(args, client, token):
     if incremental:
         templates = prepare_incremental(active, clients, token, args.work_dir,
                                         args.git_timeout)
+    if fresh_push:
+        templates = prepare_push(active, clients, token, args.work_dir, args.git_timeout)
     setup_seconds = round(time.monotonic() - setup_started, 3)
     # Skew has a declared hot tenth, not an implicit warm-cache assumption.
     hot = active[:max(1, len(active) // 10)]
     counts, latencies, service_times, dispatch_times = Counter(), [], [], []
+    push_command_times, push_preparation_times = [], []
     completed_in_window = 0
     created_identities = set()
     ingress_counts = [Counter() for _ in clients]
@@ -732,6 +811,10 @@ def measure(args, client, token):
                     dispatch_times.append(sample["dispatch_delay_ms"])
                     ingress_latencies[sample["ingress_index"]].append(sample["elapsed_ms"])
                     ingress_service_times[sample["ingress_index"]].append(sample["service_ms"])
+                if sample.get("git_push_command_ms") is not None:
+                    push_command_times.append(sample["git_push_command_ms"])
+                if sample.get("git_client_preparation_ms") is not None:
+                    push_preparation_times.append(sample["git_client_preparation_ms"])
                 samples.write(json.dumps(sample) + "\n")
 
         def execute(sequence, entry, scheduled):
@@ -742,6 +825,7 @@ def measure(args, client, token):
             result = "transport_error"
             uploaded_oid = None
             created_id = None
+            push_receipt = {}
             created_name = f"create-{create_run_id}-{sequence:07d}" if creation else None
             try:
                 if creation:
@@ -774,7 +858,12 @@ def measure(args, client, token):
                 elif git_write:
                     url = f"{ingress.base_url}/{entry['owner']}/{entry['name']}.git"
                     reference = f"refs/heads/canopy-benchmark/{push_run_id}/{sequence:07d}"
-                    push_branch(url, source, reference, token, args.git_timeout, request_id)
+                    if fresh_push:
+                        push_new_commit(url, templates[entry["repository_id"]], reference, push_run_id,
+                            sequence, git_payload_bytes, token, args.work_dir, args.git_timeout,
+                            request_id, push_receipt)
+                    else:
+                        push_branch(url, source, reference, token, args.git_timeout, request_id)
                     valid = True
                 elif lfs_download:
                     path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{entry['lfs_oid']}"
@@ -802,6 +891,9 @@ def measure(args, client, token):
                 record({"sequence": sequence, "request_id": request_id, "repository_id": entry["repository_id"], "ingress_index": ingress_index, "result": result,
                         "lfs_oid": uploaded_oid,
                         "created_name": created_name, "created_repository_id": created_id,
+                        "push_commit": push_receipt.get("push_commit"),
+                        "git_push_command_ms": push_receipt.get("git_push_command_ms"),
+                        "git_client_preparation_ms": push_receipt.get("git_client_preparation_ms"),
                         "completion_offset_seconds": finished - started,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
@@ -844,9 +936,18 @@ def measure(args, client, token):
               "offered_rps": args.rate, "schedule_seconds": args.duration,
               "elapsed_including_drain_seconds": round(elapsed, 3),
               "incremental_client_setup_seconds": setup_seconds if incremental else None,
+              "push_client_setup_seconds": setup_seconds if fresh_push else None,
               "concurrency": args.concurrency, "request_timeout_seconds": args.timeout,
               "git_timeout_seconds": args.git_timeout if git_operation else None,
               "push_run_id": push_run_id, "push_commit": push_commit,
+              "git_payload_size_bytes": git_payload_bytes if fresh_push else None,
+              "push_payload_file": "canopy-benchmark.bin" if fresh_push else None,
+              "acknowledged_new_git_payload_bytes": counts["ok"] * git_payload_bytes if fresh_push else None,
+              "push_kind": "distinct child commit and payload per arrival; original main unchanged" if fresh_push else
+                           "reused commit on unique refs" if git_write else None,
+              "git_push_command_ms": percentiles(push_command_times) if fresh_push else None,
+              "git_client_preparation_ms": percentiles(push_preparation_times) if fresh_push else None,
+              "git_push_command_population": "all attempts that reached stock git push, including command errors; includes client packing/HTTP and durable reply, not server-only time" if fresh_push else None,
               "lfs_run_id": lfs_run_id,
               "lfs_size_bytes": args.lfs_bytes if lfs_upload else None,
               "scheduled": total, "outcomes": dict(counts),
@@ -907,7 +1008,7 @@ def main():
                        help="bounded parallel identity checks (default: serial)")
     writes = commands.add_parser("verify-writes", help="check acknowledged load-test writes after owner recovery")
     writes.add_argument("--report", type=Path, action="append", dest="reports", required=True,
-                        help="push_branch or lfs_upload report with its digest-bound samples; repeat for multiple runs")
+                        help="push_branch, push_commit or lfs_upload report with digest-bound samples")
     writes.add_argument("--work-dir", type=Path, required=True)
     writes.add_argument("--output", type=Path, required=True)
     writes.add_argument("--git-timeout", type=positive, default=120)
@@ -920,6 +1021,7 @@ def main():
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
     run.add_argument("--operation", choices=("create", "metadata", "refs", "ls_remote", "clone", "cold_fetch",
                                            "incremental_fetch", "incremental_pull", "push_branch",
+                                           "push_commit",
                                            "lfs_download", "lfs_upload"),
                      default="metadata")
     run.add_argument("--rate", type=positive, default=20)
@@ -927,6 +1029,8 @@ def main():
     run.add_argument("--concurrency", type=positive, default=32)
     run.add_argument("--work-dir", type=Path, help="new client directory for stock-Git operations")
     run.add_argument("--git-timeout", type=positive, default=120)
+    run.add_argument("--git-payload-bytes", type=bounded_lfs_bytes, default=256 * 1024,
+                     help="distinct new Git payload per push_commit arrival, at most 16 MiB")
     run.add_argument("--lfs-bytes", type=bounded_lfs_bytes, default=1024 * 1024,
                      help="unique LFS upload bytes per scheduled arrival, at most 16 MiB")
     run.add_argument("--output", type=Path, required=True)

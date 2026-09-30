@@ -48,7 +48,10 @@ class CampaignTests(unittest.TestCase):
                          lambda manifest, plan: manifest["repositories"][1].update(
                              repository_id=manifest["repositories"][0]["repository_id"]),
                          lambda manifest, plan: plan["windows"][0].update(
-                             operation="lfs_upload", lfs_bytes=16 * 1024 * 1024, concurrency=17)):
+                             operation="lfs_upload", lfs_bytes=16 * 1024 * 1024, concurrency=17),
+                         lambda manifest, plan: plan["windows"][0].update(
+                             operation="push_commit", active_repositories=1,
+                             git_payload_bytes=16 * 1024 * 1024, concurrency=17)):
             manifest, plan = fixture()
             mutation(manifest, plan)
             with self.assertRaises(ValueError):

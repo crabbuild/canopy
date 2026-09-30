@@ -59,7 +59,8 @@ credentials were not changed. No authority check or TLS verification was disable
 | --- | --- |
 | Proxy socket regressions | Binary body larger than relay chunks, half-close, keep-alive, unchanged authorization, dead backend with no retry, connection-limit rejection |
 | Creation driver regressions | Unique names/UUID validation, every arrival counted, HTTP errors and invalid identities rejected, exact recovery receipts, corrupted evidence rejected before requests |
-| Python harness and fixture checks | 41 passed in 32.139 seconds, including critical-probe receipt guards and isolated Git execution; retained in `python-tests-critical.log` |
+| Python harness and fixture checks | 43 passed on Python 3.12 and 3.14, including fresh-payload push/receipt checks against local stock Git; `python312-push-timing.log` and `python314-push-timing.log` |
+| Hosted CI | The original `2ba8c81` Rust job passed format, clippy, tests, isolated RustFS compatibility and build. The `94d135f` harness job exposed a Python 3.12 fixture-mock defect; fix and latest-head CI verification are recorded separately, not relabeled as a historical pass |
 | Initial fleet startup | Failed: an old ephemeral RustFS port no longer accepted connections |
 | Initial 10,000 seed | Failed at the first create with HTTP 503; zero identities recorded, `complete: false` |
 | Cause of that seed's storage failure | Node logs show connection refusal and fencing; the old provider disappeared during concurrent Docker maintenance |
@@ -102,6 +103,7 @@ and client timeouts. Keep failures in the report rather than hiding them in a re
 | `clone`, `cold_fetch` | Stock Git with exact tip/content; distinguish a cold client from a cold server |
 | `incremental_fetch`, `incremental_pull` | Prepared base-only client outside arrival clock, exact new tip and pull body |
 | `push_branch` | Unique publication ref, stock receive-pack acknowledgement; later verify exact ref/body and strict fsck |
+| `push_commit` | New deterministic incompressible payload and child commit per arrival, exact original parent and unique ref; verify every acknowledged commit/payload after recovery |
 | `lfs_upload`, `lfs_download` | Unique upload bodies; exact size and SHA-256, including recovery |
 | Other critical Git operations | Initial ingress probe passed atomic multi-ref updates/refusal, mixed refusal, tags/notes/Unicode refs, mirror push, correct/stale force-with-lease, delete/prune, shallow/deepen/unshallow, filtered lazy fetch and invalid-token refusal; repetition under load and after owner loss remains open |
 
@@ -120,11 +122,26 @@ framing, not just payload. These observations can distinguish driver, proxy and
 server pressure; they do not measure RustFS VM CPU, S3 request cost, pack first-byte
 latency or per-payload-GiB CPU. Never label lifetime CPU percentage as interval CPU.
 
+`push_branch` reuses one commit and therefore measures ref publication, not fresh
+pack ingestion. `push_commit` clones prepared base objects locally, creates a new
+child of the original corpus tip, and sends a distinct payload on a unique ref.
+The original `main` remains unchanged. Reports separate local client preparation
+from the stock `git push` command (packing, HTTP, transfer and durable reply);
+scheduled latency still includes both. Payload bytes acknowledged are not wire
+pack bytes. The default payload is 256 KiB; a second size above 768 KiB exercises
+the external-blob path. Preparation templates are built before the arrival clock.
+
 After losing all three owners, record process exit and the unchanged lease-expiry
 boundary before starting fresh node directories. Verify every original corpus
 identity and populated Git/LFS fixture, plus every acknowledged creation, push
 and LFS upload from the load ledgers. Unacknowledged arrivals are not rollback
 assertions. A verifier alone does not prove that an owner restarted.
+
+For `push_commit`, the recovery verifier independently regenerates each payload
+from run ID, sequence and declared size, compares its Git blob ID and the exact
+parent/tip, and runs strict full fsck after v0/v2 fetches. The local file-backed
+driver regression proves these checks reject a wrong ref and a wrong payload
+declaration; it is not Canopy/RustFS performance or owner-loss evidence.
 
 ## Repeat with caller-owned disposable storage
 
