@@ -2,7 +2,7 @@
 """Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata, Git v2 discovery, clone, fetch, pull, unique-ref push or
+measures metadata, Git v2 capabilities, stock-Git ref listing, clone, fetch, pull, unique-ref push or
 direct-basic LFS transfers. Seed and verify use stock Git for a declared corpus
 sample. Incremental workloads require an opt-in two-commit corpus. Production
 throughput still needs separate qualification.
@@ -314,6 +314,10 @@ def prepare_incremental(active, clients, token, work_dir, timeout):
 def git_transfer(operation, url, entry, token, work_dir, timeout, request_id,
                  template=None):
     """Run one disposable stock-Git transfer and validate its advertised tip."""
+    if operation == "ls_remote":
+        listing = git("-c", "protocol.version=2", "ls-remote", url, "refs/heads/main",
+                      cwd=work_dir, token=token, timeout=timeout, request_id=request_id)
+        return listing == f"{entry['commit']}\trefs/heads/main"
     with tempfile.TemporaryDirectory(prefix="canopy-git-read-", dir=work_dir) as temporary:
         destination = Path(temporary) / "repo"
         if operation == "clone":
@@ -363,7 +367,7 @@ def measure(args, client, token):
     clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
     incremental = args.operation in ("incremental_fetch", "incremental_pull")
-    git_read = args.operation in ("clone", "cold_fetch") or incremental
+    git_read = args.operation in ("ls_remote", "clone", "cold_fetch") or incremental
     git_write = args.operation == "push_branch"
     git_operation = git_read or git_write
     lfs_download = args.operation == "lfs_download"
@@ -509,6 +513,8 @@ def measure(args, client, token):
               "eligible_repositories": len(eligible),
               "active_repositories": len(active), "distribution": args.distribution,
               "operation": args.operation, "seed": args.seed,
+              "git_discovery_kind": ("v2_capabilities_only" if args.operation == "refs" else
+                                     "v2_ls_refs_main_tip" if args.operation == "ls_remote" else None),
               "offered_rps": args.rate, "schedule_seconds": args.duration,
               "elapsed_including_drain_seconds": round(elapsed, 3),
               "incremental_client_setup_seconds": setup_seconds if incremental else None,
@@ -571,7 +577,7 @@ def main():
     run = commands.add_parser("run")
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
-    run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch",
+    run.add_argument("--operation", choices=("metadata", "refs", "ls_remote", "clone", "cold_fetch",
                                            "incremental_fetch", "incremental_pull", "push_branch",
                                            "lfs_download", "lfs_upload"),
                      default="metadata")

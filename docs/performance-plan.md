@@ -447,6 +447,25 @@ and disposable storage prefix. It creates private repositories; it does not
 remove them. Keep generated client checkouts on the mounted qualification volume.
 The provider fixture owns storage cleanup, separately from the benchmark.
 
+Choose the operation by the work you intend to measure:
+
+| Operation | Actual work | Validation / eligible corpus |
+| --- | --- | --- |
+| `metadata` | Authenticated repository API read | Exact UUID; all identities |
+| `refs` | Git v2 capability-only HTTP discovery; legacy operation name | Version-2 advertisement; all identities, **not** a ref-listing measurement |
+| `ls_remote` | Stock Git v2 `ls-refs`, with client-side `main` output filtering | Exact advertised `main` tip; populated repositories |
+| `clone`, `cold_fetch` | Stock Git full clone or empty-client fetch | Seeded tip; populated repositories |
+| `incremental_fetch`, `incremental_pull` | Stock Git transfer from a prepared base-only client | Incremental tip/content; two-commit repositories |
+| `push_branch` | Stock Git durable push to a unique ref | Native success; all identities |
+| `lfs_download`, `lfs_upload` | Direct-basic verified LFS body transfer | Size/hash for downloads; unique IDs for uploads |
+
+New reports distinguish the two discovery operations with `git_discovery_kind`.
+Historical `refs` rows below retain their recorded numbers but describe
+capability-only discovery, even where their old label says "Git v2 refs".
+`ls_remote` verifies a real reference advertisement. Its output pattern does
+not promise a server-side prefix filter; the observed Git client requests the
+ref advertisement and filters its output locally.
+
 ```sh
 python3 -B scripts/benchmark_repositories.py --base-url http://127.0.0.1:8080 \
   --manifest "$HOME/Workspace/crabbuild-target/canopy-density/corpus.json" \
@@ -633,6 +652,21 @@ working-set selection and offered arrivals. The driver never calls a working set
 warm automatically: its count is not the server's resident count. Prewarm a set
 that fits the node before claiming warm latency, or label the run as cold/mixed.
 
+For actual stock-Git ref listing through both gateways, use a populated working
+set and a fresh client directory. This example uses all 100 populated fixtures
+in the declared 10,000-identity corpus; it does not visit every identity:
+
+```sh
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 100 --operation ls_remote \
+  --distribution uniform --rate 5 --duration 60 --concurrency 8 \
+  --work-dir /path/to/new-ls-remote-clients \
+  --output /path/to/canopy-two-gateway-ls-remote.json
+```
+
 Each HTTP worker reuses a connection; stock-Git attempts use fresh client
 repositories. Arrivals follow a fixed clock schedule;
 end-to-end latency starts at the scheduled instant and includes driver dispatch
@@ -658,6 +692,9 @@ python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 They verify concurrency bounds, complete scheduled-outcome accounting, absence
 of retries, queue-delay inclusion, version-1/version-2 corpus and Git
 tip/content checks, and credential exclusion from the report.
+The ref-listing fixture also runs unmodified Git against an HTTP v2 server,
+asserts an actual `ls-refs` POST and request correlation, rejects a wrong tip,
+and distinguishes that exchange from capability-only GET discovery.
 
 ## Measurement history
 

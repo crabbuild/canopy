@@ -89,7 +89,7 @@ must not be compared with a successful full round trip as an end-to-end speedup.
 | Intermediate instrumentation-free multi-server candidate, four test threads | 93 passed, 9 ignored, in 482.20 s; includes the unchanged large-object fixture |
 | Final-source full debug attempt, four test threads | Stopped at the library: 113 passed, the existing symlink/reopen test failed with `WouldBlock`; integration targets are being run separately |
 | Final-source library, serial | All 114 passed in 59.35 s; does not erase the parallel failure |
-| Final-source formatter, Clippy and Python harness | Passed; Clippy checked all targets with warnings denied, Python ran 15 tests after cache-fixture repairs |
+| Final-source formatter, Clippy and Python harness | Passed; Clippy checked all targets with warnings denied, Python ran 15 tests after cache-fixture repairs and 16 after adding actual Git ref-listing coverage |
 | Final-source debug integration targets, four test threads | All six passed: Directory Cell 10, Git round trip 1, multi-server 93, owner restart 1, Repository Cell 1, smart HTTP 1; nine explicit multi-server ignores |
 | Final-source release multi-server suite, four test threads | 93 passed, 9 ignored in 490.94 s; unchanged large-object fixture passed |
 | Remaining final-source release targets, serial | All passed: library 114, binary 1 and the other five integration targets (14 tests) |
@@ -211,6 +211,24 @@ Live state and client scratch are internal. It has started seeding at
 `/tmp/canopy-chunk-count-30671d5-v6uDrfLl`; neither a partial manifest nor the
 small recovery/idle fixtures above close the 10,000-repository gate.
 
+## Measure ref listing separately from capabilities
+
+While the new corpus seeds, driver inspection found another coverage gap:
+`--operation refs` issues only Git v2 capability discovery, not `ls-refs`.
+Its old rows remain capability-only measurements, not evidence of ref-listing
+latency. A new `ls_remote` operation uses unmodified Git with protocol v2 and
+verifies the advertised `main` tip for populated fixtures. Reports label the
+two discovery kinds explicitly. The server binary and corpus release are
+unchanged by this driver addition.
+
+The HTTP regression failed before implementation, then confirmed actual
+`ls-refs` POSTs, correlation IDs, exact tip validation and rejection of wrong
+tips. It also confirms that the legacy capability operation issues no such
+POST. Git performs the output-pattern filtering client-side; the test does
+not require a wire prefix filter. All 16 Python harness tests passed after
+the addition. A direct call against one populated live Canopy fixture matched
+its tip; that is a driver smoke, not a partial-corpus capacity measurement.
+
 The old Docker data filesystem exhausted its inodes. A later read-only check
 found about 9,700 free inodes, enough to start a small probe container. A
 task-owned RustFS provider now mounts a dedicated host-home directory rather
@@ -254,6 +272,10 @@ Local logs are retained under experiment
 - `idle-memory-single-count-final.log`
 - `corpus-single-count-final-server.log`
 - `corpus-single-count-final-seed.log`
+- `ls-remote-regression-red.log`
+- `ls-remote-regression-green.log` (initial wire-prefix expectation was incorrect)
+- `python-ls-remote-final.log`
+- `ls-remote-live-driver-smoke.log`
 
 Use the [performance plan](../performance-plan.md#performance-qualification-rules)
 for the remaining capacity gates. This fix reduces transaction work; it does

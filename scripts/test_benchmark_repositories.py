@@ -67,7 +67,90 @@ class LfsHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+class GitRefsHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args):
+        pass
+
+    def reply(self, body, content_type):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @staticmethod
+    def packet(line):
+        body = line.encode()
+        return f"{len(body) + 4:04x}".encode() + body
+
+    def do_GET(self):
+        self.reply(self.packet("version 2\n") + self.packet("ls-refs\n")
+                   + self.packet("object-format=sha1\n") + b"0000",
+                   "application/x-git-upload-pack-advertisement")
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        with self.server.guard:
+            self.server.commands.append({"body": body,
+                "protocol": self.headers.get("Git-Protocol"),
+                "request_id": self.headers.get("X-Request-ID")})
+        self.reply(self.packet(f"{self.server.oid} refs/heads/main\n")
+                   + self.packet(f"{self.server.oid} refs/tags/fixture\n") + b"0000",
+                   "application/x-git-upload-pack-result")
+
+
 class ScheduledLoad(unittest.TestCase):
+    def test_ls_remote_uses_stock_git_v2_and_rejects_wrong_tips(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), GitRefsHandler)
+        server.guard, server.commands, server.oid = threading.Lock(), [], "1" * 40
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        client = benchmark.Client(f"http://127.0.0.1:{server.server_port}", "fixture-token", 2)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"version": 1, "complete": True,
+                    "requested_repositories": 2, "repositories": [
+                        {"name": "fixture", "owner": "canopy",
+                         "repository_id": str(uuid.uuid4()), "commit": server.oid},
+                        {"name": "empty", "owner": "canopy",
+                         "repository_id": str(uuid.uuid4()), "commit": None}]}))
+                for name, advertised, expected in (
+                        ("valid", "1" * 40, "ok"),
+                        ("wrong-tip", "2" * 40, "invalid_response")):
+                    server.oid = advertised
+                    args = SimpleNamespace(manifest=manifest, active_repositories=1, seed=42,
+                        duration=1, rate=2, concurrency=2, distribution="uniform",
+                        operation="ls_remote", timeout=2, git_timeout=2,
+                        work_dir=root / f"{name}-scratch", output=root / f"{name}.json")
+                    report = benchmark.measure(args, client, "fixture-token")
+                    self.assertEqual(report["outcomes"], {expected: 2})
+                    self.assertEqual(report["eligible_repositories"], 1)
+                    self.assertEqual(report["git_discovery_kind"], "v2_ls_refs_main_tip")
+                    self.assertNotIn("fixture-token", args.output.read_text())
+                self.assertEqual(len(server.commands), 4)
+                for command in server.commands:
+                    self.assertIn(b"command=ls-refs\n", command["body"])
+                    self.assertNotIn(b"command=fetch\n", command["body"])
+                    self.assertEqual(command["protocol"], "version=2")
+                    uuid.UUID(command["request_id"])
+
+                before = len(server.commands)
+                args.operation = "refs"
+                args.output = root / "capabilities.json"
+                report = benchmark.measure(args, client, "fixture-token")
+                self.assertEqual(report["outcomes"], {"ok": 2})
+                self.assertEqual(report["git_discovery_kind"], "v2_capabilities_only")
+                self.assertEqual(len(server.commands), before)
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_parallel_verify_rejects_identity_mismatch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
