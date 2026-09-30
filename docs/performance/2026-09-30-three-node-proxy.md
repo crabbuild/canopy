@@ -60,7 +60,7 @@ credentials were not changed. No authority check or TLS verification was disable
 | Proxy socket regressions | Binary body larger than relay chunks, half-close, keep-alive, unchanged authorization, dead backend with no retry, connection-limit rejection |
 | Creation driver regressions | Unique names/UUID validation, every arrival counted, HTTP errors and invalid identities rejected, exact recovery receipts, corrupted evidence rejected before requests |
 | Python harness and fixture checks | 44 passed on Python 3.12 and 3.14, including real-TCP repeated-window connection cleanup; `python312-connection-lifecycle.log` and `python314-connection-lifecycle.log` |
-| Hosted CI | Both `337e0a7` workflows passed the 44-test Linux harness and Rust format, clippy, tests, isolated RustFS compatibility and build. The earlier `94d135f` harness failure remains recorded: a global randomness mock broke UUID construction on Python 3.12 |
+| Hosted CI | Both `501c207` workflows passed the 44-test Linux harness and Rust format, clippy, tests, isolated RustFS compatibility and build. The earlier `94d135f` harness failure remains recorded: a global randomness mock broke UUID construction on Python 3.12 |
 | Initial fleet startup | Failed: an old ephemeral RustFS port no longer accepted connections |
 | Initial 10,000 seed | Failed at the first create with HTTP 503; zero identities recorded, `complete: false` |
 | Cause of that seed's storage failure | Node logs show connection refusal and fencing; the old provider disappeared during concurrent Docker maintenance |
@@ -70,7 +70,7 @@ credentials were not changed. No authority check or TLS verification was disable
 | Scheduled load matrix | Not yet qualified |
 | Initial three-owner loss | All three verified seeding-node PIDs killed; process absence recorded, followed by 32.006 seconds of unchanged lease-expiry wait; no data deleted |
 | Critical-fixture fresh-state recovery | Passed: both original identities, four exact nine-ref inventories across v0/v2, payload, Git notes and strict full fsck |
-| Full-corpus recovery / preflight | Running on three fresh node directories through the new ingress; four verification workers, no retries |
+| Full-corpus recovery / preflight | Passed: all 10,000 original identities and all 100 populated fixtures through three fresh node directories and the new ingress; v0/v2 clones, exact Git/incremental/LFS bytes and strict full fsck; four verification workers, no retries |
 | Post-load acknowledged-write recovery | Not yet run |
 
 The old seed is not resumed or merged into a passing manifest. The replacement
@@ -87,8 +87,10 @@ The matched fleet uses the same durable deployment and release binary, with new
 node IDs and local directories. The initial fault is deliberate, not a setup
 failure: the seeding launcher's retained outcome records all three exits as `-9`.
 RustFS retained container identity and start time, with zero restarts across this
-boundary. Recovery of the two critical fixtures does not prove recovery of all
-10,000 identities; the full-corpus preflight remains a separate gate.
+boundary. Recovery of the two critical fixtures and the complete original corpus
+passed separately. Neither proves post-load recovery of newly acknowledged writes;
+that gate remains open until the load ledgers and a second owner-loss boundary are
+verified.
 
 | Evidence file in `canopy-three-proxy-q3FO2z` | SHA-256 |
 | --- | --- |
@@ -96,6 +98,8 @@ boundary. Recovery of the two critical fixtures does not prove recovery of all
 | `initial-owner-loss.json` | `b7ec448090f971688bcab265dfe331f689322d23f708acdd1663d605c4644179` |
 | `fleet-node100-matched/ready.json` | `fb3e9373c7b04f19742d9098d006f55bf22273a6f0aa9a918149f43fa8827531` |
 | `critical-initial-owner-loss-verification.json` | `2aac52dcca5973fbe9ed8badebd5eda2c97563e091d94816df5735f76f9c0c5d` |
+| `campaign-node100-baseline/preflight.json` | `f9db3b852a941e85ec491ae3bce662bf08c506f679fad6428a0d86b7e45084cd` |
+| `initial-six-metadata-audit.json` | `c1edcb29c40ed53aeca1b6b868b3d8655c334df5af0a1167d83117498c526628` |
 | `plan-node100-baseline.json` | `3b91a98e56d13c20985e6ca2d3063035011cb6da47f1a770499d3aa8b95a9e1b` |
 
 The [declared first admission profile](three-node-baseline.json) expands 50
@@ -104,9 +108,19 @@ configurations into 108 windows:
 preparation and drain. It covers metadata with 100/500/1,000-identity uniform and
 skewed sets, creation, discovery, stock Git reads and incremental pull/fetch,
 ref-only pushes, fresh 256 KiB/1 MiB child-commit pushes and 1 MiB LFS transfers.
-Git concurrency and offered rate vary independently. These are planned inputs,
-not completed measurements; higher admission profiles, rate envelopes, further
+Git concurrency and offered rate vary independently. Load clocks have started
+after complete-corpus preflight; the matrix is not complete. Higher admission
+profiles, rate envelopes, further
 skewed Git tests and complete acknowledged-write recovery remain required.
+
+During preflight, a pause in the 100-identity progress checkpoints prompted a
+one-second native process sample. The main thread was waiting for its batch and
+workers were waiting for HTTP responses; progress resumed without restart or
+retry. Node logs retained successful but slow lease refreshes (up to 5.900 seconds
+in the inspected interval). RustFS retained its container identity and zero
+restarts. The process sample and cumulative cgroup snapshots are diagnostic
+artifacts, not proof of a Cellule defect or scheduled-load latency. No timeout,
+lease or fencing rule was weakened.
 
 The campaign runner rejects old or changed fixture bindings, stale proxy metrics,
 missing processes, an incomplete corpus and an active set larger than the eligible
@@ -119,6 +133,40 @@ regression reproduced an artificial admission failure when old thread-local
 keep-alive connections survived into later windows; it now passes with the same
 two-connection proxy cap and no backend/admission errors. The real fleet cap and
 production timeouts were not raised to accommodate the driver.
+
+## Initial scheduled metadata results
+
+These are the first six completed windows, not the completed campaign. Each
+offers 2,400 arrivals over 120 seconds at 20 requests/s, with 32 driver slots and
+100 selected identities from the complete 10,000-identity corpus. Node residency
+remains capped at 100 entries per node. Repetitions use the same selected set;
+there is no explicit prewarming or per-request proof of a warm serving path.
+
+| Distribution | Repeat | Successful | Driver drops | HTTP 503 | Successful req/s in window | Attempt p95 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Uniform | 1 | 1,936 | 464 | 0 | 16.133 | 3,622.677 / 11,840.058 |
+| Uniform | 2 | 2,384 | 12 | 4 | 19.867 | 364.444 / 2,142.484 |
+| Uniform | 3 | 2,400 | 0 | 0 | 20.000 | 142.316 / 235.788 |
+| Skewed | 1 | 2,167 | 233 | 0 | 18.042 | 1,425.805 / 7,259.360 |
+| Skewed | 2 | 2,358 | 25 | 17 | 19.642 | 746.147 / 2,766.292 |
+| Skewed | 3 | 2,381 | 14 | 5 | 19.842 | 1,074.443 / 2,012.889 |
+
+The independent audit recomputes every arrival count, sequence coverage,
+nearest-rank percentile and in-window success count. It verifies report, sample
+and resource digests against the campaign index. Percentiles include completed
+errors; dropped arrivals remain failures without fabricated latency. They are
+not averaged across repetitions. None meets the numerical warm-reference
+p95/p99 bounds of 20/50 ms; this shared-host diagnostic is not the reference
+Linux environment or a pure warm-path qualification.
+
+There were no front-proxy errors or admission rejections in these six windows.
+In uniform repeat 2, four client HTTP 503 completion timestamps match four
+node-0 authentication-directory error logs within about one millisecond. The
+handler performs Directory Cell authentication before repository inspection.
+The generic invocation error does not identify the underlying runtime failure;
+this is a correlated failure path, not a proven Cellule bottleneck. Same-set
+repetition improves the uniform measurements, but the skewed repeats still fail.
+No runtime optimization, retry, timeout or admission increase was applied.
 
 ## Measure the requested operations
 
