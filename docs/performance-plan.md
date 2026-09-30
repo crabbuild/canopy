@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `47a302b79962ee16c698e121315cf4e85ec49549`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a3fbfb0115a1ae2519ee8f8e0cf6b8e72fdaa303`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -20,8 +20,8 @@ flowchart LR
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
-| Is 10,000 repositories per node a measured capacity? | No; it is a proposed reference-node target | [Required outcome](#required-outcome) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | Not on a real store; the current pin passed 1,000 in-memory Cells, but its RustFS run fenced owners beyond 800 | [Current scheduler and provider observations](#current-pin-scheduler-and-provider-observations) |
+| Is 10,000 repositories per node a measured capacity? | No; local 100-slot RustFS seeding and clean-shutdown recovery passed, but the reference Linux throughput and mixed workload remain unqualified | [Real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
+| Is idle ownership proven at 1,000 active Cells? | In a local SQL-only RustFS fixture, yes: the merged pin passed 10- and 30-second renewal-coverage windows. The reference Linux node and foreground load remain unqualified | [Merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
 
@@ -30,11 +30,12 @@ the bounded 32-task renewal window when I/O completes. A 100-ms scan rebuilds
 pending candidates, removing stale generations and departed Cells. This removes
 the earlier 320-starts/s *scheduler* ceiling; it does not lower the one-control-
 update-per-active-Cell cost or prove that a provider can sustain the required
-update rate. Repeat the real-store idle coverage gate before raising the active
-Cell limit or claiming 1,000- or 10,000-Cell residency. This dependency and
-lockfile change also changes Canopy's compiled release digest; test against a
-fresh store prefix or use the documented maintenance upgrade path for an
-existing deployment.
+update rate. The local SQL-only RustFS gate now covers 1,000 active Cells, but
+repeat it on the reference Linux node under foreground load before raising the
+active Cell limit or claiming 1,000- or 10,000-Cell production residency. This
+dependency and lockfile change also changes Canopy's compiled release digest;
+test against a fresh store prefix or use the documented maintenance upgrade
+path for an existing deployment.
 
 ## Recorded large-transfer qualification
 
@@ -52,11 +53,17 @@ preparation hydrated 901 reachable blobs (5,966,921,728 bytes) in about 109
 seconds. This is functional size and recovery proof on the local provider; it
 does not establish production-provider latency or repository density.
 
-The current PR's GitHub-hosted size gate has not repeated that pass. RustFS
-returned a write-quorum HTTP 500 while staging the large Git blob, and the
-runner then reported `No space left on device`. The gate now checks for at least
-40 GiB free on both its scratch and provider volumes before uploading; it still
-requires the full non-sparse Git and LFS round trip on a suitable runner.
+The GitHub-hosted size gate has not repeated that pass. RustFS returned a
+write-quorum HTTP 500 while staging the large Git blob, and the runner then
+reported `No space left on device`. Ordinary CI now runs the smaller
+`--provider-only` compatibility suite. The separate manual
+`Qualify large Git and LFS transfers` workflow requires a runner labeled
+`canopy-large-transfer`; provision at least 40 GiB free on both scratch and
+Docker's data volume, plus Rust 1.97 or newer and Docker daemon access. Its
+preflight checks both before uploading, and it still
+requires the full non-sparse Git and LFS round trip before a release claim.
+If no such runner is connected, this gate remains unqualified rather than
+silently passing on an undersized GitHub-hosted runner.
 
 ## Required outcome
 
@@ -217,15 +224,16 @@ permits it.
   object metadata using an insertion cursor and reuses verified immutable bodies from a repository-scoped
   cache. Each native push/merge has a private writable generation; successful
   publication precedes hydration of its new objects into the shared cache.
-- Demand-driven `release_idle_cell` and automatic pressure shedding share
-  Cellule's two-movements-per-second, two-in-flight budget. A successful
-  release also deletes the local SQLite state. At 100 active slots, a
-  first-pass scan of 10,000 distinct locally owned repositories requires at
-  least 9,900 releases: the budget alone implies at least 4,950 seconds
-  (82.5 minutes), before restore, Git work or network time. This is a lower
-  bound from code, not a measured scan. Bursts can instead receive a capacity
-  error after Canopy's single one-second retry. Do not interpret the 10,000
-  identity target as a uniform-access pass until this path is qualified.
+- Demand-driven `release_idle_cell` now has a separate 32-in-flight,
+  32-completions-per-second budget; automatic pressure shedding retains its
+  two-in-flight, two-completions-per-second budget. A successful release also
+  deletes the local SQLite state. At 100 active slots, a first-pass scan of
+  10,000 distinct locally owned repositories requires at least 9,900 releases:
+  even a saturated requested-release budget needs about 310 one-second
+  windows, before restore, Git work or network time. This is a code-derived
+  rate bound, not a measured scan. Bursts can still receive a capacity error
+  after Canopy's single one-second retry. Do not interpret the 10,000 identity
+  target as a uniform-access pass until this path is qualified.
 - Eight shared heavy-request slots and four active and four pending slots per
   account prevent one account from filling every transfer wait position. The
   bounded Linux profile establishes containment, not latency, throughput or
@@ -404,11 +412,11 @@ count dropped arrivals and timeouts as failures, never omit them from results.
 Run skewed and uniform distributions across 10,000 identities, each with 100,
 500 and 1,000 active repositories. Vary simultaneous pack workers independently.
 For uniform access, report successful releases per second, movement-budget
-rejections, retry outcomes and cold-admission failures. A future demand-driven
-release budget must retain generation checks, settled-work preflight and
-authoritative release, while keeping automatic pressure shedding paced and
-preserving bounded memory/disk use. Raise no shared movement limit solely to
-make a benchmark pass.
+rejections, retry outcomes and cold-admission failures. The new demand-driven
+release budget retains generation checks, settled-work preflight and
+authoritative release while keeping automatic pressure shedding paced; measure
+whether its configured rate is sustainable for memory, disk and the object
+store. A higher admission limit alone is not a capacity result.
 Report cold activation latency by database size, local cache state and restore
 bytes. Report clone/fetch first-byte latency, throughput, CPU per transferred GiB
 and object-store cost. Write latency includes durable acknowledgement.
@@ -454,6 +462,10 @@ directories, and measurement refuses existing output files. For another
 checkout/run, use a different qualification directory. `verify` may target a
 new node URL after owner takeover. It checks every identity and clones each
 populated sample with Git v0/v2, exact commit/file hashes and strict fsck.
+It runs serially by default; `verify --concurrency 4` checks a bounded batch of
+four identities at a time. Record that setting because concurrent restores
+change the offered load and may expose capacity failures.
+
 The default sample contains three one-commit repositories; the remainder are
 empty. This is a density smoke corpus, not realistic large-history qualification.
 An interrupted seed leaves an explicitly incomplete manifest and cannot be used
@@ -709,6 +721,104 @@ do not explain the earlier failure, whose runtime publication tracing was off.
 The small corpus, short schedules, different build profile and active-set sizes
 prevent a controlled performance comparison with the initial 1,000-identity run.
 
+### Local 10,000-identity churn diagnostic
+
+Canopy `52279e9` with Cellule `21bed5e` (identical source tree to merged
+`a3fbfb0`) completed a sequential seed of 10,000 repository identities on a
+shared macOS arm64 host. This was a **debug build with
+an in-process `memory:///` store**, `max_active_repositories: 100`, and an 8-GiB
+local disk-admission setting. One hundred repositories had two commits, an
+incremental base ref, and a 128-byte LFS object. The manifest completed in
+1,731.784 seconds; no seed request failed. Creation medians were 125.65 ms for
+the first 100 and 159.18 ms for the last 100. These are observed client times,
+not a sustained throughput or reference-node result.
+After the scheduled workloads, same-process `verify` matched all 10,000
+identities against the manifest. All 100 populated samples passed stock-Git
+v0/v2 clones, exact commit and file hashes, and strict `git fsck`.
+
+The preceding build stopped at identity 3,125 with HTTP 503 after an idle Cell
+began draining between inventory and release preflight. The current build
+rescans up to eight other idle candidates on that exact transient error, leaving
+other release failures on their recovery path. Passing this one rerun supports
+the fix for sequential churn; it does not prove the race absent under concurrency.
+
+| Follow-up operation | Active set; schedule | Outcomes | Scheduled p95 / p99 |
+| --- | --- | --- | --- |
+| Metadata, uniform | 1,000; 10/s for 60 s | 600/600 OK | 193.626 / 244.862 ms |
+| Git v2 refs, skewed | 100; 5/s for 60 s | 300/300 OK | 150.051 / 206.867 ms |
+| Stock-Git full clone, uniform | 100 populated; 1/s for 30 s | 30/30 OK | 602.675 / 672.942 ms |
+| Incremental stock-Git fetch, uniform | 20 populated; 1/s for 20 s | 20/20 OK | 635.725 / 760.475 ms |
+| LFS download, uniform | 100 populated; 3/s for 30 s | 90/90 OK on rerun | 66.137 / 86.393 ms |
+| LFS upload, uniform | 100; 2/s for 30 s | 60/60 OK | 94.869 / 147.461 ms |
+| Unique-branch stock-Git push, uniform | 100; 1/s for 30 s | 30/30 OK on rerun | 533.859 / 559.576 ms |
+
+The first LFS download window returned 401 for all 90 requests, and the first
+push window recorded Git errors for all 30 requests. Both same-workload reruns
+passed; a five-request push check and a manual stock-Git push also passed.
+The original failures remain unexplained and are **not** counted as successful
+qualification. The driver keeps per-arrival outcome records, but its Git-error
+category does not retain the underlying process response. Repeat with correlated
+server diagnostics before making an availability claim.
+
+The run did not exercise a real object store, Linux resource containment,
+500/1,000 resident slots, two gateways, large bodies, recovery after restart,
+or sustained mixed-client load. None of the measured percentiles is a production
+SLO result or evidence that the 10,000-repository reference target is met.
+
+### Local real-store 10,000-identity diagnostic
+
+Canopy `ca87eb7` with merged Cellule `a3fbfb0` seeded a separate, complete
+version-2 corpus on local RustFS `1.0.0-beta.8-glibc`: 10,000 repository
+identities, 100 with two commits, an incremental base ref and a 128-byte LFS
+fixture. The debug server limited itself to 100 active repositories and an
+8-GiB local disk admission budget. The shared macOS arm64 host was not resource
+isolated; the RustFS container was capped at two CPUs and 4 GiB. The seed took
+3,763.348 seconds with no failed create request. Manifest SHA-256:
+`d1469c0ca41e415d9ccca1076a0d1e9622a0f640f416b56c0ba9ca79394e3643`.
+
+| Follow-up operation | Active set; schedule | First-window outcomes | Scheduled p95 / p99 |
+| --- | --- | --- | --- |
+| Metadata, uniform | 1,000; 10/s for 60 s | 530 OK, 70 `driver_busy` | 2,945.822 / 3,721.676 ms |
+| Git v2 refs, skewed | 100; 5/s for 60 s | 300/300 OK | 744.842 / 1,188.397 ms |
+| Stock-Git full clone, uniform | 100 populated; 1/s for 30 s | 30/30 OK | 1,102.619 / 1,166.806 ms |
+| Incremental stock-Git fetch, uniform | 20 populated; 1/s for 20 s | 20/20 OK | 680.442 / 709.351 ms |
+| LFS download, uniform | 100 populated; 3/s for 30 s | 90/90 OK | 476.676 / 606.772 ms |
+| LFS upload, uniform | 100; 2/s for 30 s | 60/60 OK | 817.552 / 944.236 ms |
+| Unique-branch stock-Git push, uniform | 100; 1/s for 30 s | 30/30 OK | 1,779.782 / 1,955.811 ms |
+
+The metadata driver had 16 workers; `driver_busy` means a scheduled arrival
+could not enter that bounded client window, not an HTTP error from Canopy. Those
+70 failures occurred in seconds 20–47 while completed requests slowed, and are
+**not** counted as success. Percentiles exclude unsent arrivals because no
+request latency exists for them. A direct signed provider PUT after the window
+took 48 ms, and point-in-time process/container CPU checks did not show sustained
+saturation. Neither observation identifies the cause of the temporary slowdown.
+An identical same-server repeat completed 596/600 requests with four
+`driver_busy` arrivals and 1,354.381-ms scheduled p95. A signed provider PUT
+during that window took 115 ms. The metadata capacity failure therefore recurred,
+although its magnitude varied.
+
+After graceful shutdown, the same node identity, key, deployment and provider
+started with an empty local data directory. Its identical metadata window
+completed 600/600 requests with 857.929-ms scheduled p95; a concurrent signed
+provider PUT took 30 ms. Targeted debug logs for that fresh-workspace window
+showed 600 Directory lookups at 13.22-ms p95, 552 repository transitions at
+781.95-ms p95, and 551 Cell acquisitions at 594.66-ms p95. The transition
+measure includes release, acquisition and initialization, so these percentiles
+are not additive. This implicates cold residency churn rather than Directory
+lookup in the observed latency, but does not isolate the slow provider operation
+or establish that the 10/s schedule is robust across repeated windows.
+
+Both the original server and the fresh-local-workspace server matched all
+10,000 identities. On each sweep, all 100 populated repositories passed LFS
+hashes, stock-Git protocol v0/v2 clones, exact commit/file hashes and strict
+`git fsck`. Verification used four bounded workers and thus also exercised
+concurrent cold restores. The second pass establishes clean-shutdown recovery
+on this local provider, not unclean takeover or multiple-node routing.
+
+The successful Git/LFS windows are short and use small fixtures; they do not
+establish the 8-vCPU Linux reference target, larger transfers, multiple
+gateways, or availability under a mixed workload.
 
 ### Diagnosing metadata latency
 
@@ -1708,7 +1818,7 @@ a controlled scheduler regression. The existing
 
 #### Current pin: scheduler and provider observations
 
-The current Cellule pin is `47a302b`. A debug Canopy example on shared macOS
+The Cellule pin at the time of this run was `47a302b`. A debug Canopy example on shared macOS
 arm64 measured these SQL-only, otherwise idle windows; each active count also
 includes the Directory Cell. The in-memory run passed its final graceful drain,
 fresh-workspace restart, released-only window, and three identity restorations.
@@ -1732,8 +1842,9 @@ bucket check still responded. This is a failed/incomplete real-store gate, not
 proof of a single root cause; node-lease refresh, provider latency and shutdown
 drain need investigation before increasing active density.
 
-The current Cellule pin addresses the dispatch-order and refill mechanism with
-a sorted scan every 100 ms. Before raising active density, qualify the change:
+The merged Cellule pin addresses the dispatch-order and refill mechanism with
+a sorted scan every 100 ms. To extend the idle SQL-only result below into a
+capacity claim under foreground work, qualify the change further:
 
 1. Measure scan and sort CPU at 1,000 through 10,000 active Cells. The current
    pending vector is rebuilt each tick and bounded by active count; use a
@@ -1745,15 +1856,47 @@ a sorted scan every 100 ms. Before raising active density, qualify the change:
 3. Prove progress above the old dispatch ceiling, including slow storage,
    concurrent foreground work, takeover and drain. Record worst renewal delay
    and missed deadlines, not only average update rate.
-4. Repeat the unchanged real-store coverage gate at 100, 500 and 1,000 Cells.
-   Separately audit whether node-session liveness can reduce per-Cell idle
-   writes safely. Scheduling fairness fixes starvation; it does not remove the
-   approximately linear storage traffic of active publishers.
+4. Repeat the real-store coverage gate on the reference Linux node under
+   foreground Git/LFS work and provider latency variation. Separately audit
+   whether node-session liveness can reduce per-Cell idle writes safely.
+   Scheduling fairness fixes starvation; it does not remove the approximately
+   linear storage traffic of active publishers.
 
 These are dependency changes and remain approval-gated under the repository
 instructions. Increasing the concurrency constant alone or relaxing the
 coverage assertion does not establish fair progress. No dependency or
 production server code was changed for this measurement.
+
+#### Merged-pin real-store idle qualification
+
+Canopy `ca87eb7` with Cellule `a3fbfb0` ran the unchanged `benchmark_idle`
+example against a fresh prefix on local RustFS `1.0.0-beta.8-glibc`. The shared
+macOS arm64 client/server host was not isolated; the RustFS container was capped
+at two CPUs and 4 GiB. The debug example binary SHA-256 was
+`6ee5dea4246f0b66c40c09c8a7e06937047f26ed94c99ef76fa8c7cc399a3df9`.
+All repositories were empty SQL-only Cells; each active count also includes the
+Directory Cell. Both runs seeded 1,000 identities, completed graceful shutdown,
+started a fresh local workspace, checked an idle released-only window, and
+restored three sampled identities.
+
+| Run and window | Serving Cells before/after | Control updates/s | Distinct Cells renewed | Failed PUTs | Gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| First run, 100 active, 10 s | 101/101 | 32.090 | 101/101 | 0 | Passed |
+| First run, 500 active, 10 s | 501/501 | 167.652 | 501/501 | 0 | Passed |
+| First run, 1,000 active, 10 s | 1,001/1,001 | 311.930 | 1,001/1,001 | 0 | Passed |
+| First run, 1,000 released, 10 s | 1/1 | 0.300 | 1/1 | 0 | Passed |
+| Repeat, 1,000 active, 30 s | 1,001/1,001 | 243.243 | 1,001/1,001 | 0 | Passed |
+| Repeat, 1,000 released, 30 s | 1/1 | 0.333 | 1/1 | 0 | Passed |
+
+No measured window changed a Cell root. The 1,000-active windows ended with 22
+and 32 PUTs still in flight, respectively; the gate counts only completed
+updates and requires renewal from every expected Cell. The lower rate in the
+30-second repeat is an observation, not an established throughput limit or a
+root-cause diagnosis. Container point samples during seeding showed substantial
+CPU use; peak host/provider resource use and renewal deadline tails were not
+measured. The earlier failed RustFS run on `47a302b` remains historical evidence,
+but its fencing symptom did not recur in these two runs. This is not proof of
+1,000 full Git/LFS repositories or the 8-vCPU Linux reference target.
 
 ### Warm Git ref-generation validation
 
