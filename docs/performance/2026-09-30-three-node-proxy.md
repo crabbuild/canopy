@@ -60,15 +60,18 @@ credentials were not changed. No authority check or TLS verification was disable
 | Proxy socket regressions | Binary body larger than relay chunks, half-close, keep-alive, unchanged authorization, dead backend with no retry, connection-limit rejection |
 | Creation driver regressions | Unique names/UUID validation, every arrival counted, HTTP errors and invalid identities rejected, exact recovery receipts, corrupted evidence rejected before requests |
 | Python harness and fixture checks | 44 passed on Python 3.12 and 3.14, including real-TCP repeated-window connection cleanup; `python312-connection-lifecycle.log` and `python314-connection-lifecycle.log` |
-| Hosted CI | The original `2ba8c81` Rust job passed format, clippy, tests, isolated RustFS compatibility and build. The `94d135f` harness job exposed a Python 3.12 fixture-mock defect; after its fix, both `e85bda4` Linux harness jobs passed. Later-head CI remains a separate gate |
+| Hosted CI | Both `337e0a7` workflows passed the 44-test Linux harness and Rust format, clippy, tests, isolated RustFS compatibility and build. The earlier `94d135f` harness failure remains recorded: a global randomness mock broke UUID construction on Python 3.12 |
 | Initial fleet startup | Failed: an old ephemeral RustFS port no longer accepted connections |
 | Initial 10,000 seed | Failed at the first create with HTTP 503; zero identities recorded, `complete: false` |
 | Cause of that seed's storage failure | Node logs show connection refusal and fencing; the old provider disappeared during concurrent Docker maintenance |
 | Replacement fleet | Three live nodes behind one proxy; matching UUID read through each node |
-| Fresh 10,000 seed | Running; its manifest remains incomplete until the entire requested seed succeeds |
+| Fresh 10,000 seed | Completed with exit 0: 10,000 distinct canonical repository UUIDs, 100 two-commit Git fixtures and 100 exact 1 MiB LFS fixtures; 8,567.224 seconds |
 | Critical stock-Git probe through ingress | Passed 17 functional steps against the live RustFS fixture; exact nine-ref inventories in two repositories, v0/v2 mirror clones and strict full fsck |
 | Scheduled load matrix | Not yet qualified |
-| Three-owner loss and fresh-state recovery | Not yet qualified |
+| Initial three-owner loss | All three verified seeding-node PIDs killed; process absence recorded, followed by 32.006 seconds of unchanged lease-expiry wait; no data deleted |
+| Critical-fixture fresh-state recovery | Passed: both original identities, four exact nine-ref inventories across v0/v2, payload, Git notes and strict full fsck |
+| Full-corpus recovery / preflight | Running on three fresh node directories through the new ingress; four verification workers, no retries |
+| Post-load acknowledged-write recovery | Not yet run |
 
 The old seed is not resumed or merged into a passing manifest. The replacement
 uses an independent provider, bucket and deployment prefix. The original 30-second
@@ -79,6 +82,31 @@ The first live seeding fixture started before the final launcher teardown guards
 and source-hash fields were added. It is setup evidence, not a matched performance
 candidate. Scheduled load runs must use a committed harness, record its script
 digests and distinguish the corresponding fresh fleet from this seeding phase.
+
+The matched fleet uses the same durable deployment and release binary, with new
+node IDs and local directories. The initial fault is deliberate, not a setup
+failure: the seeding launcher's retained outcome records all three exits as `-9`.
+RustFS retained container identity and start time, with zero restarts across this
+boundary. Recovery of the two critical fixtures does not prove recovery of all
+10,000 identities; the full-corpus preflight remains a separate gate.
+
+| Evidence file in `canopy-three-proxy-q3FO2z` | SHA-256 |
+| --- | --- |
+| `corpus-stable-10000.json` | `a0ffd0ca727a99e067fb71b419ffe0cd6ac4750ea18db25fd0f19291ac3275c1` |
+| `initial-owner-loss.json` | `b7ec448090f971688bcab265dfe331f689322d23f708acdd1663d605c4644179` |
+| `fleet-node100-matched/ready.json` | `fb3e9373c7b04f19742d9098d006f55bf22273a6f0aa9a918149f43fa8827531` |
+| `critical-initial-owner-loss-verification.json` | `2aac52dcca5973fbe9ed8badebd5eda2c97563e091d94816df5735f76f9c0c5d` |
+| `plan-node100-baseline.json` | `3b91a98e56d13c20985e6ca2d3063035011cb6da47f1a770499d3aa8b95a9e1b` |
+
+The [declared first admission profile](three-node-baseline.json) expands 50
+configurations into 108 windows:
+114,960 offered arrivals over 8,640 offered seconds, excluding preflight,
+preparation and drain. It covers metadata with 100/500/1,000-identity uniform and
+skewed sets, creation, discovery, stock Git reads and incremental pull/fetch,
+ref-only pushes, fresh 256 KiB/1 MiB child-commit pushes and 1 MiB LFS transfers.
+Git concurrency and offered rate vary independently. These are planned inputs,
+not completed measurements; higher admission profiles, rate envelopes, further
+skewed Git tests and complete acknowledged-write recovery remain required.
 
 The campaign runner rejects old or changed fixture bindings, stale proxy metrics,
 missing processes, an incomplete corpus and an active set larger than the eligible
