@@ -726,6 +726,9 @@ incremental base ref, and a 128-byte LFS object. The manifest completed in
 1,731.784 seconds; no seed request failed. Creation medians were 125.65 ms for
 the first 100 and 159.18 ms for the last 100. These are observed client times,
 not a sustained throughput or reference-node result.
+After the scheduled workloads, same-process `verify` matched all 10,000
+identities against the manifest. All 100 populated samples passed stock-Git
+v0/v2 clones, exact commit and file hashes, and strict `git fsck`.
 
 The preceding build stopped at identity 3,125 with HTTP 503 after an idle Cell
 began draining between inventory and release preflight. The current build
