@@ -10,7 +10,7 @@ Use this plan to design capacity work and interpret Canopy benchmark results. It
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Is 10,000 repositories per node a measured capacity? | No; it is a proposed reference-node target | [Required outcome](#required-outcome) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | No; a run on an older Cellule revision missed renewal coverage for nine Cells, and the current pin needs a repeat | [Observed idle renewal ceiling](#observed-idle-renewal-ceiling) |
+| Is idle ownership proven at 1,000 active Cells? | Not on a real store; the current pin passed 1,000 in-memory Cells, but its RustFS run fenced owners beyond 800 | [Current scheduler and provider observations](#current-pin-scheduler-and-provider-observations) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
 
@@ -1608,6 +1608,15 @@ cargo run --release --locked --example benchmark_idle -- \
   0,100,500,1000 30
 ```
 
+For a scheduler-only diagnostic, use `memory:///` with a different new output
+directory. The report labels this provider as in-memory; a passing result
+cannot replace the S3-compatible gate or establish provider throughput.
+
+```bash
+cargo run --locked --example benchmark_idle -- \
+  memory:/// /tmp/canopy-idle-memory-diagnostic 100,500,1000 30
+```
+
 Each phase waits four seconds after foreground work, then measures without HTTP
 requests for the requested interval (10–60 seconds). The report records successful
 conditional Cell-control updates, unchanged-root updates, root changes, updated
@@ -1664,6 +1673,32 @@ entries can leave other overdue entries waiting. The measured 9,600 updates in
 The dispatch ceiling is source-backed; exact starvation causality still needs
 a controlled scheduler regression. The existing
 `idle_owner_progress_is_renewed_without_a_per_cell_task` test covers one Cell.
+
+#### Current pin: scheduler and provider observations
+
+The current Cellule pin is `47a302b`. A debug Canopy example on shared macOS
+arm64 measured these SQL-only, otherwise idle windows; each active count also
+includes the Directory Cell. The in-memory run passed its final graceful drain,
+fresh-workspace restart, released-only window, and three identity restorations.
+The beta.8 RustFS container was capped at 2 CPUs and 4 GiB.
+
+| Store | Active repository Cells | Window | Control updates/s | Distinct Cells updated | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| In-memory | 100 | 30 s | 32.629 | 101/101 | Passed |
+| In-memory | 500 | 30 s | 161.616 | 501/501 | Passed |
+| In-memory | 1,000 | 30 s | 326.830 | 1,001/1,001 | Passed |
+| RustFS beta.8 | 100 | 10 s | 32.793 | 101/101 | Passed |
+| RustFS beta.8 | 500 | 10 s | 163.759 | 501/501 | Passed |
+
+All listed windows had zero failed PUTs and no root changes. The in-memory
+1,000-Cell window exceeds the former 320-starts/s tick ceiling, isolating the
+scheduler improvement. It does **not** qualify real-store density. During the
+beta.8 run, repository creation stopped advancing at 812 after many Cell
+renewals returned `Fenced`; the process did not complete the 1,000-Cell window
+or its graceful shutdown and was terminated for diagnosis. A basic provider
+bucket check still responded. This is a failed/incomplete real-store gate, not
+proof of a single root cause; node-lease refresh, provider latency and shutdown
+drain need investigation before increasing active density.
 
 The current Cellule pin addresses the dispatch-order and refill mechanism with
 a sorted scan every 100 ms. Before raising active density, qualify the change:
