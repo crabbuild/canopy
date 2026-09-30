@@ -6,6 +6,7 @@ environment. This script writes only below a unique prefix in that bucket.
 """
 
 import argparse
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import hashlib
 import json
@@ -23,6 +24,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 import smoke_s3_account_audit
 import smoke_s3_backup
 import smoke_s3_branch_rules
@@ -60,8 +62,8 @@ def git(*args, cwd=None):
     return run("git", "-c", "credential.helper=", *args, cwd=cwd)
 
 
-def wait_ready(process, address, log):
-    deadline = time.monotonic() + 30
+def wait_ready(process, address, log, timeout=30):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"Canopy exited: {log.read_text(errors='replace')}")
@@ -75,7 +77,8 @@ def wait_ready(process, address, log):
     raise RuntimeError(f"Canopy did not become ready: {log.read_text(errors='replace')}")
 
 
-def start(binary, directory, settings, instance, *, data_instance=None, listen_address=None):
+def start(binary, directory, settings, instance, *, data_instance=None, listen_address=None,
+          signing_key=None, ready_timeout=30):
     address = listen_address or f"127.0.0.1:{port()}"
     config = {
         **settings,
@@ -87,11 +90,14 @@ def start(binary, directory, settings, instance, *, data_instance=None, listen_a
     path.write_text(json.dumps(config))
     log = directory / f"{instance}.log"
     output = log.open("wb")
+    environment = host_git_environment(directory)
+    if signing_key is not None:
+        environment["CANOPY_NODE_SIGNING_KEY_HEX"] = signing_key
     process = subprocess.Popen([str(binary), str(path)], stdout=output, stderr=output,
-                               env=host_git_environment(directory))
+                               env=environment)
     output.close()
     try:
-        wait_ready(process, address, log)
+        wait_ready(process, address, log, timeout=ready_timeout)
     except BaseException:
         process.kill()
         process.wait()
@@ -546,6 +552,8 @@ def main():
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
     parser.add_argument("--sqlite-chunks", action="store_true", help="Qualify large tree, commit and tag objects stored in SQLite and restored after takeover")
     parser.add_argument("--corpus-repository", type=Path, help="Read HEAD history from an existing repository without changing it; qualify exact object bytes after takeover")
+    parser.add_argument("--peers-only", action="store_true", help="Run the two-node HTTPS Git/LFS and takeover gate without the other process suites")
+    parser.add_argument("--retain-work-dir", action="store_true", help="Retain the temporary workspace and server logs for diagnosis")
     args = parser.parse_args()
     if args.many_objects < 0:
         parser.error("--many-objects must be nonnegative")
@@ -566,10 +574,18 @@ def main():
         "local_disk_limit_bytes": 1 << 30,
         "max_active_repositories": 3,
     }
-    with tempfile.TemporaryDirectory(prefix="canopy-process-", dir=args.work_parent) as temp:
+    workspace = (nullcontext(tempfile.mkdtemp(prefix="canopy-process-", dir=args.work_parent))
+                 if args.retain_work_dir else
+                 tempfile.TemporaryDirectory(prefix="canopy-process-", dir=args.work_parent))
+    with workspace as temp:
         directory = Path(temp)
+        if args.retain_work_dir:
+            print(f"Retaining process workspace: {directory}", flush=True)
         processes = []
         try:
+            if args.peers_only:
+                smoke_s3_peers.qualify(args.binary, directory, settings, processes)
+                return
             first, base_url = start(args.binary, directory, settings, "first")
             processes.append(first)
             url, repository_id = create_repository(base_url, "example")
@@ -746,7 +762,7 @@ def main():
             # SQLite is a recovered cache: corrupting the killed node's copy must
             # not prevent restoration of acknowledged data from object storage.
             (abandoned / "directory.sqlite").write_bytes(b"discard this stale database")
-            time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
+            time.sleep(NODE_LEASE_WAIT_SECONDS)  # Wait past the signed node lease.
             third, base_url = start(args.binary, directory, settings, "third", data_instance="second")
             processes.append(third)
             assert not sentinel.exists()

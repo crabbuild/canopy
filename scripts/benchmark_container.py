@@ -20,6 +20,7 @@ import uuid
 
 from benchmark_repositories import Client, save
 from check_container import verify
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 from smoke_container import REPOSITORY, command, port, ready
 
 
@@ -163,7 +164,7 @@ def qualify(args):
                 mark("kill-and-restore")
                 command("docker", "kill", "--signal", "KILL", container)
                 logs("before-kill")
-                time.sleep(11)
+                time.sleep(NODE_LEASE_WAIT_SECONDS)
                 command(*compose, "up", "-d", "--force-recreate", "canopy")
                 container = command(*compose, "ps", "-q", "canopy")
                 ready(url, compose)

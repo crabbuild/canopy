@@ -478,6 +478,27 @@ commit and `main` one commit ahead. `verify` accepts both versions.
 For a multi-gateway read run, seed the documented 10,000-repository corpus,
 start two nodes against the same deployment, and pass each ingress to `run`:
 
+`serve_two_gateways.py` can start those nodes from an existing deployment
+configuration and complete manifest. It creates distinct node identities and
+signing keys, fronts each node with a trusted local HTTPS peer endpoint, and
+prints both HTTP ingress URLs as JSON. Set the same object-store credentials and
+Git token used by the seed, choose a new local work directory, and keep the
+process running while benchmarking:
+
+```bash
+CANOPY_GIT_TOKEN=... python3 -B scripts/serve_two_gateways.py \
+  --binary target/debug/canopy \
+  --config-template /path/to/deployment-config.json \
+  --manifest /path/to/canopy-corpus.json \
+  --work-dir /path/to/new-two-gateway-workspace \
+  --max-active-repositories 500
+```
+
+The launcher preserves node logs and local state after Ctrl-C and never deletes
+objects from the configured store. Its active-Cell override is per node; choose
+it within the node's memory, descriptor, and local-disk budget. A successful
+startup proves neither throughput nor correctness of a mixed workload.
+
 ```bash
 python3 -B scripts/benchmark_repositories.py \
   --base-url http://127.0.0.1:8080 \
@@ -819,6 +840,41 @@ on this local provider, not unclean takeover or multiple-node routing.
 The successful Git/LFS windows are short and use small fixtures; they do not
 establish the 8-vCPU Linux reference target, larger transfers, multiple
 gateways, or availability under a mixed workload.
+
+#### Two-gateway diagnostic on the same corpus
+
+Two local Canopy nodes, each with its own signed session and HTTPS peer
+endpoint, reused the complete 10,000-identity RustFS corpus. Requests alternated
+between their HTTP ingresses. These were debug builds on a shared macOS arm64
+host, not the reference Linux node. A bounded 16-client driver scheduled the
+uniform metadata workload at 10 requests/s for 60 seconds against 1,000
+identities; `driver_busy` is an unsent arrival, not a successful request.
+
+| Per-node active limit; RustFS CPU cap | Metadata outcomes / 600 | Scheduled p95 |
+| --- | --- | ---: |
+| 100; 2 CPUs, first window | 489 OK, 110 `driver_busy`, 1 HTTP 503 | 3,580 ms |
+| 100; 2 CPUs, separate repeat | 257 OK, 343 `driver_busy` | 7,730 ms |
+| 100; 4 CPUs | 191 OK, 408 `driver_busy`, 1 HTTP 503 | 17,060 ms |
+| 500; 4 CPUs, first window | 439 OK, 161 `driver_busy` | 5,840 ms |
+| 500; 4 CPUs, same-node repeat | 497 OK, 102 `driver_busy`, 1 HTTP 503 | 5,288 ms |
+
+Increasing only the provider CPU allowance from two to four did not restore
+capacity. The runs were not otherwise isolated, so the table is diagnostic,
+not a controlled A/B performance comparison. In the 500-slot repeat, the
+Directory-owning node had 31-ms median completed-request latency versus 540 ms
+on the other node. Stage logs showed remote Directory authentication and lookup
+p95 near 1.5–1.6 seconds while those stages were much shorter on the owner.
+Cold Cell acquisition and transition tails were also several seconds.
+Repeated canonical reads during live-owner resolution are one identifiable
+piece of remote routing cost; removing one read alone is not expected to solve
+cold activation or the shared Directory Cell bottleneck.
+
+The two-gateway Git/LFS diagnostic also failed the offered-load gate at a
+100-slot limit and two provider CPUs: Git v2 refs completed 243/300,
+full clones 22/30, incremental fetches 14/20, and unique-branch pushes 15/30;
+the remaining scheduled arrivals were predominantly `driver_busy`. These small
+fixtures and short windows do not measure sustained mixed Git/LFS capacity.
+The 10,000-repository two-gateway target remains **unqualified**.
 
 ### Diagnosing metadata latency
 

@@ -129,15 +129,9 @@ impl NodePeer {
             return Ok(None);
         };
         let now = unix_now_ms()?;
-        if !self.0.directory.is_live(owner.session, now).await? {
+        let Some(live) = self.0.directory.load_if_live(owner.session, now).await? else {
             return Ok(None);
-        }
-        let live = self
-            .0
-            .directory
-            .load(owner.session, now)
-            .await?
-            .ok_or(Error::Fenced)?;
+        };
         if live.advertisement().endpoint() != owner.endpoint {
             return Err(Error::Fenced.into());
         }
