@@ -185,7 +185,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("branch_rules/command.rs"));
                 source.update(include_bytes!("graph/preparation.rs"));
                 source.update(include_bytes!("object_batch/mod.rs"));
-                source.update(include_bytes!("object_chunks.rs"));
+                source.update(include_bytes!("object_chunks/mod.rs"));
                 source.update(include_bytes!("object_reads/mod.rs"));
                 source.update(include_bytes!(
                     "../../canopy-object-storage/src/blob/mod.rs"

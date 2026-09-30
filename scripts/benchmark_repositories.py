@@ -2,7 +2,7 @@
 """Seed disposable repositories and measure scheduled HTTP and stock-Git work.
 
 Use CANOPY_GIT_TOKEN for authentication. Reports contain no credentials. This
-measures metadata, Git v2 discovery, clone, fetch, pull, unique-ref push or
+measures metadata, Git v2 capabilities, stock-Git ref listing, clone, fetch, pull, unique-ref push or
 direct-basic LFS transfers. Seed and verify use stock Git for a declared corpus
 sample. Incremental workloads require an opt-in two-commit corpus. Production
 throughput still needs separate qualification.
@@ -140,6 +140,14 @@ def save(path, value):
     temporary.replace(path)
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def seed(args, client, token):
     if args.manifest.exists():
         raise ValueError("seed requires a new manifest; use verify for an existing corpus")
@@ -242,9 +250,26 @@ def verify(args, client, token):
     manifest = corpus(args.manifest)
     args.work_dir.mkdir(parents=True, exist_ok=False)
     def verify_one(entry):
-        status, body = client.request(f"/api/repositories/{quote(entry['name'])}")
-        if status != 200 or json.loads(body)["repository_id"] != entry["repository_id"]:
-            raise RuntimeError("restored repository identity differs from manifest")
+        request_id = str(uuid.uuid4())
+        context = f"{entry['name']} ({entry['repository_id']}), request_id={request_id}"
+        try:
+            status, body = client.request(f"/api/repositories/{quote(entry['name'])}",
+                                          request_id=request_id)
+        except (TimeoutError, OSError, ValueError, http.client.HTTPException) as error:
+            # Include no response body, authorization header or provider secrets.
+            raise RuntimeError(f"identity request failed ({type(error).__name__}) for {context}") from None
+        if status != 200:
+            raise RuntimeError(f"HTTP {status} verifying repository {context}")
+        try:
+            decoded = json.loads(body)
+            identity = decoded["repository_id"]
+            if not isinstance(identity, str):
+                raise ValueError("identity is not a string")
+            uuid.UUID(identity)
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+            raise RuntimeError(f"malformed identity response for {context}") from None
+        if identity != entry["repository_id"]:
+            raise RuntimeError(f"restored repository identity differs from manifest for {context}")
         if entry["commit"] is None:
             return 0
         if "lfs_oid" in entry:
@@ -282,6 +307,154 @@ def verify(args, client, token):
     return {"verified_repositories": len(manifest["repositories"]), "git_v0_v2_samples": populated}
 
 
+def write_runs(paths, manifest_path, entries):
+    """Validate all acknowledgement evidence before making recovery requests."""
+    manifest_digest = file_sha256(manifest_path)
+    runs, identifiers, total = [], set(), 0
+    for path in paths:
+        with path.open("rb") as source:
+            report_bytes = source.read(2 * 1024 * 1024 + 1)
+        if len(report_bytes) > 2 * 1024 * 1024:
+            raise ValueError("write report exceeds 2 MiB")
+        report = json.loads(report_bytes)
+        if not isinstance(report, dict):
+            raise ValueError("write report must be a JSON object")
+        operation = report.get("operation")
+        if report.get("version") != 1 or operation not in ("push_branch", "lfs_upload"):
+            raise ValueError("write verification requires a push_branch or lfs_upload report")
+        if report.get("manifest_sha256") != manifest_digest:
+            raise ValueError("write report does not match the corpus digest")
+        scheduled, outcomes = report.get("scheduled"), report.get("outcomes")
+        if (not isinstance(scheduled, int) or isinstance(scheduled, bool)
+                or not 1 <= scheduled <= 1_000_000 or not isinstance(outcomes, dict)
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+                       for value in outcomes.values())
+                or sum(outcomes.values()) != scheduled
+                or report.get("failed_arrivals") != scheduled - outcomes.get("ok", 0)):
+            raise ValueError("write report has inconsistent arrival accounting")
+        total += scheduled
+        if total > 1_000_000:
+            raise ValueError("write verification is limited to one million total arrivals")
+        run_id = report.get("push_run_id" if operation == "push_branch" else "lfs_run_id")
+        if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            raise ValueError("write report has an invalid run identifier")
+        if (operation, run_id) in identifiers:
+            raise ValueError("duplicate write run")
+        identifiers.add((operation, run_id))
+        if operation == "push_branch":
+            commit = report.get("push_commit")
+            if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+                raise ValueError("write report has an invalid push commit")
+        else:
+            size = report.get("lfs_size_bytes")
+            if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 16 * 1024 * 1024:
+                raise ValueError("write report has an invalid LFS size")
+        samples_path = path.with_suffix(".samples.jsonl")
+        if file_sha256(samples_path) != report.get("samples_sha256"):
+            raise ValueError("write sample digest differs or is absent")
+        seen, observed, acknowledged, sample_digest = set(), Counter(), [], hashlib.sha256()
+        with samples_path.open("rb") as samples:
+            for line in iter(lambda: samples.readline(16 * 1024 + 1), b""):
+                if len(line) > 16 * 1024:
+                    raise ValueError("write sample exceeds 16 KiB")
+                sample_digest.update(line)
+                sample = json.loads(line)
+                if not isinstance(sample, dict):
+                    raise ValueError("write sample must be a JSON object")
+                sequence = sample.get("sequence")
+                if (not isinstance(sequence, int) or isinstance(sequence, bool)
+                        or not 0 <= sequence < scheduled or sequence in seen
+                        or not isinstance(sample.get("repository_id"), str)
+                        or sample.get("repository_id") not in entries
+                        or not isinstance(sample.get("result"), str)
+                        or sample.get("result") not in outcomes):
+                    raise ValueError("write sample has an invalid identity, sequence or outcome")
+                seen.add(sequence)
+                observed[sample["result"]] += 1
+                if sample["result"] == "ok":
+                    if operation == "lfs_upload" and (
+                            not isinstance(sample.get("lfs_oid"), str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", sample["lfs_oid"])):
+                        raise ValueError("acknowledged LFS sample has an invalid object ID")
+                    acknowledged.append(sample)
+        if sample_digest.hexdigest() != report["samples_sha256"]:
+            raise ValueError("write sample digest changed during validation")
+        if len(seen) != scheduled or observed != Counter(outcomes):
+            raise ValueError("write samples do not match the report's arrival accounting")
+        runs.append((report, acknowledged, hashlib.sha256(report_bytes).hexdigest()))
+    if not any(acknowledged for _, acknowledged, _ in runs):
+        raise ValueError("write verification requires at least one acknowledged arrival")
+    return runs
+
+
+def verify_writes(args, client, token):
+    """Read every acknowledged load-test write, without retrying failed arrivals.
+
+    The caller must establish the desired owner restart/recovery beforehand;
+    this read-only verifier neither kills a node nor proves that it restarted.
+    """
+    manifest = corpus(args.manifest)
+    entries = {entry["repository_id"]: entry for entry in manifest["repositories"]}
+    if len(entries) != len(manifest["repositories"]):
+        raise ValueError("write verification requires unique repository identities")
+    if args.output.exists():
+        raise ValueError("write verification requires a new output path")
+    runs = write_runs(args.reports, args.manifest, entries)
+    args.work_dir.mkdir(parents=True, exist_ok=False)
+    refs, lfs, repositories = 0, 0, set()
+    for index, (report, acknowledged, _) in enumerate(runs):
+        if report["operation"] == "lfs_upload":
+            for sample in acknowledged:
+                entry = entries[sample["repository_id"]]
+                oid, size = sample["lfs_oid"], report["lfs_size_bytes"]
+                path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{oid}"
+                if client.lfs_get(path, size) != (200, size, oid):
+                    raise RuntimeError("acknowledged LFS object is missing or differs")
+                lfs += 1
+            continue
+        by_repository = {}
+        for sample in acknowledged:
+            by_repository.setdefault(sample["repository_id"], []).append(
+                f"refs/heads/canopy-benchmark/{report['push_run_id']}/{sample['sequence']:07d}")
+        commit = report["push_commit"]
+        algorithm = "sha256" if len(commit) == 64 else "sha1"
+        body = f"benchmark run {report['push_run_id']}\n".encode()
+        expected_blob = hashlib.new(algorithm, f"blob {len(body)}\0".encode() + body).hexdigest()
+        for repository_id, references in by_repository.items():
+            entry = entries[repository_id]
+            url = f"{client.base_url}/{entry['owner']}/{entry['name']}.git"
+            for protocol in ("0", "2"):
+                local = args.work_dir / f"run-{index}-{repository_id}-v{protocol}.git"
+                git("init", "--bare", f"--object-format={algorithm}", str(local),
+                    cwd=args.work_dir, token=token, timeout=args.git_timeout)
+                for start in range(0, len(references), 128):
+                    page = references[start:start + 128]
+                    try:
+                        git("-c", f"protocol.version={protocol}", "fetch", "--quiet", "--no-tags", url,
+                            *[f"{reference}:{reference}" for reference in page], cwd=local,
+                            token=token, timeout=args.git_timeout, request_id=str(uuid.uuid4()))
+                    except RuntimeError as error:
+                        raise RuntimeError("could not fetch acknowledged Git refs") from error
+                    for reference in page:
+                        if git("rev-parse", reference, cwd=local, token=token,
+                               timeout=args.git_timeout) != commit:
+                            raise RuntimeError("acknowledged Git ref differs")
+                if git("rev-parse", f"{commit}:README.md", cwd=local, token=token,
+                       timeout=args.git_timeout) != expected_blob:
+                    raise RuntimeError("acknowledged Git body differs")
+                git("fsck", "--strict", "--full", cwd=local, token=token, timeout=args.git_timeout)
+            refs += len(references)
+            repositories.add(repository_id)
+    result = {"version": 1, "manifest_sha256": file_sha256(args.manifest),
+              "write_report_sha256": [digest for _, _, digest in runs],
+              "verified_git_refs": refs, "verified_git_repositories": len(repositories),
+              "git_protocols": [0, 2] if refs else [], "verified_lfs_objects": lfs,
+              "unacknowledged_arrivals_not_asserted": sum(report["failed_arrivals"] for report, _, _ in runs),
+              "owner_recovery": "not established by this verifier; caller must record owner restart evidence"}
+    save(args.output, result)
+    return result
+
+
 def percentiles(values):
     values = sorted(values)
     return {name: None if not values else round(values[min(len(values) - 1, math.ceil(q * len(values)) - 1)], 3)
@@ -314,6 +487,10 @@ def prepare_incremental(active, clients, token, work_dir, timeout):
 def git_transfer(operation, url, entry, token, work_dir, timeout, request_id,
                  template=None):
     """Run one disposable stock-Git transfer and validate its advertised tip."""
+    if operation == "ls_remote":
+        listing = git("-c", "protocol.version=2", "ls-remote", url, "refs/heads/main",
+                      cwd=work_dir, token=token, timeout=timeout, request_id=request_id)
+        return listing == f"{entry['commit']}\trefs/heads/main"
     with tempfile.TemporaryDirectory(prefix="canopy-git-read-", dir=work_dir) as temporary:
         destination = Path(temporary) / "repo"
         if operation == "clone":
@@ -363,7 +540,7 @@ def measure(args, client, token):
     clients = client if isinstance(client, list) else [client]
     manifest = corpus(args.manifest)
     incremental = args.operation in ("incremental_fetch", "incremental_pull")
-    git_read = args.operation in ("clone", "cold_fetch") or incremental
+    git_read = args.operation in ("ls_remote", "clone", "cold_fetch") or incremental
     git_write = args.operation == "push_branch"
     git_operation = git_read or git_write
     lfs_download = args.operation == "lfs_download"
@@ -509,6 +686,8 @@ def measure(args, client, token):
               "eligible_repositories": len(eligible),
               "active_repositories": len(active), "distribution": args.distribution,
               "operation": args.operation, "seed": args.seed,
+              "git_discovery_kind": ("v2_capabilities_only" if args.operation == "refs" else
+                                     "v2_ls_refs_main_tip" if args.operation == "ls_remote" else None),
               "offered_rps": args.rate, "schedule_seconds": args.duration,
               "elapsed_including_drain_seconds": round(elapsed, 3),
               "incremental_client_setup_seconds": setup_seconds if incremental else None,
@@ -527,6 +706,7 @@ def measure(args, client, token):
               "service_ms": percentiles(service_times), "dispatch_delay_ms": percentiles(dispatch_times),
               "latency_population": "all completed HTTP or stock-Git attempts, including errors and client validation; driver_busy arrivals are counted failures without fabricated latency",
               "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest()}
+    result["samples_sha256"] = file_sha256(samples_path)
     if sum(counts.values()) != total:
         raise RuntimeError("benchmark lost scheduled outcomes")
     save(args.output, result)
@@ -568,10 +748,16 @@ def main():
     check.add_argument("--work-dir", type=Path, required=True)
     check.add_argument("--concurrency", type=positive, default=1,
                        help="bounded parallel identity checks (default: serial)")
+    writes = commands.add_parser("verify-writes", help="check acknowledged load-test writes after owner recovery")
+    writes.add_argument("--report", type=Path, action="append", dest="reports", required=True,
+                        help="push_branch or lfs_upload report with its digest-bound samples; repeat for multiple runs")
+    writes.add_argument("--work-dir", type=Path, required=True)
+    writes.add_argument("--output", type=Path, required=True)
+    writes.add_argument("--git-timeout", type=positive, default=120)
     run = commands.add_parser("run")
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
-    run.add_argument("--operation", choices=("metadata", "refs", "clone", "cold_fetch",
+    run.add_argument("--operation", choices=("metadata", "refs", "ls_remote", "clone", "cold_fetch",
                                            "incremental_fetch", "incremental_pull", "push_branch",
                                            "lfs_download", "lfs_upload"),
                      default="metadata")
@@ -597,7 +783,8 @@ def main():
                for base in [args.base_url, *args.additional_base_url]]
     try:
         client = clients if args.command == "run" else clients[0]
-        result = {"seed": seed, "verify": verify, "run": measure}[args.command](args, client, token)
+        result = {"seed": seed, "verify": verify, "verify-writes": verify_writes,
+                  "run": measure}[args.command](args, client, token)
         print(json.dumps(result, indent=2))
     finally:
         for client in clients:

@@ -12,6 +12,7 @@ import time
 import uuid
 
 from benchmark_repositories import Client, corpus, percentiles, seed, verify
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 from smoke_s3_process import start
 
 
@@ -38,11 +39,12 @@ def qualify(args):
         manifest = args.work_dir / "corpus.json"
         report["phase"] = "seed"
         report["seed"] = seed(argparse.Namespace(base_url=base, manifest=manifest,
-            work_dir=args.work_dir / "seed", repositories=64, populated=3, seed=20260927), client, token)
+            work_dir=args.work_dir / "seed", repositories=64, populated=3, seed=20260927,
+            incremental_fixture=False, lfs_fixture_bytes=0), client, token)
         client.close()
         process.kill()
         process.wait(timeout=10)
-        time.sleep(11)
+        time.sleep(NODE_LEASE_WAIT_SECONDS)
         report["phase"] = "recovery_startup"
         started = time.monotonic()
         process, base = start(args.binary, args.work_dir, settings, "restored")
@@ -74,7 +76,7 @@ def qualify(args):
         print(f"PASS: 64 cold repository identities restored with {args.concurrency} clients and no retries", flush=True)
         report["phase"] = "git_verification"
         report["verify"] = verify(argparse.Namespace(base_url=base, manifest=manifest,
-            work_dir=args.work_dir / "verify"), client, token)
+            work_dir=args.work_dir / "verify", concurrency=args.concurrency), client, token)
         report["git_recovery_passed"] = True
         report["phase"] = "shutdown"
         process.send_signal(signal.SIGTERM)

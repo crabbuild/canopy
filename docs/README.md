@@ -14,6 +14,11 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | Find the right Rust crate | [Rust workspace](workspace.md) | Crate ownership, dependencies and build commands |
 | Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
 | Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
+| Check the latest Cellule update and workspace merge | [Workspace and RustFS verification](performance/2026-09-30-workspace-rustfs.md) | Current revision, conflict resolution and end-to-end gates |
+| Inspect the earlier Cellule dependency update | [Initial September 30 requalification](performance/2026-09-30-cellule-main.md) | Earlier revision, passing checks, failed suites and storage-blocked performance gates |
+| Understand the large-object deadline fix | [Count chunks once per transaction](performance/2026-09-30-chunk-count.md) | Snapshot safety, query-work regression, phase timings and remaining verification |
+| Inspect earlier full-corpus load and recovery results | [Complete-corpus diagnostics](performance/2026-09-30-full-corpus.md) | All-identity verification on `30671d5`, dropped arrivals, latency windows and acknowledged-write recovery |
+| Understand concurrent cold-request routing | [Cold-owner race follow-up](performance/2026-09-30-cold-owner-race.md) | Synchronized failure, live-owner routing fix and candidate verification |
 | Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |
 | Track production-readiness work | [Roadmap](../ROADMAP.md) | Milestones and checklists across operations, product features and scale |
 

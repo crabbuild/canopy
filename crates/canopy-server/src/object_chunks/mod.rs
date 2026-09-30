@@ -112,7 +112,8 @@ pub(crate) fn body(
         return Ok(None);
     };
     while !chunks.complete() {
-        if !chunks.append(&context.sql(&chunks.query())?) {
+        let result = context.sql(&chunks.snapshot_query())?;
+        if !chunks.append_snapshot(&result) {
             return Ok(None);
         }
     }
@@ -160,6 +161,37 @@ impl Chunks {
         }] }
     }
 
+    fn snapshot_query(&self) -> SqlBatch {
+        if self.part == 0 {
+            return self.query();
+        }
+        // The command transaction keeps the count checked by the first read
+        // stable. Recounting every part scans this upload quadratically.
+        SqlBatch {
+            statements: vec![SqlStatement {
+                sql: "SELECT body FROM object_chunks WHERE upload_id = ?1 AND part = ?2".into(),
+                parameters: vec![
+                    SqlValue::Blob(self.upload.to_vec()),
+                    SqlValue::Integer(self.part as i64),
+                ],
+            }],
+        }
+    }
+
+    fn append_snapshot(&mut self, results: &[SqlResultSet]) -> bool {
+        if self.part == 0 {
+            return self.append(results);
+        }
+        let Some([SqlValue::Blob(bytes)]) = results
+            .first()
+            .and_then(|set| set.rows.first())
+            .map(Vec::as_slice)
+        else {
+            return false;
+        };
+        self.append_bytes(bytes)
+    }
+
     fn append(&mut self, results: &[SqlResultSet]) -> bool {
         let Some([SqlValue::Blob(bytes), SqlValue::Integer(count)]) = results
             .first()
@@ -168,9 +200,14 @@ impl Chunks {
         else {
             return false;
         };
-        if *count != self.size.div_ceil(CHUNK_BYTES) as i64
-            || bytes.len() != CHUNK_BYTES.min(self.size - self.body.len())
-        {
+        if *count != self.size.div_ceil(CHUNK_BYTES) as i64 {
+            return false;
+        }
+        self.append_bytes(bytes)
+    }
+
+    fn append_bytes(&mut self, bytes: &[u8]) -> bool {
+        if bytes.len() != CHUNK_BYTES.min(self.size - self.body.len()) {
             return false;
         }
         self.body.extend_from_slice(bytes);
@@ -188,3 +225,6 @@ impl Chunks {
             .then_some(self.body)
     }
 }
+
+#[cfg(test)]
+mod tests;

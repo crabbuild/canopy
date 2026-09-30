@@ -4,6 +4,8 @@ use serde_json::json;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+mod cold_activation;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -27,7 +29,7 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
         canopy_server::directory::directory_target(first_config.tenant, first_config.application)?;
     let application = <canopy_server::CanopyApplication as cellule_app::CellApplication>::compile(
         canopy_server::build_descriptor(
-            include_bytes!("../../../../Cargo.lock"),
+            include_bytes!("../../../../../Cargo.lock"),
             env!("CARGO_PKG_VERSION"),
         ),
     )?;

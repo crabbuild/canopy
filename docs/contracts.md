@@ -773,6 +773,10 @@ BLAKE3. In the publication transaction it requires the exact chunk count and
 part lengths, reconstructs the body, verifies the canonical Git OID and BLAKE3,
 and then inserts the immutable object record. A failure rolls back every object
 in that batch. Inline and external-blob records use the same publication command.
+Command verification checks the total chunk count on the first part only: its
+transaction holds a stable snapshot for the remaining indexed part reads.
+Graph certification uses the same rule. Separate asynchronous object reads
+retain a count check with every part because they do not share that snapshot.
 Repeated identical objects converge on the existing record; unused duplicate
 uploads remain staged until a collector can prove they are unreferenced.
 
