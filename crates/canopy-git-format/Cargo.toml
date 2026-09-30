@@ -1,0 +1,12 @@
+[package]
+name = "canopy-git-format"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+sha1 = "0.11"
+sha2 = "0.11"
+thiserror = "2.0"
