@@ -12,6 +12,11 @@ shutdown release-failure retention changes.
 > exhaustion prevents completing real-store benchmarks. A passing isolated
 > test is not a passing full suite.
 
+These results describe the dependency-only update at Canopy `06367a3`.
+The [subsequent chunk-count optimization](2026-09-30-chunk-count.md) records
+follow-up work on the transaction deadline failure and a host-backed provider
+fixture. It does not replace the failures retained here.
+
 ## Identify the run
 
 | Input | Value |
