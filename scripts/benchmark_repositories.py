@@ -241,15 +241,12 @@ def corpus(path):
 def verify(args, client, token):
     manifest = corpus(args.manifest)
     args.work_dir.mkdir(parents=True, exist_ok=False)
-    populated = 0
-    for index, entry in enumerate(manifest["repositories"]):
+    def verify_one(entry):
         status, body = client.request(f"/api/repositories/{quote(entry['name'])}")
         if status != 200 or json.loads(body)["repository_id"] != entry["repository_id"]:
             raise RuntimeError("restored repository identity differs from manifest")
-        if (index + 1) % 25 == 0:
-            print(f"verified {index + 1}/{len(manifest['repositories'])} identities", flush=True)
         if entry["commit"] is None:
-            continue
+            return 0
         if "lfs_oid" in entry:
             path = f"/{entry['owner']}/{entry['name']}.git/info/lfs/objects/{entry['lfs_oid']}"
             status, size, digest = client.lfs_get(path, entry["lfs_size"])
@@ -270,7 +267,18 @@ def verify(args, client, token):
                 if hashlib.sha256((clone / "incremental.txt").read_bytes()).hexdigest() != entry["incremental_sha256"]:
                     raise RuntimeError("restored incremental bytes differ from manifest")
             git("fsck", "--strict", "--full", cwd=clone, token=token)
-        populated += 1
+        return 1
+
+    populated = 0
+    entries = manifest["repositories"]
+    # Submit one bounded batch at a time: even a 10,000-entry manifest must not
+    # allocate 10,000 queued futures or hide a failed verification behind them.
+    with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+        for start in range(0, len(entries), args.concurrency):
+            populated += sum(executor.map(verify_one, entries[start:start + args.concurrency]))
+            completed = min(start + args.concurrency, len(entries))
+            if completed % 25 == 0 or completed == len(entries):
+                print(f"verified {completed}/{len(entries)} identities", flush=True)
     return {"verified_repositories": len(manifest["repositories"]), "git_v0_v2_samples": populated}
 
 
@@ -558,6 +566,8 @@ def main():
     create.add_argument("--work-dir", type=Path, required=True)
     check = commands.add_parser("verify")
     check.add_argument("--work-dir", type=Path, required=True)
+    check.add_argument("--concurrency", type=positive, default=1,
+                       help="bounded parallel identity checks (default: serial)")
     run = commands.add_parser("run")
     run.add_argument("--active-repositories", type=positive, required=True)
     run.add_argument("--distribution", choices=("uniform", "skewed"), default="uniform")
@@ -579,6 +589,8 @@ def main():
         parser.error("CANOPY_GIT_TOKEN is required")
     if args.command == "run" and args.concurrency > 256:
         parser.error("driver concurrency is limited to 256")
+    if args.command == "verify" and args.concurrency > 32:
+        parser.error("verify concurrency is limited to 32")
     if args.command != "run" and args.additional_base_url:
         parser.error("additional gateways are supported only for run")
     clients = [Client(base, token, args.timeout)

@@ -68,6 +68,27 @@ class LfsHandler(BaseHTTPRequestHandler):
 
 
 class ScheduledLoad(unittest.TestCase):
+    def test_parallel_verify_rejects_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = [{"name": f"repo-{index}", "owner": "canopy",
+                        "repository_id": str(uuid.uuid4()), "commit": None}
+                       for index in range(2)]
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"version": 1, "complete": True,
+                "requested_repositories": 2, "repositories": entries}))
+
+            class MismatchClient:
+                def request(self, path):
+                    entry = next(entry for entry in entries if path.endswith(entry["name"]))
+                    identity = entry["repository_id"] if entry is entries[0] else str(uuid.uuid4())
+                    return 200, json.dumps({"repository_id": identity}).encode()
+
+            args = SimpleNamespace(manifest=manifest, work_dir=root / "verified",
+                                   concurrency=2)
+            with self.assertRaisesRegex(RuntimeError, "identity differs"):
+                benchmark.verify(args, MismatchClient(), "fixture-token")
+
     def test_incremental_seed_and_verify_preserve_both_commits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -118,9 +139,13 @@ class ScheduledLoad(unittest.TestCase):
             self.assertNotEqual(populated[0]["base_commit"], populated[0]["commit"])
             self.assertEqual(populated[0]["lfs_size"], 128)
             check = SimpleNamespace(manifest=manifest, work_dir=root / "verified",
-                                    base_url=remotes.as_uri())
+                                    base_url=remotes.as_uri(), concurrency=1)
             self.assertEqual(benchmark.verify(check, client, "fixture-token")
                              ["git_v0_v2_samples"], 1)
+            parallel = SimpleNamespace(manifest=manifest, work_dir=root / "verified-parallel",
+                                       base_url=remotes.as_uri(), concurrency=2)
+            self.assertEqual(benchmark.verify(parallel, client, "fixture-token"),
+                             {"verified_repositories": 2, "git_v0_v2_samples": 1})
             baseline_manifest = root / "baseline.json"
             baseline = SimpleNamespace(manifest=baseline_manifest, work_dir=root / "baseline-seed",
                 seed=42, repositories=1, populated=1, incremental_fixture=False,
@@ -130,7 +155,7 @@ class ScheduledLoad(unittest.TestCase):
             self.assertEqual(benchmark.corpus(baseline_manifest)["version"], 1)
             check = SimpleNamespace(manifest=baseline_manifest,
                                     work_dir=root / "baseline-verified",
-                                    base_url=remotes.as_uri())
+                                    base_url=remotes.as_uri(), concurrency=1)
             self.assertEqual(benchmark.verify(check, client, "fixture-token")
                              ["git_v0_v2_samples"], 1)
 
