@@ -90,6 +90,8 @@ class PushCommitTests(unittest.TestCase):
 
     def test_payloads_are_reproducible_distinct_and_not_compressible_fixture_repeats(self):
         run = "a" * 32
+        with self.assertRaisesRegex(ValueError, "32 bytes"):
+            benchmark.push_payload(run, 1, 1)
         one = benchmark.push_payload(run, 1, 1024)
         self.assertEqual(len(one), 1024)
         self.assertEqual(one, benchmark.push_payload(run, 1, 1024))

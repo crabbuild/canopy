@@ -80,11 +80,11 @@ def windows(plan, manifest):
         size = row.get("lfs_bytes", 1024 * 1024)
         if not integer(size, 1, 16 * 1024 * 1024):
             raise ValueError("invalid LFS payload size")
-        if operation == "lfs_upload" and size * row["concurrency"] > 256 * 1024 * 1024:
+        if operation == "lfs_upload" and (size < 32 or size * row["concurrency"] > 256 * 1024 * 1024):
             raise ValueError("LFS in-flight payload exceeds driver bound")
         git_size = row.get("git_payload_bytes", 256 * 1024)
         if (not integer(git_size, 1, 16 * 1024 * 1024)
-                or operation == "push_commit" and git_size * row["concurrency"] > 256 * 1024 * 1024):
+                or operation == "push_commit" and (git_size < 32 or git_size * row["concurrency"] > 256 * 1024 * 1024)):
             raise ValueError("invalid or excessive new Git payload")
         for repetition in range(row["repetitions"]):
             expanded.append({**row, "active_repositories": active, "lfs_bytes": size,

@@ -137,6 +137,8 @@ from the stock `git push` command (packing, HTTP, transfer and durable reply);
 scheduled latency still includes both. Payload bytes acknowledged are not wire
 pack bytes. The default payload is 256 KiB; a second size above 768 KiB exercises
 the external-blob path. Preparation templates are built before the arrival clock.
+The distinct-write fixtures require at least 32 bytes for meaningful uniqueness
+entropy. This is a benchmark input bound, not a Git/LFS server minimum object size.
 
 After losing all three owners, record process exit and the unchanged lease-expiry
 boundary before starting fresh node directories. Verify every original corpus

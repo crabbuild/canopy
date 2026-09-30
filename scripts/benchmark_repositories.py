@@ -363,7 +363,7 @@ def write_runs(paths, manifest_path, entries):
                 raise ValueError("write report has an invalid push commit")
         elif operation == "push_commit":
             size = report.get("git_payload_size_bytes")
-            if (not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 16 * 1024 * 1024
+            if (not isinstance(size, int) or isinstance(size, bool) or not 32 <= size <= 16 * 1024 * 1024
                     or report.get("push_payload_file") != "canopy-benchmark.bin"):
                 raise ValueError("write report has an invalid Git payload declaration")
         else:
@@ -634,6 +634,8 @@ def prepare_push(active, clients, token, work_dir, timeout):
 
 
 def push_payload(run_id, sequence, size):
+    if not 32 <= size <= 16 * 1024 * 1024:
+        raise ValueError("distinct Git payload fixtures require 32 bytes..16 MiB")
     return hashlib.shake_256(f"canopy-new-push:{run_id}:{sequence}".encode()).digest(size)
 
 
@@ -722,16 +724,16 @@ def measure(args, client, token):
     fresh_push = args.operation == "push_commit"
     git_write = args.operation in ("push_branch", "push_commit")
     git_payload_bytes = getattr(args, "git_payload_bytes", 256 * 1024)
-    if fresh_push and (not 1 <= git_payload_bytes <= 16 * 1024 * 1024
+    if fresh_push and (not 32 <= git_payload_bytes <= 16 * 1024 * 1024
                        or git_payload_bytes * args.concurrency > 256 * 1024 * 1024):
-        raise ValueError("new-commit pushes require positive bytes and at most 256 MiB in-flight payloads")
+        raise ValueError("new-commit pushes require at least 32 bytes and at most 256 MiB in-flight payloads")
     creation = args.operation == "create"
     git_operation = git_read or git_write
     lfs_download = args.operation == "lfs_download"
     lfs_upload = args.operation == "lfs_upload"
-    if lfs_upload and (args.lfs_bytes == 0 or
+    if lfs_upload and (args.lfs_bytes < 32 or
                        args.lfs_bytes * args.concurrency > 256 * 1024 * 1024):
-        raise ValueError("LFS uploads require positive bytes and at most 256 MiB in-flight payloads")
+        raise ValueError("unique LFS uploads require at least 32 bytes and at most 256 MiB in-flight payloads")
     eligible = ([entry for entry in manifest["repositories"] if entry.get("lfs_oid") is not None]
                 if lfs_download else
                 [entry for entry in manifest["repositories"] if entry.get("base_commit") is not None]
