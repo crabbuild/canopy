@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `21bed5e99b7483da185766eebd4d175edb70712d`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a3fbfb0115a1ae2519ee8f8e0cf6b8e72fdaa303`; earlier runs below retain their original pins and do not establish this build's density or latency.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -718,8 +718,9 @@ prevent a controlled performance comparison with the initial 1,000-identity run.
 
 ### Local 10,000-identity churn diagnostic
 
-Canopy `52279e9` with Cellule `21bed5e` completed a sequential seed of 10,000
-repository identities on a shared macOS arm64 host. This was a **debug build with
+Canopy `52279e9` with Cellule `21bed5e` (identical source tree to merged
+`a3fbfb0`) completed a sequential seed of 10,000 repository identities on a
+shared macOS arm64 host. This was a **debug build with
 an in-process `memory:///` store**, `max_active_repositories: 100`, and an 8-GiB
 local disk-admission setting. One hundred repositories had two commits, an
 incremental base ref, and a 128-byte LFS object. The manifest completed in
