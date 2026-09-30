@@ -4,9 +4,15 @@ Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
 dependency candidate is `e07670e2348231ed401cc7280a47e3ab97596ffe`, fetched from
 `origin/main` during the [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md#prepare-the-next-upstream-candidate).
-Its build, end-to-end and performance verification remain separate open gates.
+One hosted workflow passed its build, workspace tests and isolated RustFS
+qualification; a sibling failed a delayed-startup test with `AddrInUse`.
+Local three-node end-to-end and matched performance verification remain open.
 The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
-and running three-node baseline retain `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
+and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
+That baseline stopped after 20 fully bound windows and one interrupted creation
+window when all three owners fenced. All 136 acknowledged creations and both
+critical Git fixtures passed fresh-state recovery. The full original corpus
+recheck remains in progress before further load; failed results stay in the record.
 Earlier results do not establish the new candidate's density or latency.
 
 The [chunk-count follow-up](performance/2026-09-30-chunk-count.md) removes

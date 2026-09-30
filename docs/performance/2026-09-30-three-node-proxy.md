@@ -1,6 +1,6 @@
 # Qualify three Canopy nodes behind a proxy
 
-**Status: in progress.** This campaign preserves the documented 10,000-repository
+**Status: baseline failed; fresh-state recovery in progress.** This campaign preserves the documented 10,000-repository
 reference target. A ready fleet, small socket tests or an incomplete seed does
 not qualify throughput, latency, recovery or production capacity.
 
@@ -59,15 +59,20 @@ Cellule `origin/main` advanced during the running baseline. Canopy's manifests
 and six Cellule lockfile entries now select
 `e07670e2348231ed401cc7280a47e3ab97596ffe`. Dependency resolution and locked
 metadata validation passed without updating unrelated packages or creating a
-local Cargo target directory. Compilation and verification of this candidate
-remain open; the measurements in this document still use the retained
+local Cargo target directory. [Workflow 36789746786](https://github.com/crabbuild/canopy/actions/runs/36789746786)
+passed formatting, clippy, workspace tests, isolated RustFS compatibility and
+server build. Its [sibling workflow](https://github.com/crabbuild/canopy/actions/runs/36789752428)
+failed `lifecycle::lease::startup_preflight_does_not_consume_the_node_lease`
+with `AddrInUse`; provider qualification and build were skipped in that job.
+Both used source `a2c59a3`; neither is a local three-node performance comparison.
+Local candidate verification remains open; the measurements in this document use the retained
 `70bd25f` binary, not the new source pin.
 
 The intervening commits add [fenced route reuse and coalesced owner discovery](https://github.com/crabbuild/cellule/pull/32)
 and [single-enrollment-read follower append authorization](https://github.com/crabbuild/cellule/pull/31).
 Their relevance to the observed directory/latency failures is a hypothesis,
-not a measured fix. The live campaign's scripts, binary and provider configuration
-remain unchanged. CI verification can run independently; local compilation,
+not a measured fix. The baseline's scripts, binary and provider configuration
+were unchanged during load. CI verification can run independently; local compilation,
 fresh-state recovery and matched performance comparisons must follow the
 recorded baseline and produce their own artifact bindings.
 
@@ -85,11 +90,11 @@ recorded baseline and produce their own artifact bindings.
 | Replacement fleet | Three live nodes behind one proxy; matching UUID read through each node |
 | Fresh 10,000 seed | Completed with exit 0: 10,000 distinct canonical repository UUIDs, 100 two-commit Git fixtures and 100 exact 1 MiB LFS fixtures; 8,567.224 seconds |
 | Critical stock-Git probe through ingress | Passed 17 functional steps against the live RustFS fixture; exact nine-ref inventories in two repositories, v0/v2 mirror clones and strict full fsck |
-| Scheduled load matrix | Not yet qualified |
+| Scheduled load matrix | Failed: 20 fully bound windows and one interrupted creation window; all 21 complete arrival ledgers retained. Git/LFS load phases had not started |
 | Initial three-owner loss | All three verified seeding-node PIDs killed; process absence recorded, followed by 32.006 seconds of unchanged lease-expiry wait; no data deleted |
 | Critical-fixture fresh-state recovery | Passed: both original identities, four exact nine-ref inventories across v0/v2, payload, Git notes and strict full fsck |
 | Full-corpus recovery / preflight | Passed: all 10,000 original identities and all 100 populated fixtures through three fresh node directories and the new ingress; v0/v2 clones, exact Git/incremental/LFS bytes and strict full fsck; four verification workers, no retries |
-| Post-load acknowledged-write recovery | Not yet run |
+| Post-load acknowledged-write recovery | All 136 acknowledged creations passed after observed three-owner failure and fresh-state startup. No Git/LFS load writes existed because those phases had not started; full original-corpus recheck remains in progress |
 
 The old seed is not resumed or merged into a passing manifest. The replacement
 uses an independent provider, bucket and deployment prefix. The original 30-second
@@ -126,8 +131,9 @@ configurations into 108 windows:
 preparation and drain. It covers metadata with 100/500/1,000-identity uniform and
 skewed sets, creation, discovery, stock Git reads and incremental pull/fetch,
 ref-only pushes, fresh 256 KiB/1 MiB child-commit pushes and 1 MiB LFS transfers.
-Git concurrency and offered rate vary independently. Load clocks have started
-after complete-corpus preflight; the matrix is not complete. Higher admission
+Git concurrency and offered rate vary independently. Load clocks started
+after complete-corpus preflight; the fleet later fenced during creation and the
+matrix is not complete. Higher admission
 profiles, rate envelopes, further
 skewed Git tests and complete acknowledged-write recovery remain required.
 
@@ -185,6 +191,129 @@ The generic invocation error does not identify the underlying runtime failure;
 this is a correlated failure path, not a proven Cellule bottleneck. Same-set
 repetition improves the uniform measurements, but the skewed repeats still fail.
 No runtime optimization, retry, timeout or admission increase was applied.
+
+## Retain the failed baseline and recover acknowledged writes
+
+At approximately `2026-09-30T23:28:18Z`, all three baseline nodes exited with
+code 1. Node logs record Cell fencing and
+`Runtime(Node("node lease bounds are invalid"))`; the launcher records
+`node-1 exited with 1`. The proxy closed, and the campaign terminated with
+`resource observation failed` rather than restarting or retrying a window.
+RustFS still had the same container identity and start time, without a restart
+or OOM kill. No provider or node data was deleted.
+
+The terminal audit verifies all 21 report/sample digests, complete unique
+arrival sequence coverage, outcome totals, in-window successes and nearest-rank
+latency quantiles. The first 20 windows also retain bound resource boundaries.
+The interrupted third creation window has a complete report and sample ledger,
+but no valid after-boundary: it is **not resource-qualified** and is absent from
+the completed-report list. Its acknowledgement ledger must still be included in
+recovery checks.
+
+### Metadata with larger selected sets
+
+Each window offered 2,400 arrivals at 20 requests/s with 32 driver slots and
+the same 100-entry admission limit per node. The larger selected sets do not
+raise that limit. Attempt percentiles include completed errors; driver drops
+have no fabricated latency. In-window rates exclude successful drain completions.
+
+| Selected identities | Access | Repeat | OK / drops / HTTP 503 / transport errors | Successful req/s in window | Attempt p95 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| 500 | Uniform | 1 | 1,982 / 401 / 17 / 0 | 16.483 | 3,708.603 / 4,579.120 |
+| 500 | Uniform | 2 | 2,028 / 362 / 10 / 0 | 16.875 | 3,857.033 / 6,677.808 |
+| 500 | Uniform | 3 | 1,977 / 391 / 32 / 0 | 16.225 | 3,832.183 / 6,385.354 |
+| 500 | Skewed | 1 | 1,896 / 493 / 11 / 0 | 15.800 | 2,903.415 / 19,529.582 |
+| 500 | Skewed | 2 | 2,186 / 210 / 4 / 0 | 17.975 | 2,567.978 / 6,886.433 |
+| 500 | Skewed | 3 | 1,770 / 586 / 44 / 0 | 14.550 | 5,200.413 / 8,219.480 |
+| 1,000 | Uniform | 1 | 280 / 2,096 / 6 / 18 | 2.075 | 30,004.694 / 30,015.112 |
+| 1,000 | Uniform | 2 | 531 / 1,855 / 9 / 5 | 4.167 | 20,763.359 / 29,897.866 |
+| 1,000 | Uniform | 3 | 881 / 1,497 / 22 / 0 | 7.083 | 9,454.380 / 20,007.887 |
+| 1,000 | Skewed | 1 | 2,064 / 336 / 0 / 0 | 17.192 | 3,862.827 / 6,904.098 |
+| 1,000 | Skewed | 2 | 2,368 / 32 / 0 / 0 | 19.725 | 519.354 / 2,599.916 |
+| 1,000 | Skewed | 3 | 2,302 / 40 / 58 / 0 | 19.183 | 1,586.558 / 4,136.254 |
+
+A user-requested UI preview began during the final metadata windows and used
+its own RustFS instance and deployment, without touching benchmark storage.
+It still consumed the shared Mac/Colima host. The audit conservatively flags
+the last two metadata windows and all creation windows as possible overlaps;
+those are not uncontended capacity measurements. The earlier broad-set failures
+predate the preview. Preview activity is retained in `ui-preview-intervention.json`.
+
+### Creation before owner failure
+
+All three windows offered 120 unique new names at 1 repository/s and concurrency
+16. Creation acknowledges a canonical repository UUID, not just an accepted
+HTTP request. A lost or refused response is not an acknowledgement, even if
+storage might contain an unacknowledged reservation.
+
+| Repeat | Acknowledged | Driver drops | HTTP 503 | Transport errors | Successful repos/s in window | Attempt p95 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 85 | 14 | 5 | 16 | 0.708 | 30,006.512 / 30,006.951 |
+| 2 | 51 | 27 | 11 | 31 | 0.425 | 30,071.556 / 30,163.645 |
+| 3, interrupted | 0 | 0 | 1 | 119 | 0.000 | 9.802 / 22.701 |
+
+The interrupted window's short error latencies are failed connection attempts,
+**not an improvement**. None establishes a stable creation envelope. The audit
+retains 136 distinct acknowledged name/UUID pairs across the complete creation
+ledgers; the 224 failed arrivals are not asserted to have been committed.
+
+### Fresh-state recovery gate
+
+```mermaid
+flowchart LR
+    failure[Three owners fenced] --> absent[Confirm all old PIDs absent]
+    absent --> expiry[Wait 32 seconds]
+    expiry --> fresh[Three new IDs and local directories]
+    fresh --> acknowledgements[Verify all 136 creation ACKs]
+    acknowledgements --> critical[Verify both critical Git fixtures]
+    critical --> corpus[Verify all 10,000 original identities and 100 Git/LFS fixtures]
+```
+
+`failed-owner-exit.json` records all four old process IDs absent followed by
+32.076 seconds of conservative lease-expiry wait. This boundary is an observed
+failure, not a deliberate SIGKILL. `fleet-node100-after-failure` starts the same
+retained release binary and durable deployment with three new node IDs, signing
+keys and empty local directories, still capped at 100 active entries per node.
+Its proxy is separate from the user's UI preview.
+
+The recovery run passed all 136 creation ACKs and both critical Git fixtures:
+four exact ref inventories across v0/v2 mirror clones, exact payload/notes and
+strict full fsck. It is now checking the full original corpus with four bounded
+workers and no retries. The critical receipt's digest matches the earlier
+recovery result because its expected fixture content did not change; the new
+owner boundary and fleet binding are recorded separately, not inferred from
+that content hash. Successful creation/critical recovery does not close the
+full-corpus gate or qualify any
+unstarted Git/LFS load phase. The new dependency candidate must subsequently
+produce its own release artifact, end-to-end and matched performance evidence;
+it cannot replace verification of writes made by this failed baseline.
+
+| Artifact under `canopy-three-proxy-q3FO2z` | SHA-256 |
+| --- | --- |
+| `failed-baseline-audit.json` | `398fb729e1017ddd956a6fdc6e1c5dc528f1efc86dbbeeec4035fd4e7ecd6b62` |
+| `fleet-node100-matched/outcome.json` | `153174bf051cd8795039f43c6b38a6fad4416645244c58aeb71a853bba5f136f` |
+| `failed-owner-exit.json` | `16b300d2724ec52a73f6dab656c682c70567a6669a6612bd0fb8baa920a5d889` |
+| `fleet-node100-after-failure/ready.json` | `47bd95391d667be68403dd55d02f0349d3dc874f908b64ced3ab112611056062` |
+| `creation-after-failure-verification.json` | `45127974487f1b0e272a1d7603886b84b2afe5c3255a8a04653e380c5a41db14` |
+| `critical-after-failure-verification.json` | `2aac52dcca5973fbe9ed8badebd5eda2c97563e091d94816df5735f76f9c0c5d` |
+
+### Diagnosis boundaries
+
+The independent provider observer compares adjacent UTC and monotonic sample
+clocks; their largest difference over the observation was 0.007746 seconds.
+There is no sampled large wall-clock jump. RustFS CPU observations near fencing
+include 214.24% and 141.15% under a two-core quota, followed by reduced activity.
+Earlier node warnings record successful but slow lease refreshes. These narrow
+the next investigation toward provider/publication pressure and the lease
+refresh path, but do not isolate its cause or prove a Cellule optimization.
+The production 30-second authority interval, client deadlines, admission bounds
+and fencing checks remain unchanged.
+
+The mixed hosted CI result is a separate problem: the delayed-startup test
+obtains and releases an ephemeral listener before its 31-second pause, then
+binds that same address at startup. `AddrInUse` is consistent with reuse by a
+parallel test; it is not evidence that the lease assertion failed. A
+deterministic occupied-port reproduction and fixture repair are still required.
 
 ## Measure the requested operations
 
