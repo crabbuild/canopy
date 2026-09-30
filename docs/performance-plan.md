@@ -676,7 +676,7 @@ client queue. HTTP and Git failures are recorded without retries. `--timeout`
 bounds individual HTTP socket operations; `--git-timeout` bounds each Git process.
 All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
 error totals, scheduled/service/dispatch latency percentiles and the manifest
-SHA-256. `started_at_utc` anchors the run to server logs; each sample's
+and sample-file SHA-256. `started_at_utc` anchors the run to server logs; each sample's
 scheduled offset is `sequence / offered_rps`, while latency continues to use the
 monotonic clock. Dropped arrivals have no fabricated zero latency. Any failure yields
 exit status 1 after reports are written. Latency percentiles include completed
@@ -695,6 +695,43 @@ tip/content checks, and credential exclusion from the report.
 The ref-listing fixture also runs unmodified Git against an HTTP v2 server,
 asserts an actual `ls-refs` POST and request correlation, rejects a wrong tip,
 and distinguishes that exchange from capability-only GET discovery.
+
+### Verify writes acknowledged during load
+
+Checking only the seed after a crash can miss lost load-test writes. Keep the
+write reports and their sibling sample files, establish the owner restart or
+takeover separately, then run this read-only check against the recovered node:
+
+```sh
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  verify-writes \
+  --report /path/to/canopy-two-gateway-pushes.json \
+  --report /path/to/canopy-lfs-upload.json \
+  --work-dir /path/to/new-acknowledged-write-checks \
+  --output /path/to/canopy-acknowledged-write-checks.json
+```
+
+| Evidence | Required check |
+| --- | --- |
+| Corpus and write samples | Matching SHA-256 digests, complete sequence/outcome accounting and unique run IDs |
+| Acknowledged push | Every generated ref has the exact commit; Git v0/v2 fetches reproduce the exact README object ID and pass strict fsck |
+| Acknowledged LFS upload | Streamed body matches its declared size and SHA-256 |
+| Failed, dropped or timed-out arrival | Counted separately; neither success nor rollback is inferred |
+
+All reports are validated before creating scratch or issuing requests. The
+check refuses old reports without `samples_sha256`, an empty acknowledgement
+set, existing output/scratch paths and more than one million total arrivals.
+Its output binds the source report digests and counts only verified
+acknowledgements. It does not kill a server or establish that an owner restarted:
+record old/new node identities, process exit and fresh local-state evidence
+alongside it. Run the separate corpus `verify` for seeded identities and data.
+
+Regression fixtures cover SHA-1/SHA-256 pushes, wrong tips, exact-body
+differences, corrupt LFS, lost acknowledgements, tampered samples and inconsistent
+accounting. These driver checks do not themselves qualify production recovery
+or the 10,000-repository target.
 
 ## Measurement history
 

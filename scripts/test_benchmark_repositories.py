@@ -410,6 +410,34 @@ class ScheduledLoad(unittest.TestCase):
                     self.assertEqual(len(uploaded), 1024)
                     self.assertEqual(hashlib.sha256(uploaded).hexdigest(), sample["lfs_oid"])
                 self.assertNotIn("fixture-token", args.output.read_text())
+                recovery = SimpleNamespace(manifest=manifest, reports=[args.output],
+                    work_dir=root / "lfs-ack-check", output=root / "lfs-ack-check.json",
+                    git_timeout=30)
+                recovered = benchmark.verify_writes(recovery, clients[1], "fixture-token")
+                self.assertEqual(recovered["verified_lfs_objects"], 2)
+                self.assertEqual(recovered["verified_git_refs"], 0)
+                with guard:
+                    blobs[f"/canopy/fixture.git/info/lfs/objects/{samples[0]['lfs_oid']}"] = b"X" * 1024
+                recovery.work_dir = root / "corrupt-lfs-ack-check"
+                recovery.output = root / "corrupt-lfs-ack-check.json"
+                with self.assertRaisesRegex(RuntimeError, "acknowledged LFS"):
+                    benchmark.verify_writes(recovery, clients[0], "fixture-token")
+                self.assertFalse(recovery.output.exists())
+                # A lost acknowledgement is not proof of either success or
+                # rollback. Only the remaining acknowledged object is asserted.
+                with guard:
+                    del blobs[f"/canopy/fixture.git/info/lfs/objects/{samples[0]['lfs_oid']}"]
+                samples[0]["result"] = "client_timeout"
+                sample_path = args.output.with_suffix(".samples.jsonl")
+                sample_path.write_text("".join(json.dumps(sample) + "\n" for sample in samples))
+                report["samples_sha256"] = benchmark.file_sha256(sample_path)
+                report["outcomes"], report["failed_arrivals"] = {"ok": 1, "client_timeout": 1}, 1
+                args.output.write_text(json.dumps(report))
+                recovery.work_dir = root / "partial-lfs-ack-check"
+                recovery.output = root / "partial-lfs-ack-check.json"
+                recovered = benchmark.verify_writes(recovery, clients[0], "fixture-token")
+                self.assertEqual(recovered["verified_lfs_objects"], 1)
+                self.assertEqual(recovered["unacknowledged_arrivals_not_asserted"], 1)
                 args.lfs_bytes = 16 * 1024 * 1024
                 args.concurrency = 32
                 args.output = root / "too-large.json"
@@ -475,6 +503,30 @@ class ScheduledLoad(unittest.TestCase):
                 token="fixture-token").splitlines()
             self.assertEqual(refs, [report["push_commit"]] * 2)
             self.assertNotIn("fixture-token", args.output.read_text())
+            recovery = SimpleNamespace(manifest=manifest, reports=[args.output],
+                work_dir=root / "push-ack-check", output=root / "push-ack-check.json",
+                git_timeout=30)
+            recovered = benchmark.verify_writes(recovery, ingresses[1], "fixture-token")
+            self.assertEqual(recovered["verified_git_refs"], 2)
+            self.assertEqual(recovered["verified_git_repositories"], 1)
+            self.assertEqual(recovered["verified_lfs_objects"], 0)
+            reference = f"refs/heads/canopy-benchmark/{report['push_run_id']}/0000000"
+            benchmark.git("update-ref", reference, entry["commit"], cwd=remote,
+                          token="fixture-token")
+            recovery.work_dir = root / "wrong-push-ack-check"
+            recovery.output = root / "wrong-push-ack-check.json"
+            with self.assertRaisesRegex(RuntimeError, "acknowledged Git ref"):
+                benchmark.verify_writes(recovery, ingresses[0], "fixture-token")
+            self.assertFalse(recovery.output.exists())
+            benchmark.git("update-ref", reference, report["push_commit"], cwd=remote,
+                          token="fixture-token")
+            sample_path = args.output.with_suffix(".samples.jsonl")
+            sample_path.write_text(sample_path.read_text() + "{}\n")
+            recovery.work_dir = root / "tampered-push-ack-check"
+            recovery.output = root / "tampered-push-ack-check.json"
+            with self.assertRaisesRegex(ValueError, "sample digest"):
+                benchmark.verify_writes(recovery, ingresses[0], "fixture-token")
+            self.assertFalse(recovery.work_dir.exists())
             entry["base_commit"] = entry["commit"]
             benchmark.git("branch", "benchmark-base", cwd=source, token="fixture-token")
             increment = b"new commit for an incremental transfer\n"
@@ -500,6 +552,112 @@ class ScheduledLoad(unittest.TestCase):
                 self.assertEqual([item["outcomes"] for item in report["ingresses"]],
                                  [{"ok": 1}, {"ok": 1}])
                 self.assertNotIn("fixture-token", args.output.read_text())
+
+    def test_sha256_acknowledged_push_checks_exact_body_and_both_protocols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, remote = root / "source", root / "canopy" / "fixture.git"
+            remote.parent.mkdir()
+            for path, bare in ((source, False), (remote, True)):
+                benchmark.git("init", "--object-format=sha256", "-b", "main",
+                              *(["--bare"] if bare else []), str(path), cwd=root, token="fixture-token")
+            benchmark.git("config", "user.name", "Fixture", cwd=source, token="fixture-token")
+            benchmark.git("config", "user.email", "fixture@example.invalid", cwd=source, token="fixture-token")
+            run_id = uuid.uuid4().hex
+            repository_id = str(uuid.uuid4())
+            reference = f"refs/heads/canopy-benchmark/{run_id}/0000000"
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"version": 1, "complete": True,
+                "requested_repositories": 1, "repositories": [{"name": "fixture", "owner": "canopy",
+                "repository_id": repository_id, "commit": None}]}))
+            report_path = root / "push.json"
+            samples_path = report_path.with_suffix(".samples.jsonl")
+            samples_path.write_text(json.dumps({"sequence": 0, "repository_id": repository_id,
+                                              "result": "ok"}) + "\n")
+            for case, ending in (("wrong-body", ""), ("exact-body", "\n")):
+                (source / "README.md").write_text(f"benchmark run {run_id}{ending}")
+                benchmark.git("add", "README.md", cwd=source, token="fixture-token")
+                benchmark.git("commit", "-m", case, cwd=source, token="fixture-token")
+                benchmark.git("push", str(remote), f"HEAD:{reference}", cwd=source, token="fixture-token")
+                commit = benchmark.git("rev-parse", "HEAD", cwd=source, token="fixture-token")
+                self.assertEqual(len(commit), 64)
+                report_path.write_text(json.dumps({"version": 1, "operation": "push_branch",
+                    "scheduled": 1, "outcomes": {"ok": 1}, "failed_arrivals": 0,
+                    "manifest_sha256": benchmark.file_sha256(manifest),
+                    "samples_sha256": benchmark.file_sha256(samples_path),
+                    "push_run_id": run_id, "push_commit": commit}))
+                args = SimpleNamespace(manifest=manifest, reports=[report_path],
+                    work_dir=root / f"{case}-scratch", output=root / f"{case}.json", git_timeout=30)
+                client = SimpleNamespace(base_url=root.as_uri())
+                if case == "wrong-body":
+                    with self.assertRaisesRegex(RuntimeError, "acknowledged Git body"):
+                        benchmark.verify_writes(args, client, "fixture-token")
+                    self.assertFalse(args.output.exists())
+                else:
+                    recovered = benchmark.verify_writes(args, client, "fixture-token")
+                    self.assertEqual(recovered["verified_git_refs"], 1)
+                    self.assertEqual(recovered["git_protocols"], [0, 2])
+                    self.assertEqual(recovered["unacknowledged_arrivals_not_asserted"], 0)
+
+    def test_write_verification_rejects_inconsistent_evidence_before_io(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_id = str(uuid.uuid4())
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"version": 1, "complete": True,
+                "requested_repositories": 1, "repositories": [{"name": "fixture", "owner": "canopy",
+                "repository_id": repository_id, "commit": None}]}))
+            report_path = root / "writes.json"
+            samples_path = report_path.with_suffix(".samples.jsonl")
+            base_samples = [{"sequence": 0, "repository_id": repository_id, "result": "ok", "lfs_oid": "1" * 64},
+                            {"sequence": 1, "repository_id": repository_id, "result": "driver_busy"}]
+            base_report = {"version": 1, "operation": "lfs_upload", "scheduled": 2,
+                "outcomes": {"ok": 1, "driver_busy": 1}, "failed_arrivals": 1,
+                "manifest_sha256": benchmark.file_sha256(manifest),
+                "lfs_run_id": "2" * 32, "lfs_size_bytes": 128}
+            for case in ("duplicate-sequence", "missing-sample", "unknown-repository",
+                         "wrong-outcomes", "wrong-failures", "wrong-manifest",
+                         "no-acks", "duplicate-run", "invalid-lfs-oid", "invalid-sample",
+                         "invalid-repository", "invalid-result"):
+                with self.subTest(case=case):
+                    samples = [dict(sample) for sample in base_samples]
+                    report = dict(base_report)
+                    if case == "duplicate-sequence":
+                        samples[1]["sequence"] = 0
+                    elif case == "missing-sample":
+                        samples.pop()
+                    elif case == "unknown-repository":
+                        samples[0]["repository_id"] = str(uuid.uuid4())
+                    elif case == "wrong-outcomes":
+                        report["outcomes"] = {"ok": 2}
+                        report["failed_arrivals"] = 0
+                    elif case == "wrong-failures":
+                        report["failed_arrivals"] = 0
+                    elif case == "wrong-manifest":
+                        report["manifest_sha256"] = "0" * 64
+                    elif case == "no-acks":
+                        samples[0]["result"] = "driver_busy"
+                        report["outcomes"], report["failed_arrivals"] = {"driver_busy": 2}, 2
+                    elif case == "invalid-lfs-oid":
+                        samples[0]["lfs_oid"] = []
+                    elif case == "invalid-sample":
+                        samples[0] = None
+                    elif case == "invalid-repository":
+                        samples[0]["repository_id"] = []
+                    elif case == "invalid-result":
+                        samples[0]["result"] = []
+                    samples_path.write_text("".join(json.dumps(sample) + "\n" for sample in samples))
+                    report["samples_sha256"] = benchmark.file_sha256(samples_path)
+                    report_path.write_text(json.dumps(report))
+                    args = SimpleNamespace(manifest=manifest,
+                        reports=[report_path] * (2 if case == "duplicate-run" else 1),
+                        work_dir=root / f"{case}-scratch", output=root / f"{case}.json", git_timeout=30)
+                    # There is deliberately no client: validation must precede
+                    # scratch creation and any HTTP or Git operation.
+                    with self.assertRaises(ValueError):
+                        benchmark.verify_writes(args, None, "fixture-token")
+                    self.assertFalse(args.work_dir.exists())
+                    self.assertFalse(args.output.exists())
 
 
 if __name__ == "__main__":

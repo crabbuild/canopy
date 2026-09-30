@@ -89,7 +89,7 @@ must not be compared with a successful full round trip as an end-to-end speedup.
 | Intermediate instrumentation-free multi-server candidate, four test threads | 93 passed, 9 ignored, in 482.20 s; includes the unchanged large-object fixture |
 | Final-source full debug attempt, four test threads | Stopped at the library: 113 passed, the existing symlink/reopen test failed with `WouldBlock`; integration targets are being run separately |
 | Final-source library, serial | All 114 passed in 59.35 s; does not erase the parallel failure |
-| Final-source formatter, Clippy and Python harness | Passed; Clippy checked all targets with warnings denied, Python ran 15 tests after cache-fixture repairs and 16 after adding actual Git ref-listing coverage |
+| Final-source formatter, Clippy and Python harness | Passed; Clippy checked all targets with warnings denied, Python ran 15 tests after cache-fixture repairs, 16 with actual Git ref-listing coverage and 18 with acknowledged-write verification |
 | Final-source debug integration targets, four test threads | All six passed: Directory Cell 10, Git round trip 1, multi-server 93, owner restart 1, Repository Cell 1, smart HTTP 1; nine explicit multi-server ignores |
 | Final-source release multi-server suite, four test threads | 93 passed, 9 ignored in 490.94 s; unchanged large-object fixture passed |
 | Remaining final-source release targets, serial | All passed: library 114, binary 1 and the other five integration targets (14 tests) |
@@ -243,6 +243,23 @@ All 16 Python harness tests passed after the addition, and again after adding
 the SHA-256 fixture in 17.664 s. A direct call against one populated live Canopy fixture matched
 its tip; that is a driver smoke, not a partial-corpus capacity measurement.
 
+## Check acknowledged load-test writes after recovery
+
+The corpus verifier checks seed data, not writes made by workload windows.
+The new `verify-writes` command consumes digest-bound `push_branch` and
+`lfs_upload` reports, checks every acknowledged generated ref with Git v0/v2,
+verifies exact commit/README object IDs and strict fsck, and streams each
+acknowledged LFS object for size/hash comparison. Unacknowledged arrivals remain
+separate; a timeout is not interpreted as rollback.
+
+Two regressions failed before implementation. The expanded 18-test Python suite
+then passed, including SHA-1/SHA-256 pushes, wrong refs and exact-body mismatches,
+corrupt LFS, omitted acknowledgements and inconsistent or tampered evidence.
+This is verification-driver coverage, not a recovered-Canopy load-test result.
+The caller must establish and record the owner restart before running the
+[acknowledged-write check](../performance-plan.md#verify-writes-acknowledged-during-load).
+No server artifact or in-progress corpus release changed.
+
 The old Docker data filesystem exhausted its inodes. A later read-only check
 found about 9,700 free inodes, enough to start a small probe container. A
 task-owned RustFS provider now mounts a dedicated host-home directory rather
@@ -293,6 +310,11 @@ Local logs are retained under experiment
 - `python-ls-remote-formats.log`
 - `workspace-focused-parallel.log`
 - `workspace-fork-mechanism.log` (standalone possible-mechanism probe)
+- `write-ack-verifier-regression-red.log`
+- `write-ack-verifier-first-green.log`
+- `write-ack-verifier-final.log`
+- `write-ack-verifier-sha256.log`
+- `write-ack-verifier-published.log`
 
 Use the [performance plan](../performance-plan.md#performance-qualification-rules)
 for the remaining capacity gates. This fix reduces transaction work; it does
