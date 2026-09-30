@@ -349,6 +349,24 @@ pub(crate) fn apply_refs(
     if updates.len() != plan.updates.len() {
         return Ok(false);
     }
+    // A first mirror push can contain thousands of refs. One transactional
+    // emptiness check avoids a point lookup and namespace scan for every new
+    // name while preserving the ordinary CAS path for tombstones and live refs.
+    let emptiness = context.sql(&SqlBatch {
+        statements: vec![SqlStatement {
+            sql: "SELECT NOT EXISTS (SELECT 1 FROM refs)".into(),
+            parameters: Vec::new(),
+        }],
+    })?;
+    let refs_empty = match emptiness
+        .first()
+        .and_then(|set| set.rows.first())
+        .map(Vec::as_slice)
+    {
+        Some([SqlValue::Integer(0)]) => false,
+        Some([SqlValue::Integer(1)]) => true,
+        _ => return Err(Error::Command("invalid ref emptiness result")),
+    };
     for update in &plan.updates {
         if server_owned_ref(&update.name)
             || !valid_ref_name(&update.name)
@@ -362,7 +380,9 @@ pub(crate) fn apply_refs(
         if update.new_oid.is_none() && update.expected.as_ref().and_then(|old| old.oid).is_none() {
             return Ok(false);
         }
-        if current_ref(context, &update.name)? != update.expected {
+        if (refs_empty && update.expected.is_some())
+            || (!refs_empty && current_ref(context, &update.name)? != update.expected)
+        {
             return Ok(false);
         }
     }
@@ -371,7 +391,7 @@ pub(crate) fn apply_refs(
         .iter()
         .filter(|update| update.new_oid.is_some())
     {
-        if existing_namespace_conflict(context, &updates, &update.name)? {
+        if existing_namespace_conflict(context, &updates, &update.name, refs_empty)? {
             return Ok(false);
         }
     }
@@ -474,6 +494,7 @@ fn existing_namespace_conflict(
     context: &CommandContext<'_, '_>,
     updates: &BTreeMap<&str, &RefUpdate>,
     name: &str,
+    refs_empty: bool,
 ) -> cellule_runtime::Result<bool> {
     // Planned deletions remove namespace conflicts in this same transaction.
     // Exact ancestor lookups and indexed descendant pages avoid a full ref scan
@@ -482,6 +503,7 @@ fn existing_namespace_conflict(
         let ancestor = &name[..index];
         let live = match updates.get(ancestor) {
             Some(update) => update.new_oid.is_some(),
+            None if refs_empty => false,
             None => current_ref(context, ancestor)?.is_some_and(|state| state.oid.is_some()),
         };
         if live {
@@ -495,6 +517,9 @@ fn existing_namespace_conflict(
         .any(|(_, update)| update.new_oid.is_some())
     {
         return Ok(true);
+    }
+    if refs_empty {
+        return Ok(false);
     }
     let mut after = prefix.clone();
     loop {

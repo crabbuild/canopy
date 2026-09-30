@@ -225,6 +225,33 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
                 second_commit.as_bytes(),
             )
             .await?;
+        // The empty-ref fast path still rejects an ancestor and descendant in
+        // the same atomic plan, with no generation change or partial writes.
+        let before = repository.refs_page("", None).await?.output;
+        assert!(before.refs.is_empty());
+        assert!(matches!(
+            repository
+                .finalize_push(
+                    identity(28),
+                    PushPlan {
+                        actor: "canopy".into(),
+                        updates: ["refs/tags/conflict", "refs/tags/conflict/child"]
+                            .into_iter()
+                            .map(|name| RefUpdate {
+                                name: name.into(),
+                                expected: None,
+                                new_oid: Some(committed.output),
+                            })
+                            .collect(),
+                    },
+                )
+                .await,
+            Err(InvocationError::Rejected(_))
+        ));
+        assert_eq!(
+            repository.default_branch(None).await?.output.generation,
+            before.generation
+        );
         let published = repository
             .finalize_push(
                 MutationIdentity {
