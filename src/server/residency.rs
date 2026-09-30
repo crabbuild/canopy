@@ -1,7 +1,7 @@
 //! Bounded repository residency with request pins and confirmed Cell release.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -334,100 +334,117 @@ impl RepositoryManager {
     }
 
     async fn evict_repository(&self) -> Result<Arc<OwnedSemaphorePermit>, ServerError> {
-        let candidates: HashMap<_, _> = self
-            .node
-            .idle_transfer_candidates()
-            .await?
-            .into_iter()
-            .map(|(cell, generation, _, _)| (cell, generation))
-            .collect();
-        let (id, action, _transition) = {
-            let mut loaded = self.loaded.lock().await;
-            let mut eligible = Vec::new();
-            for (id, repository) in loaded.iter() {
-                if Arc::strong_count(&repository.pin) != 1 {
-                    continue;
-                }
-                let (priority, action) = match (repository.state, repository.local) {
-                    (ResidencyState::Released, _) => (0, EvictionAction::Cleanup),
-                    (ResidencyState::Serving, false) => (1, EvictionAction::DropRemote),
-                    (ResidencyState::Serving | ResidencyState::RefreshHandle, true) => {
-                        let target = repository_target(self.tenant, self.application, *id)?;
-                        let Some(generation) = candidates.get(&target.cell_id()) else {
-                            continue;
-                        };
-                        (
-                            2,
-                            EvictionAction::Release {
-                                cell: target.cell_id(),
-                                generation: *generation,
-                            },
-                        )
+        // A candidate can start renewal or another lifecycle transition after
+        // inventory. Try a different idle Cell within this same admitted cold
+        // request instead of turning one transient preflight race into HTTP 503.
+        // Bound rescans so a whole busy working set still backpressures callers.
+        let mut rejected = HashSet::new();
+        loop {
+            let candidates: HashMap<_, _> = self
+                .node
+                .idle_transfer_candidates()
+                .await?
+                .into_iter()
+                .map(|(cell, generation, _, _)| (cell, generation))
+                .collect();
+            let (id, action, _transition) = {
+                let mut loaded = self.loaded.lock().await;
+                let mut eligible = Vec::new();
+                for (id, repository) in loaded.iter() {
+                    if rejected.contains(id) || Arc::strong_count(&repository.pin) != 1 {
+                        continue;
                     }
-                    _ => continue,
-                };
-                eligible.push((priority, repository.last_used, *id, action));
-            }
-            eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1, candidate.2));
-            let mut chosen = None;
-            for (_, _, id, action) in eligible {
-                // Never wait for another repository while holding our own guard.
-                // This excludes in-flight initialization and competing evictions.
-                let Ok(transition) = self.transition_lock(id).await.try_lock_owned() else {
-                    continue;
-                };
-                if matches!(action, EvictionAction::Release { .. }) {
-                    loaded
-                        .get_mut(&id)
-                        .ok_or(ServerError::Repository("eviction candidate is absent"))?
-                        .state = ResidencyState::Releasing;
+                    let (priority, action) = match (repository.state, repository.local) {
+                        (ResidencyState::Released, _) => (0, EvictionAction::Cleanup),
+                        (ResidencyState::Serving, false) => (1, EvictionAction::DropRemote),
+                        (ResidencyState::Serving | ResidencyState::RefreshHandle, true) => {
+                            let target = repository_target(self.tenant, self.application, *id)?;
+                            let Some(generation) = candidates.get(&target.cell_id()) else {
+                                continue;
+                            };
+                            (
+                                2,
+                                EvictionAction::Release {
+                                    cell: target.cell_id(),
+                                    generation: *generation,
+                                },
+                            )
+                        }
+                        _ => continue,
+                    };
+                    eligible.push((priority, repository.last_used, *id, action));
                 }
-                chosen = Some((id, action, transition));
-                break;
-            }
-            chosen.ok_or(Error::Capacity("repository residency"))?
-        };
-        let (cell, generation) = match action {
-            EvictionAction::DropRemote => {
-                let removed = self.loaded.lock().await.remove(&id);
-                return removed
-                    .map(|repository| repository.slot)
-                    .ok_or(ServerError::Repository("eviction candidate is absent"));
-            }
-            EvictionAction::Cleanup => return self.cleanup_released(id).await,
-            EvictionAction::Release { cell, generation } => (cell, generation),
-        };
-        let mut result = self
-            .node
-            .release_idle_cell(cell, self.session, generation)
-            .await;
-        // Cellule rejects this exact capacity error before transfer preflight.
-        // Wait one rate window; the retry rechecks generation and settled work.
-        // Other failures can follow release and must retain the recovery path.
-        if matches!(&result, Err(Error::Capacity("movement budget"))) {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            result = self
+                eligible.sort_unstable_by_key(|candidate| (candidate.0, candidate.1, candidate.2));
+                let mut chosen = None;
+                for (_, _, id, action) in eligible {
+                    // Never wait for another repository while holding our own guard.
+                    // This excludes in-flight initialization and competing evictions.
+                    let Ok(transition) = self.transition_lock(id).await.try_lock_owned() else {
+                        continue;
+                    };
+                    if matches!(action, EvictionAction::Release { .. }) {
+                        loaded
+                            .get_mut(&id)
+                            .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                            .state = ResidencyState::Releasing;
+                    }
+                    chosen = Some((id, action, transition));
+                    break;
+                }
+                chosen.ok_or_else(|| {
+                    if rejected.is_empty() {
+                        Error::Capacity("repository residency")
+                    } else {
+                        Error::CellDraining
+                    }
+                })?
+            };
+            let (cell, generation) = match action {
+                EvictionAction::DropRemote => {
+                    let removed = self.loaded.lock().await.remove(&id);
+                    return removed
+                        .map(|repository| repository.slot)
+                        .ok_or(ServerError::Repository("eviction candidate is absent"));
+                }
+                EvictionAction::Cleanup => return self.cleanup_released(id).await,
+                EvictionAction::Release { cell, generation } => (cell, generation),
+            };
+            let mut result = self
                 .node
                 .release_idle_cell(cell, self.session, generation)
                 .await;
+            // Cellule rejects this exact capacity error before transfer preflight.
+            // Wait one rate window; the retry rechecks generation and settled work.
+            // Other failures can follow release and must retain the recovery path.
+            if matches!(&result, Err(Error::Capacity("movement budget"))) {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                result = self
+                    .node
+                    .release_idle_cell(cell, self.session, generation)
+                    .await;
+            }
+            {
+                let mut loaded = self.loaded.lock().await;
+                let repository = loaded
+                    .get_mut(&id)
+                    .ok_or(ServerError::Repository("eviction candidate is absent"))?;
+                repository.state = if result.is_ok() {
+                    ResidencyState::Released
+                } else {
+                    ResidencyState::RefreshHandle
+                };
+            }
+            if matches!(&result, Err(Error::CellDraining)) && rejected.len() < 8 {
+                rejected.insert(id);
+                continue;
+            }
+            result?;
+            // Only a confirmed release permits dropping handles and deleting local
+            // SQLite artifacts. Failed or ambiguous releases retain the local state.
+            let slot = self.cleanup_released(id).await?;
+            tracing::debug!(repository = %hex::encode(id), "released idle repository Cell");
+            return Ok(slot);
         }
-        {
-            let mut loaded = self.loaded.lock().await;
-            let repository = loaded
-                .get_mut(&id)
-                .ok_or(ServerError::Repository("eviction candidate is absent"))?;
-            repository.state = if result.is_ok() {
-                ResidencyState::Released
-            } else {
-                ResidencyState::RefreshHandle
-            };
-        }
-        result?;
-        // Only a confirmed release permits dropping handles and deleting local
-        // SQLite artifacts. Failed or ambiguous releases retain the local state.
-        let slot = self.cleanup_released(id).await?;
-        tracing::debug!(repository = %hex::encode(id), "released idle repository Cell");
-        Ok(slot)
     }
 
     async fn cleanup_released(
