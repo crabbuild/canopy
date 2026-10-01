@@ -2,15 +2,24 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency candidate is `e07670e2348231ed401cc7280a47e3ab97596ffe`, fetched from
-`origin/main` during the [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md#prepare-the-next-upstream-candidate).
-One hosted workflow passed its build, workspace tests and isolated RustFS
-qualification; a sibling failed a delayed-startup test with `AddrInUse`.
-That fixture race was reproduced and repaired without changing production
-authority checks; all four lease lifecycle tests passed locally. A separately
-bound production release passed 17 critical stock-Git checks through three
-nodes and a proxy against RustFS. Its new 10,000-repository seed is in progress;
-complete-corpus recovery and matched performance verification remain open.
+dependency pin is `0573f48998c4e5343cd8b463d79b7bc1820c923c`, a docs-only
+upstream advance from `e07670e` with identical Rust workspace/crates. Both full
+hosted workflows passed; that does not establish three-node capacity.
+The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
+retains the earlier fixture race and its regression, plus the candidate's failed
+seed and successful recovery of every recorded ACK.
+
+| Current gate | Evidence / status |
+| --- | --- |
+| Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
+| Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
+| Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
+| Native-volume comparison | Same runtime, provider image/limits and full corpus requested; critical Git setup passed, full seed running |
+| Full recovery and scheduled load | Still unqualified; no incomplete seed or narrow functional test closes these gates |
+
+The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
+records the storage hypothesis, graceful diagnostic drain and new bindings.
+No Cellule bottleneck or matched performance improvement is proven.
 The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
 and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
 That baseline stopped after 20 fully bound windows and one interrupted creation

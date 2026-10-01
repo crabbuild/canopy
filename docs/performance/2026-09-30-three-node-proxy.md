@@ -93,8 +93,11 @@ in the Cellule checkout. Both commits have the same `crates` tree object
 `587e3215ce1bc0c67db3390a137623b6fead01ac`, root Cargo manifest blob
 `6b7e13d8439558455ea04458357f3a70992fa367` and lockfile blob
 `b512761a55bba5165101ce9905dfe7f603f5b079`. This upstream update is not a
-runtime performance fix. A new production build, hosted verification and
-end-to-end qualification for the new source pin remain open; existing binary
+runtime performance fix. Both full hosted workflows for `0573f489` passed:
+[36806695489](https://github.com/crabbuild/canopy/actions/runs/36806695489) and
+[36806698917](https://github.com/crabbuild/canopy/actions/runs/36806698917).
+A new local production build and three-node end-to-end qualification for the
+new source pin remain open; existing binary
 bindings and the live ACK recovery still identify `e07670e`.
 
 The candidate-volume `metadata-0573f489.json` SHA-256 is
@@ -189,7 +192,8 @@ The candidate provider uses a Mac-backed bind mount at `/data`. A Linux-owned
 Docker volume is a falsifiable next storage comparison: retain the exact binary,
 image, two-CPU/2-GiB provider limits, admission, leases, 30-second HTTP deadline,
 10,000 identities and 100 same-sized Git/LFS fixtures, changing the filesystem
-backing in a new disposable deployment. That trial has **not** run. Shared-host
+backing in a new disposable deployment. The [native-volume trial](2026-10-01-native-filesystem.md)
+is now running after audited ACK recovery and graceful diagnostic drain. Shared-host
 and renewal-contention hypotheses remain open; no Cellule bottleneck or fix is
 established.
 
@@ -201,25 +205,32 @@ then started against the same durable prefix and immutable binary, with new
 identities and local directories. The two critical repositories passed their
 four exact v0/v2 ref inventories, payload/notes checks and strict full fsck.
 
-At the 02:25:27 UTC ledger checkpoint, verification of all 3,561 recorded seed ACKs was
-live, with 600 verified. It uses four workers, the unchanged 30-second HTTP
-deadline and no retries. Every UUID must match; each of the 39 populated
-fixtures must also recover exact Git/LFS bytes, both protocols and strict full
-fsck. The original incomplete manifest is never rewritten. Even a complete
-ACK recovery cannot qualify a 10,000-repository gate or scheduled performance.
+Verification completed with exit 0: all 3,561 recorded ACKs and all 39 populated
+fixtures passed with four workers, the unchanged 30-second HTTP deadline and
+no retries. Each UUID and exact Git/LFS payload matched, with both protocols and
+strict full fsck. The independent audit checked exact unique ledger sets and
+bindings, then rechecked all 78 local Git clones. The original incomplete
+manifest was never rewritten. This ACK recovery cannot qualify a
+10,000-repository gate or scheduled performance.
 
-A separate `observe_ack_recovery.py` companion is now collecting bounded
+A separate `observe_ack_recovery.py` companion collected bounded
 provider health timings, signed metrics, current pause/quota/restart state,
 VM uptime and VM-wide CPU/I/O pressure. A continuous event stream is scoped
-to the two fixture container IDs. It stops after 2,400 seconds, verifier exit
-or a caller stop; probe errors and unexpected stream exit are retained. The
-first 11 samples had no probe errors, but the observation remains incomplete.
+to the two fixture container IDs. It completed after verifier exit with 173
+samples and zero probe errors; the event stream was then stopped intentionally.
+An offline audit checked the digests, probe bounds, state snapshots and events.
 Health responses do not establish durable-write latency, VM pressure is not
 container attribution, and probes add shared-host overhead. This is diagnostic
 evidence, not a performance comparison. The companion's source SHA-256 is
 `3e7233d357c41f9f76194c268def6d259cc5cc56202cc73be1bb5b8181876e3a`;
-its append-only samples and event stream are under
+its closed samples and event stream are under
 `ack-recovery-boundary-observer`, separate from the closed failure audit.
+
+The diagnostic fleet subsequently drained with three unforced exit-0 outcomes.
+Only its verified launcher received SIGTERM. The old dedicated provider was
+stopped without deleting its data; the separate UI stayed live. See the
+[native-volume trial record](2026-10-01-native-filesystem.md) for the completed
+ACK audit, drain boundary and new fixture bindings.
 
 | Closed candidate artifact | SHA-256 |
 | --- | --- |
@@ -232,6 +243,11 @@ its append-only samples and event stream are under
 | `audit_seed_failure.py` | `42daca70ada182e272a198aceb4568834a9a9fa206ac729193f9d64ebd1558c1` |
 | `fleet-after-seed-failure/ready.json` | `aaa089a05e1b140ea9b0973248290aa07d6fcb11309eb29e05f570bb5bec6920` |
 | `critical-after-failed-seed-verification.json` | `1031bf601b1e63970198a385fe4f7bacae0124b6d9861a8254729f371967ef31` |
+| `failed-seed-ack-verification.json` | `e9d6e6c804367a69f93c59fae57f98f90062b7fa48393e107ae8759f8f473167` |
+| `failed-seed-ack-verification.jsonl` | `9290073f8b460d31a2cb21fcd62805759cf3e31a413c681cb9a3c195cf4d2008` |
+| `failed-seed-ack-recovery-audit.json` | `01f2daa462f7f5ee321fc30dba813013ee2fe00415ff60d210224cace0355350` |
+| `ack-recovery-observer-audit.json` | `866419ea5503df3ca685789f333f8d8fed03f5ed734b2f8bf8ac822099ef9dec` |
+| `ack-recovery-graceful-drain.json` | `23a29d2a479e814b117e610a580a504cc4a7e442871e1908a40694eacaf44c11` |
 
 ## Retain failed setup and incomplete work
 
