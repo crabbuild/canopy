@@ -211,6 +211,24 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
 #[tokio::test]
 async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
+    const ISOLATED: &str = "CANOPY_TEST_ISOLATED_FAILED_SPAWN";
+    if std::env::var(ISOLATED).as_deref() != Ok("1") {
+        // This checks the command's parent fence, not unrelated forks that can
+        // briefly inherit its CLOEXEC descriptor. An inherited live fence must
+        // prevent cleanup; exercise that case separately below.
+        let status = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "git_http::stream_tests::failed_spawn_releases_parent_fence_before_cache_cleanup",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ISOLATED, "1")
+            .status()
+            .await?;
+        assert!(status.success());
+        return Ok(());
+    }
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
     let cache = GitCache::create(
@@ -227,5 +245,120 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
         Err(GitHttpError::Io(_))
     ));
     assert_eq!(budget.used(), 0);
+    Ok(())
+}
+
+// A concurrent fork can inherit the cache fence until it execs, even though
+// CLOEXEC remains set in the parent. Failed-spawn cleanup must not undercount
+// or delete such a generation; conservative quarantine lasts until restart.
+#[cfg(unix)]
+#[tokio::test]
+async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::{Read, Write},
+        os::unix::{io::AsRawFd, net::UnixStream, process::CommandExt},
+        thread::JoinHandle,
+    };
+
+    struct ForkBarrier {
+        control: UnixStream,
+        thread: Option<JoinHandle<std::io::Result<std::process::ExitStatus>>>,
+    }
+    impl ForkBarrier {
+        fn finish(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            self.control.write_all(b"X")?;
+            let status = self
+                .thread
+                .take()
+                .ok_or("missing helper thread")?
+                .join()
+                .map_err(|_| "helper thread panicked")??;
+            assert!(status.success());
+            Ok(())
+        }
+    }
+    impl Drop for ForkBarrier {
+        fn drop(&mut self) {
+            if let Some(thread) = self.thread.take() {
+                let _ = self.control.write_all(b"X");
+                let _ = thread.join();
+            }
+        }
+    }
+
+    let files = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(
+        files.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    let charged = budget.used();
+    assert!(charged > 0);
+    let git_dir = cache.git_dir();
+    let mut command = crate::native_git::command(&git_dir)?;
+    command.current_dir(files.path().join("missing"));
+
+    let (control, child_control) = UnixStream::pair()?;
+    control.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let executable = std::env::current_exe()?;
+    let thread = std::thread::spawn(move || {
+        let mut unrelated = std::process::Command::new(executable);
+        unrelated
+            .arg("--help")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: the child uses only async-signal-safe read/write, with an
+        // owned live socket and stack/static byte buffers, before exec. Holding
+        // this barrier models a concurrent fork's inherited CLOEXEC descriptors.
+        unsafe {
+            unrelated.pre_exec(move || {
+                let fd = child_control.as_raw_fd();
+                let mut release = 0_u8;
+                if libc::write(fd, b"R".as_ptr().cast(), 1) != 1
+                    || libc::read(fd, (&mut release as *mut u8).cast(), 1) != 1
+                    || release != b'X'
+                {
+                    return Err(std::io::Error::from_raw_os_error(libc::EIO));
+                }
+                Ok(())
+            });
+        }
+        unrelated.spawn()?.wait()
+    });
+    let mut barrier = ForkBarrier {
+        control,
+        thread: Some(thread),
+    };
+    let mut ready = [0_u8];
+    barrier.control.read_exact(&mut ready)?;
+    assert_eq!(ready, *b"R");
+    assert!(matches!(
+        GitProcess::spawn(command, cache),
+        Err(GitHttpError::Io(_))
+    ));
+    assert_eq!(budget.used(), charged);
+    assert!(
+        git_dir.exists(),
+        "live inherited fence must prevent cache deletion"
+    );
+    let busy =
+        crate::native_git::idle_fence(&git_dir).expect_err("inherited fence should still be held");
+    assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+    barrier.finish()?;
+    drop(crate::native_git::idle_fence(&git_dir)?);
+    // Drop quarantined the generation while its fence was busy. Closing the
+    // inherited descriptor later must not silently release its disk charge
+    // while files remain. Startup recovery reclaims quarantined generations.
+    assert_eq!(
+        budget.used(),
+        charged,
+        "quarantined files must stay charged until they are reclaimed"
+    );
+    assert!(git_dir.exists());
     Ok(())
 }
