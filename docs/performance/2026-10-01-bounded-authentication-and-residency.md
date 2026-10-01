@@ -6,6 +6,10 @@ in PR #18 without temporary diagnostic logging. It has **not** been deployed
 against the existing 10,000-repository corpus. Upgrade, full recovery and
 performance qualification remain open; no matched speedup is claimed.
 
+This records the first published authentication/residency candidate. The
+[retained catalog follow-up](2026-10-01-retained-catalog-admission.md) documents
+the later startup fix, safety regressions and separately qualified combined source.
+
 This follows the [failed authentication candidate and corpus verification](2026-10-01-evidence-loss-and-c51dd121.md).
 Their failures remain intact. The target is still three nodes behind a proxy,
 10,000 identities, 100 populated Git/LFS fixtures and all 108 load windows:
@@ -77,17 +81,20 @@ and unknown code. It does not open old persisted Cells.
 
 Startup still requires the exact selected release. There is no general upgrade
 controller; no selected release or catalog was changed during these checks.
-Source inspection identifies another unresolved upgrade risk: `acquire_sql_cell`
-provisions the current module code, whereas an existing catalog's initial code
-is immutable. A call-site reproduction and actual old-code restore are required.
+Source inspection identified another upgrade risk: `acquire_sql_cell` provisioned
+the current module code, whereas an existing catalog's initial code is immutable.
+The [follow-up](2026-10-01-retained-catalog-admission.md) reproduces and fixes that
+call site, and tests retained startup in an owned in-memory fixture. Actual
+old-executable RustFS restore and fully admitted same-corpus upgrade remain required.
 Do not bypass release selection, rewrite catalog identity or treat a low-level
 activation CAS as compatibility proof.
 
 ## Closed verification results
 
 The frozen source is local commit `392a343b83a492d49c08a6f3e83ff4dd2917437f`.
-The PR production source, tests, scripts and Cargo files are byte-identical to
-that candidate. All six Cellule packages remain locked to
+At the first publication, the PR production source, tests, scripts and Cargo files
+were byte-identical to that candidate. The follow-up records the current qualified
+source separately. All six Cellule packages remain locked to
 `c51dd121284ecc8878b75d32717a4dfbe2c406c2`. Upstream main was rechecked as
 `0dc04a658bd99668936f7ec58032d054f6fbc141`; separate qualification is required.
 
@@ -148,7 +155,8 @@ This candidate has not been deployed and cannot be credited with fixing it.
 
 Required next proofs remain:
 
-- Safe existing-catalog admission, old-code restore and actual same-corpus upgrade.
+- Actual old-executable RustFS restore and fully admitted same-corpus upgrade;
+  the later catalog admission regression is not that proof.
 - Full 10,000-identity/100-fixture Git/LFS verification and fresh-owner recovery.
 - The complete schedule, critical concurrent workflows and faults, and every new
   acknowledged write after owner loss.

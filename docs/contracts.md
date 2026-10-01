@@ -1494,8 +1494,10 @@ and a 256-byte result limit. Its input is exactly one 32-byte token digest; the
 result contains at most one validated principal. Existing commands 1/3 and
 queries 2/4 keep their one-MiB contracts. Admission budgets and minimum receipts
 are unchanged. The Directory descriptor retains the exact preceding `f7254eda`
-code at schema 1; this is descriptor compatibility, not an automatic upgrade or
-proof of restoring an existing catalog under a new release.
+code at schema 1. Descriptor compatibility alone is not an automatic upgrade or
+old-binary restore proof. The [catalog admission regression](performance/2026-10-01-retained-catalog-admission.md)
+exercises real startup against an owned in-memory predecessor fixture, not an
+old executable or the existing RustFS corpus.
 
 Authentication requires `expires_ms IS NULL OR expires_ms > now_ms`; it does not
 wait for a cleanup job. Token listing/issuance/revocation, account creation and
@@ -2522,6 +2524,16 @@ cancels its task group and applies runtime lease fencing while closing SQL;
 advertisement withdrawal follows the shutdown attempt. Unsettled controls still
 prevent maintenance completion if that attempt fails.
 The executable observes supervisor completion as well as OS stop signals.
+
+New SQL catalog entries still use strict current-code provisioning. Existing SQL
+entries are admitted read-only: their verified proof must match the derived
+target, namespace, partition and SQL role, and the registry must support their
+immutable initial code/schema. The selected release must be exact and Ready
+before and after admission, with the complete release record unchanged.
+The actual persisted Control code/schema is checked separately before bootstrap,
+takeover or restoration can claim ownership. Unsupported Control metadata is
+rejected without rewriting its canonical bytes. These checks do not activate a
+release, migrate schema or replace runtime CAS/fencing.
 
 Maintenance administration prepares the same compiled descriptor and enters
 Maintenance with a caller-supplied UUID. It does not select new code or modify Cell

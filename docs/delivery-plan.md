@@ -79,8 +79,12 @@ These are the next implementation slices. Each slice must update its contract, b
    retains its separately bound `e07670e` executable; latest source is not a
    claim that the running artifact was rebuilt or performance-qualified.
    The [bounded authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
-   passed release correctness and eight RustFS compatibility gates. Existing
-   catalog upgrade, full-corpus recovery and performance remain open.
+   passed release correctness and eight RustFS compatibility gates. The
+   [retained catalog follow-up](performance/2026-10-01-retained-catalog-admission.md)
+   adds read-only existing-proof admission and rejects unsupported persisted
+   Control metadata before acquisition. Its 239-test release suite, eight RustFS
+   gates and repeated startup/residency regressions passed. Actual old-binary
+   RustFS upgrade, full-corpus recovery and performance remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits

@@ -19,8 +19,14 @@ The [combined authentication and residency candidate](performance/2026-10-01-bou
 is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
 20 unchanged cold-activation repetitions and all 15 residency tests. It has not
 been deployed on the existing corpus. Descriptor compatibility passed, but
-existing-catalog admission, old-code restore and the diagnostic fleet's terminal
-lease-fencing failure remain open. These results do not qualify newer upstream
+actual old-binary restore and the diagnostic fleet's terminal lease-fencing
+failure remain open. The [catalog admission follow-up](performance/2026-10-01-retained-catalog-admission.md)
+reproduces and fixes immutable-identity reprovisioning and late rejection of
+unsupported Control metadata. Its combined candidate passed 239 release tests,
+all eight RustFS gates, 20 cold-activation repetitions and 20 three-case retained
+startup repetitions, plus all 15 residency tests. Retained startup uses an owned
+in-memory fixture; actual old-binary RustFS upgrade remains open.
+These results do not qualify newer upstream
 or replace the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
@@ -29,7 +35,8 @@ seed and successful recovery of every recorded ACK.
 | Current gate | Evidence / status |
 | --- | --- |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
-| Combined authentication and residency candidate | 231 release tests, eight RustFS gates, 20 original cold-activation repetitions and 15 residency tests passed. Exact predecessor descriptor is retained; existing-catalog upgrade and old-code restore remain open. Not deployed or performance-qualified |
+| Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
+| Retained catalog admission follow-up | 239 release tests, eight RustFS gates, 20 cold-activation and 20 three-case retained-startup repetitions, 15 residency tests, lints and 84 Python tests passed. Existing supported identities restore without reprovisioning; unsupported Controls stay unchanged on refusal. Owned in-memory retained fixture, not old-binary RustFS upgrade, live deployment or performance qualification |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
