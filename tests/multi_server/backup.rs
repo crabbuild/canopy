@@ -53,6 +53,13 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     let lfs = vec![29_u8; 256 * 1024];
     std::fs::write(local.join("large.bin"), &blob)?;
     std::fs::write(local.join("data.lfs"), &lfs)?;
+    // Force a native receive pack with delta-compressed small blobs. Backup
+    // must retain both immutable artifacts after original storage is deleted.
+    for n in 0..200 {
+        let mut body = vec![b'x'; 32 * 1024];
+        body[..8].copy_from_slice(&(n as u64).to_le_bytes());
+        std::fs::write(local.join(format!("packed-{n:03}")), body)?;
+    }
     run_git(Some(&local), &["add", "."]).await?;
     run_git(Some(&local), &["commit", "-m", "Back up all bytes"]).await?;
     run_git(
@@ -90,7 +97,7 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     let report = deployment
         .create_backup(id, backup.clone(), worker())
         .await?;
-    assert_eq!(report.external_objects, 2);
+    assert_eq!(report.external_objects, 3);
     assert_eq!(report.cells, 2);
     deployment
         .create_backup(id, backup.clone(), worker())
@@ -171,6 +178,10 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     assert!(
         std::fs::read(cloned.join("data.lfs"))? == lfs,
         "restored LFS body differs"
+    );
+    assert_eq!(
+        std::fs::read(cloned.join("packed-199"))?,
+        std::fs::read(local.join("packed-199"))?
     );
     run_git(Some(&cloned), &["fsck", "--strict", "--full"]).await?;
     let restored_issue: Value = client

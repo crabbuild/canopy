@@ -30,6 +30,9 @@ const MAX_CGI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CGI_STDERR_BYTES: usize = 64 * 1024;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_CGI_HEADER_BYTES: usize = 64 * 1024;
+// Pack traversal and delta search can legitimately run for minutes before
+// producing output. Cancellation still kills the entire process group.
+pub(crate) const WORKER_DEADLINE: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHttpError {
@@ -243,7 +246,7 @@ impl GitHttpBackend {
         start_stream(
             process,
             (keep_alive, Arc::clone(&self.cache), request.body),
-            Duration::from_secs(120),
+            WORKER_DEADLINE,
         )
         .await
     }
@@ -350,6 +353,9 @@ async fn start_stream<T: Send + 'static>(
             .await
             .map_err(|_| GitHttpError::Timeout)
             .and_then(|result| result);
+        if let Err(error) = &result {
+            tracing::warn!(error = ?error, deadline_seconds = deadline.as_secs(), "Git response worker failed");
+        }
         // Cleanup precedes any blocked delivery of the final error.
         drop(process);
         drop(head_sender);

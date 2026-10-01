@@ -11,7 +11,7 @@ fn inline(size: usize) -> StoredObject {
 #[test]
 fn maximum_batch_round_trips_below_the_operation_wire_limit() {
     let mut batch = ObjectBatch::default();
-    for _ in 0..MAX_OBJECTS - 1 {
+    for _ in 0..MAX_BATCH_OBJECTS - 1 {
         assert!(
             batch
                 .try_push(StoredObject {
@@ -52,7 +52,7 @@ fn a_full_batch_returns_the_unconsumed_record() {
     };
     let mut next = ObjectBatch::default();
     assert!(next.try_push(leftover).is_ok());
-    for _ in 1..MAX_OBJECTS {
+    for _ in 1..MAX_BATCH_OBJECTS {
         assert!(next.try_push(inline(0)).is_ok());
     }
     assert!(next.try_push(inline(0)).is_err());
@@ -60,7 +60,7 @@ fn a_full_batch_returns_the_unconsumed_record() {
 
 #[test]
 fn decoding_enforces_aggregate_bytes_and_count_before_building_a_batch() {
-    for count in [0, MAX_OBJECTS + 1] {
+    for count in [0, MAX_BATCH_OBJECTS + 1] {
         let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
         encoder.write_count(count).unwrap();
         let bytes = encoder.finish();
@@ -137,4 +137,33 @@ fn chunk_references_bound_total_verification_bytes_and_round_trip() {
     assert!(ObjectBatch::decode(&mut BoundedDecoder::new(&malicious, 1 << 20).unwrap()).is_err());
     let mut oversized = ObjectBatch::default();
     assert!(oversized.try_push(chunked(u64::MAX)).is_err());
+}
+
+#[test]
+fn packed_metadata_batch_preserves_immutable_locator_without_blob_expansion() {
+    let mut batch = ObjectBatch::default();
+    for _ in 0..MAX_BATCH_OBJECTS {
+        batch
+            .try_push(StoredObject {
+                oid: crate::ObjectId::Sha1([1; 20]),
+                kind: ObjectKind::Blob,
+                storage: ObjectStorage::Packed {
+                    size: INLINE_OBJECT_LIMIT as u64,
+                    blake3: [2; 32],
+                    pack: [3; 32],
+                },
+            })
+            .ok()
+            .unwrap();
+    }
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
+    batch.encode(&mut encoder).unwrap();
+    let bytes = encoder.finish();
+    assert!(bytes.len() < 256 * 1024);
+    let mut decoder = BoundedDecoder::new(&bytes, INPUT_LIMIT).unwrap();
+    let decoded = ObjectBatch::decode(&mut decoder).unwrap();
+    decoder.finish().unwrap();
+    let mut encoder = BoundedEncoder::new(INPUT_LIMIT).unwrap();
+    decoded.encode(&mut encoder).unwrap();
+    assert_eq!(encoder.finish(), bytes);
 }

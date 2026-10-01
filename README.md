@@ -15,6 +15,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | --- | --- |
 | Understand the storage model | [How Canopy stores a repository](#how-canopy-stores-a-repository) |
 | Run a development node | [Run a local node](#run-a-local-node) |
+| Start an isolated local server and test a Kubernetes-sized repository | [Local evaluation and real-repository benchmark](deploy/local-evaluation.md) |
 | Create, clone, and push a repository | [Create and use a repository](#create-and-use-a-repository) |
 | Use the browser, collaboration, or Git LFS | [Use Canopy](docs/user-guide.md) |
 | Automate repository operations | [API reference](docs/api-reference.md) |

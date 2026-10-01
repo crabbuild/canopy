@@ -1,0 +1,17 @@
+{
+  "repository_id": "be13f59a-3ad6-4ceb-b44b-0ae9f30426dd",
+  "clone_url": "http://127.0.0.1:18082/canopy/maintenance-proof.git",
+  "push_seconds": [
+    1.973,
+    3.482,
+    1.935,
+    2.779,
+    2.591,
+    3.391,
+    3.671,
+    2.856
+  ],
+  "status": "passed",
+  "publication_log": "2026-10-01T06:57:33.015236Z  INFO canopy_server::git_gateway::maintenance: published background Git repack generation repository=be13f59a3ad64cebb44b0ae9f30426dd objects=1616 previous_bytes=356499 packed_bytes=146715 elapsed_seconds=0.375848458",
+  "clone_seconds": 0.915
+}

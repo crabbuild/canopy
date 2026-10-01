@@ -116,18 +116,114 @@ impl GitGateway {
         // The shared object cache publishes loose objects atomically and
         // coordinates duplicate OID writes. Hold the gateway lock only long
         // enough to borrow it; slow fetches must not queue behind each other.
-        let shared = {
+        let shared = cached.backend.cache.object_cache();
+        let _hydrating = shared.hydration_guard();
+        let through = {
             let objects = self.objects.lock().await;
-            Arc::clone(&objects.as_ref().ok_or(GatewayError::MalformedCache)?.cache)
+            objects
+                .as_ref()
+                .filter(|objects| Arc::ptr_eq(&objects.cache, &shared))
+                .map_or(0, |objects| objects.through)
         };
+        if self
+            .repository
+            .object_high_water()
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            .output
+            <= through
+        {
+            shared
+                .prepared
+                .lock()
+                .await
+                .extend(request.wants.iter().map(|oid| (*oid, true)));
+            return Ok(());
+        }
         let roots: Vec<_> = request.wants.iter().copied().collect();
-        self.hydrate_selected(&shared, request.wants).await?;
         let unfiltered = request.filter.is_none();
+        if roots.iter().all(|oid| {
+            shared.prepared.try_lock().ok().is_some_and(|prepared| {
+                prepared.contains(&(*oid, true))
+                    || (request.filter.as_deref() == Some("blob:none")
+                        && prepared.contains(&(*oid, false)))
+            })
+        }) {
+            return Ok(());
+        }
+        let _selection = shared.selection.lock().await;
+        // A concurrent cold request may have completed while we waited.
+        if (unfiltered || request.filter.as_deref() == Some("blob:none"))
+            && roots.iter().all(|oid| {
+                shared.prepared.try_lock().ok().is_some_and(|prepared| {
+                    prepared.contains(&(*oid, true))
+                        || (!unfiltered && prepared.contains(&(*oid, false)))
+                })
+            })
+        {
+            return Ok(());
+        }
+        self.hydrate_selected(&shared, request.wants).await?;
         // The certified Cell graph already names every reachable blob. A full
         // fetch can hydrate those bodies during the structural walk and avoid
         // a second native traversal over the same cold history.
-        self.hydrate_structure(&shared, &roots, unfiltered).await?;
+        self.hydrate_structure(&shared, &roots, unfiltered, through)
+            .await?;
         if unfiltered || request.filter.as_deref() == Some("blob:none") {
+            shared
+                .prepared
+                .lock()
+                .await
+                .extend(roots.iter().map(|oid| (*oid, unfiltered)));
+            if unfiltered && through == 0 {
+                // Count a covering OID index, not the large body table. A cache
+                // inventory consists exclusively of verified durable IDs. Equal
+                // cardinality therefore proves the entire captured Cell is warm.
+                let result = self
+                    .repository
+                    .sql
+                    .query(
+                        None,
+                        SqlBatch {
+                            statements: vec![
+                                SqlStatement {
+                                    sql: "SELECT COUNT(oid) FROM objects".into(),
+                                    parameters: vec![],
+                                },
+                                SqlStatement {
+                                    sql: "SELECT COALESCE(MAX(sequence), 0) FROM objects".into(),
+                                    parameters: vec![],
+                                },
+                            ],
+                        },
+                    )
+                    .await
+                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                if let (Some([SqlValue::Integer(count)]), Some([SqlValue::Integer(high_water)])) = (
+                    result
+                        .output
+                        .first()
+                        .and_then(|set| set.rows.first())
+                        .map(Vec::as_slice),
+                    result
+                        .output
+                        .get(1)
+                        .and_then(|set| set.rows.first())
+                        .map(Vec::as_slice),
+                ) {
+                    if usize::try_from(*count).ok() == Some(shared.packed_count()) {
+                        // Never invert build_cache's lock order by waiting here.
+                        if let Ok(mut objects) = self.objects.try_lock() {
+                            if let Some(objects) = objects
+                                .as_mut()
+                                .filter(|objects| Arc::ptr_eq(&objects.cache, &shared))
+                            {
+                                objects.through = objects.through.max(*high_water);
+                            }
+                        }
+                    }
+                }
+            }
             return Ok(());
         }
         // Use the same native filter as upload-pack. Structure is present, so
@@ -282,6 +378,7 @@ impl GitGateway {
         cache: &Arc<GitCache>,
         roots: &[crate::ObjectId],
         include_blobs: bool,
+        through: i64,
     ) -> Result<(), GatewayError> {
         let mut pending: BTreeSet<_> = roots.iter().copied().collect();
         let mut visited = BTreeSet::new();
@@ -306,13 +403,14 @@ impl GitGateway {
                 let mut parameters: Vec<_> =
                     ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect();
                 parameters.extend([
+                    SqlValue::Integer(through),
                     SqlValue::Blob(after_parent.clone()),
                     SqlValue::Blob(after_parent.clone()),
                     SqlValue::Blob(after_child.clone()),
                     SqlValue::Integer(MAX_OBJECTS as i64),
                 ]);
                 let result = self.repository.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-                    sql: format!("SELECT e.parent, e.child, o.kind FROM object_edges e JOIN objects o ON o.oid = e.child WHERE e.parent IN ({placeholders}) {kind_filter} AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
+                    sql: format!("SELECT e.parent, e.child, o.kind FROM object_edges e JOIN objects o ON o.oid = e.child JOIN objects p ON p.oid = e.parent WHERE e.parent IN ({placeholders}) AND p.sequence > ? {kind_filter} AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
                     parameters,
                 }] }).await.map_err(|error| GatewayError::Cell(Box::new(error)))?;
                 let rows = &result

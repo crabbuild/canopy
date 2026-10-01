@@ -253,6 +253,17 @@ fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
         {
             ObjectStorage::Inline(body)
         }
+        ("packed", SqlValue::Null, SqlValue::Blob(pack), SqlValue::Null)
+            if kind == ObjectKind::Blob && size >= 0 =>
+        {
+            ObjectStorage::Packed {
+                size: size as u64,
+                blake3: digest,
+                pack: pack
+                    .try_into()
+                    .map_err(|_| Error::Command("invalid pack locator"))?,
+            }
+        }
         ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
             if kind == ObjectKind::Blob && size >= 0 =>
         {

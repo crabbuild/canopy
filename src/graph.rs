@@ -14,7 +14,7 @@ mod preparation;
 
 type Oid = crate::ObjectId;
 type Edge = (Oid, Option<ObjectKind>);
-const MAX_CERTIFICATES: usize = 128;
+const MAX_CERTIFICATES: usize = 512;
 
 #[derive(Default)]
 pub(crate) struct CertificateBatch(Vec<Oid>);
@@ -60,7 +60,7 @@ fn status_query(oids: &[Oid]) -> SqlBatch {
     SqlBatch {
         statements: vec![SqlStatement {
             sql: format!(
-                "SELECT o.oid, o.kind, CASE WHEN o.storage = 'external' THEN 0 ELSE o.size END, c.oid FROM objects o LEFT JOIN object_closure c ON c.oid = o.oid WHERE o.oid IN ({placeholders})"
+                "SELECT o.oid, o.kind, CASE WHEN o.storage IN ('external', 'packed') THEN 0 ELSE o.size END, c.oid FROM objects o LEFT JOIN object_closure c ON c.oid = o.oid WHERE o.oid IN ({placeholders})"
             ),
             parameters: oids
                 .iter()
@@ -106,7 +106,7 @@ pub(crate) struct CertifyObjects;
 impl Command for CertifyObjects {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = CertificateBatch;
     type Output = bool;
 
@@ -249,7 +249,9 @@ fn object_edges(
         }
         // The immutable upload is verified before its SQLite record is published.
         // Blobs have no outgoing Git edges; no network I/O belongs in this transaction.
-        ("external", SqlValue::Null, SqlValue::Null) if kind == ObjectKind::Blob => Vec::new(),
+        ("external" | "packed", SqlValue::Null, SqlValue::Null) if kind == ObjectKind::Blob => {
+            Vec::new()
+        }
         ("chunked", SqlValue::Null, SqlValue::Blob(upload)) => {
             let invalid = || Error::Command("invalid stored graph object chunks");
             let body = crate::object_chunks::body(

@@ -1,6 +1,69 @@
 use super::*;
 
 #[tokio::test]
+async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(128 << 20);
+    let cache = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    let mut ids = Vec::new();
+    for n in 0..64 {
+        let body = format!("{n}\n{}", "shared historical contents\n".repeat(400));
+        let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body.as_bytes());
+        cache
+            .store_object(oid, ObjectKind::Blob, body.into_bytes())
+            .await?;
+        ids.push(oid);
+    }
+    let reader = Arc::clone(&cache);
+    let packed = cache.repacked(root.path().into(), budget.clone()).await?;
+    assert!(packed.missing_objects(ids.clone()).await?.is_empty());
+    assert!(!packed.object_path(ids[0]).exists());
+    assert_eq!(packed.packed_count(), 64);
+    let reused = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    assert_eq!(
+        reused
+            .retain_verified_packs(Arc::clone(&packed), ids[..63].iter().copied().collect())
+            .await?,
+        0
+    );
+    assert_eq!(
+        reused
+            .retain_verified_packs(Arc::clone(&packed), ids.iter().copied().collect())
+            .await?,
+        64
+    );
+    assert!(reused.missing_objects(ids.clone()).await?.is_empty());
+    drop(reused);
+    for source in [&reader, &packed] {
+        let output = crate::native_git::command(&source.git_dir())?
+            .args(["cat-file", "blob", &hex::encode(ids[0])])
+            .output()
+            .await?;
+        assert!(output.status.success());
+        assert!(output.stdout.starts_with(b"0\nshared historical contents"));
+    }
+    drop(cache);
+    drop(packed);
+    assert!(reader.object_path(ids[0]).is_file());
+    drop(reader);
+    assert_eq!(budget.used(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_hydration_publishes_each_object_once() -> Result<(), Box<dyn std::error::Error>>
 {
     let root = tempfile::TempDir::new()?;
@@ -405,5 +468,96 @@ async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn
     assert!(cache.missing_objects(vec![reference.oid]).await?.is_empty());
     drop(cache);
     assert_eq!(budget.used(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign_members()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(256 << 20);
+    let source = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    let body = vec![b'x'; 2 << 20];
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
+    let digest = *blake3::hash(&body).as_bytes();
+    source
+        .store_object(oid, ObjectKind::Blob, body.clone())
+        .await?;
+    let foreign = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, b"foreign");
+    source
+        .store_object(foreign, ObjectKind::Blob, b"foreign".to_vec())
+        .await?;
+    let packed = source.repacked(root.path().into(), budget.clone()).await?;
+    let (hash, pack, index, ids) = packed.pack_sources().await?.pop().unwrap();
+    assert_eq!(
+        ids.iter().copied().collect::<HashSet<_>>(),
+        [oid, foreign].into_iter().collect()
+    );
+    let store = Arc::new(object_store::memory::InMemory::new());
+    let reader = crate::pack_store::PackReader::new(
+        store,
+        [4; 16],
+        root.path().into(),
+        budget.clone(),
+        crate::ObjectFormat::Sha1,
+    );
+    let record = crate::pack_store::PackRecord {
+        hash,
+        pack: reader.upload(pack).await?,
+        index: reader.upload(index).await?,
+        approved: false,
+        covered_through: 0,
+    };
+    let target = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    target
+        .store_native_blob(
+            reader
+                .native_reader(record.clone(), oid, body.len() as u64, digest)
+                .await?,
+        )
+        .await?;
+    assert!(target.missing_objects(vec![oid]).await?.is_empty());
+    assert_eq!(target.missing_objects(vec![foreign]).await?, vec![foreign]);
+    let output = crate::native_git::command(&target.git_dir())?
+        .args(["cat-file", "blob", &hex::encode(oid)])
+        .output()
+        .await?;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, body);
+    assert!(
+        reader
+            .cache()
+            .await?
+            .missing_objects(vec![oid, foreign])
+            .await?
+            .len()
+            == 2
+    );
+    let invalid = GitCache::create(
+        root.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+    )
+    .await?;
+    assert!(
+        invalid
+            .store_native_blob(reader.native_reader(record, oid, 2 << 20, [0; 32]).await?)
+            .await
+            .is_err()
+    );
+    assert_eq!(invalid.missing_objects(vec![oid]).await?, vec![oid]);
     Ok(())
 }

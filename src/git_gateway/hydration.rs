@@ -11,9 +11,38 @@ pub(super) struct Hydration {
 }
 
 impl GitGateway {
+    pub(super) async fn restore_packs(
+        &self,
+        shared: &mut CachedObjects,
+    ) -> Result<(), GatewayError> {
+        let mut after = Vec::new();
+        loop {
+            let page = self
+                .repository
+                .approved_packs(&after)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            if page.is_empty() {
+                break;
+            }
+            for record in &page {
+                self.pack_reader.install(&shared.cache, record).await?;
+                shared.through = shared.through.max(record.covered_through);
+            }
+            after = page
+                .last()
+                .ok_or(GatewayError::MalformedCache)?
+                .pack
+                .sha256
+                .to_vec();
+        }
+        Ok(())
+    }
+
     pub(super) async fn hydrate(&self, shared: &mut CachedObjects) -> Result<(), GatewayError> {
         let started = Instant::now();
         let cache = &shared.cache;
+        let _selection = cache.selection.lock().await;
         let cursor = &mut shared.through;
         let from_sequence = *cursor;
         // Bound this refresh even when other writers keep appending objects.
@@ -79,6 +108,28 @@ impl GitGateway {
         let read = Instant::now();
         let body = match object.storage {
             ObjectStorage::Inline(body) => body,
+            ObjectStorage::Packed { pack, size, blake3 } => {
+                let record = self
+                    .repository
+                    .pack_record(pack)
+                    .await
+                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                if record.approved {
+                    self.pack_reader.install(cache, &record).await?;
+                    return Ok(None);
+                }
+                let reader = self
+                    .pack_reader
+                    .native_reader(record, object.oid, size, blake3)
+                    .await?;
+                stats.body_time += read.elapsed();
+                let written = Instant::now();
+                cache.store_native_blob(reader).await?;
+                stats.cache_time += written.elapsed();
+                stats.objects += 1;
+                stats.bytes += size;
+                return Ok(None);
+            }
             ObjectStorage::Chunked {
                 upload,
                 size,

@@ -497,12 +497,34 @@ impl RepositoryManager {
             .with_signer_directory(Arc::clone(&self.directory)),
         );
         let router = self.router_for(entry, Arc::clone(&gateway))?;
+        let pin = Arc::new(());
+        let weak_gateway = Arc::downgrade(&gateway);
+        let weak_pin = Arc::downgrade(&pin);
+        let stop = self.maintenance_stop.clone();
+        self.tasks.spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    () = stop.cancelled() => return,
+                    _ = interval.tick() => {},
+                }
+                let (Some(gateway), Some(_pin)) = (weak_gateway.upgrade(), weak_pin.upgrade()) else { return; };
+                tokio::select! {
+                    () = stop.cancelled() => return,
+                    result = gateway.maintain() => {
+                        if let Err(error) = result { tracing::warn!(error = ?error, "background Git maintenance failed; previous cache retained"); }
+                    }
+                }
+            }
+        });
         Ok(LoadedRepository {
             repository,
             gateway,
             name: entry.name.clone(),
             router,
-            pin: Arc::new(()),
+            pin,
             last_used: Instant::now(),
             initialized: false,
             local,

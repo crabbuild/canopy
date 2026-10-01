@@ -10,6 +10,8 @@ use object_store::{ObjectStore, prefix::PrefixStore};
 #[derive(Clone, Copy)]
 enum BodyKind {
     Git,
+    Pack,
+    PackIndex,
     Lfs,
 }
 enum Reference {
@@ -93,7 +95,12 @@ impl Deployment {
                     ));
                 }
             }
-            for kind in [BodyKind::Git, BodyKind::Lfs] {
+            for kind in [
+                BodyKind::Git,
+                BodyKind::Pack,
+                BodyKind::PackIndex,
+                BodyKind::Lfs,
+            ] {
                 let mut cursor = Vec::new();
                 loop {
                     let page = read_page(database.clone(), kind, cursor).await?;
@@ -203,6 +210,8 @@ async fn read_page(
         let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         let sql = match kind {
             BodyKind::Git => "SELECT oid, size, digest, external_sha256 FROM objects WHERE storage = 'external' AND oid > ?1 ORDER BY oid LIMIT 256",
+            BodyKind::Pack => "SELECT DISTINCT pack_oid, pack_size, pack_digest, sha256 FROM git_packs WHERE pack_oid > ?1 ORDER BY pack_oid LIMIT 256",
+            BodyKind::PackIndex => "SELECT DISTINCT index_oid, index_size, index_digest, index_sha256 FROM git_packs WHERE index_oid > ?1 ORDER BY index_oid LIMIT 256",
             BodyKind::Lfs => "SELECT sha256, size, digest, sha256 FROM lfs_objects WHERE sha256 > ?1 ORDER BY sha256 LIMIT 256",
         };
         let mut statement = connection.prepare(sql)?;
@@ -217,7 +226,7 @@ async fn read_page(
             let digest = digest.try_into().map_err(|_| BackupError::Invalid("invalid body digest"))?;
             let sha256 = sha256.try_into().map_err(|_| BackupError::Invalid("invalid body SHA-256"))?;
             page.push(match kind {
-                BodyKind::Git => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3: digest, sha256 }),
+                BodyKind::Git | BodyKind::Pack | BodyKind::PackIndex => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3: digest, sha256 }),
                 BodyKind::Lfs => Reference::Lfs(LfsObject { sha256, size, parts_digest: digest }),
             });
         }

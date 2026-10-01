@@ -1,11 +1,11 @@
 //! Disposable Git files charged to the node's shared disk budget.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
@@ -55,6 +55,14 @@ pub(crate) struct GitCache {
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
+    packed: RwLock<HashSet<crate::ObjectId>>,
+    durable_packs: RwLock<HashSet<[u8; 32]>>,
+    pub(crate) selection: Mutex<()>,
+    pub(crate) prepared: Mutex<BTreeSet<(crate::ObjectId, bool)>>,
+    pub(crate) loose_objects: std::sync::atomic::AtomicU64,
+    pub(crate) pack_files: std::sync::atomic::AtomicU64,
+    pub(crate) hydrating: std::sync::atomic::AtomicU64,
+    pub(crate) write_generation: std::sync::atomic::AtomicU64,
 }
 
 impl GitCache {
@@ -87,6 +95,14 @@ impl GitCache {
                 reservation: Some(budget.try_reserve(0)?),
                 objects,
                 object_writes: OnceLock::new(),
+                packed: RwLock::new(HashSet::new()),
+                durable_packs: RwLock::new(HashSet::new()),
+                selection: Mutex::new(()),
+                prepared: Mutex::new(BTreeSet::new()),
+                loose_objects: std::sync::atomic::AtomicU64::new(0),
+                pack_files: std::sync::atomic::AtomicU64::new(0),
+                hydrating: std::sync::atomic::AtomicU64::new(0),
+                write_generation: std::sync::atomic::AtomicU64::new(0),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
                 fs::create_dir_all(cache.git_dir().join(directory))?;
@@ -117,6 +133,18 @@ impl GitCache {
 
     pub(crate) fn git_dir(&self) -> PathBuf {
         self.root().join("repo.git")
+    }
+
+    pub(crate) fn object_cache(self: &Arc<Self>) -> Arc<Self> {
+        self.objects
+            .as_ref()
+            .map_or_else(|| Arc::clone(self), Arc::clone)
+    }
+
+    pub(crate) fn hydration_guard(self: &Arc<Self>) -> HydrationGuard {
+        self.hydrating
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        HydrationGuard(Arc::clone(self))
     }
 
     fn reservation(&self) -> io::Result<&DiskReservation> {
@@ -170,6 +198,14 @@ impl GitCache {
     }
 
     fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
+        if self
+            .packed
+            .read()
+            .map_err(|_| io::Error::other("packed inventory poisoned"))?
+            .contains(&oid)
+        {
+            return Ok(true);
+        }
         match fs::symlink_metadata(self.object_path(oid)) {
             Ok(metadata) if metadata.is_file() => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -269,6 +305,17 @@ impl GitCache {
             temporary
                 .persist_noclobber(destination)
                 .map_err(|error| error.error)?;
+            cache
+                .packed
+                .write()
+                .map_err(|_| io::Error::other("verified inventory poisoned"))?
+                .insert(oid);
+            cache
+                .loose_objects
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            cache
+                .write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         })
         .await?
@@ -276,24 +323,33 @@ impl GitCache {
 
     pub(crate) async fn store_blob(
         self: &Arc<Self>,
-        mut reader: LargeBlobRead,
+        reader: LargeBlobRead,
     ) -> Result<(), CacheError> {
-        let reference = reader.reference();
-        let write = self.object_write_lock(reference.oid).lock_owned().await;
+        self.store_blob_reader(BlobReader::External(reader)).await
+    }
+    pub(crate) async fn store_native_blob(
+        self: &Arc<Self>,
+        reader: crate::pack_store::NativePackedRead,
+    ) -> Result<(), CacheError> {
+        self.store_blob_reader(BlobReader::Packed(reader)).await
+    }
+    async fn store_blob_reader(self: &Arc<Self>, mut reader: BlobReader) -> Result<(), CacheError> {
+        let (oid, size) = reader.metadata();
+        let write = self.object_write_lock(oid).lock_owned().await;
         let cache = Arc::clone(self);
         let pending = tokio::task::spawn_blocking(move || {
-            if reference.oid.format() != cache.object_format {
+            if oid.format() != cache.object_format {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Git object format mismatch",
                 )
                 .into());
             }
-            if cache.object_present(reference.oid)? {
+            if cache.object_present(oid)? {
                 return Ok::<_, CacheError>(None);
             }
-            let (mut encoder, temporary, destination) = cache.object_writer(reference.oid)?;
-            encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
+            let (mut encoder, temporary, destination) = cache.object_writer(oid)?;
+            encoder.write_all(format!("blob {}\0", size).as_bytes())?;
             Ok::<_, CacheError>(Some((encoder, temporary, destination)))
         })
         .await??;
@@ -309,12 +365,24 @@ impl GitCache {
             })
             .await??;
         }
+        let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _write = write;
             drop(encoder.finish()?);
             temporary
                 .persist_noclobber(destination)
                 .map_err(|error| error.error)?;
+            cache
+                .packed
+                .write()
+                .map_err(|_| io::Error::other("verified inventory poisoned"))?
+                .insert(oid);
+            cache
+                .loose_objects
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            cache
+                .write_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok::<_, CacheError>(())
         })
         .await?
@@ -359,6 +427,10 @@ impl GitCache {
             Ok(())
         })
         .await?
+    }
+
+    pub(crate) fn packed_count(&self) -> usize {
+        self.packed.read().expect("packed inventory poisoned").len()
     }
 }
 
@@ -436,3 +508,36 @@ fn tree_bytes(path: &Path) -> io::Result<u64> {
 #[cfg(test)]
 #[path = "git_cache/tests.rs"]
 mod tests;
+
+mod maintenance;
+
+pub(crate) struct HydrationGuard(Arc<GitCache>);
+impl Drop for HydrationGuard {
+    fn drop(&mut self) {
+        self.0
+            .hydrating
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+enum BlobReader {
+    External(LargeBlobRead),
+    Packed(crate::pack_store::NativePackedRead),
+}
+impl BlobReader {
+    fn metadata(&self) -> (crate::ObjectId, u64) {
+        match self {
+            Self::External(read) => (read.reference().oid, read.reference().size),
+            Self::Packed(read) => (read.oid, read.size),
+        }
+    }
+    async fn next(&mut self) -> Result<Option<bytes::Bytes>, CacheError> {
+        match self {
+            Self::External(read) => Ok(read.next().await?),
+            Self::Packed(read) => read
+                .next()
+                .await
+                .map_err(|error| io::Error::other(error).into()),
+        }
+    }
+}
