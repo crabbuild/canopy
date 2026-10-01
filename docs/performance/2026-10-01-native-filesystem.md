@@ -43,8 +43,8 @@ environment names and identical values, image, entrypoint, arguments, resource
 settings and owned volume. Only environment ordering differed. The failed
 preparation receipt remains preserved; it was not rerun or overwritten.
 
-The native fleet passed all 17 critical Git checks. At **03:10:16 UTC on
-2026-10-01**, its incomplete seed contained **3,575 identities and 40 populated
+The native fleet passed all 17 critical Git checks. At **03:41:52 UTC on
+2026-10-01**, its incomplete seed contained **9,275 identities and 95 populated
 fixtures**. Passing the old failure's repository count does not prove a fix.
 Different wall-clock load and observer overhead remain shared-host variables.
 
@@ -63,6 +63,34 @@ native owner-loss recovery, the [declared load matrix](three-node-baseline.json)
 higher admission profiles, additional critical-operation load/fault coverage
 and matched performance comparisons remain open. No stage can substitute a
 smaller corpus or retries for its required evidence.
+
+## Gate the transition and complete load plan
+
+Two separately bound controllers are armed, not completed. The recovery
+controller waits for the exact seed and its setup controller to exit, then
+rereads their final receipt. A failed/incomplete corpus, changed process
+identity, provider restart/pause/quota/mount change or source drift stops it
+before any owner-loss action.
+
+Only a full 10,000-identity manifest with the original RNG-selected 100 exact
+two-commit/LFS fixtures can reach the fault stage. The controller verifies the
+whole PID/command/kernel-identity batch before sending three SIGKILLs, records
+process absence and the unchanged 32-second expiry wait, and starts fresh
+owners from the preserved deployment. Every original identity and Git/LFS
+fixture, plus both critical repositories, must pass without retries.
+
+The load controller requires that closed recovery evidence, all source and
+receipt digests, three recorded SIGKILLs and fresh owners. Its plan is the
+unchanged 108 windows: 114,960 offered arrivals over 8,640 offered seconds.
+Failed arrivals, interrupted windows and diagnostic gaps remain visible;
+post-load verification of every ACK is a separate, still-open gate.
+
+Offline guard tests passed: four recovery tests cover the simulated complete
+path, eight failure-control cases, provider-boundary checks and actual full
+manifest/fixture validation; two load tests cover closed-recovery evidence and
+five no-launch failure cases. All signals, provider calls, Git and load traffic
+were mocked in control tests. Live read-only binding checks also passed before
+arming. These are controller guards, not actual owner-loss or performance proof.
 
 ## Separate diagnostics from performance
 
@@ -93,6 +121,14 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `fleet-native-seed/ready.json` | `aaa9769fa8dfa6fa85491a32881448e9b71fe9941ff798b5b8058f8a29720ef9` |
 | `critical-native.json` | `2b019dea0a6e89fe26f22d20860775860469ae2a2fd743f65d836e95d03ca04d` |
 | `observe_native_seed.py` | `621ee99b88bb839541165417bb3a4c2c333edadfdbff0003f70d025498f119b3` |
+| `finish_native_recovery.py` | `2dac2dd18bdbd416c95ab9ff77cbfb8566cad7bb4ae89dc5c6fa55b51c00500e` |
+| `test_finish_native_recovery.py` | `bd919dfdff557d6e5fa59a6647d7731661efa37ec7854efd093cf0a08ab4b837` |
+| `transition-guard-tests-final.log` | `9155d1771a85043e16da955d5f7f61465a4ca3da7df0518f116cc2093bce6568` |
+| `transition-check-final.json` | `d93ac46cef8392eb61dbc666d49a69be89a46841b5e22b9d0bf464aafb1ac865` |
+| `start_native_load.py` | `61d7828f2441c2d12061fce9fdb2c366ceb60c746e75322ee8b615e410c4645e` |
+| `test_start_native_load.py` | `9a1009d2f57987931beeeead14cb8e1482e3ffd3bbf6f9bb7520a5cd77ae0e0b` |
+| `load-guard-tests-final.log` | `6b307282780ae288f168cfceef2ff771a215534923036eb6875258d24e00622d` |
+| `load-check-final.json` | `3076fafdfc8881746f728f8db498b08731676e33cba1e3181df7a7092e2f4a54` |
 
 The corpus, controller report and observer outputs are still live and do not
 have final completion digests. Setup timings are not scheduled throughput.
