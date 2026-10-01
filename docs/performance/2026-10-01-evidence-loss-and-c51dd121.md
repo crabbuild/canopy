@@ -133,6 +133,7 @@ rebuildable Cargo target directory.
 | CI at `5b2f95c` | Both Rust and harness jobs passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36898604222) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36898599990) |
 | CI at `7d09597` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36904766930) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36904761443) |
 | CI at `d6d63a3` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36913619350) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36913616080); later heads need their own results |
+| CI at `f0c5d09` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36921149190) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36921143618); this evidence update needs its own results |
 
 The eight provider gates cover SHA-256 round trips and native merge candidates,
 signed HTTP push options, signed SHA-256 SSH, stock SSH, bulk refs, partial clones
@@ -201,8 +202,8 @@ At the same second, node 0 logged `repository directory operation failed`
 without an underlying error chain or request ID. That message does not establish
 the root cause or identify a Cellule bottleneck.
 
-All eight finite gate/launcher processes subsequently exited. The original
-three owners remained live, and the rejected post-load receipt contains an
+All eight finite gate/launcher processes subsequently exited. At that checkpoint,
+the original three owners remained live, and the rejected post-load receipt contains an
 empty signal list. There is no new recovery fleet or timed campaign directory.
 Their terminal receipts and logs have verified independent-filesystem copies;
 the provider retained its original start time, zero restarts and zero recorded
@@ -234,8 +235,8 @@ nor a scheduled throughput measurement. **The root cause remains unresolved.**
 Temporary error-only classification lives in a separate diagnostic worktree,
 not this PR's production candidate. It records bounded request IDs and static
 error categories without raw headers, private error payloads or provider URLs.
-It does not change routing, retries, deadlines or HTTP responses, and has not
-yet been exercised against the original three-node corpus.
+It does not change routing, retries, deadlines or HTTP responses. The later
+same-corpus replay is recorded below; the original failed receipts stay intact.
 
 Its first release workspace suite failed the existing
 `failed_spawn_releases_parent_fence_before_cache_cleanup` test. Twenty full
@@ -261,6 +262,60 @@ passed at four test threads, with 115 tests in each repetition and zero failed
 attempts. Every attempt log and digest is retained. This verifies the local test
 correction without erasing the original failure; it is not runtime recovery or
 proof that an intermittent Directory error is fixed.
+
+### Same corpus authentication diagnosis
+
+The original fleet drained gracefully at **20:29:37 UTC**, after signaling only
+its launcher. This was not an owner-loss test. Three diagnostic nodes then
+started against the unchanged RustFS provider and existing corpus, with the same
+admission limits. The UI preview was not changed.
+
+Three full metadata sweeps closed at **20:53:47 UTC**, with concurrency 16,
+unchanged 30-second HTTP deadlines and no retries:
+
+| Metadata result | Observations |
+| --- | ---: |
+| HTTP 200 with matching identity | 29,996 |
+| HTTP 503 | 4 |
+| Total | 30,000 |
+
+All four failing request IDs matched authentication invocations classified as
+`not_started` with a runtime `capacity` error. The bounded classifier reported
+the reason as `other`; it did not identify the owner's specific budget.
+These observations narrow the investigation, but do not prove that all earlier
+503s share a cause. This replay excludes Git/LFS bodies, scheduled throughput
+and crash recovery. A failed metadata check remains a failed correctness gate.
+
+### Bounded authentication candidate remains separate
+
+A regression at the actual `DirectoryCell.authenticate` call site held its SQL
+worker while polling 16 valid authentication requests. The original generic
+query contract admitted 15 and refused the sixteenth with `Cell mailbox bytes`.
+All ten pre-fix repetitions reproduced that result. Its declared one-MiB result
+bound over-reserves credit for an authentication result containing at most one
+small principal row.
+
+The separate candidate adds a typed authentication query with a 36-byte input
+bound and 256-byte output bound. It preserves existing query contracts, Cellule
+`c51dd121`, runtime budgets, execution-time token expiry and minimum receipts.
+The regression admitted all 16 requests without refusal, retaining 4,673 bytes;
+all 11 Directory integration tests passed. This is an admission-contract result,
+not a measured throughput improvement or a completed live-fleet fix.
+
+| Candidate verification | Closed result |
+| --- | --- |
+| Locked release build | Passed; executable retained outside Cargo targets |
+| Authentication regression | Passed; 16 admitted, zero refused |
+| Directory integration suite | 11 passed |
+| Release workspace | **Failed**, closed at 21:09:16 UTC; multi-server suite had 95 passed, one failed and nine ignored |
+| Failed case | `paused_cold_repository_does_not_serialize_other_cold_activations` returned HTTP 503 during repository creation; exact failing call and cause remain unresolved |
+| Runtime upgrade | Not attempted; predecessor compatibility and old-code restore remain open |
+
+The original predecessor release descriptor was read from RustFS and its BLAKE3
+digest verified without changing selected state. Reading it is not rolling
+compatibility or restore proof. The candidate is **not deployed or included in
+this PR**. Its failure cannot be dismissed as test timing, and its passing
+focused checks cannot replace full correctness verification.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -311,6 +366,22 @@ The separate local diagnostic evidence is under
 | `canopy-c51-diagnostic-library-tests` | `795b6ff0abc2d1eee01c83d927b8e8b0a2b0827293b2f42acaee8f7e1496980f` |
 | `test-artifact.json` | `fbdd719e2dd5e0d12dfab935ff470eff5b5f87206354462fd5df97e844ad8ae9` |
 | `cleanup-reproduction/reproduction.json` | `7e71923d85025177a7b0a273656a4daccded11ba6c9f0e174814cfc4aaec50ed` |
+| `instrumented-metadata-replay.json` | `75047e541aeb877966a1e52797eebcf1f762b4c2626bb3b2e6dd0d779cb998c9` |
+| `instrumented-metadata-replay.samples.jsonl` | `1bdce950788e730011648c6614f633ee3d1e2f3a435029f37ea36388cd3a2e73` |
+| `classification-correlations.json` | `4fd685ec69d3d55f67fc7ca20ee66ec7c74b4f1b7bbac67245f6f72bfed0e382` |
+
+The separate bounded candidate evidence is under
+`/Users/haipingfu/.codex/canopy-authentication-bounded-query-PvyQdK`:
+
+| Closed candidate artifact | SHA-256 |
+| --- | --- |
+| `build-tests.json` | `81cb8ecb5be43ac4311ac3ec1356805f87cb8a81c4165626048af6fcfcc23099` |
+| `authentication-regression.log` | `79c3114be7d3dd15a4faa56cefda884d749758f803b6afec50e28f12f507dbf1` |
+| `directory-correctness.log` | `5210b95ffeec1196be875a18c5f469e738f17e146a7d58295705175610309af4` |
+| `release-workspace.log` | `2aea6bf39c8ed8480070a8175b5af45711850d0742f3b9630d26f647b82ca07a` |
+| `canopy-bounded-authentication-c51` | `e52ac937bb34d154185b5b6d49268d0ce6b7b39fab6e220478937f7a42472b2d` |
+| `failed-workspace-multi-server-tests` | `8a79042dc26364dfd8844624d6ab0b448f65350c04e48cb3a53647aa57baf399` |
+| `closed-failure-backup.json` | `9be839c98998ef970c1f25dda53e98e8ddd16958c09150ebf56962dd92f93081` |
 
 ### Independent evidence backup
 
@@ -332,12 +403,20 @@ This local preservation does not recover the old missing ledgers or constitute
 an off-machine backup. Private fleet configs and changing verifier/load receipts
 are excluded. Their existence or intermediate counts are not passing results.
 
+The closed 30,000-observation replay and correlations also have verified copies
+at `/Volumes/Workspace/CrabData/canopy-closed-directory-replay-fk36kinj`.
+The failed bounded candidate, its source bindings, exact test executables and
+predecessor inputs have 278 verified file copies at
+`/Volumes/Workspace/CrabData/canopy-bounded-auth-failure-8v6zmudg`.
+Neither backup overwrites original failed receipts or certifies recovery.
+
 | Required gate | Current status |
 | --- | --- |
 | Exact new artifact and source provenance | Passed locked build and current binding checks |
 | Rust workspace correctness and RustFS Git/LFS compatibility | Passed release suite, eight provider gates and initial 17-step proxy check |
 | New-pin non-sparse 5-GiB transfer | Open; excluded by `--provider-only` |
 | Full 10,000 identities/100 populated fixtures | Full seed closed; remote verification failed HTTP 503; cause unresolved |
+| Bounded authentication candidate | Focused regression and Directory suite passed; full workspace failed; old-code compatibility and live verification open; not in PR |
 | Original matrix and every new ACK after owner loss | Downstream gates stopped without owner signals or timed load; recovery open |
 | Critical concurrent Git load and fault coverage | Open; separate from the initial 17-step functional check |
 | Higher admission profiles and matched comparisons | Open |
