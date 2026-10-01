@@ -1,7 +1,8 @@
 # Preserve failures and rebuild the Cellule candidate
 
-**Status: performance failed; post-load correctness recovery incomplete; old raw
-evidence unavailable. Latest-Cellule candidate verification is in progress.**
+**Status: the old performance attempt failed and its post-load recovery is
+incomplete. The new Cellule candidate passed release tests and initial Git
+verification; its full corpus setup and performance qualification remain open.**
 
 This checkpoint supersedes earlier running/retained-artifact statements in the
 [native-filesystem trial](2026-10-01-native-filesystem.md). It keeps the original
@@ -107,10 +108,54 @@ routing and host-permit changes. It reuses resident catalog identity for unlease
 requests while still observing fresh authority, and pairs resource charges with
 semaphore permits. Source inspection is not a Canopy latency or correctness result.
 
-All 84 Python harness tests passed in 44.556 seconds. They exercise benchmark
-accounting and guards, not the upgraded Rust implementation. A new locked release
-build is running; Rust tests, RustFS end-to-end checks and full three-node/load/fault
-verification remain open. New evidence belongs outside Cargo target directories.
+The locked release build completed successfully. Its retained executable has
+SHA-256 `32b114119960608c0a91d1c783bb69eafec432831bfa452d54d8950b09bc0e99`.
+The build receipt binds 256 production-source and harness files; those bindings
+still match the published candidate. Evidence and the executable are outside the
+rebuildable Cargo target directory.
+
+| Verification | Result and scope |
+| --- | --- |
+| Python harness | 84 tests passed in 44.556 s; accounting and guards, not Rust runtime proof |
+| Release Rust workspace | 227 tests passed, 9 ignored; the nested isolated native-Git child test is not counted twice |
+| Isolated real RustFS compatibility | All eight exact ignored provider tests passed with `scripts/qualify_size.py --provider-only --release` |
+| Three-node proxy Git behavior | The retained production executable passed all 17 critical steps against the separately bound RustFS provider |
+| CI at `5b2f95c` | Both Rust and harness jobs passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36898604222) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36898599990) |
+
+The eight provider gates cover SHA-256 round trips and native merge candidates,
+signed HTTP push options, signed SHA-256 SSH, stock SSH, bulk refs, partial clones
+and SSH-issued LFS access. They ran in the qualification script's own disposable
+RustFS fixture. That script selects `rustfs/rustfs:1.0.0-beta.8-glibc`; this is
+not a matched provider-envelope comparison with the performance fixture. The
+non-sparse 5-GiB size gate was explicitly excluded and remains open for this pin.
+
+The 17-step production check covers atomic multi-ref publication, mixed and
+atomic refusal, correct and stale leases, shallow/deepen/unshallow, filtered
+lazy fetches, incremental push/pull, branch deletion and pruning, mirror push,
+invalid credentials and exact v0/v2 ref inventories with strict fsck. It passed
+at 17:39:09 UTC. These are functional checks, not scheduled throughput, owner-loss
+recovery or packet-level confirmation of negotiated protocol versions.
+
+### Full corpus setup
+
+The new performance provider has a fresh bucket/prefix on its own native Docker
+volume, with the pinned RustFS image, 2 CPUs and 4 GiB memory. Its original
+five-second bucket-startup command timed out. A separate startup-completion
+receipt first confirmed the bucket absent, then created and checked it without
+restarting or replacing the provider. The original failed receipt remains intact.
+
+Three independent foreground nodes use the retained executable, 100-entry
+per-node admission and a loopback TCP proxy. Their launcher has its own session
+and is not owned by the finite verification controller. The 10,000-repository
+seed started after the eight provider tests exited successfully. It keeps seed
+`20260926`, 100 two-commit Git fixtures and 100 one-MiB LFS objects, unchanged
+30-second HTTP/120-second Git deadlines, and no retry or reseed. Partial manifests
+are retained on failure. Serial seed time is not scheduled creation throughput.
+
+Four offline seed-guard tests passed with 18 rejection cases for scope trimming,
+invalid or duplicate ACK identities and changed Git/LFS expectations. They do not
+prove that the live corpus completed. Full verification, fresh-owner recovery,
+the original 108-window matrix and every new ACK after load remain separate gates.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -121,15 +166,28 @@ rebuildable Cargo target:
 | `harness.log` | `5696368dfdbb6537716b8e35dddc719726c848369dc47df293e4e092319f0176` |
 | `metadata.json` | `a4a33f617545d8b7796719b791c9da241b94eb5e89db85fb3f0bb61765418a69` |
 | `build_candidate.py` | `1e458a80735bdb8c83edf58755ee3933d6a403704b6dc0e8e8bbec89428f1b62` |
+| `build.json` | `818077ca334759e90e16fd3326406831f1840ba2f93b3b93952c3b8e81f9f70c` |
+| `build.log` | `63c8b2f9eac5b7a144f4f5bfcb61bcbc02c3cc94d61c4bfcffce107125c87748` |
+| `canopy-c51dd121` | `32b114119960608c0a91d1c783bb69eafec432831bfa452d54d8950b09bc0e99` |
+| `rust-tests.log` | `8dbf6d432544e39510a7b314a6bf8a4291e008ea3f8664ada2c0d3e6a860a42b` |
+| `provider-ready.json` | `dd243add0de22069284ddf3181af1f3ed1c94247d1758e27730de53c0e1e6de0` |
+| `critical-controller.json` | `402ac5ced76f9585c57e25fc7642cc066b5c5ec3196441b4135373fdd93193a1` |
+| `critical.json` | `84ea23bf95c5b9cc448f1e520c663c05d5cca0a952be1056774e02b34d5d2a03` |
+| `provider-tests.json` | `cd94183c06648d26a44da368c8cb3cd49f597124e3b37c338673794eac1e6412` |
+| `provider-tests.log` | `27f48704797584c5b08f1297c9e1cae2ef0c5f1ff8965a557a07a5f9eefbc2dd` |
+| `run_provider_gates.py` | `c1f0e2a52c474fea0adeb4b671495f2d0980120b3067ebb2b38245a3f3492deb` |
+| `seed_full_corpus.py` | `7bbd79a6dae40fec4809720970d80a8465be4c8df4d63c242a4d59ef63a6fc0e` |
+| `seed-guard-tests.log` | `3c82e7c0a92ea5b6efa559b91d414936635fdf034fc5182b260ab7d2c0d07cc8` |
 
-`build.json` and `build.log` remain changing outputs until the actual compiler
-process exits; they are not listed as closed evidence here.
+The live seed manifest, controller receipt and log are changing outputs, not
+closed evidence. Do not use their intermediate counts as a complete-corpus result.
 
 | Required gate | Current status |
 | --- | --- |
-| Exact new artifact and source provenance | Build in progress |
-| Rust workspace correctness and RustFS Git/LFS compatibility | Open |
-| Full 10,000 identities/100 populated fixtures | Open for the new artifact |
+| Exact new artifact and source provenance | Passed locked build and current binding checks |
+| Rust workspace correctness and RustFS Git/LFS compatibility | Passed release suite, eight provider gates and initial 17-step proxy check |
+| New-pin non-sparse 5-GiB transfer | Open; excluded by `--provider-only` |
+| Full 10,000 identities/100 populated fixtures | Seed running; full verification and fresh-owner recovery open |
 | Original matrix, critical Git load and every new ACK after owner loss | Open |
 | Higher admission profiles and matched comparisons | Open |
 | Old campaign every-ACK recovery | Unverified; original raw inputs unavailable |

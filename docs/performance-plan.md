@@ -6,15 +6,19 @@ dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, the latest
 observed upstream main on October 1. Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
 metadata resolves all six packages; the lockfile changes only their sources.
-The new release build and its RustFS/three-node qualification are separate
-gates. The 84 Python harness tests passed; this is not Rust runtime verification.
-None establishes reference capacity.
+The new locked release build passed. Its release workspace suite passed 227
+tests with 9 ignored gates; all eight real-RustFS compatibility gates subsequently
+passed, as did the production binary's initial 17-step check through three nodes
+and a proxy. The 84 Python harness tests cover accounting and guards. Full-corpus
+recovery, scheduled load and every-ACK verification remain separate gates; none
+of these functional checks establishes reference capacity.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
+| Latest Cellule candidate | `c51dd121` locked release build, 227 Rust tests, eight real-RustFS compatibility gates and initial 17-step three-node/proxy Git check passed; new 10K/100 seed running |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
@@ -25,7 +29,7 @@ seed and successful recovery of every recorded ACK.
 | Post-load ACK recovery | Recorded three-owner loss and 32.249-s wait; critical fixtures passed. Fresh fleet then recorded ENOSPC and shut down; full corpus and every-ACK verification are incomplete |
 | Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. The versioned gate separates failed performance from mandatory correctness recovery; no live critical-load/fault result is established |
 | Evidence availability | Benchmark directories and retained executable disappeared during the later space check. No receipt backup found in checked locations; surviving RustFS data is not an ACK ledger |
-| Performance qualification | Latest artifact/runtime, every post-load ACK, critical-operation load/fault coverage, higher admission profiles and matched comparisons remain open |
+| Performance qualification | Latest full-corpus recovery, scheduled load, every post-load ACK, critical-operation load/fault coverage, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
