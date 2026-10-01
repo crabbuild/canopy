@@ -33,8 +33,18 @@ fn now() -> Result<i64> {
     )?)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn server_reopens_a_retained_directory_catalog_after_explicit_fixture_activation() -> Result {
+struct RetainedFixture {
+    _files: tempfile::TempDir,
+    configuration: ServerConfig,
+    store: Arc<dyn ObjectStore>,
+    layout: CellStorageLayout,
+    catalog: CellCatalog,
+    authority: CellAuthority,
+    target: cellule_runtime::CellTarget,
+    entry: CatalogEntry,
+}
+
+async fn retained_fixture() -> Result<RetainedFixture> {
     let files = tempfile::TempDir::new()?;
     let address = available_address().await?;
     let configuration = config(address, files.path().join("server"));
@@ -217,6 +227,32 @@ async fn server_reopens_a_retained_directory_catalog_after_explicit_fixture_acti
         .complete_activation(activating.revision(), operation)
         .await?;
 
+    Ok(RetainedFixture {
+        _files: files,
+        configuration,
+        store,
+        layout,
+        catalog,
+        authority,
+        target,
+        entry,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_reopens_a_retained_directory_catalog_after_explicit_fixture_activation() -> Result {
+    let fixture = retained_fixture().await?;
+    let address = fixture.configuration.listen;
+    let RetainedFixture {
+        _files,
+        configuration,
+        store,
+        catalog,
+        target,
+        entry,
+        ..
+    } = fixture;
+
     // Exercise real Canopy startup, not a direct low-level client workaround.
     let server = CanopyServer::start(configuration, Arc::clone(&store)).await?;
     let url = create_repository(address, "after-activation").await?;
@@ -246,4 +282,61 @@ async fn server_reopens_a_retained_directory_catalog_after_explicit_fixture_acti
     assert!(url.ends_with("/canopy/after-activation.git"));
     server.shutdown().await?;
     Ok(())
+}
+
+async fn unsupported_control_stays_unchanged(code: Option<Digest>, schema: Option<u32>) -> Result {
+    let fixture = retained_fixture().await?;
+    let observed = fixture
+        .authority
+        .load(fixture.target.cell_id())
+        .await?
+        .ok_or("control missing")?;
+    let mut unsupported = observed.value().clone();
+    if let Some(code) = code {
+        unsupported.code = code;
+    }
+    if let Some(schema) = schema {
+        unsupported.schema = schema;
+    }
+    unsupported.revision += 1;
+    unsupported.progress += 1;
+    let path = fixture
+        .layout
+        .control_path(fixture.target.cell_id().as_bytes());
+    let (_, token) = fixture.layout.store().get_with_etag(&path).await?;
+    let encoded = unsupported.encode()?;
+    // Inject unsupported persisted metadata only in this owned in-memory fixture.
+    // Its catalog remains supported. A failed startup must reject the control
+    // before acquisition, not claim it and rely on later SQL/client rejection.
+    fixture
+        .layout
+        .store()
+        .update(&path, Bytes::from(encoded.clone()), token)
+        .await?;
+    assert!(
+        CanopyServer::start(fixture.configuration, Arc::clone(&fixture.store))
+            .await
+            .is_err()
+    );
+    let after = fixture
+        .authority
+        .load(fixture.target.cell_id())
+        .await?
+        .ok_or("control disappeared")?;
+    assert_eq!(
+        after.value().encode()?,
+        encoded,
+        "unsupported persisted control was acquired or rewritten"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_control_code_is_rejected_before_cell_acquisition() -> Result {
+    unsupported_control_stays_unchanged(Some(Digest::from_bytes([1; 32])), None).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_control_schema_is_rejected_before_cell_acquisition() -> Result {
+    unsupported_control_stays_unchanged(None, Some(2)).await
 }
