@@ -1,4 +1,5 @@
 mod accounts;
+mod capacity;
 mod expiry;
 #[path = "../support/objects.rs"]
 mod objects;
