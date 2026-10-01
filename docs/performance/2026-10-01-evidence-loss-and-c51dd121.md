@@ -132,6 +132,7 @@ rebuildable Cargo target directory.
 | Three-node proxy Git behavior | The retained production executable passed all 17 critical steps against the separately bound RustFS provider |
 | CI at `5b2f95c` | Both Rust and harness jobs passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36898604222) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36898599990) |
 | CI at `7d09597` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36904766930) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36904761443) |
+| CI at `d6d63a3` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36913619350) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36913616080); later heads need their own results |
 
 The eight provider gates cover SHA-256 round trips and native merge candidates,
 signed HTTP push options, signed SHA-256 SSH, stock SSH, bulk refs, partial clones
@@ -172,9 +173,9 @@ The seed process exited successfully at **19:02:14 UTC**. Its closed manifest
 contains all **10,000 identities, 100 populated Git fixtures and 100 LFS objects**;
 the setup controller validated their expected identities and payload declarations.
 The serial seed took 3,852.843 seconds. This is setup duration, not scheduled
-creation throughput. At 19:09 UTC, the separate full-corpus verifier is running against the
-same three owners and unchanged RustFS provider; setup alone does not establish
-that all remote Git/LFS bytes survive owner loss.
+creation throughput. The separate full-corpus verifier subsequently failed
+against the same three owners and unchanged RustFS provider. Setup alone does
+not establish that all remote Git/LFS bytes survive owner loss.
 
 The initial fault, independent fresh fleet, full recovery and original 108-window
 matrix controllers were armed behind that verifier. Separate post-load fault,
@@ -209,10 +210,57 @@ cgroup OOM events. Neither the failures nor the data were discarded or reseeded.
 
 A separate read-only replay of the failed identity and its original 16-entry
 batch returned matching identities on all 67 requests. It did not reproduce
-the 503 and does not overturn the original failure. A metadata-only diagnostic
-across all 10,000 identities is running with concurrency 16 and the same
-30-second HTTP deadline. It excludes Git/LFS body checks and is not a replacement
-qualification run. The cause remains unresolved.
+the 503 and does not overturn the original failure. The metadata-only diagnostic
+closed at **19:27:31 UTC**, retaining all 10,000 observations at concurrency 16
+and the same 30-second HTTP deadline:
+
+| Diagnostic outcome | Observations |
+| --- | ---: |
+| HTTP 200 with matching repository identity | 9,999 |
+| HTTP 503 | 1 |
+| Total | 10,000 |
+
+The failure was for `density-3a92b05e1d80-04322`
+(`f39019bc-2063-438c-8f0a-10fa01f17cea`), request ID
+`b221bf05-2df9-4b44-9b48-8d95fb4ffa88`, at 19:22:01 UTC. Node 2 logged
+`authentication failed` with `repository directory operation failed` at that
+time. The original verifier failed at the metadata-read call site; this is a
+related Directory failure, not proof of an identical underlying cause.
+The diagnostic excludes Git/LFS bodies and is neither a qualification retry
+nor a scheduled throughput measurement. **The root cause remains unresolved.**
+
+### Separate diagnostic build and cleanup test investigation
+
+Temporary error-only classification lives in a separate diagnostic worktree,
+not this PR's production candidate. It records bounded request IDs and static
+error categories without raw headers, private error payloads or provider URLs.
+It does not change routing, retries, deadlines or HTTP responses, and has not
+yet been exercised against the original three-node corpus.
+
+Its first release workspace suite failed the existing
+`failed_spawn_releases_parent_fence_before_cache_cleanup` test. Twenty full
+library repetitions reproduced that failure four times. A controlled fork
+reproduction showed that an unrelated child can inherit the Git cache fence
+before executing, so cleanup conservatively retains the files and their
+132-byte budget charge. This is separate from the Directory HTTP 503; no causal
+link or production performance improvement is established.
+
+The local test correction isolates the parent-fence assertion in a subprocess
+and adds a deterministic inherited-fence safety check. Production cleanup stays
+unchanged: files remain charged while the fence is busy. The corrected diagnostic
+build at local commit `0ee8f69` passed the full locked release workspace suite
+at **20:11:04 UTC**: **230 top-level tests passed, 9 ignored**. Nested subprocess
+tests are counted once. Its executable and library-test artifact are retained
+outside Cargo targets. These local results do not qualify the PR artifact,
+newer Cellule upstream, RustFS recovery or performance. Temporary diagnostic
+source and the test correction remain separate from this PR while the original
+experiment's source bindings stay frozen.
+
+A subsequent check closed at **20:21:06 UTC**: all **20 full-library repetitions**
+passed at four test threads, with 115 tests in each repetition and zero failed
+attempts. Every attempt log and digest is retained. This verifies the local test
+correction without erasing the original failure; it is not runtime recovery or
+proof that an intermittent Directory error is fixed.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -249,6 +297,20 @@ The seed manifest, controller receipt and log are now closed:
 | `full-seed-verification.json` | `981dd75f4bc0fc1605cc06b579d9966b0c597ac64e2c5e4c6e3a29a9561fdf01` |
 | `full-seed-verification.log` | `273e945deb34c5792e12da3d7d4a01819cc80e402a55ea64d04346c1a25be593` |
 | `identity-503-replay.json` | `2410d2c63edcd1d4700b20bb795dc680b012190517a3ee063f3f87904c174caf` |
+| `metadata-churn-diagnostic.json` | `9dfb64b72791e252bcbe1ebb8cb1e6192dd12c4e8bd07f45b77ca8155b9a2337` |
+| `metadata-churn-diagnostic.samples.jsonl` | `a6b1827ca695e7ea0eea47ce1b96e535d1a14b87d02ebc18752d6cb06906b8d0` |
+
+The separate local diagnostic evidence is under
+`/Users/haipingfu/.codex/canopy-directory-diagnostics-v2-rNr2qi`:
+
+| Closed diagnostic artifact | SHA-256 |
+| --- | --- |
+| `build-tests.json` | `03aaefd41ba4dc594b635921a7a3cd5087a2f973dd8dae0e1ad995ca08f8e263` |
+| `rust-tests.log` | `a91eeeb87b1f232d692cfa5a2121b63a1f52cd78cfa73e6c2b17c7542898d665` |
+| `canopy-c51-directory-diagnostics` | `e2e5c12e504b9e73d11e7b6f650fa3f35e46b137136e7eddaaf6ed7b339638a2` |
+| `canopy-c51-diagnostic-library-tests` | `795b6ff0abc2d1eee01c83d927b8e8b0a2b0827293b2f42acaee8f7e1496980f` |
+| `test-artifact.json` | `fbdd719e2dd5e0d12dfab935ff470eff5b5f87206354462fd5df97e844ad8ae9` |
+| `cleanup-reproduction/reproduction.json` | `7e71923d85025177a7b0a273656a4daccded11ba6c9f0e174814cfc4aaec50ed` |
 
 ### Independent evidence backup
 
@@ -259,6 +321,8 @@ The initial copy contains 270 files: all 15 then-published closed artifacts and
 all 256 build bindings, with one shared helper counted once. Every source and
 copy digest matched, and a separate read replayed all copied digests. The closed
 full seed was copied separately only after its process actually exited.
+The closed metadata diagnostic, all 10,000 samples and its helper also have
+verified copies in the backup's `closed-metadata-churn-diagnostic` directory.
 
 `closed-backup.json` has SHA-256
 `4622fa3b31ca5eeb76ccfd48e4a352480e262f173efeb0dce676ff0afd879a41`;

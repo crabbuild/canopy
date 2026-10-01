@@ -21,7 +21,7 @@ seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
-| Latest Cellule candidate | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. Downstream fault/load gates stopped without owner signals; cause unresolved |
+| Latest Cellule candidate | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
@@ -39,6 +39,12 @@ records the storage hypothesis, graceful diagnostic drain and new bindings.
 The [evidence-loss checkpoint](performance/2026-10-01-evidence-loss-and-c51dd121.md)
 supersedes its earlier running/retained-artifact status. Historical observations
 are not currently replayable; a new run cannot certify the old ACKs.
+The separate diagnostic build passed 230 release workspace tests with 9 ignored
+after isolating a concurrent-fork cleanup test and adding fence-safety coverage.
+All 20 subsequent full-library repetitions passed at four test threads.
+That local test finding does not explain the Directory 503, change production
+cleanup or qualify the PR's frozen artifact; temporary diagnostics remain outside
+the PR.
 No Cellule bottleneck or matched performance improvement is proven. The 4-GiB
 diagnostic is a new resource envelope, not a passing 2-GiB result. Offline plans
 for 500/1,000-entry admission retain the full matrix but have not been executed.
