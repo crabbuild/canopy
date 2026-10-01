@@ -121,15 +121,23 @@ impl GitGateway {
         disk_budget: DiskBudget,
     ) -> Self {
         let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
-        let pack_reader = Arc::clone(repository.pack_reader.get_or_init(|| {
-            Arc::new(crate::pack_store::PackReader::new(
-                Arc::clone(&blob_store),
-                repository.repository_id(),
-                scratch_root.clone(),
-                disk_budget.clone(),
-                repository.object_format(),
-            ))
-        }));
+        // A reader belongs to this gateway's workspace and disk admission.
+        // Another gateway may use a different root/budget for the same Cell.
+        let pack_reader = Arc::new(crate::pack_store::PackReader::new(
+            Arc::clone(&blob_store),
+            repository.repository_id(),
+            scratch_root.clone(),
+            disk_budget.clone(),
+            repository.object_format(),
+        ));
+        {
+            let mut readers = repository
+                .pack_readers
+                .lock()
+                .expect("packed reader registry poisoned");
+            readers.retain(|reader| reader.strong_count() > 0);
+            readers.push(Arc::downgrade(&pack_reader));
+        }
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
         Self {
             repository,
@@ -627,10 +635,10 @@ impl GitGateway {
                     );
                 }
                 Ok(retained) => {
-                    if retained == count {
-                        if let Some(record) = &archive {
-                            shared.cache.mark_durable_pack(record.pack.sha256);
-                        }
+                    if retained == count
+                        && let Some(record) = &archive
+                    {
+                        shared.cache.mark_durable_pack(record.pack.sha256);
                     }
                 }
                 Err(error) => {

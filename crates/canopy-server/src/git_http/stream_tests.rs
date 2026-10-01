@@ -226,6 +226,15 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
         GitProcess::spawn(command, cache),
         Err(GitHttpError::Io(_))
     ));
+    // Concurrent forks can briefly inherit the parent's queued-command fence
+    // before exec closes their CLOEXEC descriptors. Cleanup remains charged
+    // until that fence is acquired rather than permanently leaking admission.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     assert_eq!(budget.used(), 0);
     Ok(())
 }

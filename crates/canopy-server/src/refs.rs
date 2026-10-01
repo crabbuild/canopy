@@ -204,28 +204,9 @@ impl RepositoryCell {
 
 impl WireValue for PushPlan {
     fn encode(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
-        if validate_component(&self.actor).is_err() {
-            return Err(CodecError::Invalid("invalid push actor"));
-        }
-        if self.updates.is_empty() || self.updates.len() > MAX_UPDATES {
-            return Err(CodecError::Invalid("push update count is outside bounds"));
-        }
-        encoder.write_text(&self.actor)?;
-        encoder.write_count(self.updates.len())?;
+        self.encode_prefix(encoder)?;
         for update in &self.updates {
-            encoder.write_text(&update.name)?;
-            encoder.write_bool(update.expected.is_some())?;
-            if let Some(expected) = &update.expected {
-                encoder.write_bool(expected.oid.is_some())?;
-                if let Some(oid) = expected.oid {
-                    encoder.write_bytes(&oid)?;
-                }
-                encoder.write_i64(expected.version)?;
-            }
-            encoder.write_bool(update.new_oid.is_some())?;
-            if let Some(oid) = update.new_oid {
-                encoder.write_bytes(&oid)?;
-            }
+            encode_update(update, encoder)?;
         }
         Ok(())
     }
@@ -268,6 +249,45 @@ impl WireValue for PushPlan {
         Ok(Self { actor, updates })
     }
 }
+impl PushPlan {
+    /// Shared wire prefix and update encoding allow bounded incremental hashing
+    /// without allocating a second full copy of a large mirror plan.
+    pub(crate) fn encode_prefix(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
+        if validate_component(&self.actor).is_err() {
+            return Err(CodecError::Invalid("invalid push actor"));
+        }
+        if self.updates.is_empty() || self.updates.len() > MAX_UPDATES {
+            return Err(CodecError::Invalid("push update count is outside bounds"));
+        }
+        encoder.write_text(&self.actor)?;
+        encoder.write_count(self.updates.len())
+    }
+}
+pub(crate) fn encode_update(
+    update: &RefUpdate,
+    encoder: &mut BoundedEncoder,
+) -> Result<(), CodecError> {
+    encoder.write_text(&update.name)?;
+    encode_update_suffix(update, encoder)
+}
+pub(crate) fn encode_update_suffix(
+    update: &RefUpdate,
+    encoder: &mut BoundedEncoder,
+) -> Result<(), CodecError> {
+    encoder.write_bool(update.expected.is_some())?;
+    if let Some(expected) = &update.expected {
+        encoder.write_bool(expected.oid.is_some())?;
+        if let Some(oid) = expected.oid {
+            encoder.write_bytes(&oid)?;
+        }
+        encoder.write_i64(expected.version)?;
+    }
+    encoder.write_bool(update.new_oid.is_some())?;
+    if let Some(oid) = update.new_oid {
+        encoder.write_bytes(&oid)?;
+    }
+    Ok(())
+}
 
 fn read_oid(decoder: &mut BoundedDecoder<'_>) -> Result<crate::ObjectId, CodecError> {
     decoder
@@ -305,8 +325,33 @@ pub(crate) fn apply_refs(
     plan: &PushPlan,
     merge: Option<&crate::pulls::merge::ReviewedMerge>,
 ) -> cellule_runtime::Result<bool> {
-    if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
+    let Some(validated) = validate_refs(context, plan)? else {
         return Ok(false);
+    };
+    if !crate::graph::certified_roots(context, plan)?
+        || !crate::branch_rules::policies_allow(context, plan, merge)?
+    {
+        return Ok(false);
+    }
+    validated.apply(context)?;
+    Ok(true)
+}
+
+/// Only ref/ACL validation constructs this result. Catalog membership and
+/// current branch/merge policy must also pass before consuming it. It borrows
+/// the immutable plan and cannot be reused by another admitted command.
+pub(crate) struct ValidatedRefs<'plan> {
+    plan: &'plan PushPlan,
+    target: cellule_runtime::CellTarget,
+    owner: cellule_runtime::registry::OwnerFence,
+    sequence: u64,
+}
+pub(crate) fn validate_refs<'plan>(
+    context: &CommandContext<'_, '_>,
+    plan: &'plan PushPlan,
+) -> cellule_runtime::Result<Option<ValidatedRefs<'plan>>> {
+    if plan.updates.is_empty() || plan.updates.len() > MAX_UPDATES {
+        return Ok(None);
     }
     if validate_component(&plan.actor).is_err()
         || !decode_access(&context.sql(&SqlBatch {
@@ -314,7 +359,7 @@ pub(crate) fn apply_refs(
         })?)?
         .is_some_and(|level| level >= TokenScope::Write)
     {
-        return Ok(false);
+        return Ok(None);
     }
     let identity = context.sql(&SqlBatch {
         statements: vec![SqlStatement {
@@ -339,7 +384,7 @@ pub(crate) fn apply_refs(
                 .and_then(|old| old.oid)
                 .is_some_and(|oid| oid.format() != format)
     }) {
-        return Ok(false);
+        return Ok(None);
     }
     let updates: BTreeMap<_, _> = plan
         .updates
@@ -347,7 +392,7 @@ pub(crate) fn apply_refs(
         .map(|update| (update.name.as_str(), update))
         .collect();
     if updates.len() != plan.updates.len() {
-        return Ok(false);
+        return Ok(None);
     }
     // A first mirror push can contain thousands of refs. One transactional
     // emptiness check avoids a point lookup and namespace scan for every new
@@ -375,15 +420,15 @@ pub(crate) fn apply_refs(
                 .as_ref()
                 .is_some_and(|old| old.version <= 0 || old.version == i64::MAX)
         {
-            return Ok(false);
+            return Ok(None);
         }
         if update.new_oid.is_none() && update.expected.as_ref().and_then(|old| old.oid).is_none() {
-            return Ok(false);
+            return Ok(None);
         }
         if (refs_empty && update.expected.is_some())
             || (!refs_empty && current_ref(context, &update.name)? != update.expected)
         {
-            return Ok(false);
+            return Ok(None);
         }
     }
     for update in plan
@@ -392,16 +437,27 @@ pub(crate) fn apply_refs(
         .filter(|update| update.new_oid.is_some())
     {
         if existing_namespace_conflict(context, &updates, &update.name, refs_empty)? {
-            return Ok(false);
+            return Ok(None);
         }
     }
-    if !crate::graph::certified_roots(context, plan)?
-        || !crate::branch_rules::policies_allow(context, plan, merge)?
-    {
-        return Ok(false);
-    }
-    for update in &plan.updates {
-        let result = match (&update.expected, update.new_oid) {
+    Ok(Some(ValidatedRefs {
+        plan,
+        target: context.target().clone(),
+        owner: context.owner_fence(),
+        sequence: context.sequence(),
+    }))
+}
+impl ValidatedRefs<'_> {
+    pub(crate) fn apply(self, context: &mut CommandContext<'_, '_>) -> cellule_runtime::Result<()> {
+        if context.target() != &self.target
+            || context.owner_fence() != self.owner
+            || context.sequence() != self.sequence
+        {
+            return Err(Error::Command("ref validation belongs to another command"));
+        }
+        let plan = self.plan;
+        for update in &plan.updates {
+            let result = match (&update.expected, update.new_oid) {
             (None, Some(new_oid)) => context.sql(&SqlBatch {
                 statements: vec![SqlStatement {
                     sql: "INSERT INTO refs (name, oid, version) VALUES (?1, ?2, 1)".into(),
@@ -425,14 +481,15 @@ pub(crate) fn apply_refs(
             })?,
             (None, None) => return Err(Error::Command("empty ref mutation")),
         };
-        if result.first().is_none_or(|set| set.rows_affected != 1) {
-            return Err(Error::Command("ref CAS changed no rows"));
+            if result.first().is_none_or(|set| set.rows_affected != 1) {
+                return Err(Error::Command("ref CAS changed no rows"));
+            }
         }
+        // Both typed pushes and HTTP completion pass here. Advance only with the
+        // ref transaction so paginated readers reject mixed generations, including ABA.
+        advance_generation(context)?;
+        Ok(())
     }
-    // Both typed pushes and HTTP completion pass here. Advance only with the
-    // ref transaction so paginated readers reject mixed generations, including ABA.
-    advance_generation(context)?;
-    Ok(true)
 }
 
 pub(crate) fn server_owned_ref(name: &str) -> bool {

@@ -1,5 +1,80 @@
 use super::*;
 
+async fn wait_for_cleanup(budget: &DiskBudget) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn overlapping_indexes_are_not_unique_coverage_and_registration_is_idempotent()
+-> Result<(), Box<dyn std::error::Error>> {
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(512 << 20);
+        let mut packs = Vec::new();
+        let mut verified = HashSet::new();
+        for unique in [b"first".as_slice(), b"second".as_slice()] {
+            let source = GitCache::create(
+                root.path().into(),
+                budget.clone(),
+                "refs/heads/main",
+                format,
+            )
+            .await?;
+            for body in [b"overlapping object".as_slice(), unique] {
+                let oid = object_id(format, ObjectKind::Blob, body);
+                verified.insert(oid);
+                source
+                    .store_object(oid, ObjectKind::Blob, body.to_vec())
+                    .await?;
+            }
+            packs.push(source.repacked(root.path().into(), budget.clone()).await?);
+        }
+        let target = GitCache::create(
+            root.path().into(),
+            budget.clone(),
+            "refs/heads/main",
+            format,
+        )
+        .await?;
+        for pack in &packs {
+            assert_eq!(
+                target
+                    .retain_verified_packs(Arc::clone(pack), verified.clone())
+                    .await?,
+                2
+            );
+        }
+        assert_eq!(verified.len(), 3);
+        assert_eq!(target.indexed_entries(), 4);
+        assert_eq!(
+            target
+                .retain_verified_packs(Arc::clone(&packs[0]), verified.clone())
+                .await?,
+            2
+        );
+        assert_eq!(target.indexed_entries(), 4);
+        drop(packs);
+        // Registered handles belong to copied destination indexes, not to the
+        // disposable source cache whose files have now been removed.
+        assert!(
+            target
+                .missing_objects(verified.into_iter().collect())
+                .await?
+                .is_empty()
+        );
+        drop(target);
+        wait_for_cleanup(&budget).await?;
+        assert_eq!(budget.used(), 0);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +100,7 @@ async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers(
     let packed = cache.repacked(root.path().into(), budget.clone()).await?;
     assert!(packed.missing_objects(ids.clone()).await?.is_empty());
     assert!(!packed.object_path(ids[0]).exists());
-    assert_eq!(packed.packed_count(), 64);
+    assert_eq!(packed.indexed_entries(), 64);
     let reused = GitCache::create(
         root.path().into(),
         budget.clone(),
@@ -59,6 +134,7 @@ async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers(
     drop(packed);
     assert!(reader.object_path(ids[0]).is_file());
     drop(reader);
+    wait_for_cleanup(&budget).await?;
     assert_eq!(budget.used(), 0);
     Ok(())
 }
@@ -302,6 +378,14 @@ async fn a_fenced_generation_retains_its_borrowed_objects() -> Result<(), Box<dy
     assert!(object_path.exists());
     assert_eq!(budget.used(), charged);
     drop(fence);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(!generation_path.exists());
+    assert!(!object_path.exists());
     Ok(())
 }
 

@@ -48,6 +48,7 @@ mod object_batch;
 mod object_chunks;
 mod object_reads;
 mod pack_store;
+pub mod packs;
 pub mod pulls;
 mod push;
 mod refs;
@@ -61,7 +62,7 @@ pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
 pub use object_chunks::ObjectStageError;
-pub use push::{PushCertificateReceipt, PushError, PushReceipt};
+pub use push::{PushCertificateReceipt, PushError, PushReceipt, VerifiedPushCertificate};
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
@@ -183,6 +184,9 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("../../canopy-git-format/src/lib.rs"));
+                source.update(include_bytes!(
+                    "../../canopy-git-format/src/pack_index/mod.rs"
+                ));
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph/mod.rs"));
@@ -293,7 +297,9 @@ pub struct RepositoryCell {
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
-    pack_reader: OnceLock<std::sync::Arc<pack_store::PackReader>>,
+    // Gateways own the cache lifetime. Sharing the reader through a weak
+    // reference must not retain its original disk budget after gateway eviction.
+    pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
 }
 
 impl RepositoryCell {
@@ -320,7 +326,7 @@ impl RepositoryCell {
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
-            pack_reader: OnceLock::new(),
+            pack_readers: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -330,11 +336,15 @@ impl RepositoryCell {
         identity: cellule_runtime::MutationIdentity,
         plan: PushPlan,
     ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
-        self.prepare_graph(&plan).await?;
-        self.prepare_branch_proofs(&plan).await?;
-        self.application
-            .command::<FinalizePush>(&self.target, identity, plan)
-            .await
+        // Keep each transport-heavy phase in its own allocation. Embedding all
+        // three futures multiplies stack copies when debug callers poll a push.
+        Box::pin(self.prepare_graph(&plan)).await?;
+        Box::pin(self.prepare_branch_proofs(&plan)).await?;
+        Box::pin(
+            self.application
+                .command::<FinalizePush>(&self.target, identity, plan),
+        )
+        .await
     }
 
     pub async fn object(
@@ -405,12 +415,19 @@ impl RepositoryCell {
                 ));
             }
             let record = self.pack_record(pack).await?;
-            let reader =
-                self.pack_reader
-                    .get()
-                    .ok_or(cellule_runtime::InvocationError::NotStarted(
-                        Error::Command("packed reader unavailable"),
-                    ))?;
+            let reader = self
+                .pack_readers
+                .lock()
+                .map_err(|_| {
+                    cellule_runtime::InvocationError::NotStarted(Error::Command(
+                        "packed reader registry poisoned",
+                    ))
+                })?
+                .iter()
+                .find_map(std::sync::Weak::upgrade)
+                .ok_or(cellule_runtime::InvocationError::NotStarted(
+                    Error::Command("packed reader unavailable"),
+                ))?;
             let body = reader
                 .read_blob(
                     record,

@@ -49,7 +49,7 @@ impl GitGateway {
             return Ok(());
         }
         tracing::info!(repository = %hex::encode(self.repository.repository_id()),
-            objects = next.packed_count(), previous_bytes = old.bytes()?, packed_bytes = next.bytes()?,
+            index_entries = next.indexed_entries(), previous_bytes = old.bytes()?, packed_bytes = next.bytes()?,
             elapsed_seconds = started.elapsed().as_secs_f64(), "published background Git repack generation");
         self.pack_reader.replace(&old, Arc::clone(&next)).await;
         objects.cache = next;

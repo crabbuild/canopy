@@ -29,7 +29,7 @@ impl GitGateway {
                 |path| cached.backend.with_signers(path),
             );
             let mut response = backend.run(request).await?;
-            let certificate = self.verified_certificate(&cached, &commands, actor).await?;
+            let certificate = self.verified_certificate(&cached, &commands, actor, digest).await?;
             // Git may accept some refs and reject others unless atomic was requested.
             // Publish its actual changes before returning any successful per-ref report.
             let plan = if response.status == 200 {
@@ -119,6 +119,7 @@ impl GitGateway {
         cached: &CachedRepository,
         commands: &branch_policy::PushCommands,
         actor: &str,
+        request_digest: [u8; 32],
     ) -> Result<Option<crate::push::VerifiedPushCertificate>, GatewayError> {
         let Some(body) = commands.certificate() else {
             return Ok(None);
@@ -165,6 +166,8 @@ impl GitGateway {
             ));
         }
         Ok(Some(crate::push::VerifiedPushCertificate {
+            target: self.repository.target.clone(),
+            request_digest,
             body: body.to_vec(),
             signer: signer.into(),
             key: key.into(),

@@ -39,14 +39,13 @@ pub(crate) fn valid_options(options: &[String]) -> bool {
 
 mod certificate;
 mod plan;
-pub use certificate::PushCertificateReceipt;
-pub(crate) use certificate::VerifiedPushCertificate;
 use certificate::{CertificateMeta, certificate_complete};
+pub use certificate::{PushCertificateReceipt, VerifiedPushCertificate};
 pub(crate) mod report;
 use plan::StagedPlan;
 
-const CHUNK_BYTES: usize = 512 * 1024;
-const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const CHUNK_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PushError {
@@ -320,6 +319,11 @@ impl RepositoryCell {
             )));
         }
         let certificate = if let Some(certificate) = &input.certificate {
+            if certificate.target != self.target || certificate.request_digest != input.digest {
+                return Err(InvocationError::NotStarted(Error::Command(
+                    "signed push witness context differs",
+                )));
+            }
             Some(self.stage_push_certificate(input.id, certificate).await?)
         } else {
             None

@@ -1,0 +1,166 @@
+//! Fenced preparation and retained generation facts in the Repository Cell.
+//! The fresh schema is selected with the final producer/reader hard cutover;
+//! these commands are not registered on the legacy repository serving path.
+use super::catalog::StoredCatalog;
+use crate::{
+    ObjectFormat, RepositoryModule,
+    access::{access_statement, decode_access},
+    directory::{TokenScope, validate_component},
+};
+use cellule_runtime::{
+    CellModule, Command, Error, Query, RegistryBuilder,
+    codec::{BoundedDecoder, BoundedEncoder, CodecError, WireValue},
+    identity::IncarnationId,
+    primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
+    registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
+};
+mod base;
+pub use base::{PreparationBaseError, PreparationBaseResolver};
+mod certificate;
+mod codec;
+pub use certificate::{
+    AttestationOutcome, CERTIFICATE_BYTES, CatalogCertificate, RegisteredCatalog,
+};
+mod attestation;
+pub use attestation::{CatalogAttestationError, RegisterCatalogAttestation};
+mod prepare;
+pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
+mod ref_proof;
+pub use ref_proof::{RefProofError, RefPublicationProof};
+mod publish;
+pub use publish::{PublicationReply, PublishCatalogRefs, PublishedRefs};
+mod completion;
+mod coordinator;
+pub use completion::{
+    CatalogCompletionReply, CatalogPushCompletion, CatalogPushResponseError, CheckCompletedPush,
+    CompleteCatalogPush, CompletedCatalogPush, CompletionCatalogProof, PushCompletionProofError,
+    PushCompletionRequest, SignedPushAnnotation, replay_push_response,
+};
+pub use coordinator::{
+    PublicationAdmissionFailure, PublicationCoordinator, PublicationLimits,
+    PublicationScheduleError, PublicationState, PublicationStats, PublicationTicket,
+    ReadyCatalogPush,
+};
+mod commands;
+mod sql;
+pub use commands::{
+    AbortPreparation, BeginPreparation, CheckPreparation, CheckPreparationFrontier,
+    ClaimPreparation, ReapPreparation, RenewPreparation,
+};
+
+pub const SCHEMA: &str = include_str!("schema.sql");
+pub const MAX_OPERATIONS: u64 = 1024;
+pub const MAX_GENERATION_LEASES: u64 = 4096;
+/// Includes the reserved empty generation. Old eligible facts are reaped;
+/// removing a local SQL fact never authorizes deleting remote artifacts.
+pub const MAX_RETAINED_GENERATIONS: u64 = 8192;
+pub const MAX_LEASE_MS: u64 = 300_000;
+pub const DEFAULT_LEASE_MS: u64 = 60_000;
+pub const REAP_ROWS: u64 = 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparationToken {
+    pub repository: [u8; 16],
+    pub operation: [u8; 16],
+    /// Durable creating namespace, independent of the logical request ID.
+    /// Allocated once by Begin/Claim; never supplied by a product client.
+    pub artifact_operation: [u8; 16],
+    pub request_digest: [u8; 32],
+    pub owner: OwnerFence,
+    /// Admitted execution sequence, not a counter reset by record pruning.
+    pub attempt: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GenerationFact {
+    pub generation: u64,
+    pub catalog: Option<StoredCatalog>,
+    pub certificate: Option<[u8; 32]>,
+}
+impl GenerationFact {
+    fn validate(self) -> Result<(), CodecError> {
+        if self.generation > i64::MAX as u64 {
+            return Err(CodecError::Invalid("invalid catalog generation"));
+        }
+        match (self.generation, self.catalog, self.certificate) {
+            (0, None, None) => Ok(()),
+            (1.., Some(catalog), Some(_)) => catalog
+                .validate()
+                .map_err(|_| CodecError::Invalid("invalid generation catalog")),
+            _ => Err(CodecError::Invalid("incomplete generation fact")),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparationLease {
+    pub token: PreparationToken,
+    pub base: GenerationFact,
+    pub format: ObjectFormat,
+    pub observed_at_ms: i64,
+    pub expires_at_ms: i64,
+}
+/// One authorized snapshot of the original attempt and latest catalog. The
+/// attempt's immutable base is a retention floor: every subsequent generation
+/// stays retained until its independent pin is reaped. This query result grants
+/// neither canonical reconciliation nor publication authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparationFrontier {
+    pub lease: PreparationLease,
+    pub current: GenerationFact,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparationDenial {
+    Unauthorized,
+    Conflict,
+    Stale,
+    Expired,
+    Capacity,
+    Missing,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreparationReply {
+    Granted(Box<PreparationLease>),
+    Denied(PreparationDenial),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeginRequest {
+    pub repository: [u8; 16],
+    pub operation: [u8; 16],
+    pub request_digest: [u8; 32],
+    pub actor: String,
+    pub lease_ms: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseCheck {
+    pub token: PreparationToken,
+    pub actor: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseRequest {
+    pub check: LeaseCheck,
+    pub lease_ms: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaintenanceRequest {
+    pub repository: [u8; 16],
+    pub actor: String,
+    pub owner: OwnerFence,
+}
+
+/// Register on the fresh RepositoryModule only, with bounded descriptors for
+/// command IDs 11..14/16..19 and query IDs 15/20/21, plus the existing trusted SQL
+/// query. No separate Cell or compatibility API.
+pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    registry.bind_command::<BeginPreparation>()?;
+    registry.bind_command::<ClaimPreparation>()?;
+    registry.bind_command::<RenewPreparation>()?;
+    registry.bind_command::<AbortPreparation>()?;
+    registry.bind_command::<ReapPreparation>()?;
+    registry.bind_command::<RegisterCatalogAttestation>()?;
+    registry.bind_command::<PublishCatalogRefs>()?;
+    registry.bind_command::<CompleteCatalogPush>()?;
+    registry.bind_query::<CheckCompletedPush>()?;
+    registry.bind_query::<CheckPreparationFrontier>()?;
+    registry.bind_query::<CheckPreparation>()
+}
+#[cfg(test)]
+mod tests;

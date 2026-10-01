@@ -8,46 +8,12 @@ fn worker_error(error: GitHttpError) -> CacheError {
     io::Error::other(error).into()
 }
 
-// Native receive-pack writes v2 indexes. Reject unsupported layouts rather than
-// guessing an inventory and incorrectly skipping authoritative hydration.
-pub(crate) fn index_ids(
-    path: &Path,
-    format: crate::ObjectFormat,
-) -> io::Result<HashSet<crate::ObjectId>> {
-    let data = fs::read(path)?;
-    if data.get(..8) != Some(b"\xfftOc\0\0\0\x02") || data.len() < 1032 {
-        return Err(io::Error::other("unsupported Git pack index"));
-    }
-    let count = u32::from_be_bytes(data[1028..1032].try_into().unwrap()) as usize;
-    let width = if format == crate::ObjectFormat::Sha1 {
-        20
-    } else {
-        32
-    };
-    let end = 1032_usize
-        .checked_add(
-            count
-                .checked_mul(width)
-                .ok_or_else(|| io::Error::other("pack index overflow"))?,
-        )
-        .ok_or_else(|| io::Error::other("pack index overflow"))?;
-    let ids = data
-        .get(1032..end)
-        .ok_or_else(|| io::Error::other("truncated Git pack index"))?;
-    ids.chunks_exact(width)
-        .map(|id| {
-            id.try_into()
-                .map_err(|_| io::Error::other("invalid pack OID"))
-        })
-        .collect()
-}
-
 // Follow physical pack order to retain delta-base locality while verifying large
 // histories. Hash order forces needless repeated decompression of distant bases.
 fn index_order(path: &Path, format: crate::ObjectFormat) -> io::Result<Vec<crate::ObjectId>> {
     let data = fs::read(path)?;
-    let ids = index_ids(path, format)?;
-    let count = ids.len();
+    let validated = crate::git_format::pack_index::PackIndex::open(path, format)?;
+    let count = validated.len() as usize;
     let width = format.bytes();
     let offsets = 1032_usize
         .checked_add(
@@ -164,19 +130,11 @@ impl GitCache {
             let path = cache
                 .git_dir()
                 .join(format!("objects/pack/pack-{}.idx", hex::encode(hash)));
-            let data = fs::read(&path)?;
-            let width = cache.object_format.bytes();
-            if data.len() < width * 2
-                || &data[data.len() - 2 * width..data.len() - width] != hash.as_ref()
-            {
+            let index = crate::git_format::pack_index::PackIndex::open(&path, cache.object_format)?;
+            if index.pack_checksum() != hash {
                 return Err(io::Error::other("index/pack binding mismatch").into());
             }
-            let ids = index_ids(&path, cache.object_format)?;
-            cache
-                .packed
-                .write()
-                .map_err(|_| io::Error::other("verified inventory poisoned"))?
-                .extend(ids);
+            cache.register_checked_index(index)?;
             cache
                 .pack_files
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -302,8 +260,16 @@ impl GitCache {
                 if path.extension().and_then(|v| v.to_str()) != Some("idx") {
                     continue;
                 }
-                let ids = index_ids(&path, cache.object_format)?;
-                if !ids.is_subset(&verified) {
+                let index =
+                    crate::git_format::pack_index::PackIndex::open(&path, cache.object_format)?;
+                let mut approved = true;
+                for oid in index.ids() {
+                    if !verified.contains(&oid?) {
+                        approved = false;
+                        break;
+                    }
+                }
+                if !approved {
                     continue;
                 }
                 let pack = path.with_extension("pack");
@@ -329,18 +295,19 @@ impl GitCache {
                             .map_err(|error| error.error)?;
                     }
                 }
-                retained += ids.len();
+                retained += index.len() as usize;
                 cache
                     .write_generation
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 cache
                     .pack_files
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                cache
-                    .packed
-                    .write()
-                    .map_err(|_| io::Error::other("packed inventory poisoned"))?
-                    .extend(ids);
+                cache.register_index(
+                    &cache.git_dir().join("objects/pack").join(
+                        path.file_name()
+                            .ok_or_else(|| io::Error::other("missing index filename"))?,
+                    ),
+                )?;
             }
             // Caller serializes ingestion/hydration while this operation runs.
             cache.reservation()?.resize(tree_bytes(cache.root())?)?;
@@ -363,7 +330,7 @@ impl GitCache {
         let reserve = self
             .bytes()?
             .checked_add(
-                (self.packed_count() as u64)
+                self.indexed_entries()
                     .checked_mul(96)
                     .ok_or_else(|| io::Error::other("maintenance index estimate overflow"))?,
             )
@@ -492,15 +459,11 @@ impl GitCache {
             }
             let next_copy = Arc::clone(&next);
             tokio::task::spawn_blocking(move || {
-                let ids = index_ids(&pack.with_extension("idx"), next_copy.object_format)?;
-                *next_copy
-                    .packed
-                    .write()
-                    .map_err(|_| io::Error::other("packed inventory poisoned"))? = ids;
+                next_copy.register_index(&pack.with_extension("idx"))?;
                 Ok::<_, io::Error>(())
             })
             .await
-            .map_err(|error| io::Error::other(error))??;
+            .map_err(io::Error::other)??;
             Ok::<_, GitHttpError>(())
         };
         let result = tokio::time::timeout(WORKER_DEADLINE, run)

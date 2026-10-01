@@ -72,6 +72,7 @@ pub struct GitHttpRequest<B = GitInput> {
 }
 
 /// CGI response with a streamed or collected body.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitHttpResponse<B = Vec<u8>> {
     pub status: u16,
     pub headers: Vec<(String, String)>,

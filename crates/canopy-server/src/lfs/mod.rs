@@ -45,7 +45,7 @@ pub enum LfsError {
     #[error("LFS Cell operation failed")]
     Cell(#[source] Box<dyn StdError + Send + Sync>),
     #[error("LFS object store failed")]
-    Store(#[from] object_store::Error),
+    Store(#[source] object_store::Error),
     #[error("LFS request body failed")]
     Body(#[from] axum::Error),
     #[error("LFS transfer timed out")]
@@ -67,6 +67,16 @@ pub enum LfsError {
 }
 
 /// Repository-scoped LFS transfer service.
+impl From<object_store::Error> for LfsError {
+    fn from(error: object_store::Error) -> Self {
+        if crate::external::is_corruption(&error) {
+            Self::Corrupt
+        } else {
+            Self::Store(error)
+        }
+    }
+}
+
 pub struct LfsService {
     repository: Arc<RepositoryCell>,
     store: Arc<dyn ObjectStore>,

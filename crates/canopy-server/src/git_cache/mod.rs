@@ -21,6 +21,9 @@ use crate::{
 
 pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
+mod artifacts;
+mod cleanup;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
     #[error("Git cache HEAD must name a valid branch")]
@@ -55,7 +58,7 @@ pub(crate) struct GitCache {
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
-    packed: RwLock<HashSet<crate::ObjectId>>,
+    packed: RwLock<Vec<crate::git_format::pack_index::PackIndex>>,
     durable_packs: RwLock<HashSet<[u8; 32]>>,
     pub(crate) selection: Mutex<()>,
     pub(crate) prepared: Mutex<BTreeSet<(crate::ObjectId, bool)>>,
@@ -95,7 +98,7 @@ impl GitCache {
                 reservation: Some(budget.try_reserve(0)?),
                 objects,
                 object_writes: OnceLock::new(),
-                packed: RwLock::new(HashSet::new()),
+                packed: RwLock::new(Vec::new()),
                 durable_packs: RwLock::new(HashSet::new()),
                 selection: Mutex::new(()),
                 prepared: Mutex::new(BTreeSet::new()),
@@ -198,13 +201,15 @@ impl GitCache {
     }
 
     fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
-        if self
+        for index in self
             .packed
             .read()
             .map_err(|_| io::Error::other("packed inventory poisoned"))?
-            .contains(&oid)
+            .iter()
         {
-            return Ok(true);
+            if index.contains(oid)? {
+                return Ok(true);
+            }
         }
         match fs::symlink_metadata(self.object_path(oid)) {
             Ok(metadata) if metadata.is_file() => Ok(true),
@@ -306,11 +311,6 @@ impl GitCache {
                 .persist_noclobber(destination)
                 .map_err(|error| error.error)?;
             cache
-                .packed
-                .write()
-                .map_err(|_| io::Error::other("verified inventory poisoned"))?
-                .insert(oid);
-            cache
                 .loose_objects
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             cache
@@ -373,11 +373,6 @@ impl GitCache {
                 .persist_noclobber(destination)
                 .map_err(|error| error.error)?;
             cache
-                .packed
-                .write()
-                .map_err(|_| io::Error::other("verified inventory poisoned"))?
-                .insert(oid);
-            cache
                 .loose_objects
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             cache
@@ -429,8 +424,44 @@ impl GitCache {
         .await?
     }
 
-    pub(crate) fn packed_count(&self) -> usize {
-        self.packed.read().expect("packed inventory poisoned").len()
+    /// Physical index entries, including duplicates across packs. This is an
+    /// admission/telemetry bound, never a proof of canonical object coverage.
+    pub(crate) fn indexed_entries(&self) -> u64 {
+        self.packed
+            .read()
+            .expect("packed inventory poisoned")
+            .iter()
+            .fold(0_u64, |count, index| {
+                count.saturating_add(u64::from(index.len()))
+            })
+            .saturating_add(
+                self.loose_objects
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+    }
+
+    fn register_index(&self, path: &Path) -> io::Result<()> {
+        self.register_checked_index(crate::git_format::pack_index::PackIndex::open(
+            path,
+            self.object_format,
+        )?)
+    }
+
+    fn register_checked_index(
+        &self,
+        index: crate::git_format::pack_index::PackIndex,
+    ) -> io::Result<()> {
+        let mut indexes = self
+            .packed
+            .write()
+            .map_err(|_| io::Error::other("packed inventory poisoned"))?;
+        if !indexes
+            .iter()
+            .any(|present| present.pack_checksum() == index.pack_checksum())
+        {
+            indexes.push(index);
+        }
+        Ok(())
     }
 }
 
@@ -443,6 +474,19 @@ impl Drop for GitCache {
         if let Err(error) = cleanup()
             && error.kind() != io::ErrorKind::NotFound
         {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                // Another short-lived fork may still hold an inherited lock.
+                // Orphan descendants can retain it longer. Defer reclamation
+                // without releasing this generation's admission or alternates.
+                self.directory.disable_cleanup(true);
+                cleanup::Cleanup {
+                    path: self.root().to_path_buf(),
+                    reservation: self.reservation.take(),
+                    objects: self.objects.take(),
+                }
+                .defer();
+                return;
+            }
             tracing::error!(path = %self.root().display(), error = %error, "Git cache cleanup failed; disk admission retained until process restart");
             // Releasing capacity while files remain would undercount disk use.
             // Quarantine this reservation for the remaining process lifetime.

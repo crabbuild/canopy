@@ -212,6 +212,25 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
         offset += bytes.len();
     }
     assert_eq!(offset, body.len());
+    struct BlobSink;
+    impl EdgeSink for BlobSink {
+        async fn append(
+            &mut self,
+            _: crate::ObjectId,
+            _: &[crate::packs::metadata::TypedEdge],
+        ) -> Result<(), ObjectReadError> {
+            Err(ObjectReadError::Malformed)
+        }
+    }
+    let mut verifier = crate::packs::verification::CanonicalVerifier::new(
+        &directory.path().join(".git"),
+        oid.format(),
+    )?;
+    let canonical = verifier.inspect(oid, &mut BlobSink).await?;
+    assert_eq!(canonical.size, body.len() as u64);
+    assert_eq!(canonical.kind, ObjectKind::Blob);
+    assert_eq!(canonical.digest, *blake3::hash(&body).as_bytes());
+    verifier.finish().await?;
     Ok(())
 }
 
@@ -241,5 +260,49 @@ async fn missing_walk_streams_requested_history_without_unrelated_blobs() -> Tes
     }
     walk.finish().await?;
     assert_eq!(found, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn streamed_inspection_rejects_hash_mismatch_partial_bodies_bad_separators_and_invalid_graphs()
+-> TestResult {
+    struct NoEdges;
+    impl EdgeSink for NoEdges {
+        async fn append(
+            &mut self,
+            _: crate::ObjectId,
+            _: &[crate::packs::metadata::TypedEdge],
+        ) -> Result<(), ObjectReadError> {
+            Ok(())
+        }
+    }
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let body = b"canonical bytes";
+        let oid = crate::object_id(format, ObjectKind::Blob, body);
+        for (bytes, size, separator) in [
+            (&b"incorrect bytes"[..], body.len(), b'\n'),
+            (&body[..2], body.len(), b'\n'),
+            (&body[..], body.len(), b'X'),
+            (&body[..], 1, b'\n'),
+        ] {
+            let mut frame = format!("{} blob {size}\n", hex::encode(oid)).into_bytes();
+            frame.extend_from_slice(bytes);
+            frame.push(separator);
+            let mut input = frame.as_slice();
+            let object = open_object(&mut input, oid).await?;
+            assert!(object.inspect_graph(&mut NoEdges).await.is_err());
+        }
+        let body = b"100644 unfinished";
+        let oid = crate::object_id(format, ObjectKind::Tree, body);
+        let mut frame = format!("{} tree {}\n", hex::encode(oid), body.len()).into_bytes();
+        frame.extend_from_slice(body);
+        frame.push(b'\n');
+        let mut input = frame.as_slice();
+        let object = open_object(&mut input, oid).await?;
+        assert!(matches!(
+            object.inspect_graph(&mut NoEdges).await,
+            Err(ObjectReadError::Malformed)
+        ));
+    }
     Ok(())
 }

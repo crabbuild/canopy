@@ -171,6 +171,17 @@ pub(crate) struct GitObjects {
     inventory: Option<std::vec::IntoIter<crate::ObjectId>>,
     batch: Process,
     requests: ChildStdin,
+    // A canceled/failed streamed inspection leaves a partial native frame.
+    // Never reuse that process for another object or a successful finish.
+    inspection_failed: bool,
+}
+
+pub trait EdgeSink: Send {
+    fn append(
+        &mut self,
+        parent: crate::ObjectId,
+        edges: &[crate::packs::metadata::TypedEdge],
+    ) -> impl std::future::Future<Output = Result<(), ObjectReadError>> + Send;
 }
 
 impl GitObjects {
@@ -186,6 +197,7 @@ impl GitObjects {
             inventory: None,
             batch,
             requests,
+            inspection_failed: false,
         })
     }
 
@@ -193,16 +205,53 @@ impl GitObjects {
         git_dir: &Path,
         ids: Vec<crate::ObjectId>,
     ) -> Result<Self, ObjectReadError> {
+        let mut objects = Self::batch(git_dir)?;
+        objects.inventory = Some(ids.into_iter());
+        Ok(objects)
+    }
+
+    /// Persistent native reader with caller-owned bounded index iteration.
+    /// Verification uses an isolated admitted object directory without alternates.
+    pub(crate) fn batch(git_dir: &Path) -> Result<Self, ObjectReadError> {
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
         Ok(Self {
             walk: None,
-            inventory: Some(ids.into_iter()),
+            inventory: None,
             batch,
             requests,
+            inspection_failed: false,
         })
     }
 
+    /// Streams canonical hashing and typed structural extraction. Sink writes
+    /// are private preparation; discard them if this returns an error or is
+    /// canceled. Pack binding and graph closure remain verifier obligations.
+    pub(crate) async fn inspect_graph(
+        &mut self,
+        oid: crate::ObjectId,
+        sink: &mut impl EdgeSink,
+    ) -> Result<crate::packs::metadata::CanonicalObject, ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
+        self.inspection_failed = true;
+        let object = timeout(IO_TIMEOUT, async {
+            self.requests
+                .write_all(format!("{}\n", hex::encode(oid)).as_bytes())
+                .await?;
+            open_object(&mut self.batch.output, oid).await
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)??;
+        let canonical = object.inspect_graph(sink).await?;
+        self.inspection_failed = false;
+        Ok(canonical)
+    }
+
     pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
         if let Some(inventory) = &mut self.inventory {
             return Ok(inventory.next());
         }
@@ -217,6 +266,9 @@ impl GitObjects {
         &mut self,
         oid: crate::ObjectId,
     ) -> Result<GitObject<'_, BufReader<ChildStdout>>, ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
         timeout(IO_TIMEOUT, async {
             self.requests
                 .write_all(format!("{}\n", hex::encode(oid)).as_bytes())
@@ -228,6 +280,9 @@ impl GitObjects {
     }
 
     pub(crate) async fn finish(self) -> Result<(), ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
         timeout(IO_TIMEOUT, async move {
             if let Some(walk) = self.walk {
                 walk.finish().await?;
@@ -271,6 +326,58 @@ pub(crate) struct GitObject<'a, R> {
 }
 
 impl<R: AsyncRead + Unpin> GitObject<'_, R> {
+    async fn inspect_graph(
+        mut self,
+        sink: &mut impl EdgeSink,
+    ) -> Result<crate::packs::metadata::CanonicalObject, ObjectReadError> {
+        use crate::{
+            graph::stream::{CHUNK_BYTES, EdgeParser},
+            packs::metadata::{CanonicalObject, PAGE_OBJECTS},
+        };
+        let mut canonical =
+            crate::git_format::ObjectHasher::new(self.oid.format(), self.kind, self.size);
+        let mut hash = blake3::Hasher::new();
+        let mut parser = EdgeParser::new(self.oid.format(), self.kind);
+        let mut buffer = vec![0; CHUNK_BYTES];
+        // A bounded input chunk plus one crossing record bounds occurrences.
+        // Repository size, wide trees and repeated parents do not grow this Vec.
+        let max_edges = CHUNK_BYTES / (self.oid.len() + 4) + 1;
+        let mut edges = Vec::with_capacity(max_edges);
+        loop {
+            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+            if count == 0 {
+                break;
+            }
+            canonical.update(&buffer[..count]);
+            hash.update(&buffer[..count]);
+            edges.clear();
+            parser
+                .feed(&buffer[..count], |edge| edges.push(edge))
+                .map_err(|_| ObjectReadError::Malformed)?;
+            if edges.len() > max_edges {
+                return Err(ObjectReadError::Malformed);
+            }
+            for batch in edges.chunks(PAGE_OBJECTS) {
+                timeout(IO_TIMEOUT, sink.append(self.oid, batch))
+                    .await
+                    .map_err(|_| ObjectReadError::Timeout)??;
+            }
+        }
+        parser.finish().map_err(|_| ObjectReadError::Malformed)?;
+        let result = CanonicalObject {
+            oid: self.oid,
+            kind: self.kind,
+            size: self.size,
+            digest: *hash.finalize().as_bytes(),
+        };
+        self.finish().await?;
+        if canonical.finalize() != result.oid {
+            return Err(ObjectReadError::Malformed);
+        }
+        Ok(result)
+    }
     /// Verify a packed body with constant memory, including oversized blobs.
     pub(crate) async fn fingerprint(mut self) -> Result<[u8; 32], ObjectReadError> {
         let expected = self.oid;

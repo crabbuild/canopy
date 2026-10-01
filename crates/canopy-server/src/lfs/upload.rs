@@ -23,7 +23,7 @@ pub(super) async fn receive(
     let result = async {
         let body = parts(&mut upload, oid, body, declared, admission.clone()).await?;
         let parts_digest = upload
-            .publish_lfs(&lfs_path(repository_id, &oid), body.size, &body.digests)
+            .publish_hashed(&lfs_path(repository_id, &oid), body.size, &body.digests)
             .await?;
         let object = LfsObject {
             sha256: oid,

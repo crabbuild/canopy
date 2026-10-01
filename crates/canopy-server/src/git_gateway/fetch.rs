@@ -175,55 +175,10 @@ impl GitGateway {
                 .lock()
                 .await
                 .extend(roots.iter().map(|oid| (*oid, unfiltered)));
-            if unfiltered && through == 0 {
-                // Count a covering OID index, not the large body table. A cache
-                // inventory consists exclusively of verified durable IDs. Equal
-                // cardinality therefore proves the entire captured Cell is warm.
-                let result = self
-                    .repository
-                    .sql
-                    .query(
-                        None,
-                        SqlBatch {
-                            statements: vec![
-                                SqlStatement {
-                                    sql: "SELECT COUNT(oid) FROM objects".into(),
-                                    parameters: vec![],
-                                },
-                                SqlStatement {
-                                    sql: "SELECT COALESCE(MAX(sequence), 0) FROM objects".into(),
-                                    parameters: vec![],
-                                },
-                            ],
-                        },
-                    )
-                    .await
-                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-                if let (Some([SqlValue::Integer(count)]), Some([SqlValue::Integer(high_water)])) = (
-                    result
-                        .output
-                        .first()
-                        .and_then(|set| set.rows.first())
-                        .map(Vec::as_slice),
-                    result
-                        .output
-                        .get(1)
-                        .and_then(|set| set.rows.first())
-                        .map(Vec::as_slice),
-                ) {
-                    if usize::try_from(*count).ok() == Some(shared.packed_count()) {
-                        // Never invert build_cache's lock order by waiting here.
-                        if let Ok(mut objects) = self.objects.try_lock() {
-                            if let Some(objects) = objects
-                                .as_mut()
-                                .filter(|objects| Arc::ptr_eq(&objects.cache, &shared))
-                            {
-                                objects.through = objects.through.max(*high_water);
-                            }
-                        }
-                    }
-                }
-            }
+            // Per-root preparation above is a coverage certificate. Physical
+            // index counts include cross-pack duplicates and cannot certify a
+            // whole-repository watermark. Durable covering packs are handled by
+            // hydrate_selected using their committed covered_through metadata.
             return Ok(());
         }
         // Use the same native filter as upload-pack. Structure is present, so

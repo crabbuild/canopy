@@ -34,6 +34,10 @@ mod ref_snapshots;
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
 -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("canopy_server=warn")
+        .with_test_writer()
+        .try_init();
     let application = Arc::new(CanopyApplication::compile(build_descriptor(
         include_bytes!("../../../../Cargo.lock"),
         "smart-http-test",
