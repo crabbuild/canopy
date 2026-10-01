@@ -628,6 +628,57 @@ errors and sampling gaps remain in `provider-samples.jsonl`. Docker's raw displa
 units and rounding are retained. These container samples are not whole-VM CPU,
 S3 request cost or exact per-window wire-byte counts; `NetIO` is cumulative.
 
+### Provider request counters without a restart
+
+The dedicated RustFS instance exposes signed, read-only console metrics at
+`GET /rustfs/admin/v3/metrics?n=1&types=512`. This is NDJSON, not a Prometheus
+endpoint. The image's labelled revision documents the
+[authenticated handler](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/rustfs/src/admin/handlers/metrics.rs)
+and [HTTP-only metric selection](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/crates/ecstore/src/services/metrics_realtime.rs).
+An actual signed read returned HTTP 200 and S3 operation/outcome counters;
+no telemetry configuration change or provider restart was needed.
+
+`scripts/provider_requests.py` records bounded snapshots and deltas by HTTP
+method, S3 operation and outcome. It verifies the bound container, image, start
+time and restart count around each read. Missing/decreasing series, restarted
+providers and failed reads leave an incomplete receipt with earlier samples
+retained. Credentials go to curl on stdin, never command arguments; only explicit
+loopback HTTP endpoints are accepted, without redirects or proxy configuration.
+This helper is scoped to the dedicated `three-node-candidate-e07670e` fixture.
+
+```sh
+# Disposable fixture credentials must already be in the environment.
+python3 -B scripts/provider_requests.py \
+  --binding /dedicated-volume/candidate-binding.json \
+  --docker-config /path/to/disposable-docker-config \
+  --docker-host unix:///path/to/docker.sock \
+  --output-dir /dedicated-volume/new-provider-request-observation \
+  --samples 12 --interval 5
+```
+
+Counts include background work and retries. Unknown labels and non-2xx outcomes
+are retained: a provider 4xx can be a conditional-write rejection or missing
+object, not necessarily a failed Canopy operation. Observer overhead is not
+subtracted. The pinned [request-counter implementation](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/crates/io-metrics/src/s3_http_metrics.rs)
+counts once at response headers, service error or cancellation; later body-stream
+failures are outside this counter. Snapshots are not atomic across series.
+These counts are request-volume evidence, not billed dollars,
+request latency, wire bytes or operation-attributed cost. Seed-load observations
+cannot close matched load-window accounting.
+
+Seven provider-reader tests cover signed-read isolation, schema/outcome labels,
+new series, counter reset/disappearance, restart/identity boundaries and retained
+partial failures. All 66 harness tests passed on Python 3.12 and 3.14. Retained
+candidate-volume logs `python312-provider-final-suite.log` and
+`python314-provider-final-suite.log` have SHA-256
+`027b64abca6de9f9cf0aa52b0bacf83c4862e9e5b466b514ff939f102f5d27e0`
+and `6b4e22260518592ec0de75175f356aed856738c1c76fb5c157bb3fa4ee70ead6`.
+Both full hosted workflows for the preceding `59a7307` commit also completed
+successfully, including Rust tests, RustFS compatibility and server build:
+[36797898373](https://github.com/crabbuild/canopy/actions/runs/36797898373)
+and [36797902238](https://github.com/crabbuild/canopy/actions/runs/36797902238).
+Those earlier runs did not include this new provider reader.
+
 `push_branch` reuses one commit and therefore measures ref publication, not fresh
 pack ingestion. `push_commit` clones prepared base objects locally, creates a new
 child of the original corpus tip, and sends a distinct payload on a unique ref.
