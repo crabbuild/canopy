@@ -113,8 +113,12 @@ async fn slow_deployment_read_does_not_block_node_lease_renewal() -> Result {
 async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
-    let address = available_address().await?;
-    let settings = config(address, files.path().join("node"));
+    let competing_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = competing_listener.local_addr()?;
+    let mut settings = config(address, files.path().join("node"));
+    // Bind only when preflight finishes; an address observed before the
+    // 31-second pause is not a reservation against parallel tests.
+    settings.listen.set_port(0);
     let layout = cellule_runtime::ltx::CellStorageLayout::new(
         cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
@@ -123,6 +127,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     *store.read.lock().unwrap() = Some((layout.release_path(), 1));
     let startup = tokio::spawn(CanopyServer::start(settings, store.clone()));
     store.wait().await?;
+    // Keep the originally selected port occupied throughout startup so this
+    // regression cannot pass by merely winning the released-port race.
     // Deployment validation happens before this node owns any Cell. Its I/O
     // must not spend the node authority lease used by subsequent startup.
     tokio::time::sleep(Duration::from_secs(31)).await;
@@ -133,6 +139,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     )?;
     store.proceed.notify_one();
     let server = timeout(Duration::from_secs(10), startup).await???;
+    let actual_address = server.local_addr();
+    assert_ne!(actual_address, address);
     let initial = store
         .initial_advertisement
         .lock()
@@ -143,8 +151,9 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
         .as_str()
         .ok_or("advertisement issue time missing")?
         .parse::<i64>()?;
-    create_repository(address, "after-slow-preflight").await?;
+    create_repository(actual_address, "after-slow-preflight").await?;
     server.shutdown().await?;
+    drop(competing_listener);
     assert!(
         issued >= preflight_finished,
         "preflight consumed the initial node lease"

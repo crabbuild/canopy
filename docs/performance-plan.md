@@ -6,7 +6,11 @@ dependency candidate is `e07670e2348231ed401cc7280a47e3ab97596ffe`, fetched from
 `origin/main` during the [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md#prepare-the-next-upstream-candidate).
 One hosted workflow passed its build, workspace tests and isolated RustFS
 qualification; a sibling failed a delayed-startup test with `AddrInUse`.
-Local three-node end-to-end and matched performance verification remain open.
+That fixture race was reproduced and repaired without changing production
+authority checks; all four lease lifecycle tests passed locally. A separately
+bound production release passed 17 critical stock-Git checks through three
+nodes and a proxy against RustFS. Its new 10,000-repository seed is in progress;
+complete-corpus recovery and matched performance verification remain open.
 The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
 and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
 That baseline stopped after 20 fully bound windows and one interrupted creation

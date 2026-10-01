@@ -65,8 +65,10 @@ server build. Its [sibling workflow](https://github.com/crabbuild/canopy/actions
 failed `lifecycle::lease::startup_preflight_does_not_consume_the_node_lease`
 with `AddrInUse`; provider qualification and build were skipped in that job.
 Both used source `a2c59a3`; neither is a local three-node performance comparison.
-Local candidate verification remains open; the measurements in this document use the retained
-`70bd25f` binary, not the new source pin.
+The candidate's local release build and 17-step critical Git check now passed.
+Its 10,000-repository seed is in progress; full-corpus recovery and matched load
+remain open. The baseline measurements below use the retained `70bd25f` binary,
+not the new source pin.
 
 The intervening commits add [fenced route reuse and coalesced owner discovery](https://github.com/crabbuild/cellule/pull/32)
 and [single-enrollment-read follower append authorization](https://github.com/crabbuild/cellule/pull/31).
@@ -75,6 +77,51 @@ not a measured fix. The baseline's scripts, binary and provider configuration
 were unchanged during load. CI verification can run independently; local compilation,
 fresh-state recovery and matched performance comparisons must follow the
 recorded baseline and produce their own artifact bindings.
+
+### Bind the local candidate separately
+
+The locked production release built with one Cargo job in 578.311 seconds.
+Its production source binding is `5165e075`, equivalent to merged `d8a6e114`
+for the bound manifests, lockfile and production files. Build time is setup
+evidence, not server throughput. Cargo integration tests can overwrite
+`target/release/canopy` with a test-feature variant, so the fleet uses a retained
+immutable copy of the original production executable, not that mutable path.
+
+| Candidate input or gate | Evidence / status |
+| --- | --- |
+| Cellule revision | `e07670e2348231ed401cc7280a47e3ab97596ffe` |
+| Production executable SHA-256 | `e90728c60cbb941cc8caa1c698bc24bcf6edda1935d98853f0c0319933668f16` |
+| RustFS | New container `canopy-candidate-rustfs-w0sfigmz`, same pinned ARM64 manifest as the baseline, two CPU quota / 2 GiB memory; fresh bucket and prefix |
+| Fleet | Three new node identities/directories behind one proxy; unchanged 100-entry admission and 1.5 GiB configured local disk limit per node |
+| Critical Git behavior | All 17 steps passed: atomic publication/refusal, mixed refusal, correct/stale force-with-lease, shallow/deepen/unshallow, filtered lazy fetch v0/v2, new-object push, fast-forward pull, deletion/pruning, mirror push, credential refusal and exact mirror inventories with strict full fsck |
+| Corpus setup | New 10,000 identities with 100 two-commit Git and 1 MiB LFS fixtures requested; seed in progress, not yet complete |
+| Recovery and performance | Candidate owner-loss, full-corpus recovery, scheduled load and matched comparisons remain unqualified |
+
+Artifacts are retained under `canopy-e07670e-candidate-W0SFiGMz` on the
+qualification volume:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `build.json` | `f4a8b63fede3fc0556f9d956513bbe9fc85ad3db9ec8b9f3421aba7aae4f6e9b` |
+| `candidate-binding.json` | `9f4be2686d6f74fe1c8f45ae6b2afa6b6e9d108d7a3b4ddde5839e0d0e9ec517` |
+| `fleet-candidate-matched/ready.json` | `975088199e3d1b2ba1aa6ce234253915dca0dd885566843bcc88f29413232822` |
+| `critical-candidate.json` | `48fc4f70c291aa3770d4cf093c3945603ddcaf3ef393a7ded3f66e10139fb9dd` |
+
+The candidate's two critical repositories are separate from its density corpus:
+`910d4eae-ca4a-4495-bb10-06a8cd9e9d23` and
+`092a2349-8cf8-44ed-8b31-43ccae05d7d5`. The receipt binds the executable and
+driver digests. Compound functional-step durations are not scheduled operation
+latency or throughput. A separate observer retains provider gauges and node
+RSS/cumulative CPU during seeding; it excludes native Git child CPU and does not
+measure S3 API cost.
+
+Failed setup remains visible. `fleet-candidate-seed` failed its storage probe
+with `NotFound` before readiness; the cause is not isolated. After explicit
+bucket readiness, `fleet-candidate-ready` started a test-feature executable,
+then all three nodes shut down gracefully with exit 0 before any corpus was
+seeded. Neither setup is qualification evidence. The current fleet uses the
+immutable production artifact and its own binding. Successful setup does not
+erase the earlier baseline's failed full-corpus recovery.
 
 ## Retain failed setup and incomplete work
 
@@ -316,7 +363,7 @@ repository resident. These measurements occurred while the separate candidate
 build ran on the shared host: they are neither a cold recovery retry nor a warm
 reference-capacity result. The failed full-corpus record remains unchanged.
 
-The new dependency build uses a separate artifact-volume target directory and
+The new dependency build used a separate artifact-volume target directory and
 one Cargo build job; it does not replace any running server or recreate a
 workspace `target` directory. Release admission binds the Cargo lockfile and
 compiled release. The new binary therefore requires its own fresh prefix;
@@ -324,6 +371,12 @@ old-release migration is unsupported and admission must not be bypassed to
 reuse the baseline's store. The original 10,000 identities and creation ACKs
 remain retained for baseline recovery diagnosis, not reseeded as a passing
 replacement.
+
+After preserving the failed recovery and diagnostic probes, all three baseline
+recovery nodes drained gracefully with exit 0 and confirmed process absence.
+`failed-recovery-drain.json` records the boundary. The dedicated baseline RustFS
+container was then stopped, not deleted; its durable data and node artifacts
+remain available for diagnosis. The independent user UI preview stays running.
 
 ### Diagnosis boundaries
 
@@ -339,9 +392,24 @@ and fencing checks remain unchanged.
 
 The mixed hosted CI result is a separate problem: the delayed-startup test
 obtains and releases an ephemeral listener before its 31-second pause, then
-binds that same address at startup. `AddrInUse` is consistent with reuse by a
-parallel test; it is not evidence that the lease assertion failed. A
-deterministic occupied-port reproduction and fixture repair are still required.
+binds that same address at startup. Holding a competing listener on the released
+port reproduced `AddrInUse` in the exact test after the original 31-second
+pause. The fixture now holds its initially selected port and requests port zero
+for the server, then uses `server.local_addr()` and asserts that the server
+bound a different port. This also avoids a released-port race in the regression
+itself. The 31-second pause, advertisement issue-time assertion, real repository
+creation and production authority/fencing behavior are unchanged.
+
+The final exact test passed in 31.17 seconds; all four lease lifecycle tests
+passed together in 35.24 seconds (100 other integration tests filtered out).
+This is fixture verification, not a local full-workspace or performance pass.
+Retained candidate-directory logs bind the failure and final results:
+
+| Test log | SHA-256 |
+| --- | --- |
+| `startup-port-race-reproduction.log`, failed | `19a99536e5c7a119fd0a675b64e7b171c25fb5918e34560c2e8f933061c24c7f` |
+| `startup-port-race-atomic-fixed.log`, passed | `585d00b55b4f4ceedf05a216df20635c347d330e86305efb47f20cea0475e04d` |
+| `lease-suite-after-fixture-fix.log`, four passed | `27c4a6d42108bd57ac8c006d48f5b39b28ceb473454bc80d41eb40adced8bf28` |
 
 ## Measure the requested operations
 
