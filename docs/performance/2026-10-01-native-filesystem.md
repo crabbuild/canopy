@@ -1,6 +1,6 @@
 # Compare RustFS filesystem backing
 
-**Status: full native seed and initial owner-loss recovery passed; replacement load preflight running; performance unqualified.**
+**Status: full native seed and initial recovery passed; V2 load failed after RustFS cgroup OOM; fresh 4-GiB full recovery running; performance unqualified.**
 This shared-Mac/Colima diagnostic keeps the 10,000-repository target. It tests
 filesystem backing without replacing the bound runtime or weakening correctness.
 
@@ -131,8 +131,8 @@ sending signals, followed by a fresh **32.040-second** conservative wait.
 The replacement fleet is now its own persistent foreground server session,
 not a child of a finite recovery controller. It uses new node IDs, signing keys
 and local directories, but the same executable, deployment, provider, corpus,
-admission and deadlines. Its full mandatory preflight was live at the
-3,500-identity checkpoint; no timed window had started at that checkpoint.
+admission and deadlines. Its mandatory preflight subsequently passed all
+10,000 identities and all 100 Git v0/v2/LFS fixtures before timed load began.
 The unchanged 108-window attempt has a new output directory. It neither resumes
 the failed attempt nor removes a failing window.
 
@@ -152,7 +152,7 @@ windows; they are shared-host work, not service performance proof.
 
 ### Arm every-ACK recovery without shortening the load
 
-A separately bound post-load controller is live in `wait_bound_load`. Its
+A separately bound post-load controller was armed in `wait_bound_load`. Its
 read-only live binding check and four offline guard tests passed. During load
 it only inspects the two bound process identities every 15 seconds; it does not
 poll provider state or send additional Git traffic. This still adds some host
@@ -181,8 +181,121 @@ verifier does not orphan an attached fixture. Critical fixtures, full seeded
 corpus, acknowledged creations and acknowledged Git/LFS writes have separate
 verification stages; one failed stage does not skip the other scopes. Counts
 must match the audited ACK ledgers. There are no retries or failed-arrival
-rollback assertions. This controller is armed, not completed, and a recovery
-pass cannot turn a failed performance campaign into a pass.
+rollback assertions. This controller was armed, not completed, and a recovery
+pass cannot turn a failed performance campaign into a pass. In the actual V2
+attempt, RustFS OOM changed the provider boundary, so this controller stopped
+before any owner-loss or recovery action. Its closed failure receipt is retained.
+
+### Retain the V2 OOM and all failed arrivals
+
+All three repetitions below offered 20 metadata requests/s for 120 seconds,
+uniformly across 100 repositories, with concurrency 32. Latencies include every
+scheduled arrival, including failures and driver drops; throughput counts only
+successes completed inside the offered window.
+
+| Repetition | Outcomes (2,400 offered) | Successful requests/s | p50 / p95 / p99 (ms) |
+| --- | --- | --- | --- |
+| 1 | 2,400 OK | 19.983 | 59.220 / 463.515 / 1,511.428 |
+| 2 | 2,400 OK | 20.000 | 49.283 / 131.151 / 205.672 |
+| 3 | 2,328 OK; 29 driver busy; 43 HTTP 503 | 19.400 | 62.648 / 808.954 / 16,883.284 |
+
+The independent audits bind complete arrival sequences, deterministic selection,
+latencies and resource boundaries. First-scheduled-hit/time-bin diagnostics
+support cold activation contributing to the first tail, but do not explain the
+whole failure. These groups do not replace the all-arrival metrics. Installed
+CPython asyncio already sets TCP_NODELAY; no proxy-flag optimization is supported.
+Small offline audits ran on the shared host during load and add overhead.
+
+The scoped Docker stream recorded OOM at **05:01:19.533453747 UTC** on
+2026-10-01, followed by container death. Docker reported `OOMKilled=true`,
+exit 137 and zero restarts. The VM kernel independently identified
+`CONSTRAINT_MEMCG` for the exact fixture cgroup and killed `rustfs` PID 12755
+with 1,976,556 KiB anonymous RSS and 83,976 KiB file RSS. The VM had no swap;
+a configured 4-GiB `MemorySwap` value did not provide usable swap. This proves
+provider cgroup OOM, not a Cellule bottleneck, RustFS allocation mechanism,
+or the cause of the earlier Mac-backed failure.
+
+After preserving that boundary, only the verified campaign PID 82894 received
+SIGINT. The final record contains:
+
+| Scope | Retained accounting |
+| --- | --- |
+| Six closed windows | 14,400 arrivals: 7,128 OK, 29 driver busy, 403 HTTP 503, 6,840 transport errors |
+| Interrupted seventh window | Exact 991-arrival sequence prefix, all transport errors; resource boundary incomplete |
+| Original matrix | 108 declared: six closed, one interrupted, 101 unstarted |
+| Load-write ACKs | Zero: no creation, push or LFS upload window started |
+
+The partial prefix does not fabricate outcomes for its remaining 1,409 declared
+arrivals. The generic whole-campaign auditor rejects its orphan ledger; a
+separate reconciliation audits the six closed ledgers and retains the exact
+interrupted prefix. Neither turns this into a completed or passing matrix.
+The diagnostic sidecar closed with 261 probe errors; gaps remain unqualified.
+
+### Change only the provider memory envelope for the next diagnostic
+
+After both controllers actually exited, a guarded batch sent SIGKILL to the
+three old owners (80868/80928/80936). All exited -9 without forced fallback.
+Recorded launcher/owner absence was followed by a **32.033208-second** wait.
+The original OOM state, kernel evidence and all failed ledgers remain preserved.
+
+Only the owned, stopped provider's `HostConfig.Memory` changed: **2 → 4 GiB**.
+CPU quota remains two; image, complete container Config, durable local volume,
+other HostConfig values, binary, corpus, node admission and deadlines are
+unchanged. The same container restarted at `2026-10-01T05:17:59.758811988Z`.
+Its dynamic loopback endpoint changed from port 32787 to **32799**; a new
+binding records that start/endpoint/resource envelope. The old trial and binding
+were not overwritten. No data, unrelated container or UI service was removed.
+
+```mermaid
+flowchart LR
+    failed[2 GiB V2 OOM<br/>failed ledgers retained] --> loss[Verified owner loss<br/>absence + 32.033s]
+    loss --> provider[Same data/image/2 CPUs<br/>new 4 GiB envelope]
+    provider --> fresh[Independent fleet<br/>fresh owners/local directories]
+    fresh --> verify[Full 10000/100 + critical 2<br/>no retry or reseed]
+    verify --> next[New complete 108-window attempt<br/>only after full recovery passes]
+```
+
+The new independent foreground fleet started at 05:19:35 UTC with fresh owner
+IDs. Both critical repositories have passed four exact ref inventories, bytes,
+notes and strict full fsck. The full 10,000-identity/100-fixture verifier is
+running with four workers, 30-second HTTP and 120-second Git deadlines.
+Cgroup current/max/peak/events/stat, CPU and shared-VM pressure are retained
+with raw file order and host-monotonic probe bounds. These non-atomic snapshots
+and self/reaped-child CPU are diagnostics, not live-child or priced cost proof.
+The 4-GiB change is not yet a verified fix and cannot qualify the failed 2-GiB
+attempt or demonstrate a code improvement.
+
+A separate read-only controller is now armed in `wait_bound_full_recovery`.
+Its live binding check and two offline tests (23 rejection cases) passed.
+It waits for the exact verifier's actual exit, rereads its terminal receipt,
+checks full 10K/100, critical-2, original deadlines and closed sidecar digests,
+then starts a **new entire 108-window attempt**, including mandatory preflight,
+in a new directory. It sends no signals and changes no provider settings.
+An incomplete recovery, PID reuse, changed provider/source, reused output or
+shortened plan prevents launch. It is waiting, not a load or recovery pass.
+
+At 05:40:44 UTC, the recovery sidecar had 132 samples: cgroup memory had reached
+the 4-GiB limit, anonymous memory was 1,658,716,160 bytes and file memory was
+1,831,895,040 bytes, with zero observed OOM kills. The separate process probe
+identified PID 1 as RustFS with 1,620,432 KiB anonymous RSS. Its signed `types=1`
+console response was **scanner metrics, not allocator metrics**: a deep scan
+was active, with 98,771 objects and 130,058 directories scanned. The raw response
+is retained without relabelling it as allocation evidence. Reclaim counters
+show pressure, but RSS does not distinguish live allocations from freed pages
+retained by the allocator; scanner activity is not a proven root cause.
+
+The source at the image-reported revision `d47f54b` already
+[defaults allocator reclaim to enabled](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/crates/config/src/constants/runtime.rs)
+and [makes object-cache memory resolution container-aware](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/crates/object-data-cache/src/runtime_memory.rs).
+Those defaults are not proof of effective runtime settings or a fix here;
+old upstream reports do not justify blindly toggling either knob in this bound
+attempt. No live limit, environment or source was changed during verification.
+
+Two offline admission-plan tests passed, including exact full-matrix retention
+and rejection of corpus/rate/duration/trimming changes. Independent normalized
+diffs confirm that the 500- and 1,000-entry variants change only admission.
+Each keeps 108 windows, 8,640 offered seconds and 114,960 offered arrivals.
+Neither variant has been executed; larger caps do not prove residency or capacity.
 
 ## Separate diagnostics from performance
 
@@ -253,11 +366,31 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `test_finish_native_load_v2.py` | `2ad420292ccfd4fe66072b216cb816603dbeeb3c20dbb86568b56cec10495762` |
 | `post-load-v2-guard-tests.log` | `28157ddb518f5c1d4f887b07be9710a779324b00d8f73347311839e52606bd59` |
 | `post-load-v2-check.json` | `57befacbc9f31ac6564b8cab618c45be0851b8f81c3996c1334eadae485cb281` |
+| `native-load-v2/preflight.json` | `9564ba67057758324738dfbf5223ec79c172df1378458145ed586bd786551770` |
+| `native-load-v2/campaign.json` | `3dda98f8c3820e151bc2f7eb2c0d72273972a6cbeb3250a84bacce160c2427af` |
+| `native-load-v2-controller.json` | `3f82e91c1c4524937bb30f31c78ef39e55579f93e928b2fedd16978c66e909d9` |
+| `native-post-load-v2.json` | `968c99e941dbd442326bfeb575a9ba46e46b562f17f0b584dbc857ac331fa0d3` |
+| `native-windows-0000-0002-audit.json` | `ebf2ca6aaa189a4facdb0cc5033e76ebbcd9cfef5cd77cc26efbc889a401a7b2` |
+| `native-v2-oom-ledger-audit.json` | `619c3ed1e0be121178a7b92379a1ce8b924e9c8d3ee71efc886757580f1e6314` |
+| `native-v2-provider-oom-kernel.log` | `496836038f63914a34342a89d0895242d4c997f3dd7c31eb8470beee9304e847` |
+| `native-v2-provider-oom-cancellation.json` | `7eca8217db7b9a06246626c1c1cfc652b5d4148f4c04397684eb204fd4ca4105` |
+| `native-v2-oom-owner-loss.json` | `c63b5e7d4433e0130a899b0bf0efdb8d44d5b94ad08b6d5ffb5b319d9c6f5720` |
+| `provider-recovery-4g.json` | `565cf80795d7d9da78eb4525f247ad3e3a0f687ae6b5804392d09304137d2da0` |
+| `fleet-native-recovery-4g/ready.json` | `04b630ac1ad771a62d936071c58823c74243968f350bca14bfb15fa5d38d78af` |
+| `verify_native_recovery_4g.py` | `a194d74fed89cc45048fc3378416877e3413cc1cc16c824c0446244f562be916` |
+| `critical-recovered-4g.json` | `1031bf601b1e63970198a385fe4f7bacae0124b6d9861a8254729f371967ef31` |
+| `start_native_load_4g.py` | `9e3ba38b22b1188923d06a4b01125cdc7921763402368815fc91b41ae10c2cef` |
+| `test_start_native_load_4g.py` | `8113463ea6ad6c9e5076a94e05b5c45821f5e040ac9ca1405bd0d223f698b6b0` |
+| `load-4g-guard-tests.log` | `ad1dabaf6fd44b97c2ba48c91cc833bc69a88c2e8baf813908fc24f5d1465527` |
+| `load-4g-check.json` | `6865f1c3646548feed611843d84a5eb1daa635801e5df78e3c3862ad63b93a61` |
+| `native-recovery-4g-memory-probe.json` | `b078266a61591ff18db05e0efabdca1e11433452e8898ffe65b9bf1e6ae91129` |
+| `higher-admission-plans-v1/preparation.json` | `f2fec01bc047cbe800580b3c8515fcaf2ab29c3af1aee8fee0ba9327a163bc85` |
 
 The baseline's new independent ledger audit is
 `5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`
-in `canopy-three-proxy-q3FO2z`. The replacement load and post-load recovery
-controllers are live and have no final completion digests. Setup timings are
+in `canopy-three-proxy-q3FO2z`. V2 load and its stopped post-load controller have
+closed failure digests above; the separate 4-GiB full verifier has no completion
+digest yet. Setup timings are
 not scheduled throughput.
 This is not isolated Linux reference capacity, a proven Cellule bottleneck or
 a passing latest-pin executable comparison. Both hosted workflows for source
@@ -265,3 +398,7 @@ pin `0573f489` passed
 ([36806695489](https://github.com/crabbuild/canopy/actions/runs/36806695489),
 [36806698917](https://github.com/crabbuild/canopy/actions/runs/36806698917));
 the running comparison binary remains the original `e07670e` artifact.
+Both harness (75 tests) and Rust jobs also passed for published head `772d1dc`
+([36816818943](https://github.com/crabbuild/canopy/actions/runs/36816818943),
+[36816813337](https://github.com/crabbuild/canopy/actions/runs/36816813337)).
+Hosted verification is not the outstanding local full-matrix qualification.

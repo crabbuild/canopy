@@ -15,12 +15,15 @@ seed and successful recovery of every recorded ACK.
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
 | Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s and passed initial three-owner-loss recovery; independent 200-clone audit passed |
-| Native scheduled load | First attempt failed during mandatory preflight before any window; process-lifetime reproduction retained. Replacement fleet is independently hosted; full preflight is running |
+| Native scheduled load | First attempt failed before any window. Independent-session V2 passed full preflight, then RustFS was cgroup-OOM killed: six closed windows, one interrupted prefix and 101 unstarted windows retained |
+| Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; critical-2 recovery passed, full 10K/100 recovery running |
 | Performance qualification | Full scheduled load, every post-load ACK recovery, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
-No Cellule bottleneck or matched performance improvement is proven.
+No Cellule bottleneck or matched performance improvement is proven. The 4-GiB
+diagnostic is a new resource envelope, not a passing 2-GiB result. Offline plans
+for 500/1,000-entry admission retain the full matrix but have not been executed.
 The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
 and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
 That baseline stopped after 20 fully bound windows and one interrupted creation
