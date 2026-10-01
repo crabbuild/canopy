@@ -56,7 +56,7 @@ credentials were not changed. No authority check or TLS verification was disable
 ## Prepare the next upstream candidate
 
 Cellule `origin/main` advanced during the running baseline. Canopy's manifests
-and six Cellule lockfile entries now select
+and six Cellule lockfile entries first selected
 `e07670e2348231ed401cc7280a47e3ab97596ffe`. Dependency resolution and locked
 metadata validation passed without updating unrelated packages or creating a
 local Cargo target directory. [Workflow 36789746786](https://github.com/crabbuild/canopy/actions/runs/36789746786)
@@ -78,6 +78,27 @@ not a measured fix. The baseline's scripts, binary and provider configuration
 were unchanged during load. CI verification can run independently; local compilation,
 fresh-state recovery and matched performance comparisons must follow the
 recorded baseline and produce their own artifact bindings.
+
+### Track the latest source without replacing the bound runtime
+
+Upstream subsequently advanced to `0573f48998c4e5343cd8b463d79b7bc1820c923c`
+with [the Cellule website/documentation change](https://github.com/crabbuild/cellule/pull/34).
+Canopy's five direct dependency declarations and six lockfile source entries
+now select that revision, with no unrelated dependency changes. Locked Cargo
+metadata resolved all six packages to the exact new commit; no workspace
+`target` directory or new executable was created.
+
+`git diff --exit-code e07670e 0573f489 -- Cargo.toml Cargo.lock crates` passed
+in the Cellule checkout. Both commits have the same `crates` tree object
+`587e3215ce1bc0c67db3390a137623b6fead01ac`, root Cargo manifest blob
+`6b7e13d8439558455ea04458357f3a70992fa367` and lockfile blob
+`b512761a55bba5165101ce9905dfe7f603f5b079`. This upstream update is not a
+runtime performance fix. A new production build, hosted verification and
+end-to-end qualification for the new source pin remain open; existing binary
+bindings and the live ACK recovery still identify `e07670e`.
+
+The candidate-volume `metadata-0573f489.json` SHA-256 is
+`8cbbca85086cd846f265c97d9c0ca50f85c33b795c87ec2e40405a7db8c879e9`.
 
 ### Bind the local candidate separately
 
