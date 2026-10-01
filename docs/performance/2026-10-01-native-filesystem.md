@@ -1,8 +1,16 @@
 # Compare RustFS filesystem backing
 
-**Status: full seed, initial recovery and post-OOM 4-GiB recovery passed; V2 load failed; new complete load attempt in mandatory preflight; performance unqualified.**
+**Status: all 108 4-GiB load windows finished and failed; post-load recovery was interrupted; local raw artifacts are unavailable; performance unqualified.**
 This shared-Mac/Colima diagnostic keeps the 10,000-repository target. It tests
 filesystem backing without replacing the bound runtime or weakening correctness.
+
+The [later evidence-loss checkpoint](2026-10-01-evidence-loss-and-c51dd121.md)
+supersedes running/retained-artifact statements below. At the final inspection,
+the campaign retained 60,197 OK and 54,763 failed arrivals. Fresh post-load owners
+passed the critical fixtures, then their launcher recorded ENOSPC and graceful
+shutdown; full-corpus/every-ACK recovery did not complete. The external benchmark
+directories and executable subsequently disappeared. Historical digests below
+are expected values, not proof that their local files remain available.
 
 ## Preserve the failed run first
 
@@ -278,9 +286,11 @@ A separately bound controller passed its live check and two offline tests
 (23 rejection cases). It observed the exact verifier's actual exit, reread the
 terminal full 10K/100 and critical-2 receipts, original deadlines and closed
 sidecar digests, then launched a **new entire 108-window attempt** in a new
-directory. The real campaign PID is 5740; its mandatory full preflight is
-running, with no timed window completed at this checkpoint. It sends no signals
-and changes no provider settings.
+directory. The real campaign PID is 5740; its mandatory preflight passed all
+10,000 identities/100 Git-v0/v2/LFS fixtures, and timed load began at
+**07:03:58 UTC**. The first three closed metadata windows failed; all 108 windows
+subsequently completed without retrying or dropping those failures. The load
+controller sent no signals and changed no provider settings.
 An incomplete recovery, PID reuse, changed provider/source, reused output or
 shortened plan prevents launch. Launch/preflight is not a load pass: all
 114,960 declared arrivals over 8,640 offered seconds remain required.
@@ -330,8 +340,31 @@ python3 -B scripts/benchmark_critical_git.py \
 ```
 
 This example offers 20 whole workflows over 300 seconds with up to four in
-flight. It is **prepared, not executed**; it adds no traffic to the live matrix.
+flight. It was **armed, not executed** at the earlier checkpoint; it added no
+traffic to the matrix. Those waiter processes are no longer present.
 It cannot replace the original 108 windows or higher-admission comparisons.
+
+A separate controller binds the live post-load verifier PID/command/kernel
+identity and only reads that process/receipt every 15 seconds while prior load
+runs. Before launching, it requires actual verifier/controller/campaign/event
+stream absence, the entire passing 108-window matrix, all four recovery scopes,
+closed sidecar digests, exact ACK counts, recorded owner loss/expiry and unchanged
+provider/source/fresh-owner bindings. Three offline tests passed, including 28
+rejection cases, and its live read-only binding check passed. These are terminal
+gate tests, not a mocked full workflow or actual critical-load result.
+
+The first timed failures prevented this attempt from satisfying that original
+launch gate, even if later windows succeeded. A separately versioned gate later
+passed seven offline tests/49 rejection cases and a live binding check. It allowed
+failed performance to remain failed while still requiring the entire schedule,
+every recovery scope, exact ACK counts and unchanged provider/owner boundaries.
+Neither gate produced a live critical-load result: the post-load recovery did
+not finish, and its evidence was subsequently lost. The critical live run remains open.
+On an eligible future completion, the controller establishes receipt of a scoped
+Docker event with a read-only `/proc/uptime` marker before traffic, runs the new
+workflow process in an independent session, retains closed provider events and
+rechecks the provider/fleet/source boundary. It sends no owner signals or provider
+restarts. New critical ACKs still require a separate recorded fault and recovery.
 
 | Driver evidence | Boundary |
 | --- | --- |
@@ -351,6 +384,52 @@ measured load. These tests mock Git/provider operations and do not establish
 any live result. The real scheduler test retains a simulated failed worker's
 partial receipt and verifies client closure; recovery tests check refusal of
 reused owners and continued verification after another workflow fails.
+
+### Preserve the first three 4-GiB timed failures
+
+All three repetitions offered 20 metadata requests/s for 120 seconds, with 32
+clients and the same deterministic uniform 100-repository selection in the full
+10,000-identity corpus. Independent closed-ledger replay verified all 7,200
+arrival sequences, selections, outcome counters, nearest-rank percentiles,
+in-window/drained throughput and resource/receipt digests. It deliberately does
+not hash the changing campaign or active later ledgers as closed evidence.
+
+| Repetition | OK / busy / HTTP 503 | Successful in-window requests/s | All-attempt p50 / p95 / p99 (ms) |
+| --- | --- | --- | --- |
+| 1 | 2,269 / 128 / 3 | 18.833 | 137.376 / 1,610.926 / 4,621.883 |
+| 2 | 2,392 / 8 / 0 | 19.683 | 135.785 / 872.798 / 1,681.714 |
+| 3 | 1,805 / 542 / 53 | 14.833 | 639.841 / 5,893.097 / 9,139.462 |
+
+That is **6,466 OK, 678 busy drops and 56 HTTP 503s**: 734 failed arrivals.
+Busy drops have no invented latency, and success-only latency does not replace
+the all-attempt population. These metadata windows are not creation or Git/LFS
+write throughput, and no later success can reclassify this campaign as passing.
+
+Three hypotheses remain open: provider pressure; directory/activation contention;
+and driver/shared-host congestion. Dispatch p99 was only 10.511/19.826/20.323 ms,
+while service tails were seconds. Failures recur late in windows and in repetition
+3, so first-window startup alone is insufficient, and scheduler dispatch alone
+does not explain the measured tails. This is captured-ledger replay, not a new
+isolated replay of the failing server call or a verified causal fix.
+
+A separate audit froze only complete existing observer samples wholly within
+the three closed resource boundaries (22/22/19 samples), retaining non-atomic
+raw cgroup files and exact kernel identities. The sampled intervals cover
+116.032/114.444/113.105 seconds, excluding edges without interpolation. Provider
+CPU averaged 1.290/1.084/1.506 cores; throttled-time counter increments were
+10.158/11.573/46.453 seconds. Memory approached the 4-GiB limit in each interval,
+with zero observed `oom`/`oom_kill` counters. Some provider-wide 4xx/5xx counters
+also increased; these include background work/retries and do not identify a
+specific frontend request or establish billed/per-operation cost.
+
+The corresponding server logs report authentication/metadata failures with the
+opaque `repository directory operation failed` message. The
+[error wrapper](../../crates/canopy-server/src/server/mod.rs) retains a typed
+invocation failure, but the [HTTP logs](../../crates/canopy-server/src/repository_http/mod.rs)
+print only its outer Display value. That observation cannot distinguish a
+durable refusal, pending outcome, invalid published result or not-started failure;
+it is not evidence of bad user credentials or a proven Cellule bottleneck. No
+live limit, source, binary, lease, deadline or provider setting was tuned.
 
 The closed observer reached a sampled maximum `memory.current` of 4,294,967,296
 bytes. At its final sample (06:27:17 UTC), current memory was 4,108,148,736 bytes,
@@ -436,7 +515,9 @@ CPU, per-operation CPU/GiB or priced object-store cost.
 
 ## Bind the new trial
 
-Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
+These historical artifacts were inspected under `canopy-native-filesystem-ceXFad8I`.
+That directory is now absent; this table records expected digests, not currently
+available or newly reverified local files:
 
 | Closed input or receipt | SHA-256 |
 | --- | --- |
@@ -514,6 +595,14 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `harness-38a51dd-linux-36823311167-job.log` | `963a1636810e0efdc768e1d6f4c8297f3d3b07c7d441e99919ee8969d8ab0bcf` |
 | `rust-38a51dd-linux-36823311167-job.log` | `2384cf85dc36736bb8560902e71227ba823b3120cbb109856b2a040159f99842` |
 | `harness-84-critical-driver.log` | `ca0bd3cb47be225672e608b5b7a60f036ea82ef15df2d3b58b36ecf8dcafc437` |
+| `start_critical_load_4g.py` | `b0ffd626d390a59a0b94e1ce48abd7388561454354dd8fca2ae8979ae5718a5e` |
+| `test_start_critical_load_4g.py` | `c1e3bdc631a206cbaa43d681d30cdedc7ec4bca429adda6f111df4cc26b35fc2` |
+| `critical-4g-gate-tests.log` | `efae8d6479515f878d6a459abc70a5880a93ef66c8c9712cc86c1d65ddf45fa9` |
+| `critical-4g-check.json` | `31424b96b9c18a12dad50bd8688193f871351c9625c24277acb6a7f0a368d993` |
+| `native-load-4g/preflight.json` | `78e3950590462eeca9ae8b1df729294ac3ce247056eccc8c342c542e1ca7847d` |
+| `load-4g-first-three-audit.json` | `8396bd9f6d29eb5680f791b8288ac8b1e357ed7af9ebdb6861341930fc628f8c` |
+| `load-4g-first-three-sidecar-audit.json` | `36602007172205cbec6d0ba1ed7ad1099cf605302ab8bd2dd132f6eb46740b35` |
+| `load-4g-first-three-sidecar-prefix.jsonl` | `25162b403cecfdc12de98b1ca06a2da10c8a778c4ee9ab4c053fae1d3fe5982b` |
 
 The baseline's new independent ledger audit is
 `5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`

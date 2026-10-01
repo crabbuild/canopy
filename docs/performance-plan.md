@@ -2,12 +2,12 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `a4500add51764fa0415791aefbfa561db6ada203`, an upstream
-web/documentation advance with the same Rust crate tree and root Cargo objects
-as `0573f489` and `e07670e`. Locked metadata resolves all six packages to the
-new commit without unrelated dependency changes. Both hosted Rust and harness
-jobs passed for source head `38a51dd` with this pin; the latest-pin local
-production artifact and three-node qualification remain separate open gates.
+dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, the latest
+observed upstream main on October 1. Unlike the earlier `a4500add` documentation
+advance, this changes routing and resource-permit implementation. Locked
+metadata resolves all six packages; the lockfile changes only their sources.
+The new release build and its RustFS/three-node qualification are separate
+gates. The 84 Python harness tests passed; this is not Rust runtime verification.
 None establishes reference capacity.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
@@ -21,12 +21,17 @@ seed and successful recovery of every recorded ACK.
 | Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s and passed initial three-owner-loss recovery; independent 200-clone audit passed |
 | Native scheduled load | First attempt failed before any window. Independent-session V2 passed full preflight, then RustFS was cgroup-OOM killed: six closed windows, one interrupted prefix and 101 unstarted windows retained |
 | Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; full 10K/100 and critical-2 recovery passed, with independent 200-clone/four-mirror audits |
-| New complete load attempt | Original 108-window/114,960-arrival matrix launched after terminal recovery; mandatory full preflight running, no timed window completed at this checkpoint; every-ACK controller captured the actual campaign identity |
-| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) prepared with nine offline tests; retains the full 17-step suite and every attempted receipt, but no live critical-load/fault result is claimed |
-| Performance qualification | Full scheduled load, every post-load ACK recovery, higher admission profiles and matched comparisons remain open |
+| Complete 4-GiB load attempt | All 108 windows finished: 60,197 OK and 54,763 failed arrivals. The original attempt remains failed; local raw evidence is now unavailable |
+| Post-load ACK recovery | Recorded three-owner loss and 32.249-s wait; critical fixtures passed. Fresh fleet then recorded ENOSPC and shut down; full corpus and every-ACK verification are incomplete |
+| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. The versioned gate separates failed performance from mandatory correctness recovery; no live critical-load/fault result is established |
+| Evidence availability | Benchmark directories and retained executable disappeared during the later space check. No receipt backup found in checked locations; surviving RustFS data is not an ACK ledger |
+| Performance qualification | Latest artifact/runtime, every post-load ACK, critical-operation load/fault coverage, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
+The [evidence-loss checkpoint](performance/2026-10-01-evidence-loss-and-c51dd121.md)
+supersedes its earlier running/retained-artifact status. Historical observations
+are not currently replayable; a new run cannot certify the old ACKs.
 No Cellule bottleneck or matched performance improvement is proven. The 4-GiB
 diagnostic is a new resource envelope, not a passing 2-GiB result. Offline plans
 for 500/1,000-entry admission retain the full matrix but have not been executed.
