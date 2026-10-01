@@ -13,6 +13,9 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn backup_restores_git_lfs_and_collaboration_without_original_storage() -> Result {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let files = tempfile::TempDir::new()?;
     let address = available_address().await?;

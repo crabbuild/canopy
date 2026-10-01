@@ -144,7 +144,7 @@ impl Command for CertifyObjects {
             // Only certified, typed edges enter the reachability index. Keeping
             // this with closure publication prevents lazy fetch from trusting
             // staged or malformed object graphs.
-            for edges in edges.chunks(MAX_CERTIFICATES) {
+            for edges in edges.chunks(crate::object_batch::MAX_OBJECTS) {
                 context.sql(&SqlBatch {
                     statements: edges
                         .iter()
@@ -164,7 +164,7 @@ impl Command for CertifyObjects {
                     .filter(|(_, kind)| *kind == Some(ObjectKind::Commit))
                     .map(|(parent, _)| *parent)
                     .collect();
-                for parents in parents.chunks(MAX_CERTIFICATES) {
+                for parents in parents.chunks(crate::object_batch::MAX_OBJECTS) {
                     context.sql(&SqlBatch { statements: parents.iter().map(|parent| SqlStatement {
                         sql: "INSERT INTO commit_parents (child, parent) VALUES (?1, ?2) ON CONFLICT DO NOTHING".into(),
                         parameters: vec![SqlValue::Blob(oid.to_vec()), SqlValue::Blob(parent.to_vec())],
