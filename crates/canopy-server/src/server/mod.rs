@@ -812,6 +812,17 @@ pub(crate) async fn acquire_provisioned_sql_cell(
                 .await?
         }
     };
+    // Catalog identity describes initial code/schema, not necessarily the
+    // current persisted Control. Reject unsupported Control metadata before
+    // bootstrap, ownership takeover, or restoration can mutate authority.
+    if !node.application().registry().supports_cell(
+        target.namespace(),
+        CatalogRole::Sql,
+        observed.value().code,
+        observed.value().schema,
+    ) {
+        return Err(Error::Control("persisted SQL Cell code/schema is unsupported").into());
+    }
     let cell_type = node
         .application()
         .cell_types()
