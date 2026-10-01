@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "cellule-app"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "blake3",
  "cellule-runtime",
@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "cellule-host"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "cellule-app",
  "cellule-runtime",
@@ -471,7 +471,7 @@ dependencies = [
 [[package]]
 name = "cellule-ltx"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "async-trait",
  "blake3",
@@ -493,7 +493,7 @@ dependencies = [
 [[package]]
 name = "cellule-runtime"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "blake3",
  "bytes",
@@ -519,7 +519,7 @@ dependencies = [
 [[package]]
 name = "cellule-store"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "async-trait",
  "blake3",
@@ -542,7 +542,7 @@ dependencies = [
 [[package]]
 name = "cellule-types"
 version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=c51dd121284ecc8878b75d32717a4dfbe2c406c2#c51dd121284ecc8878b75d32717a4dfbe2c406c2"
+source = "git+https://github.com/crabbuild/cellule.git?rev=0dc04a658bd99668936f7ec58032d054f6fbc141#0dc04a658bd99668936f7ec58032d054f6fbc141"
 dependencies = [
  "schemars",
  "serde",
