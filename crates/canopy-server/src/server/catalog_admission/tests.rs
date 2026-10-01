@@ -119,7 +119,7 @@ impl Fixture {
             *application.as_bytes(),
         );
         let registry = CanopyApplication::compile(build_descriptor(
-            include_bytes!("../../../../../../Cargo.lock"),
+            include_bytes!("../../../../../Cargo.lock"),
             env!("CARGO_PKG_VERSION"),
         ))?
         .registry();
