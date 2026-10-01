@@ -71,7 +71,7 @@ smaller corpus or retries for its required evidence.
 ## Gate the transition and complete load plan
 
 The initial recovery controller completed successfully. It
-controller waited for the exact seed and its setup controller to exit, then
+waited for the exact seed and its setup controller to exit, then
 reread their final receipt. A failed/incomplete corpus, changed process
 identity, provider restart/pause/quota/mount change or source drift stops it
 before any owner-loss action.
@@ -150,6 +150,40 @@ offline auditor tests brought the harness to **75 passing tests** on Python
 3.12 and 3.14. Local tests ran during recovery/preflight, not measured load
 windows; they are shared-host work, not service performance proof.
 
+### Arm every-ACK recovery without shortening the load
+
+A separately bound post-load controller is live in `wait_bound_load`. Its
+read-only live binding check and four offline guard tests passed. During load
+it only inspects the two bound process identities every 15 seconds; it does not
+poll provider state or send additional Git traffic. This still adds some host
+overhead and is not an isolated reference measurement.
+
+```mermaid
+flowchart LR
+    endload[Actual campaign and observer exit] --> audit[Audit all closed ledgers<br/>retain failed arrivals]
+    audit --> loss[Verified owner loss<br/>actual absence and 32s wait]
+    loss --> fresh[New IDs and local directories<br/>independent process session]
+    fresh --> scopes[Full 10000 corpus and critical fixtures<br/>every creation, push and LFS ACK]
+```
+
+Before any signal, it requires closed controller/campaign/observer evidence,
+unchanged source/provider bindings and an independent complete-ledger audit.
+Missing or orphan ledgers stop it for reconciliation, not silent omission.
+If all old owners remain live, it verifies the entire PID/command/kernel
+identity batch before three SIGKILLs. Already-lost fleets get no signals and
+must become authoritatively absent before the same conservative wait. A
+partially lost fleet that does not close stops takeover. Even a rare mid-batch
+exit retains the signals already sent.
+
+Fresh recovery keeps the same durable deployment, executable, provider and
+admission. Its launcher uses a new process session so completion of the finite
+verifier does not orphan an attached fixture. Critical fixtures, full seeded
+corpus, acknowledged creations and acknowledged Git/LFS writes have separate
+verification stages; one failed stage does not skip the other scopes. Counts
+must match the audited ACK ledgers. There are no retries or failed-arrival
+rollback assertions. This controller is armed, not completed, and a recovery
+pass cannot turn a failed performance campaign into a pass.
+
 ## Separate diagnostics from performance
 
 The closed ACK-recovery observer retained 173 samples with zero probe errors.
@@ -215,11 +249,16 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `load-v2-check.json` | `d3a9d6522b1a7fde45b551c8bafafe485711a81fd194559aa35bcaa1aaeb4549` |
 | `harness-75-python314.log` | `07cece1c7015f5df010cca8c9b2ada28cd78fdfb33a7eb08c5d7dd63daa0cecb` |
 | `harness-75-python312.log` | `77ea19d83080755caf641792dac1c1dd093100d7131e814b6b8b807cfd0d9389` |
+| `finish_native_load_v2.py` | `596a713aebe893796b9425d18dcfead2987f03728ac2ccb0cb63216bcb76a036` |
+| `test_finish_native_load_v2.py` | `2ad420292ccfd4fe66072b216cb816603dbeeb3c20dbb86568b56cec10495762` |
+| `post-load-v2-guard-tests.log` | `28157ddb518f5c1d4f887b07be9710a779324b00d8f73347311839e52606bd59` |
+| `post-load-v2-check.json` | `57befacbc9f31ac6564b8cab618c45be0851b8f81c3996c1334eadae485cb281` |
 
 The baseline's new independent ledger audit is
 `5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`
-in `canopy-three-proxy-q3FO2z`. The replacement load controller is live and
-has no final completion digest. Setup timings are not scheduled throughput.
+in `canopy-three-proxy-q3FO2z`. The replacement load and post-load recovery
+controllers are live and have no final completion digests. Setup timings are
+not scheduled throughput.
 This is not isolated Linux reference capacity, a proven Cellule bottleneck or
 a passing latest-pin executable comparison. Both hosted workflows for source
 pin `0573f489` passed
