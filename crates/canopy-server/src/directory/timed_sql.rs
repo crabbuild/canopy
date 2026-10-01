@@ -139,7 +139,11 @@ mod tests {
             Vec::<u8>::decode(&mut BoundedDecoder::new(&encoded, 36)?)?,
             digest
         );
-        assert!(vec![7_u8; 33].encode(&mut BoundedEncoder::new(36)?).is_err());
+        assert!(
+            vec![7_u8; 33]
+                .encode(&mut BoundedEncoder::new(36)?)
+                .is_err()
+        );
 
         let name = "a".repeat(64);
         validate_component(&name)?;
