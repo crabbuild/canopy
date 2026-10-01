@@ -448,6 +448,13 @@ starts. Requests for that candidate wait for the transition and recheck its
 serving state. Initialization must succeed before the ready route is exposed.
 Remote routes retain authoritative owner checks on the transition path.
 
+If inventory has no safe eviction candidate but an unrejected, unpinned local
+resident may settle, cold admission can reobserve inventory up to eight times
+with at most 200 ms of settling waits. The registry lock is released while
+waiting and request/residency permits stay charged. It never replays mutations
+or releases runtime-busy Cells. A fully request-pinned working set refuses
+immediately; the settling bound is not an HTTP or storage-I/O latency guarantee.
+
 At most 32 transition operations may be executing or waiting on that path.
 One authenticated account may hold at most 16 of those slots, across all its
 tokens and repository endpoints. Anonymous readers share a separate 16-slot
@@ -1187,7 +1194,7 @@ require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current source pins Cellule revision
-`a4500add51764fa0415791aefbfa561db6ada203`; running qualification artifacts
+`c51dd121284ecc8878b75d32717a4dfbe2c406c2`; qualification artifacts
 remain bound to their recorded revisions, not silently replaced by this pin.
 The earlier entity-partition
 cutover also made pre-cutover prefixes incompatible; no migration is available.
@@ -1474,13 +1481,21 @@ storage. Historical credentials and runtime command outcomes remain retained;
 account-count admission, request-rate controls, receipt retention and deployment
 storage quotas still need their own policies.
 
-Directory credential command 3 and query 4 bind parameter 1 to one execution
+Directory credential command 3 and queries 4/5 bind parameter 1 to one execution
 timestamp for the entire SQL operation. They use the greater of owner wall time
 and Cellule admission time. The pinned runtime captures context time before
 queuing, so the handler samples the clock again after queued work. Commands
 still persist their replay outcome through Cellule; replay does not rerun a
 successful mutation or reactivate an expired record. Normal SQL operations 1/2
 remain for Directory operations that do not make credential-time decisions.
+
+Authentication uses typed query 5, codec 1, with a 36-byte canonical input limit
+and a 256-byte result limit. Its input is exactly one 32-byte token digest; the
+result contains at most one validated principal. Existing commands 1/3 and
+queries 2/4 keep their one-MiB contracts. Admission budgets and minimum receipts
+are unchanged. The Directory descriptor retains the exact preceding `f7254eda`
+code at schema 1; this is descriptor compatibility, not an automatic upgrade or
+proof of restoring an existing catalog under a new release.
 
 Authentication requires `expires_ms IS NULL OR expires_ms > now_ms`; it does not
 wait for a cleanup job. Token listing/issuance/revocation, account creation and
@@ -2480,8 +2495,9 @@ Stock `git lfs pull` without credentials verifies this behavior.
 
 Both Directory and Repository initialization schemas changed in this unreleased
 build. Use a fresh development prefix; existing data is not migrated or removed.
-Source digest validation rejects old modules; mixed-build rolling upgrades are
-not supported. Production upgrade migration remains a delivery gate.
+Source digest validation rejects unsupported module codes. Exact Directory
+predecessor retention is a contract check, not a migration. Mixed-build rolling
+upgrades are not supported. Production upgrade migration remains a delivery gate.
 
 ## Deployment release enrollment and maintenance
 

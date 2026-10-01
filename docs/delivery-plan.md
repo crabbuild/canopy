@@ -72,12 +72,15 @@ These are the next implementation slices. Each slice must update its contract, b
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The current source pins Cellule revision `a4500add` and
+   a Canopy remote. The current source pins Cellule revision `c51dd121` and
    owns a startup storage probe with cleanup on failure. Historical dependency
    qualification runs below remain evidence for their recorded revisions only.
    The [live three-node trial](performance/2026-10-01-native-filesystem.md)
    retains its separately bound `e07670e` executable; latest source is not a
    claim that the running artifact was rebuilt or performance-qualified.
+   The [bounded authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
+   passed release correctness and eight RustFS compatibility gates. Existing
+   catalog upgrade, full-corpus recovery and performance remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits

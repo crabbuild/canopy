@@ -6,7 +6,7 @@ dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, observed upstream
 main at build preparation on October 1. Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
 metadata resolves all six packages; the lockfile changes only their sources.
-The new locked release build passed. Its release workspace suite passed 227
+The original rebuilt artifact passed its locked release build and 227 release
 tests with 9 ignored gates; all eight real-RustFS compatibility gates subsequently
 passed, as did the production binary's initial 17-step check through three nodes
 and a proxy. The 84 Python harness tests cover accounting and guards. Full-corpus
@@ -15,13 +15,21 @@ of these functional checks establishes reference capacity.
 Upstream subsequently advanced to `0dc04a6` with atomic API and test changes.
 That revision needs a separate artifact and runtime qualification; the current
 experiment and its frozen source remain on `c51dd121`.
+The [combined authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
+is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
+20 unchanged cold-activation repetitions and all 15 residency tests. It has not
+been deployed on the existing corpus. Descriptor compatibility passed, but
+existing-catalog admission, old-code restore and the diagnostic fleet's terminal
+lease-fencing failure remain open. These results do not qualify newer upstream
+or replace the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
-| Latest Cellule candidate | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
+| Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
+| Combined authentication and residency candidate | 231 release tests, eight RustFS gates, 20 original cold-activation repetitions and 15 residency tests passed. Exact predecessor descriptor is retained; existing-catalog upgrade and old-code restore remain open. Not deployed or performance-qualified |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
@@ -43,7 +51,8 @@ The separate diagnostic build passed 230 release workspace tests with 9 ignored
 after isolating a concurrent-fork cleanup test and adding fence-safety coverage.
 All 20 subsequent full-library repetitions passed at four test threads.
 That local test finding does not explain the Directory 503, change production
-cleanup or qualify the PR's frozen artifact; temporary diagnostics remain outside
+cleanup or qualify its original frozen artifact. The cleanup-test correction is
+included in the combined candidate; temporary diagnostic logging stays outside
 the PR.
 No Cellule bottleneck or matched performance improvement is proven. The 4-GiB
 diagnostic is a new resource envelope, not a passing 2-GiB result. Offline plans

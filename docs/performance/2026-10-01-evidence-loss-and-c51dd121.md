@@ -5,6 +5,11 @@ incomplete. The new Cellule candidate passed release tests and initial Git
 verification. Its full corpus seed completed, but remote verification failed
 with HTTP 503. Recovery and timed load did not start.**
 
+The [bounded authentication and residency follow-up](2026-10-01-bounded-authentication-and-residency.md)
+now records the combined production changes included in PR #18, their closed
+correctness checks and remaining upgrade/recovery gates. The failed attempts
+below remain historical results, not passing retries.
+
 This checkpoint supersedes earlier running/retained-artifact statements in the
 [native-filesystem trial](2026-10-01-native-filesystem.md). It keeps the original
 10,000-repository target, all 108 load windows and separate correctness gates.
@@ -120,9 +125,10 @@ upgrading the pin or changing the live experiment.
 
 The locked release build completed successfully. Its retained executable has
 SHA-256 `32b114119960608c0a91d1c783bb69eafec432831bfa452d54d8950b09bc0e99`.
-The build receipt binds 256 production-source and harness files; those bindings
-still match the published candidate. Evidence and the executable are outside the
-rebuildable Cargo target directory.
+The build receipt binds 256 production-source and harness files. Those bindings
+matched the original PR source at `4651aaa`; that baseline is preserved separately
+and does not bind the later combined candidate. Evidence and the executable are
+outside the rebuildable Cargo target directory.
 
 | Verification | Result and scope |
 | --- | --- |
@@ -286,7 +292,7 @@ These observations narrow the investigation, but do not prove that all earlier
 503s share a cause. This replay excludes Git/LFS bodies, scheduled throughput
 and crash recovery. A failed metadata check remains a failed correctness gate.
 
-### Bounded authentication candidate remains separate
+### First bounded authentication candidate failed
 
 A regression at the actual `DirectoryCell.authenticate` call site held its SQL
 worker while polling 16 valid authentication requests. The original generic
@@ -313,9 +319,10 @@ not a measured throughput improvement or a completed live-fleet fix.
 
 The original predecessor release descriptor was read from RustFS and its BLAKE3
 digest verified without changing selected state. Reading it is not rolling
-compatibility or restore proof. The candidate is **not deployed or included in
-this PR**. Its failure cannot be dismissed as test timing, and its passing
-focused checks cannot replace full correctness verification.
+compatibility or restore proof. At the 21:09 UTC checkpoint, this first candidate
+was **not deployed or included in the PR**. Its failure cannot be dismissed as
+test timing, and its passing focused checks cannot replace full correctness
+verification.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -416,7 +423,7 @@ Neither backup overwrites original failed receipts or certifies recovery.
 | Rust workspace correctness and RustFS Git/LFS compatibility | Passed release suite, eight provider gates and initial 17-step proxy check |
 | New-pin non-sparse 5-GiB transfer | Open; excluded by `--provider-only` |
 | Full 10,000 identities/100 populated fixtures | Full seed closed; remote verification failed HTTP 503; cause unresolved |
-| Bounded authentication candidate | Focused regression and Directory suite passed; full workspace failed; old-code compatibility and live verification open; not in PR |
+| First bounded authentication candidate | Focused regression and Directory suite passed; full workspace failed. The [combined follow-up](2026-10-01-bounded-authentication-and-residency.md) is now in the PR with passing release/provider checks; existing-catalog upgrade and live verification stay open |
 | Original matrix and every new ACK after owner loss | Downstream gates stopped without owner signals or timed load; recovery open |
 | Critical concurrent Git load and fault coverage | Open; separate from the initial 17-step functional check |
 | Higher admission profiles and matched comparisons | Open |
