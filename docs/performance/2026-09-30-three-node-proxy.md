@@ -1,6 +1,6 @@
 # Qualify three Canopy nodes behind a proxy
 
-**Status: baseline and post-load full-corpus recovery failed; qualification in progress.** This campaign preserves the documented 10,000-repository
+**Status: baseline, post-load full-corpus recovery and candidate seed failed; qualification in progress.** This campaign preserves the documented 10,000-repository
 reference target. A ready fleet, small socket tests or an incomplete seed does
 not qualify throughput, latency, recovery or production capacity.
 
@@ -66,8 +66,9 @@ failed `lifecycle::lease::startup_preflight_does_not_consume_the_node_lease`
 with `AddrInUse`; provider qualification and build were skipped in that job.
 Both used source `a2c59a3`; neither is a local three-node performance comparison.
 The candidate's local release build and 17-step critical Git check now passed.
-Its 10,000-repository seed is in progress; full-corpus recovery and matched load
-remain open. The baseline measurements below use the retained `70bd25f` binary,
+Its 10,000-repository seed subsequently failed with HTTP 503 after 3,561 recorded
+acknowledgements; full-corpus recovery and matched load remain open. The baseline
+measurements below use the retained `70bd25f` binary,
 not the new source pin.
 
 The intervening commits add [fenced route reuse and coalesced owner discovery](https://github.com/crabbuild/cellule/pull/32)
@@ -94,7 +95,7 @@ immutable copy of the original production executable, not that mutable path.
 | RustFS | New container `canopy-candidate-rustfs-w0sfigmz`, same pinned ARM64 manifest as the baseline, two CPU quota / 2 GiB memory; fresh bucket and prefix |
 | Fleet | Three new node identities/directories behind one proxy; unchanged 100-entry admission and 1.5 GiB configured local disk limit per node |
 | Critical Git behavior | All 17 steps passed: atomic publication/refusal, mixed refusal, correct/stale force-with-lease, shallow/deepen/unshallow, filtered lazy fetch v0/v2, new-object push, fast-forward pull, deletion/pruning, mirror push, credential refusal and exact mirror inventories with strict full fsck |
-| Corpus setup | New 10,000 identities with 100 two-commit Git and 1 MiB LFS fixtures requested; seed in progress, not yet complete |
+| Corpus setup | Failed: 3,561 of 10,000 identities recorded, including 39 completed two-commit Git/1 MiB LFS fixtures; manifest remains incomplete |
 | Recovery and performance | Candidate owner-loss, full-corpus recovery, scheduled load and matched comparisons remain unqualified |
 
 Artifacts are retained under `canopy-e07670e-candidate-W0SFiGMz` on the
@@ -120,8 +121,96 @@ with `NotFound` before readiness; the cause is not isolated. After explicit
 bucket readiness, `fleet-candidate-ready` started a test-feature executable,
 then all three nodes shut down gracefully with exit 0 before any corpus was
 seeded. Neither setup is qualification evidence. The current fleet uses the
-immutable production artifact and its own binding. Successful setup does not
+immutable production artifact and its own binding; its later failure is recorded
+below. Successful setup does not
 erase the earlier baseline's failed full-corpus recovery.
+
+### Preserve the candidate seed failure
+
+The original seed terminated with HTTP 503 after 5,885.969 seconds. Its manifest
+remains `complete: false`: 3,561 distinct UUID/name pairs and 39 completed Git/LFS
+fixtures, not a smaller passing corpus. The creation log records a pending
+Directory mutation; an unacknowledged request is not proof of rollback.
+
+| Boundary, UTC on 2026-10-01 | Observation |
+| --- | --- |
+| 01:43:24.215207 | Node 2 reported a 14,651 ms successful renewal with 15,347 ms remaining |
+| 01:43:33.898105 | Node 0 logged the pending creation result |
+| 01:44:01.014171 | Last retained Mac-side seed/provider sample |
+| 01:44:11.394524 | Independent UI node stopped lease maintenance with invalid bounds |
+| 01:44:11.581900–11.602699 | All three candidate nodes stopped lease maintenance with invalid bounds; 20.799 ms spread |
+| After process exit | Launcher retained three exit-1 outcomes, none forcibly killed; seed-to-recovery controller rejected the incomplete manifest before any planned owner-loss action |
+
+The UI used a separate RustFS container, bucket and identities on the same
+Mac/Colima VM. Its lease failure preceded the first candidate failure by
+187.376 ms. Both providers were responding after the fault with unchanged
+container start times and zero restarts. These are correlations, not proof that
+providers were responsive during the stall or that no pause/update occurred.
+The UI was restored from preserved data; its later repository refresh is a
+separate shared-host intervention, not a benchmark window.
+
+An independent offline audit checked all 934 provider samples. The maximum
+adjacent start gap was 13.037 seconds. In the 17 near-failure samples, UTC-minus-
+monotonic variation was 4.057 ms (119.533 ms across the entire observation).
+These Mac-side samples cannot exclude VM/storage stalls, and end about
+10.568 seconds before the first candidate lease termination. No gap is
+interpolated. Rounded Docker gauges do not establish exact request completion,
+CPU usage during every interval or historical quota configuration.
+
+The scoped historical Docker-event query returned no pause/unpause events;
+the provider's stdout was empty in the requested failure window, and the
+filtered host power query returned no sleep/wake events. None excludes an
+unobserved infrastructure interruption. In particular,
+[Docker returns only its last 256 historical events](https://docs.docker.com/reference/cli/docker/system/events/),
+so a later empty filtered query is not a complete history.
+
+The candidate provider uses a Mac-backed bind mount at `/data`. A Linux-owned
+Docker volume is a falsifiable next storage comparison: retain the exact binary,
+image, two-CPU/2-GiB provider limits, admission, leases, 30-second HTTP deadline,
+10,000 identities and 100 same-sized Git/LFS fixtures, changing the filesystem
+backing in a new disposable deployment. That trial has **not** run. Shared-host
+and renewal-contention hypotheses remain open; no Cellule bottleneck or fix is
+established.
+
+### Recover every recorded candidate acknowledgement
+
+After independently confirming the old owners absent, a new boundary record
+waited 32.301 seconds without sending any signals. A fresh three-node fleet
+then started against the same durable prefix and immutable binary, with new
+identities and local directories. The two critical repositories passed their
+four exact v0/v2 ref inventories, payload/notes checks and strict full fsck.
+
+At the 02:25:27 UTC ledger checkpoint, verification of all 3,561 recorded seed ACKs was
+live, with 600 verified. It uses four workers, the unchanged 30-second HTTP
+deadline and no retries. Every UUID must match; each of the 39 populated
+fixtures must also recover exact Git/LFS bytes, both protocols and strict full
+fsck. The original incomplete manifest is never rewritten. Even a complete
+ACK recovery cannot qualify a 10,000-repository gate or scheduled performance.
+
+A separate `observe_ack_recovery.py` companion is now collecting bounded
+provider health timings, signed metrics, current pause/quota/restart state,
+VM uptime and VM-wide CPU/I/O pressure. A continuous event stream is scoped
+to the two fixture container IDs. It stops after 2,400 seconds, verifier exit
+or a caller stop; probe errors and unexpected stream exit are retained. The
+first 11 samples had no probe errors, but the observation remains incomplete.
+Health responses do not establish durable-write latency, VM pressure is not
+container attribution, and probes add shared-host overhead. This is diagnostic
+evidence, not a performance comparison. The companion's source SHA-256 is
+`3e7233d357c41f9f76194c268def6d259cc5cc56202cc73be1bb5b8181876e3a`;
+its append-only samples and event stream are under
+`ack-recovery-boundary-observer`, separate from the closed failure audit.
+
+| Closed candidate artifact | SHA-256 |
+| --- | --- |
+| `corpus-candidate-10000.json` | `5c7d527dc0199d55bbbef30e3a6b707dbdfc661e1d91602d3398f98fe624d7d5` |
+| `seed-candidate.log` | `c25f649c85df7c9bc53a605eada98ac581c460ccee84c656c028f31c28c9fe85` |
+| `fleet-candidate-matched/outcome.json` | `08318903e813bb24a865ea605157533bef77c0db143486f4215689cedb42ef41` |
+| `seed-to-recovery.json` | `7e92791a2217668ef045a431ab210f13c56710ee2631b37d031aed4ef47e071c` |
+| `failed-candidate-owner-exit.json` | `7e3e10b51c3c90c950566b0710121e311dadc9de4391e6e8e14d204d1ff44f28` |
+| `failed-candidate-seed-audit.json` | `c73c9b2a9ae6242b1275d961b11c946f779ab580f76ce5c4f81913c6dd5bb9a6` |
+| `audit_seed_failure.py` | `42daca70ada182e272a198aceb4568834a9a9fa206ac729193f9d64ebd1558c1` |
+| `fleet-after-seed-failure/ready.json` | `aaa089a05e1b140ea9b0973248290aa07d6fcb11309eb29e05f570bb5bec6920` |
+| `critical-after-failed-seed-verification.json` | `1031bf601b1e63970198a385fe4f7bacae0124b6d9861a8254729f371967ef31` |
 
 ## Retain failed setup and incomplete work
 
@@ -434,24 +523,24 @@ the baseline's provider latency or prove a performance fix. The Cellule
 
 ### Advance only from a complete candidate seed
 
-The retained one-off `finish_seed_recovery.py` transition is now running, bound
+The retained one-off `finish_seed_recovery.py` transition was armed, bound
 to seed PID 48549, the immutable candidate binary, current provider and original
 three owner process identities. Its live read-only binding check passed before
-execution. It waits for that exact seed to end and requires 10,000 distinct
+execution. It required that exact seed to end with 10,000 distinct
 canonical UUID/name pairs and the same 100 two-commit Git/1 MiB LFS fixtures
-before any signals. Incomplete seed, changed source/processes, missing owners
-or a provider restart stop it without a retry, reseed or replacement fixture.
+before any signals. The incomplete seed stopped it with `ValueError` in
+`wait_bound_seed`, without any signals, retry, reseed or replacement fixture.
 
-After successful seeding, it records three verified-owner SIGKILLs and process
-absence, waits at least 32 seconds, starts fresh directories on the same durable
-deployment, and verifies both critical fixtures and the complete original
+Its unexecuted complete-seed path would record three verified-owner SIGKILLs and
+process absence, wait at least 32 seconds, start fresh directories on the same
+durable deployment, and verify both critical fixtures and the complete original
 corpus. HTTP timeout stays 30 seconds, verification concurrency stays four,
 and admission stays 100/node. It does not start scheduled load. At this
-observation its phase is `wait_bound_seed`, not a recovery pass.
+terminal observation its phase remained `wait_bound_seed`; it is not a recovery pass.
 
 Four simulated control-flow tests passed: complete transition, incomplete seed,
 provider restart and missing node. They send no real signals or provider/Git
-requests and are not recovery evidence. The live transition retains
+requests and are not recovery evidence. The terminated transition retains
 `seed-to-recovery.json`, fault boundaries and individual verification receipts.
 
 | Candidate-volume control artifact | SHA-256 |
@@ -467,6 +556,12 @@ Rust tests, isolated RustFS compatibility, server build and the 66-test harness:
 [36799971965](https://github.com/crabbuild/canopy/actions/runs/36799971965) and
 [36799975428](https://github.com/crabbuild/canopy/actions/runs/36799975428).
 Those earlier commits did not contain the new expired-reply test.
+
+Both full workflows for `39829f7` also passed, including the new expired-reply
+test, workspace checks, isolated RustFS compatibility/build and 66-test harness:
+[36802086544](https://github.com/crabbuild/canopy/actions/runs/36802086544) and
+[36802089950](https://github.com/crabbuild/canopy/actions/runs/36802089950).
+CI success does not convert the local candidate seed failure to a performance pass.
 
 ## Measure the requested operations
 
@@ -582,8 +677,9 @@ The reported transfer rate is pack bytes divided by the entire POST duration, no
 steady-state capacity. Serial repetitions can warm server state; neither the
 identity check nor a new HTTP connection establishes cold ownership. Discovery,
 local validation, v2 negotiation, stock clone performance, native Git child CPU
-and provider request-cost accounting require their own evidence. The running
-candidate seed and its bound harness are unchanged.
+and provider request-cost accounting require their own evidence. The candidate
+seed's bound harness was unchanged during these observations; its later terminal
+failure is recorded above.
 
 The campaign samples each node, the proxy launcher and its own driver once per
 second with `ps`: RSS, cumulative process CPU seconds and raw CPU percentage.
