@@ -436,7 +436,75 @@ successful completions inside the offered-load window and successful throughput
 including drain. The driver observes the complete offered window; a quick final
 response must not inflate the rate by omitting the last inter-arrival interval.
 Git timings include client setup/validation where declared. Pack first-byte,
-bytes/s, CPU and provider cost still need independent measurements.
+bytes/s, CPU and provider cost still need independent live measurements.
+
+### Separate pack waiting from transfer and validation
+
+`scripts/measure_git_pack.py` adds a bounded, read-only v0 upload-pack probe.
+It requests the critical receipt's exact main commit with no haves and
+`side-band-64k`, using the [Git pack protocol](https://git-scm.com/docs/pack-protocol).
+The measurement starts before a new HTTP connection/POST and records header
+time, the first channel-1 pack byte, last pack byte and completion through final
+flush/EOF. NAK and progress-channel bytes cannot count as pack data. First-byte
+time is taken after reading one data byte, before waiting for the remainder of
+that packet; it is a client-observed boundary, not kernel arrival or server CPU.
+
+```mermaid
+sequenceDiagram
+    participant Probe
+    participant Proxy
+    participant Canopy
+    participant Git as Local validation
+    Note over Probe,Canopy: Identity and live fleet/artifact checks outside POST clock
+    Probe->>Proxy: POST want exact commit, no haves
+    Proxy->>Canopy: Forward unchanged
+    Canopy-->>Probe: Headers, NAK, progress (not pack data)
+    Canopy-->>Probe: First channel-1 pack byte
+    Note over Probe: Record first-pack-byte time before reading remainder
+    Canopy-->>Probe: Remaining pack, flush, EOF
+    Note over Probe: End POST clock; record bytes and transfer rate
+    Probe->>Git: index-pack --strict into empty object database
+    Probe->>Git: Exact wanted commit + fsck --strict --full
+    Note over Probe,Git: Validation timed separately; failure leaves incomplete receipt
+```
+
+Run only against the explicitly bound fleet, outside a scheduled load window:
+
+```sh
+export CANOPY_GIT_TOKEN='<disposable fixture token>'
+python3 -B scripts/measure_git_pack.py \
+  --fleet-dir /dedicated-volume/candidate-fleet \
+  --receipt /dedicated-volume/critical-candidate.json \
+  --output-dir /dedicated-volume/new-pack-measurement \
+  --samples 3 --timeout 30 --max-pack-bytes 268435456
+```
+
+The output binds the fleet, production executable, critical receipt and source
+digests. Each serial sample uses a new connection and retains its pack and
+validation database. HTTP errors, redirects, wrong content types, compression,
+fatal sidebands, missing/truncated/oversized data, invalid pack checksums and
+missing wanted commits cannot produce a completed sample. There are no retries
+or automatic warmup. Failed sample receipts remain incomplete, not low-latency
+successes.
+
+Eight regression tests include a real stock `git upload-pack` stream over
+fragmented loopback HTTP, complete serial measurement receipts, strict
+indexing/fsck and corrupt/missing-graph pack rejection. The complete 52-test
+Python harness passed on both Python 3.12 and 3.14. Retained final logs under
+`canopy-e07670e-candidate-W0SFiGMz` bind those results:
+
+| Final suite log | SHA-256 |
+| --- | --- |
+| `python312-pack-probe-final-suite.log` | `9e6e2636cef36997c027c275ae4f32baf6ec4d6b72717624b1784eb1ddc4b725` |
+| `python314-pack-probe-final-suite.log` | `344cc7ad10890a9c8bca494609c2f79c72cd3339b6f0b61c1644f1fea16e2d73` |
+
+This probe has not yet produced candidate RustFS measurements. Its transfer
+rate is pack bytes divided by the entire POST duration, not Ethernet bytes/s or
+steady-state capacity. Serial repetitions can warm server state; neither the
+identity check nor a new HTTP connection establishes cold ownership. Discovery,
+local validation, v2 negotiation, stock clone performance, native Git child CPU
+and provider request-cost accounting require their own evidence. The running
+candidate seed and its bound harness are unchanged.
 
 The campaign samples each node, the proxy launcher and its own driver once per
 second with `ps`: RSS, cumulative process CPU seconds and raw CPU percentage.
