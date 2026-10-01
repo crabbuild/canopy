@@ -14,8 +14,9 @@ seed and successful recovery of every recorded ACK.
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
-| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s; full owner-loss recovery running |
-| Full recovery and scheduled load | Still unqualified; no incomplete seed or narrow functional test closes these gates |
+| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s and passed initial three-owner-loss recovery; independent 200-clone audit passed |
+| Native scheduled load | First attempt failed during mandatory preflight before any window; process-lifetime reproduction retained. Replacement fleet is independently hosted; full preflight is running |
+| Performance qualification | Full scheduled load, every post-load ACK recovery, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
@@ -781,6 +782,41 @@ Regression fixtures cover SHA-1/SHA-256 pushes, wrong tips, exact-body
 differences, corrupt LFS, lost acknowledgements, tampered samples and inconsistent
 accounting. These driver checks do not themselves qualify production recovery
 or the 10,000-repository target.
+
+### Audit closed three-node campaign ledgers
+
+After the campaign process has exited, independently reconcile its reports:
+
+```sh
+python3 -B scripts/audit_three_node_campaign.py \
+  --directory /path/to/closed-campaign \
+  --manifest /path/to/canopy-corpus.json \
+  --plan docs/performance/three-node-baseline.json \
+  --fleet-dir /path/to/original-fleet \
+  --output /path/to/new-ledger-audit.json \
+  --require-complete
+```
+
+The auditor sends no Git or provider traffic. It checks input/artifact digests,
+full-corpus preflight counts, deterministic repository selection, declared
+rates/concurrency/deadlines, exact arrival sequences and outcomes, nearest-rank
+percentiles and both in-window and drained throughput. Completed errors remain
+in the main latency population; success-only latency is reported separately.
+Busy arrivals have no fabricated latency. Interrupted reports without resource
+bindings remain unqualified; sample ledgers without closed reports stop the
+audit and must be preserved for separate reconciliation.
+
+Resource summaries cover observed node self CPU/RSS and proxy protocol bytes,
+including setup/drain, not all live Git children or payload-only throughput.
+`--require-complete` writes the integrity result before rejecting an incomplete
+declared schedule. Integrity can pass while arrivals failed: read completion,
+errors and resource coverage separately. Neither this audit nor a complete
+schedule establishes owner-loss recovery. Run the full seeded-corpus,
+critical-fixture and every-ACK checks after the separately recorded owner loss.
+
+The retained failed baseline passed this audit for all 21 closed ledgers,
+20 resource-bound windows and 136 acknowledged creations. Its 108-window
+schedule is still incomplete; none of the failed recovery evidence changes.
 
 ## Measurement history
 

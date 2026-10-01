@@ -1,6 +1,6 @@
 # Compare RustFS filesystem backing
 
-**Status: full native-volume seed complete; owner-loss recovery running; performance unqualified.**
+**Status: full native seed and initial owner-loss recovery passed; replacement load preflight running; performance unqualified.**
 This shared-Mac/Colima diagnostic keeps the 10,000-repository target. It tests
 filesystem backing without replacing the bound runtime or weakening correctness.
 
@@ -56,13 +56,13 @@ flowchart LR
     ack[Every failed-seed ACK verified] --> drain[Graceful diagnostic drain]
     drain --> seed[Native full 10000 seed<br/>complete]
     seed --> loss[Three-owner loss and wait<br/>recorded]
-    loss --> recovery[All identities and Git/LFS<br/>verification running]
+    loss --> recovery[All identities and Git/LFS<br/>verification passed]
     recovery --> load[Declared 108-window load plan]
     load --> final[Second owner loss<br/>verify every load ACK and corpus]
 ```
 
 The seed and recorded fault boundary are also complete. Critical Git setup and
-critical-fixture recovery passed; full native owner-loss recovery, the
+critical-fixture and full native initial owner-loss recovery passed; the
 [declared load matrix](three-node-baseline.json),
 higher admission profiles, additional critical-operation load/fault coverage
 and matched performance comparisons remain open. No stage can substitute a
@@ -70,7 +70,7 @@ smaller corpus or retries for its required evidence.
 
 ## Gate the transition and complete load plan
 
-Two separately bound controllers are running, not completed. The recovery
+The initial recovery controller completed successfully. It
 controller waited for the exact seed and its setup controller to exit, then
 reread their final receipt. A failed/incomplete corpus, changed process
 identity, provider restart/pause/quota/mount change or source drift stops it
@@ -89,10 +89,13 @@ process absence, the expiry wait lasted **32.037 seconds**. A new fleet started
 at 03:45:31 UTC with three new IDs/PIDs and local directories, the same durable
 deployment, admission and immutable binary. Both critical repositories passed
 four exact v0/v2 ref inventories, payload/notes and strict full fsck. Full
-10,000-identity/100-fixture recovery was live at the 1,500-identity checkpoint;
-no load window had started at that checkpoint.
+10,000-identity/100-fixture recovery completed without retries. Its independent
+terminal audit rechecked all 200 local v0/v2 clones: exact HEAD/base commits,
+README/incremental bytes and strict full fsck. LFS network bytes are bound to
+the inspected verifier, not downloaded again by that local audit.
 
-The load controller requires that closed recovery evidence, all source and
+The replacement load controller requires that closed recovery evidence, its
+independent audit, all source and
 receipt digests, three recorded SIGKILLs and fresh owners. Its plan is the
 unchanged 108 windows: 114,960 offered arrivals over 8,640 offered seconds.
 Failed arrivals, interrupted windows and diagnostic gaps remain visible;
@@ -104,6 +107,48 @@ manifest/fixture validation; two load tests cover closed-recovery evidence and
 five no-launch failure cases. All signals, provider calls, Git and load traffic
 were mocked in control tests. Live read-only binding checks also passed before
 arming. These are controller guards, not actual owner-loss or performance proof.
+
+### Preserve the failed preflight and fix fixture lifetime
+
+The first load attempt failed before any scheduled window. Its mandatory
+identity preflight received `RemoteDisconnected` for
+`density-b7c039e34b54-00528` / `1096f600-8ebe-4648-ac1b-d9395ead175f`.
+The launcher and all three nodes disappeared with empty node logs and no
+launcher outcome. This is not evidence of the earlier invalid-lease-bounds
+fencing branch. The original failed campaign, controller and observer remain
+preserved; the successful initial recovery does not reclassify them.
+
+Three harmless real-tool process-lifetime trials reproduced a relevant fixture
+hazard: an attached child disappeared after its tool command ended, while a
+`start_new_session=True` child survived to its natural 45-second exit. An
+independent offline audit checked all three process/session layouts and logs.
+This supports session cleanup as the fixture explanation; it does not prove
+the particular signal that removed the real fleet or globally exclude host
+interventions. No production or Cellule behavior was changed.
+
+Actual absence of the old fleet and both controllers was recorded without
+sending signals, followed by a fresh **32.040-second** conservative wait.
+The replacement fleet is now its own persistent foreground server session,
+not a child of a finite recovery controller. It uses new node IDs, signing keys
+and local directories, but the same executable, deployment, provider, corpus,
+admission and deadlines. Its full mandatory preflight was live at the
+3,500-identity checkpoint; no timed window had started at that checkpoint.
+The unchanged 108-window attempt has a new output directory. It neither resumes
+the failed attempt nor removes a failing window.
+
+A read-only binding check and eight mocked rejection cases passed for the
+replacement controller. These reject incomplete independent recovery, a short
+expiry wait, a still-present old PID, provider changes, the wrong launcher,
+binary/deployment changes and reused node IDs. Re-running the full original
+scenario remains necessary before declaring fixture-lifetime repair verified
+end to end. Every post-load creation, push and LFS ACK still requires recovery.
+
+The separate committed ledger auditor passed against the retained failed
+baseline: 21 closed arrival ledgers, 20 bound resource windows and 136 creation
+ACKs, with the incomplete 108-window schedule explicitly retained. Nine new
+offline auditor tests brought the harness to **75 passing tests** on Python
+3.12 and 3.14. Local tests ran during recovery/preflight, not measured load
+windows; they are shared-host work, not service performance proof.
 
 ## Separate diagnostics from performance
 
@@ -156,9 +201,25 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `native-seed-observer/observation.json` | `7569827510978ba20827e57d1629b72dfc370afa8fb452773844e40c931137b8` |
 | `native-initial-owner-loss.json` | `3ed0fdb7df452bf586c1c2908f9b66546e73a8177fbbf088531b07ea73baefe7` |
 | `fleet-native-recovery/ready.json` | `2823b1e4b9ab4143fb7c9813e2717cf89d099212f50a5e8f8ad305a1d4043154` |
+| `native-seed-to-recovery.json` | `0e243c3df72c789321ebc6dbf8b25c5c5dd22cea0a304ebceb6da32fea5cfe10` |
+| `full-native-recovered.json` | `49d8acf40cc8e6cc253f7ac4db0cc8ddff143c913000b4e42ee868a40d2915de` |
+| `critical-native-recovered.json` | `1031bf601b1e63970198a385fe4f7bacae0124b6d9861a8254729f371967ef31` |
+| `initial-native-recovery-audit.json` | `0115a21f2070999189c70ecdb860af9b6f807de9b1f3fb645e53e2a2419edd20` |
+| `native-load-108/campaign.json` (failed preflight) | `f27ea086b94048d54a171ee6c93507a814b427f6140887dc2a27743d9b732e9b` |
+| `native-load-controller.json` (failed attempt) | `d646486befbf202fae8a5fb6696a1706b5fda82e39b79332936229d7a0548e4c` |
+| `lifetime-probe-RIRZo2/audit.json` | `04cec20ab1c97805ddb40355cf2399648b3ec9c2204b237e7cf69921d57c7b04` |
+| `fixture-failure-owner-exit.json` | `8deb78805eac55e248ce461955cf9078e99f851ba9ec6ed00fb952d6f2c9caf2` |
+| `serve_native_load_v2.py` | `a2c41160d59b7e7cae45164f0a8030766b4eaadc293d1cc71d5ae36846469a96` |
+| `start_native_load_v2.py` | `4585e0e0564edfee476e45a4d287ff061181fe5edd40daaadaae67475245ae1f` |
+| `fleet-native-load-v2/ready.json` | `2741766230b975811ef46b104b06a2a3904ceea4902537ba18191e73d7c7aa9b` |
+| `load-v2-check.json` | `d3a9d6522b1a7fde45b551c8bafafe485711a81fd194559aa35bcaa1aaeb4549` |
+| `harness-75-python314.log` | `07cece1c7015f5df010cca8c9b2ada28cd78fdfb33a7eb08c5d7dd63daa0cecb` |
+| `harness-75-python312.log` | `77ea19d83080755caf641792dac1c1dd093100d7131e814b6b8b807cfd0d9389` |
 
-The recovery and load controllers are still live and do not have final
-completion digests. Setup timings are not scheduled throughput.
+The baseline's new independent ledger audit is
+`5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`
+in `canopy-three-proxy-q3FO2z`. The replacement load controller is live and
+has no final completion digest. Setup timings are not scheduled throughput.
 This is not isolated Linux reference capacity, a proven Cellule bottleneck or
 a passing latest-pin executable comparison. Both hosted workflows for source
 pin `0573f489` passed
