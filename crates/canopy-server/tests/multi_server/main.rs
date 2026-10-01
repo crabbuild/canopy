@@ -38,6 +38,7 @@ mod lfs_locks;
 mod lifecycle;
 mod peers;
 mod residency;
+mod retained_catalog;
 mod tokens;
 mod transfers;
 mod visibility;
