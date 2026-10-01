@@ -2,7 +2,8 @@
 
 **Status: the old performance attempt failed and its post-load recovery is
 incomplete. The new Cellule candidate passed release tests and initial Git
-verification; its full corpus setup and performance qualification remain open.**
+verification. Its full corpus seed completed; full verification, recovery and
+performance qualification remain open.**
 
 This checkpoint supersedes earlier running/retained-artifact statements in the
 [native-filesystem trial](2026-10-01-native-filesystem.md). It keeps the original
@@ -130,6 +131,7 @@ rebuildable Cargo target directory.
 | Isolated real RustFS compatibility | All eight exact ignored provider tests passed with `scripts/qualify_size.py --provider-only --release` |
 | Three-node proxy Git behavior | The retained production executable passed all 17 critical steps against the separately bound RustFS provider |
 | CI at `5b2f95c` | Both Rust and harness jobs passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36898604222) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36898599990) |
+| CI at `7d09597` | All four Rust/harness checks passed in the [PR workflow](https://github.com/crabbuild/canopy/actions/runs/36904766930) and [branch workflow](https://github.com/crabbuild/canopy/actions/runs/36904761443) |
 
 The eight provider gates cover SHA-256 round trips and native merge candidates,
 signed HTTP push options, signed SHA-256 SSH, stock SSH, bulk refs, partial clones
@@ -163,8 +165,29 @@ are retained on failure. Serial seed time is not scheduled creation throughput.
 
 Four offline seed-guard tests passed with 18 rejection cases for scope trimming,
 invalid or duplicate ACK identities and changed Git/LFS expectations. They do not
-prove that the live corpus completed. Full verification, fresh-owner recovery,
+prove remote Git/LFS delivery or recovery. Full verification, fresh-owner recovery,
 the original 108-window matrix and every new ACK after load remain separate gates.
+
+The seed process exited successfully at **19:02:14 UTC**. Its closed manifest
+contains all **10,000 identities, 100 populated Git fixtures and 100 LFS objects**;
+the setup controller validated their expected identities and payload declarations.
+The serial seed took 3,852.843 seconds. This is setup duration, not scheduled
+creation throughput. At 19:09 UTC, the separate full-corpus verifier is running against the
+same three owners and unchanged RustFS provider; setup alone does not establish
+that all remote Git/LFS bytes survive owner loss.
+
+The initial fault, independent fresh fleet and full recovery controllers are
+armed behind that verifier. The original 108-window matrix waits for full initial
+recovery. Separate post-load fault, independent fresh fleet and every-ACK recovery
+controllers are also armed, but have not signaled any post-load owner or passed
+recovery. They require an independent replay of all closed ledgers and resource
+boundaries. Failed performance does not discard ACKs or prevent their recovery
+check; an interrupted or reduced matrix cannot satisfy this gate.
+
+Eleven offline post-load guard tests passed, covering complete arrival/ACK
+accounting, changed kernel identities, launcher resumption after a signal or
+receipt-write failure, and rejection of missing corpus/critical/ACK coverage.
+These are local helper tests, not actual owner-loss or delivered-body proof.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -188,16 +211,40 @@ rebuildable Cargo target:
 | `seed_full_corpus.py` | `7bbd79a6dae40fec4809720970d80a8465be4c8df4d63c242a4d59ef63a6fc0e` |
 | `seed-guard-tests.log` | `3c82e7c0a92ea5b6efa559b91d414936635fdf034fc5182b260ab7d2c0d07cc8` |
 
-The live seed manifest, controller receipt and log are changing outputs, not
-closed evidence. Do not use their intermediate counts as a complete-corpus result.
+The seed manifest, controller receipt and log are now closed:
+
+| Closed seed artifact | SHA-256 |
+| --- | --- |
+| `corpus-10000.json` | `9ce7da04a7642bc7342d204c874cabf39ceea6c40ffd51211797687f4dd46397` |
+| `seed-controller.json` | `b93d3e4ab71f2f8e98f63efd29b67c2477bd7089e8658a941368d81a162a2f1c` |
+| `seed.log` | `be3fdb0b01b04c6205ce456ec8c33230cac9a7f27175c8645ebd63606d62a7b7` |
+
+### Independent evidence backup
+
+A new backup under
+`/Volumes/Workspace/CrabData/canopy-evidence-backup-BwYz7P-bYyTQg`
+is outside Cargo targets and on a different filesystem from the evidence root.
+The initial copy contains 270 files: all 15 then-published closed artifacts and
+all 256 build bindings, with one shared helper counted once. Every source and
+copy digest matched, and a separate read replayed all copied digests. The closed
+full seed was copied separately only after its process actually exited.
+
+`closed-backup.json` has SHA-256
+`4622fa3b31ca5eeb76ccfd48e4a352480e262f173efeb0dce676ff0afd879a41`;
+`full-seed-backup.json` has SHA-256
+`8f95fc0073c6156792c766b7539ca1e3fb1e7ce4908f0559ababdfcab0b49521`.
+This local preservation does not recover the old missing ledgers or constitute
+an off-machine backup. Private fleet configs and changing verifier/load receipts
+are excluded. Their existence or intermediate counts are not passing results.
 
 | Required gate | Current status |
 | --- | --- |
 | Exact new artifact and source provenance | Passed locked build and current binding checks |
 | Rust workspace correctness and RustFS Git/LFS compatibility | Passed release suite, eight provider gates and initial 17-step proxy check |
 | New-pin non-sparse 5-GiB transfer | Open; excluded by `--provider-only` |
-| Full 10,000 identities/100 populated fixtures | Seed running; full verification and fresh-owner recovery open |
-| Original matrix, critical Git load and every new ACK after owner loss | Open |
+| Full 10,000 identities/100 populated fixtures | Full seed closed; remote verification running and fresh-owner recovery pending |
+| Original matrix and every new ACK after owner loss | Controllers armed behind prerequisite gates; no timed-load or recovery pass |
+| Critical concurrent Git load and fault coverage | Open; separate from the initial 17-step functional check |
 | Higher admission profiles and matched comparisons | Open |
 | New upstream `0dc04a6` artifact and runtime qualification | Open; separate from the bound `c51dd121` experiment |
 | Old campaign every-ACK recovery | Unverified; original raw inputs unavailable |
