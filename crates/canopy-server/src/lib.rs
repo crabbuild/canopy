@@ -47,6 +47,7 @@ mod native_git;
 mod object_batch;
 mod object_chunks;
 mod object_reads;
+mod pack_store;
 pub mod pulls;
 mod push;
 mod refs;
@@ -88,9 +89,9 @@ const COMMANDS: [OperationDescriptor; 9] = [
     operation_with_codec(4, 6),
     OperationDescriptor {
         input_limit: object_batch::INPUT_LIMIT,
-        ..operation_with_codec(5, 3)
+        ..operation_with_codec(5, 5)
     },
-    operation_with_codec(6, 2),
+    operation_with_codec(6, 3),
     operation_with_codec(7, 2),
     operation_with_codec(8, 2),
     operation_with_codec(9, 4),
@@ -143,6 +144,11 @@ pub enum ObjectStorage {
         size: u64,
         blake3: [u8; 32],
     },
+    Packed {
+        size: u64,
+        blake3: [u8; 32],
+        pack: [u8; 32],
+    },
     External {
         size: u64,
         blake3: [u8; 32],
@@ -187,6 +193,9 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_batch/mod.rs"));
                 source.update(include_bytes!("object_chunks/mod.rs"));
                 source.update(include_bytes!("object_reads/mod.rs"));
+                source.update(include_bytes!("pack_store.rs"));
+                source.update(include_bytes!("git_objects/mod.rs"));
+                source.update(include_bytes!("git_gateway/mod.rs"));
                 source.update(include_bytes!(
                     "../../canopy-object-storage/src/blob/mod.rs"
                 ));
@@ -284,6 +293,7 @@ pub struct RepositoryCell {
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
+    pack_reader: OnceLock<std::sync::Arc<pack_store::PackReader>>,
 }
 
 impl RepositoryCell {
@@ -310,6 +320,7 @@ impl RepositoryCell {
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
+            pack_reader: OnceLock::new(),
         })
     }
 
@@ -341,7 +352,7 @@ impl RepositoryCell {
                 SqlBatch {
                     statements: vec![SqlStatement {
                         sql:
-                            "SELECT kind, body, digest, size, chunk_id FROM objects WHERE oid = ?1"
+                            "SELECT kind, body, digest, size, chunk_id, storage, external_sha256 FROM objects WHERE oid = ?1"
                                 .into(),
                         parameters: vec![SqlValue::Blob(oid.to_vec())],
                     }],
@@ -360,6 +371,8 @@ impl RepositoryCell {
             SqlValue::Blob(digest),
             SqlValue::Integer(size),
             upload,
+            SqlValue::Text(storage),
+            locator,
         ] = row.as_slice()
         else {
             return Err(cellule_runtime::InvocationError::NotStarted(
@@ -377,6 +390,59 @@ impl RepositoryCell {
                 ));
             }
         };
+        if storage == "packed" {
+            let SqlValue::Blob(pack) = locator else {
+                return Err(cellule_runtime::InvocationError::NotStarted(
+                    Error::Command("invalid pack locator"),
+                ));
+            };
+            let pack: [u8; 32] = pack.as_slice().try_into().map_err(|_| {
+                cellule_runtime::InvocationError::NotStarted(Error::Command("invalid pack locator"))
+            })?;
+            if *size < 0 || *size > INLINE_OBJECT_LIMIT as i64 {
+                return Err(cellule_runtime::InvocationError::NotStarted(
+                    Error::Command("object exceeds bounded body reader"),
+                ));
+            }
+            let record = self.pack_record(pack).await?;
+            let reader =
+                self.pack_reader
+                    .get()
+                    .ok_or(cellule_runtime::InvocationError::NotStarted(
+                        Error::Command("packed reader unavailable"),
+                    ))?;
+            let body = reader
+                .read_blob(
+                    record,
+                    oid,
+                    *size as u64,
+                    digest.as_slice().try_into().map_err(|_| {
+                        cellule_runtime::InvocationError::NotStarted(Error::Command(
+                            "invalid packed digest",
+                        ))
+                    })?,
+                )
+                .await
+                .map_err(|error| {
+                    cellule_runtime::InvocationError::NotStarted(Error::Facility {
+                        name: "packed Git body",
+                        source: Box::new(error),
+                    })
+                })?;
+            if kind != ObjectKind::Blob
+                || body.len() as i64 != *size
+                || object_id(oid.format(), kind, &body) != oid
+                || blake3::hash(&body).as_bytes() != digest.as_slice()
+            {
+                return Err(cellule_runtime::InvocationError::NotStarted(
+                    Error::Command("corrupt packed Git body"),
+                ));
+            }
+            return Ok(Observed {
+                output: Some((kind, body)),
+                receipt: result.receipt,
+            });
+        }
         let body = match (body, upload) {
             (SqlValue::Blob(bytes), SqlValue::Null)
                 if usize::try_from(*size).ok() == Some(bytes.len()) =>
