@@ -587,6 +587,40 @@ only Git, and do not close operation-specific CPU/GiB accounting without
 independently verified child boundaries. Historical `ps` results are unchanged;
 no child CPU is retroactively imputed to the failed baseline.
 
+The committed reader (`6199a73`) completed 120 live samples during seeding, from
+00:40:22 to 00:42:22 UTC on October 1. Independent checks confirmed exact
+indices 0..119, all three bound PIDs, unchanged process identities and raw
+counter/timebase-derived totals over about 120.551 seconds:
+
+| Candidate node PID | Self CPU seconds | Mean self CPU (%) | Reaped-child CPU seconds |
+| --- | ---: | ---: | ---: |
+| 87409 | 5.483475 | 4.548687 | 0 |
+| 88175 | 0.125026 | 0.103713 | 0 |
+| 88533 | 0.108677 | 0.090150 | 0 |
+
+Zero charged child CPU in this interval is not proof that no children were
+live. A separate retained `check_cpu_during_pack.py` calibration then bracketed
+three verified, read-only pack requests during the still-active seed. All three
+node identities stayed unchanged and their reaped-child counters increased:
+48.400, 45.548 and 39.485 ms, respectively, over about 4.525 seconds. Every pack
+was 1,153 bytes and passed strict indexing, exact wanted-commit validation and
+full strict fsck. This verifies that the reader observes Canopy child rollup;
+the overlapping seed and unclosed child boundaries prevent Git-only,
+per-request or CPU/GiB attribution. No writes or fleet restarts were introduced.
+
+| Candidate-volume artifact | SHA-256 |
+| --- | --- |
+| `kernel-cpu-during-seed/observation.json` | `b48364c7c908da7789481d181d8c82d0026284e3a4c1d621e60625e0ae0feea5` |
+| `kernel-cpu-during-seed/samples.jsonl` | `482ce4ebe4a5d2cb18fe3f2f88253dd6418b8e17f2bd799a4320a70d7eb2bca8` |
+| `kernel-cpu-pack-calibration.json` | `0be6c1653fbd7dd34b2d12638b063d2a86c122d47379a2f43d39d7bebb5ff007` |
+| `pack-probe-under-cpu-check/measurement.json` | `85bef58670c8e797375f4719d37766846788615be748b106362d51be1f50aab3` |
+
+Both Linux-hosted harness jobs for `6199a73` also passed all 59 tests:
+[workflow 36797306682](https://github.com/crabbuild/canopy/actions/runs/36797306682)
+and [workflow 36797311677](https://github.com/crabbuild/canopy/actions/runs/36797311677).
+That includes native Linux tick calibration and waited-child rollup; it does
+not qualify the hosted Rust/provider jobs while those are still running.
+
 A separate read-only observer records dedicated RustFS container CPU/memory
 samples about every six seconds, beginning during full-corpus preflight. Its
 binding includes the observer digest, campaign PID, container ID and start time;
