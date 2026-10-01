@@ -113,8 +113,12 @@ async fn slow_deployment_read_does_not_block_node_lease_renewal() -> Result {
 async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     let files = tempfile::TempDir::new()?;
     let store = Arc::new(PausedStore::default());
-    let address = available_address().await?;
-    let settings = config(address, files.path().join("node"));
+    let competing_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = competing_listener.local_addr()?;
+    let mut settings = config(address, files.path().join("node"));
+    // Bind only when preflight finishes; an address observed before the
+    // 31-second pause is not a reservation against parallel tests.
+    settings.listen.set_port(0);
     let layout = cellule_runtime::ltx::CellStorageLayout::new(
         cellule_store::Store::new(store.clone()),
         settings.store_prefix.clone(),
@@ -123,6 +127,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     *store.read.lock().unwrap() = Some((layout.release_path(), 1));
     let startup = tokio::spawn(CanopyServer::start(settings, store.clone()));
     store.wait().await?;
+    // Keep the originally selected port occupied throughout startup so this
+    // regression cannot pass by merely winning the released-port race.
     // Deployment validation happens before this node owns any Cell. Its I/O
     // must not spend the node authority lease used by subsequent startup.
     tokio::time::sleep(Duration::from_secs(31)).await;
@@ -133,6 +139,8 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
     )?;
     store.proceed.notify_one();
     let server = timeout(Duration::from_secs(10), startup).await???;
+    let actual_address = server.local_addr();
+    assert_ne!(actual_address, address);
     let initial = store
         .initial_advertisement
         .lock()
@@ -143,8 +151,9 @@ async fn startup_preflight_does_not_consume_the_node_lease() -> Result {
         .as_str()
         .ok_or("advertisement issue time missing")?
         .parse::<i64>()?;
-    create_repository(address, "after-slow-preflight").await?;
+    create_repository(actual_address, "after-slow-preflight").await?;
     server.shutdown().await?;
+    drop(competing_listener);
     assert!(
         issued >= preflight_finished,
         "preflight consumed the initial node lease"
@@ -194,6 +203,67 @@ async fn delayed_renewal_reply_does_not_extend_confirmed_authority() -> Result {
             Err(error) => error.is_connect(),
         },
         "node served readiness beyond its confirmed advertisement expiry: {readiness:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expired_successful_renewal_reply_cannot_reopen_ingress() -> Result {
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let mut settings = config(available_address().await?, files.path().join("node"));
+    settings.listen.set_port(0);
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    let address = server.local_addr();
+    store.delay_renewals.store(true, Ordering::SeqCst);
+    store.wait().await?;
+    let expires = store
+        .renewal_expiry
+        .lock()
+        .unwrap()
+        .ok_or("renewal expiry missing")?;
+    let now = || -> Result<i64> {
+        Ok(i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?)
+    };
+    // The conditional write has succeeded. Hold only its reply past the
+    // signed replacement expiry, not merely past the previous lease.
+    let remaining = u64::try_from(expires - now()? + 200)?;
+    tokio::time::sleep(Duration::from_millis(remaining)).await;
+    let expired_at_reply = now()?;
+    store.delay_renewals.store(false, Ordering::SeqCst);
+    store.proceed.notify_one();
+    // No caller stop signal: only the server's own terminal fence may end
+    // supervision. An explicit shutdown could hide an unsafe revival.
+    let shutdown = timeout(
+        Duration::from_secs(10),
+        server.serve_until(std::future::pending::<std::io::Result<()>>()),
+    )
+    .await?;
+    let readiness = reqwest::Client::new()
+        .get(format!("http://{address}/readyz"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await;
+    assert!(expired_at_reply > expires);
+    assert!(
+        matches!(
+            shutdown,
+            Err(canopy_server::server::ServerError::Runtime(
+                cellule_runtime::Error::Fenced
+            ))
+        ),
+        "expired successful refresh did not fence: {shutdown:?}"
+    );
+    assert!(
+        match &readiness {
+            Ok(response) => response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            Err(error) => error.is_connect(),
+        },
+        "expired refresh reopened ingress: {readiness:?}"
     );
     Ok(())
 }
