@@ -291,6 +291,13 @@ Those defaults are not proof of effective runtime settings or a fix here;
 old upstream reports do not justify blindly toggling either knob in this bound
 attempt. No live limit, environment or source was changed during verification.
 
+The pinned [console collector](https://github.com/rustfs/rustfs/blob/d47f54bfb2f39f48bd1adda334bd27e151fe85b8/crates/ecstore/src/services/metrics_realtime.rs)
+defines MEM as `1 << 6` but leaves that collection branch unimplemented. A
+separate signed `types=64` request completed with empty aggregated/by-host/by-disk
+samples. That is an **instrumentation gap**, not zero allocator usage or evidence
+that memory is safe. Its raw receipt is retained separately from the scanner
+probe; allocator attribution remains open.
+
 Two offline admission-plan tests passed, including exact full-matrix retention
 and rejection of corpus/rate/duration/trimming changes. Independent normalized
 diffs confirm that the 500- and 1,000-entry variants change only admission.
@@ -384,6 +391,7 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `load-4g-guard-tests.log` | `ad1dabaf6fd44b97c2ba48c91cc833bc69a88c2e8baf813908fc24f5d1465527` |
 | `load-4g-check.json` | `6865f1c3646548feed611843d84a5eb1daa635801e5df78e3c3862ad63b93a61` |
 | `native-recovery-4g-memory-probe.json` | `b078266a61591ff18db05e0efabdca1e11433452e8898ffe65b9bf1e6ae91129` |
+| `native-recovery-4g-allocator-probe.json` | `47da1e7f9ade991395715eaa211bdd830e48578f214622c85c4c9519e258381d` |
 | `higher-admission-plans-v1/preparation.json` | `f2fec01bc047cbe800580b3c8515fcaf2ab29c3af1aee8fee0ba9327a163bc85` |
 
 The baseline's new independent ledger audit is
