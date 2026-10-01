@@ -28,6 +28,16 @@ pub(super) async fn graph(
     operation: [u8; 16],
     blobs: usize,
 ) -> Result<Graph> {
+    graph_with_run_limits(fixture, provider, store, operation, blobs, limits()).await
+}
+pub(super) async fn graph_with_run_limits(
+    fixture: &Fixture,
+    provider: Arc<dyn object_store::ObjectStore>,
+    store: Arc<ArtifactStore>,
+    operation: [u8; 16],
+    blobs: usize,
+    run_limits: crate::packs::metadata::MetadataLimits,
+) -> Result<Graph> {
     let (base, _, _) = opened(fixture, operation, Arc::clone(&store)).await?;
     let native = prepared_for_store(
         fixture.format,
@@ -55,7 +65,14 @@ pub(super) async fn graph(
         .oid;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(256 << 20);
-    let mut builder = CatalogPreparation::new(root.path(), budget.clone(), base, limits()).await?;
+    let mut builder = CatalogPreparation::new_with_run_limits(
+        root.path(),
+        budget.clone(),
+        base,
+        limits(),
+        run_limits,
+    )
+    .await?;
     let (witness, segments) = physical(&native, root.path(), budget.clone()).await?;
     builder.begin_pack(witness)?;
     for segment in segments {

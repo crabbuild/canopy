@@ -236,6 +236,50 @@ impl DirectoryRun {
             )?
             .collect::<rusqlite::Result<_>>()?)
     }
+    /// Recompute the complete canonical fold from bounded pages, optionally
+    /// consuming them in a private merge. The returned edge count is unique
+    /// within this run. Artifact authentication alone cannot replace this check.
+    pub(in crate::packs) fn verify_inventory(&self) -> Result<u64, MetadataError> {
+        self.verify_entries(|_| Ok(()))
+    }
+    pub(super) fn verify_entries(
+        &self,
+        mut consume: impl FnMut(&[DirectoryEntry]) -> Result<(), MetadataError>,
+    ) -> Result<u64, MetadataError> {
+        let mut after = None;
+        let mut count = 0_u64;
+        let mut edges = 0_u64;
+        let mut inventory = inventory_seed(self.descriptor.format);
+        let mut first = None;
+        loop {
+            let entries = self.entries_after(after)?;
+            if entries.is_empty() {
+                break;
+            }
+            for entry in &entries {
+                let oid = entry.header.object.oid;
+                if after.is_some_and(|last| last >= oid) {
+                    return Err(MetadataError::Integrity);
+                }
+                first.get_or_insert(oid);
+                inventory = fold_header(inventory, count, entry.header);
+                count = count.checked_add(1).ok_or(MetadataError::Limit)?;
+                edges = edges
+                    .checked_add(entry.header.edge_count)
+                    .ok_or(MetadataError::Limit)?;
+                after = Some(oid);
+            }
+            consume(&entries)?;
+        }
+        if count != self.descriptor.object_count
+            || inventory != self.descriptor.inventory_digest
+            || first != Some(self.descriptor.first_oid)
+            || after != Some(self.descriptor.last_oid)
+        {
+            return Err(MetadataError::Integrity);
+        }
+        Ok(edges)
+    }
     pub async fn upload(
         self: Arc<Self>,
         store: &ArtifactStore,

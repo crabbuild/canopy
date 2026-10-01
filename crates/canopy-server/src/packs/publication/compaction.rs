@@ -15,9 +15,12 @@ use std::{path::Path, sync::Arc};
 use tokio::time::timeout_at;
 mod prepare;
 mod publish;
+mod range;
 pub use publish::{
     CheckCompletedCompaction, CompactionReply, PublishCatalogCompaction, PublishedCompaction,
 };
+pub use range::CompactionSource;
+use range::RangeSelection;
 
 #[derive(Clone, Copy)]
 pub struct CompactionLimits {
@@ -52,11 +55,16 @@ impl CompactionLimits {
         Ok(())
     }
 }
+#[derive(Clone)]
+enum Selection {
+    Ingress(Vec<NodeRef>),
+    Range(Box<RangeSelection>),
+}
 /// Only preparation from query-derived certified inputs constructs this object.
-/// It retains exact selected input roots for rebinding against a moving frontier.
+/// It retains exact selected inputs for rebinding against a moving frontier.
 pub struct PreparedCompaction {
     base: Arc<PreparationBaseResolver>,
-    selected: Vec<NodeRef>,
+    selected: Selection,
     output: NodeRef,
     catalog: StoredCatalog,
     object_count: u64,
@@ -112,9 +120,10 @@ impl PreparedCompaction {
         .await
         .map_err(|_| PreparationBaseError::Inactive)?
     }
-    /// Exact selected roots must still occupy level zero. If another compaction
-    /// replaced/moved one, reject rather than resurrecting an obsolete placement.
-    /// Concurrent ingress keeps its own roots and the current source tree.
+    /// Selected inputs must still occupy their certified positions. A range
+    /// selection can rebind unrelated level updates, but replaced inputs or new
+    /// overlapping target runs reject rather than resurrect obsolete placement.
+    /// Concurrent ingress and the current source tree are preserved.
     pub async fn reconcile(&self) -> Result<Self, CatalogPreparationError> {
         let (_, deadline) = self.base.live_lease()?;
         timeout_at(deadline, async {
@@ -143,20 +152,34 @@ impl PreparedCompaction {
 }
 async fn replacement(
     base: &PreparationBaseResolver,
-    selected: &[NodeRef],
+    selected: &Selection,
     output: NodeRef,
 ) -> Result<StoredCatalog, CatalogPreparationError> {
     let (mut directory, sources) = base.catalog_parts();
-    if selected.len() < 2
-        || selected
-            .iter()
-            .any(|root| !directory.level_zero.contains(root))
-    {
-        return Err(crate::packs::directory::index::IndexError::Stale.into());
-    }
-    directory.level_zero.retain(|root| !selected.contains(root));
     let indexes = base.indexes();
-    directory.append(indexes.ranges(), output).await?;
+    match selected {
+        Selection::Ingress(selected) => {
+            if selected.len() < 2
+                || selected
+                    .iter()
+                    .any(|root| !directory.level_zero.contains(root))
+            {
+                return Err(crate::packs::directory::index::IndexError::Stale.into());
+            }
+            directory.level_zero.retain(|root| !selected.contains(root));
+            directory.append(indexes.ranges(), output).await?;
+        }
+        Selection::Range(selected) => {
+            selected
+                .replace(
+                    &mut directory,
+                    indexes.ranges(),
+                    base.context().operation,
+                    output,
+                )
+                .await?;
+        }
+    }
     let store = indexes.store();
     let operation = base.context_token().artifact_operation;
     Ok(CatalogSnapshot {

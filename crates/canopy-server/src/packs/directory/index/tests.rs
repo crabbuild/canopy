@@ -352,3 +352,73 @@ fn source_nodes_use_typed_keys_separate_domains_and_bounded_leaf_codecs() -> Res
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn bounded_overlap_seek_includes_enclosing_ranges_and_rejects_truncation() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (index, _store) = index(format);
+        let mut root = None;
+        for n in 0..600 {
+            root = Some(index.insert(root, [5; 16], run(n, format)).await?);
+        }
+        index.clear_cache()?;
+        let before = index.stats();
+        assert_eq!(
+            index
+                .overlapping(root, oid(898, format), oid(904, format), 3)
+                .await?,
+            vec![run(299, format), run(300, format), run(301, format)]
+        );
+        assert!(index.stats().loaded_nodes - before.loaded_nodes <= 4);
+        // Endpoint inside a run, endpoint in a gap, exact touching endpoints.
+        assert_eq!(
+            index
+                .overlapping(root, oid(901, format), oid(901, format), 1)
+                .await?,
+            vec![run(300, format)]
+        );
+        assert_eq!(
+            index
+                .overlapping(root, oid(900, format), oid(900, format), 0)
+                .await?,
+            vec![]
+        );
+        assert!(matches!(
+            index
+                .overlapping(root, oid(898, format), oid(904, format), 2)
+                .await,
+            Err(IndexError::Limit)
+        ));
+        assert!(matches!(
+            index
+                .overlapping(root, oid(901, format), oid(902, format), 0)
+                .await,
+            Err(IndexError::Limit)
+        ));
+        assert!(matches!(
+            index
+                .overlapping(root, oid(904, format), oid(898, format), 3)
+                .await,
+            Err(IndexError::Integrity)
+        ));
+        assert!(matches!(
+            index
+                .overlapping(root, oid(1, format), oid(2, format), MAX_RANGE_RECORDS + 1)
+                .await,
+            Err(IndexError::Limit)
+        ));
+        assert!(
+            index
+                .overlapping(root, oid(1801, format), oid(1802, format), 0)
+                .await?
+                .is_empty()
+        );
+        assert!(
+            index
+                .overlapping(None, oid(1, format), oid(2, format), 0)
+                .await?
+                .is_empty()
+        );
+    }
+    Ok(())
+}

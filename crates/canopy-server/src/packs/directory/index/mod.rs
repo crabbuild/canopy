@@ -21,6 +21,7 @@ pub const FANOUT: usize = 256;
 pub const NODE_BYTES: u32 = 64 << 10;
 pub const MAX_HEIGHT: u8 = 7;
 const CACHE_NODES: usize = 64;
+pub const MAX_RANGE_RECORDS: usize = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
@@ -348,6 +349,47 @@ impl<R: IndexRecord> RangeIndex<R> {
                 }
             }
         }
+    }
+    /// All records intersecting an inclusive interval, including an enclosing
+    /// record whose first key precedes the interval. Fail rather than truncate
+    /// when the caller's bounded selection budget is exceeded. Seeking reads
+    /// one path; subsequent cursor work is proportional to intersecting leaves.
+    pub async fn overlapping(
+        &self,
+        root: Option<NodeRef<R>>,
+        first: R::Key,
+        last: R::Key,
+        limit: usize,
+    ) -> Result<Vec<R>, IndexError> {
+        if !first.valid(self.format) || !last.valid(self.format) || first > last {
+            return Err(IndexError::Integrity);
+        }
+        if limit > MAX_RANGE_RECORDS {
+            return Err(IndexError::Limit);
+        }
+        let mut selected = Vec::new();
+        let Some(start) = self
+            .successor(root, first)
+            .await?
+            .filter(|run| run.first_key() <= last)
+        else {
+            return Ok(selected);
+        };
+        if limit == 0 {
+            return Err(IndexError::Limit);
+        }
+        selected.push(start);
+        let mut cursor = self.cursor(root, Some(start.first_key()))?;
+        while let Some(run) = cursor.next().await? {
+            if run.first_key() > last {
+                break;
+            }
+            if selected.len() == limit {
+                return Err(IndexError::Limit);
+            }
+            selected.push(run);
+        }
+        Ok(selected)
     }
     pub async fn find(
         &self,

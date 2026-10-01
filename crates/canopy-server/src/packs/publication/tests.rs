@@ -714,41 +714,27 @@ async fn expired_attempts_cannot_renew_and_reaping_respects_bounded_indexed_work
             .is_none()
     );
     let owner = fixture.handle.owner_fence();
-    fixture
-        .handle
-        .execute(
-            identity()?,
-            Digest::from_bytes([64; 32]),
-            sql::now(0)?,
-            1,
-            0,
+    // Fixture preparation is bounded too: reuse parsed statements and avoid a
+    // monolithic setup competing with unrelated native verifier test workers.
+    // The full quota and the publisher/reaper deadlines below remain unchanged.
+    for first in (1..MAX_OPERATIONS).step_by(REAP_ROWS as usize) {
+        let last = (first + REAP_ROWS).min(MAX_OPERATIONS);
+        fixture.handle.execute(
+            identity()?, Digest::from_bytes([65; 32]), sql::now(0)?, 128, 0,
             move |tx| {
-                for n in 1..MAX_OPERATIONS {
+                let mut pin = tx.prepare("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,0,0)")?;
+                let mut operation = tx.prepare("INSERT INTO catalog_operations(id,actor,request_digest,incarnation,owner_epoch,admission_sequence,artifact_operation,generation,expires_at_ms) VALUES(?1,'owner',?2,?3,?4,?5,?6,0,0)")?;
+                for n in first..last {
                     let mut id = [0u8; 16];
                     id[..8].copy_from_slice(&n.to_be_bytes());
                     let seq = 1_000_000 + n as i64;
-                    tx.execute(
-                        "INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,0,0)",
-                        rusqlite::params![owner.incarnation.as_bytes().as_slice(), seq, id.as_slice(), owner.epoch.to_be_bytes().as_slice(), artifact_number(seq as u64).as_slice()],
-                    )?;
-                    tx.execute(
-                        "INSERT INTO catalog_operations(id,actor,request_digest,incarnation,owner_epoch,admission_sequence,artifact_operation,generation,expires_at_ms) VALUES(?1,'owner',?2,?3,?4,?5,?6,0,0)",
-                        rusqlite::params![
-                            id.as_slice(),
-                            [17u8; 32].as_slice(),
-                            owner.incarnation.as_bytes().as_slice(),
-                            owner.epoch.to_be_bytes().as_slice(),
-                            seq,
-                            artifact_number(seq as u64).as_slice()
-                        ],
-                    )?;
+                    pin.execute(rusqlite::params![owner.incarnation.as_bytes().as_slice(), seq, id.as_slice(), owner.epoch.to_be_bytes().as_slice(), artifact_number(seq as u64).as_slice()])?;
+                    operation.execute(rusqlite::params![id.as_slice(), [17u8; 32].as_slice(), owner.incarnation.as_bytes().as_slice(), owner.epoch.to_be_bytes().as_slice(), seq, artifact_number(seq as u64).as_slice()])?;
                 }
-                Ok(cellule_runtime::cell::executor::HandlerOutcome::Success(
-                    Vec::new(),
-                ))
+                Ok(cellule_runtime::cell::executor::HandlerOutcome::Success(Vec::new()))
             },
-        )
-        .await?;
+        ).await?;
+    }
     rejected(
         client
             .command::<BeginPreparation>(&fixture.target, identity()?, fixture.begin([26; 16]))

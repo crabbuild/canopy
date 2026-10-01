@@ -93,7 +93,7 @@ impl Command for PublishCatalogCompaction {
         let Some((data, key)) = authenticate(context, &certificate, None, None)? else {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
-        if !data.compaction || data.object_count == 0 || data.input_count < 2 {
+        if !data.compaction || data.object_count == 0 || data.input_count == 0 {
             return Ok(denied(PreparationDenial::Unauthorized));
         }
         let Some(format) = authorized(

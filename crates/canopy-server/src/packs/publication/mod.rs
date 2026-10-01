@@ -44,8 +44,8 @@ pub use coordinator::{
 mod commands;
 mod compaction;
 pub use compaction::{
-    CheckCompletedCompaction, CompactionLimits, CompactionReply, PreparedCompaction,
-    PublishCatalogCompaction, PublishedCompaction,
+    CheckCompletedCompaction, CompactionLimits, CompactionReply, CompactionSource,
+    PreparedCompaction, PublishCatalogCompaction, PublishedCompaction,
 };
 mod sql;
 pub use commands::{

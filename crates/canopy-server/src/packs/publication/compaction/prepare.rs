@@ -34,27 +34,7 @@ impl PreparedCompaction {
         inputs.sort_by_key(|root| (root.operation, root.artifact.digest));
         let root = root.to_owned();
         timeout_at(deadline, async {
-            let (client, target, check) = base.capability();
-            let sql = cellule_runtime::primitives::sql::SqlCell::<RepositoryModule>::new(
-                client.clone(),
-                target.clone(),
-            )
-            .map_err(|_| PreparationBaseError::Context)?;
-            let role = sql
-                .query(
-                    None,
-                    SqlBatch {
-                        statements: vec![access_statement(&check.actor)],
-                    },
-                )
-                .await
-                .map_err(|_| PreparationBaseError::Inactive)?;
-            if !decode_access(&role.output)
-                .map_err(|_| PreparationBaseError::Context)?
-                .is_some_and(|role| role >= TokenScope::Admin)
-            {
-                return Err(PreparationBaseError::Inactive.into());
-            }
+            check_admin(&base).await?;
             Self::prepare_inner(root, budget, base, inputs, limits).await
         })
         .await
@@ -68,32 +48,13 @@ impl PreparedCompaction {
         limits: CompactionLimits,
     ) -> Result<Self, CatalogPreparationError> {
         let context = base.context();
-        let builder_budget = budget.clone();
-        let mut builder = tokio::task::spawn_blocking(move || {
-            let workspace = Arc::new(
-                tempfile::Builder::new()
-                    .prefix("canopy-compaction-")
-                    .tempdir_in(root)?,
-            );
-            let mut builder = DirectoryBuilder::new(
-                workspace.path(),
-                builder_budget,
-                context.repository,
-                context.operation,
-                context.format,
-                limits.spool,
-            )?;
-            builder.retain_workspace(workspace);
-            Ok::<_, MetadataError>(builder)
-        })
-        .await??;
+        let mut builder = new_builder(root, budget.clone(), &base, limits.spool).await?;
         let mut binding = BoundedEncoder::new(16 << 10)?;
         binding.write_bytes(b"canopy.ingress-compaction.v1\0")?;
         binding.write_bytes(&context.repository)?;
         binding.write_u8(context.format.bytes() as u8)?;
         binding.write_count(selected.len())?;
         let indexes = base.indexes();
-        let files = base.files();
         let mut input_count = 0_u64;
         let mut input_bytes = 0_u64;
         for &root in &selected {
@@ -117,15 +78,7 @@ impl PreparedCompaction {
                 if input_count > u64::from(limits.input_runs) || input_bytes > limits.input_bytes {
                     return Err(MetadataError::Limit.into());
                 }
-                let run = RunLoader::load(&*files, stored).await?;
-                builder = tokio::task::spawn_blocking(move || {
-                    if run.descriptor() != stored.run {
-                        return Err(MetadataError::Integrity);
-                    }
-                    builder.add_run(&run)?;
-                    Ok::<_, MetadataError>(builder)
-                })
-                .await??;
+                builder = copy_run(builder, &base, stored).await?;
                 base.live_lease()?;
             }
             // Summaries cover one disjoint run set, not the union of overlapping
@@ -139,43 +92,9 @@ impl PreparedCompaction {
                 return Err(CatalogPreparationError::Integrity);
             }
         }
-        let (mut partitioner, descriptor, edge_count) = tokio::task::spawn_blocking(move || {
-            let (run, edges) = builder.seal_with_edges()?;
-            let descriptor = run.descriptor();
-            Ok::<_, MetadataError>((
-                DirectoryPartitioner::new(Arc::new(run), budget, limits.output)?,
-                descriptor,
-                edges,
-            ))
-        })
-        .await??;
-        let store = indexes.store();
-        let mut output = None;
-        loop {
-            let (next, retained) = tokio::task::spawn_blocking(move || {
-                let next = partitioner.next_run()?;
-                Ok::<_, MetadataError>((next, partitioner))
-            })
-            .await??;
-            partitioner = retained;
-            let Some(run) = next else {
-                break;
-            };
-            output = Some(
-                indexes
-                    .ranges()
-                    .insert(output, context.operation, run.upload(&store).await?)
-                    .await?,
-            );
-            base.live_lease()?;
-        }
-        let output = output.ok_or(CatalogPreparationError::Integrity)?;
-        if output.object_count != descriptor.object_count
-            || output.first_key != descriptor.first_oid
-            || output.last_key != descriptor.last_oid
-        {
-            return Err(CatalogPreparationError::Integrity);
-        }
+        let (output, descriptor, edge_count) =
+            finish_output(builder, budget, &base, limits.output).await?;
+        let selected = Selection::Ingress(selected);
         let catalog = replacement(&base, &selected, output).await?;
         base.live_lease()?;
         Ok(Self {
@@ -190,4 +109,122 @@ impl PreparedCompaction {
             inventory_digest: descriptor.inventory_digest,
         })
     }
+}
+
+pub(super) async fn check_admin(
+    base: &PreparationBaseResolver,
+) -> Result<(), CatalogPreparationError> {
+    let (client, target, check) = base.capability();
+    let sql = cellule_runtime::primitives::sql::SqlCell::<RepositoryModule>::new(
+        client.clone(),
+        target.clone(),
+    )
+    .map_err(|_| PreparationBaseError::Context)?;
+    let role = sql
+        .query(
+            None,
+            SqlBatch {
+                statements: vec![access_statement(&check.actor)],
+            },
+        )
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)?;
+    if !decode_access(&role.output)
+        .map_err(|_| PreparationBaseError::Context)?
+        .is_some_and(|role| role >= TokenScope::Admin)
+    {
+        return Err(PreparationBaseError::Inactive.into());
+    }
+    Ok(())
+}
+pub(super) async fn new_builder(
+    root: std::path::PathBuf,
+    budget: DiskBudget,
+    base: &PreparationBaseResolver,
+    limits: MetadataLimits,
+) -> Result<DirectoryBuilder, CatalogPreparationError> {
+    let context = base.context();
+    tokio::task::spawn_blocking(move || {
+        let workspace = Arc::new(
+            tempfile::Builder::new()
+                .prefix("canopy-compaction-")
+                .tempdir_in(root)?,
+        );
+        let mut builder = DirectoryBuilder::new(
+            workspace.path(),
+            budget,
+            context.repository,
+            context.operation,
+            context.format,
+            limits,
+        )?;
+        builder.retain_workspace(workspace);
+        Ok::<_, MetadataError>(builder)
+    })
+    .await?
+    .map_err(Into::into)
+}
+pub(super) async fn copy_run(
+    builder: DirectoryBuilder,
+    base: &PreparationBaseResolver,
+    stored: crate::packs::directory::StoredRun,
+) -> Result<DirectoryBuilder, CatalogPreparationError> {
+    let run = RunLoader::load(&*base.files(), stored).await?;
+    tokio::task::spawn_blocking(move || {
+        let mut builder = builder;
+        if run.descriptor() != stored.run {
+            return Err(MetadataError::Integrity);
+        }
+        builder.add_run(&run)?;
+        Ok::<_, MetadataError>(builder)
+    })
+    .await?
+    .map_err(Into::into)
+}
+pub(super) async fn finish_output(
+    builder: DirectoryBuilder,
+    budget: DiskBudget,
+    base: &PreparationBaseResolver,
+    limits: MetadataLimits,
+) -> Result<(NodeRef, crate::packs::directory::RunDescriptor, u64), CatalogPreparationError> {
+    let indexes = base.indexes();
+    let context = base.context();
+    let (mut partitioner, descriptor, edge_count) = tokio::task::spawn_blocking(move || {
+        let (run, edges) = builder.seal_with_edges()?;
+        let descriptor = run.descriptor();
+        Ok::<_, MetadataError>((
+            DirectoryPartitioner::new(Arc::new(run), budget, limits)?,
+            descriptor,
+            edges,
+        ))
+    })
+    .await??;
+    let store = indexes.store();
+    let mut output = None;
+    loop {
+        let (next, retained) = tokio::task::spawn_blocking(move || {
+            let next = partitioner.next_run()?;
+            Ok::<_, MetadataError>((next, partitioner))
+        })
+        .await??;
+        partitioner = retained;
+        let Some(run) = next else {
+            break;
+        };
+        output = Some(
+            indexes
+                .ranges()
+                .insert(output, context.operation, run.upload(&store).await?)
+                .await?,
+        );
+        base.live_lease()?;
+    }
+    let output = output.ok_or(CatalogPreparationError::Integrity)?;
+    if output.object_count != descriptor.object_count
+        || output.first_key != descriptor.first_oid
+        || output.last_key != descriptor.last_oid
+    {
+        return Err(CatalogPreparationError::Integrity);
+    }
+    Ok((output, descriptor, edge_count))
 }

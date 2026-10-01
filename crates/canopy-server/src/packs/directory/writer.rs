@@ -108,34 +108,7 @@ impl DirectoryBuilder {
             return Err(MetadataError::Integrity);
         }
         self.failed = true;
-        let mut after = None;
-        let mut copied = 0_u64;
-        let mut inventory = inventory_seed(self.format);
-        let mut first = None;
-        loop {
-            let entries = run.entries_after(after)?;
-            if entries.is_empty() {
-                break;
-            }
-            for entry in &entries {
-                let oid = entry.header.object.oid;
-                if after.is_some_and(|last| last >= oid) {
-                    return Err(MetadataError::Integrity);
-                }
-                first.get_or_insert(oid);
-                inventory = fold_header(inventory, copied, entry.header);
-                copied = copied.checked_add(1).ok_or(MetadataError::Limit)?;
-                after = Some(oid);
-            }
-            self.put_entries(&entries)?;
-        }
-        if copied != descriptor.object_count
-            || inventory != descriptor.inventory_digest
-            || first != Some(descriptor.first_oid)
-            || after != Some(descriptor.last_oid)
-        {
-            return Err(MetadataError::Integrity);
-        }
+        run.verify_entries(|entries| self.put_entries(entries))?;
         self.failed = false;
         Ok(())
     }

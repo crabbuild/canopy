@@ -14,6 +14,10 @@ async fn compaction_copy_checks_each_full_input_inventory_and_poisons_partial_me
             1 => run.descriptor.inventory_digest[0] ^= 1,
             _ => run.descriptor.first_oid = ObjectId::Sha256([1; 32]),
         }
+        assert!(matches!(
+            run.verify_inventory(),
+            Err(MetadataError::Integrity)
+        ));
         let mut merged = directory(&fixture, budget.clone())?;
         assert!(matches!(
             merged.add_run(&run),
