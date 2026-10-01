@@ -312,6 +312,46 @@ passes. Provider/binary/admission/deadlines stay fixed; no automatic retries,
 restarts or data deletion are permitted. This is an armed gate, not a recovered
 ACK claim or completed load result.
 
+### Prepare concurrent critical workflows as a separate gate
+
+The new [critical-workflow driver](../../scripts/benchmark_critical_git.py)
+schedules the complete existing 17-step stock-Git suite through a validated
+three-node/proxy fleet. Each workflow creates two unique disposable repositories
+and covers atomic publication/refusal, mixed refusal, correct/stale force leases,
+shallow history, v0/v2 filtered lazy fetch, incremental push/pull, deletion,
+pruning, mirroring, invalid credentials and exact mirror/fsck checks.
+
+```sh
+# After the current complete matrix and every-ACK recovery gates close:
+python3 -B scripts/benchmark_critical_git.py \
+  --fleet-dir "$CRITICAL_FLEET_DIR" --node-active-limit 100 \
+  run --output-dir "$CRITICAL_OUTPUT_DIR" \
+  --duration 300 --interval 15 --concurrency 4
+```
+
+This example offers 20 whole workflows over 300 seconds with up to four in
+flight. It is **prepared, not executed**; it adds no traffic to the live matrix.
+It cannot replace the original 108 windows or higher-admission comparisons.
+
+| Driver evidence | Boundary |
+| --- | --- |
+| Complete arrival ledger | Every workflow or busy drop retained; no backpressure-induced clock slowdown or automatic retry |
+| Workflow throughput/latency | Separate offered-window and drained throughput; latency includes failed attempts, dispatch delay and client/validation work |
+| Critical step timings | All recorded successes and failures retained; grouped command wall times, not isolated RPC throughput or server-only latency |
+| ACK evidence | Each attempted receipt is digest-bound; partial workflows and orphan receipts stop recovery for reconciliation rather than silently skipping writes |
+| Fresh-owner verification | All complete workflows checked; a failure does not skip other complete workflows; refused/reused owners and failed load remain explicit |
+
+The driver's verification command sends no signals. The caller must separately
+record actual old-process loss, expiry wait, fresh local state, unchanged provider
+and complete original-corpus recovery. In-flight fault/partial-ACK reconciliation,
+resource/cost boundaries and an actual concurrent critical run remain open.
+Nine new offline scheduler and receipt/recovery tests passed, and all **84
+harness tests** passed on local Python 3.14 during mandatory preflight, not
+measured load. These tests mock Git/provider operations and do not establish
+any live result. The real scheduler test retains a simulated failed worker's
+partial receipt and verifies client closure; recovery tests check refusal of
+reused owners and continued verification after another workflow fails.
+
 The closed observer reached a sampled maximum `memory.current` of 4,294,967,296
 bytes. At its final sample (06:27:17 UTC), current memory was 4,108,148,736 bytes,
 anonymous memory 1,552,654,336 bytes and file memory 1,404,837,888 bytes. The
@@ -473,6 +513,7 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `cellule-a450-source-audit.json` | `87bac9bc1c54e8fba393cfec424436532086e0810f03f48b957c5d6cfb5d01a3` |
 | `harness-38a51dd-linux-36823311167-job.log` | `963a1636810e0efdc768e1d6f4c8297f3d3b07c7d441e99919ee8969d8ab0bcf` |
 | `rust-38a51dd-linux-36823311167-job.log` | `2384cf85dc36736bb8560902e71227ba823b3120cbb109856b2a040159f99842` |
+| `harness-84-critical-driver.log` | `ca0bd3cb47be225672e608b5b7a60f036ea82ef15df2d3b58b36ecf8dcafc437` |
 
 The baseline's new independent ledger audit is
 `5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`

@@ -22,6 +22,7 @@ seed and successful recovery of every recorded ACK.
 | Native scheduled load | First attempt failed before any window. Independent-session V2 passed full preflight, then RustFS was cgroup-OOM killed: six closed windows, one interrupted prefix and 101 unstarted windows retained |
 | Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; full 10K/100 and critical-2 recovery passed, with independent 200-clone/four-mirror audits |
 | New complete load attempt | Original 108-window/114,960-arrival matrix launched after terminal recovery; mandatory full preflight running, no timed window completed at this checkpoint; every-ACK controller captured the actual campaign identity |
+| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) prepared with nine offline tests; retains the full 17-step suite and every attempted receipt, but no live critical-load/fault result is claimed |
 | Performance qualification | Full scheduled load, every post-load ACK recovery, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
