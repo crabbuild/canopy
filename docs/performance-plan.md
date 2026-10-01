@@ -21,7 +21,7 @@ seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
-| Latest Cellule candidate | `c51dd121` locked release build, 227 Rust tests, eight real-RustFS compatibility gates and initial 17-step three-node/proxy Git check passed; new full 10K/100 seed closed and remote verification running |
+| Latest Cellule candidate | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. Downstream fault/load gates stopped without owner signals; cause unresolved |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |

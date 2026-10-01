@@ -2,8 +2,8 @@
 
 **Status: the old performance attempt failed and its post-load recovery is
 incomplete. The new Cellule candidate passed release tests and initial Git
-verification. Its full corpus seed completed; full verification, recovery and
-performance qualification remain open.**
+verification. Its full corpus seed completed, but remote verification failed
+with HTTP 503. Recovery and timed load did not start.**
 
 This checkpoint supersedes earlier running/retained-artifact statements in the
 [native-filesystem trial](2026-10-01-native-filesystem.md). It keeps the original
@@ -176,18 +176,43 @@ creation throughput. At 19:09 UTC, the separate full-corpus verifier is running 
 same three owners and unchanged RustFS provider; setup alone does not establish
 that all remote Git/LFS bytes survive owner loss.
 
-The initial fault, independent fresh fleet and full recovery controllers are
-armed behind that verifier. The original 108-window matrix waits for full initial
-recovery. Separate post-load fault, independent fresh fleet and every-ACK recovery
-controllers are also armed, but have not signaled any post-load owner or passed
-recovery. They require an independent replay of all closed ledgers and resource
-boundaries. Failed performance does not discard ACKs or prevent their recovery
-check; an interrupted or reduced matrix cannot satisfy this gate.
+The initial fault, independent fresh fleet, full recovery and original 108-window
+matrix controllers were armed behind that verifier. Separate post-load fault,
+independent fresh fleet and every-ACK recovery controllers were also armed.
+All stopped after the verification failure, without owner signals or timed load.
+The post-load gate requires an independent replay of all closed ledgers and
+resource boundaries. Failed performance would not discard ACKs or prevent their
+recovery check; an interrupted or reduced matrix cannot satisfy this gate.
 
 Eleven offline post-load guard tests passed, covering complete arrival/ACK
 accounting, changed kernel identities, launcher resumption after a signal or
 receipt-write failure, and rejection of missing corpus/critical/ACK coverage.
 These are local helper tests, not actual owner-loss or delivered-body proof.
+
+### Remote verification failed
+
+At **19:10:19 UTC**, the verifier exited 1 on HTTP 503 for
+`density-3a92b05e1d80-07076` (`f2a0f25e-9db4-4a16-8a5b-1db1d43aeac9`),
+request ID `6a4a923c-fbe1-419a-8943-930c7a02a67c`. Its last progress line was
+6,800/10,000 identities; that is not the exact count of completed concurrent
+requests or a passing prefix. No complete Git/LFS result was returned.
+At the same second, node 0 logged `repository directory operation failed`
+without an underlying error chain or request ID. That message does not establish
+the root cause or identify a Cellule bottleneck.
+
+All eight finite gate/launcher processes subsequently exited. The original
+three owners remained live, and the rejected post-load receipt contains an
+empty signal list. There is no new recovery fleet or timed campaign directory.
+Their terminal receipts and logs have verified independent-filesystem copies;
+the provider retained its original start time, zero restarts and zero recorded
+cgroup OOM events. Neither the failures nor the data were discarded or reseeded.
+
+A separate read-only replay of the failed identity and its original 16-entry
+batch returned matching identities on all 67 requests. It did not reproduce
+the 503 and does not overturn the original failure. A metadata-only diagnostic
+across all 10,000 identities is running with concurrency 16 and the same
+30-second HTTP deadline. It excludes Git/LFS body checks and is not a replacement
+qualification run. The cause remains unresolved.
 
 New closed files are under
 `/Users/haipingfu/.codex/canopy-three-node-evidence-BwYz7P`, separately from the
@@ -219,6 +244,12 @@ The seed manifest, controller receipt and log are now closed:
 | `seed-controller.json` | `b93d3e4ab71f2f8e98f63efd29b67c2477bd7089e8658a941368d81a162a2f1c` |
 | `seed.log` | `be3fdb0b01b04c6205ce456ec8c33230cac9a7f27175c8645ebd63606d62a7b7` |
 
+| Closed failed verification or diagnostic | SHA-256 |
+| --- | --- |
+| `full-seed-verification.json` | `981dd75f4bc0fc1605cc06b579d9966b0c597ac64e2c5e4c6e3a29a9561fdf01` |
+| `full-seed-verification.log` | `273e945deb34c5792e12da3d7d4a01819cc80e402a55ea64d04346c1a25be593` |
+| `identity-503-replay.json` | `2410d2c63edcd1d4700b20bb795dc680b012190517a3ee063f3f87904c174caf` |
+
 ### Independent evidence backup
 
 A new backup under
@@ -242,8 +273,8 @@ are excluded. Their existence or intermediate counts are not passing results.
 | Exact new artifact and source provenance | Passed locked build and current binding checks |
 | Rust workspace correctness and RustFS Git/LFS compatibility | Passed release suite, eight provider gates and initial 17-step proxy check |
 | New-pin non-sparse 5-GiB transfer | Open; excluded by `--provider-only` |
-| Full 10,000 identities/100 populated fixtures | Full seed closed; remote verification running and fresh-owner recovery pending |
-| Original matrix and every new ACK after owner loss | Controllers armed behind prerequisite gates; no timed-load or recovery pass |
+| Full 10,000 identities/100 populated fixtures | Full seed closed; remote verification failed HTTP 503; cause unresolved |
+| Original matrix and every new ACK after owner loss | Downstream gates stopped without owner signals or timed load; recovery open |
 | Critical concurrent Git load and fault coverage | Open; separate from the initial 17-step functional check |
 | Higher admission profiles and matched comparisons | Open |
 | New upstream `0dc04a6` artifact and runtime qualification | Open; separate from the bound `c51dd121` experiment |
