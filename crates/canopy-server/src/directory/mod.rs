@@ -31,7 +31,11 @@ pub const SCHEMA: &str = include_str!("../directory_schema.sql");
 pub const REPOSITORY_PAGE_SIZE: usize = 32;
 
 const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation(3)];
-const QUERIES: [OperationDescriptor; 2] = [operation(2), operation(4)];
+const QUERIES: [OperationDescriptor; 3] = [
+    operation(2),
+    operation(4),
+    timed_sql::AUTHENTICATE_OPERATION,
+];
 
 const fn operation(id: u32) -> OperationDescriptor {
     OperationDescriptor {
@@ -100,7 +104,8 @@ impl CellModule for DirectoryModule {
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<timed_sql::CredentialCommand>()?;
-        registry.bind_query::<timed_sql::CredentialQuery>()
+        registry.bind_query::<timed_sql::CredentialQuery>()?;
+        registry.bind_query::<timed_sql::AuthenticateQuery>()
     }
 }
 
@@ -305,12 +310,10 @@ impl DirectoryCell {
         token_digest: [u8; 32],
         minimum: Option<Receipt>,
     ) -> Result<Observed<Option<Principal>>, InvocationError<Vec<SqlResultSet>>> {
-        let result = self.credential_query(minimum, SqlBatch {
-            statements: vec![SqlStatement {
-                sql: "SELECT a.name, t.scope, t.id FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?2 AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1".into(),
-                parameters: vec![SqlValue::Blob(token_digest.to_vec())],
-            }],
-        }).await?;
+        let result = self
+            .application
+            .query::<timed_sql::AuthenticateQuery>(&self.target, minimum, token_digest.to_vec())
+            .await?;
         let principal = result
             .output
             .first()
