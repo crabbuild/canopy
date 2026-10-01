@@ -5,9 +5,10 @@ It separates demonstrated behavior from proposed targets. The current Cellule
 dependency pin is `a4500add51764fa0415791aefbfa561db6ada203`, an upstream
 web/documentation advance with the same Rust crate tree and root Cargo objects
 as `0573f489` and `e07670e`. Locked metadata resolves all six packages to the
-new commit without unrelated dependency changes. Hosted verification for the
-previous source pin passed; the latest-pin production artifact and three-node
-qualification remain separate open gates. None establishes reference capacity.
+new commit without unrelated dependency changes. Both hosted Rust and harness
+jobs passed for source head `38a51dd` with this pin; the latest-pin local
+production artifact and three-node qualification remain separate open gates.
+None establishes reference capacity.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
@@ -19,7 +20,8 @@ seed and successful recovery of every recorded ACK.
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
 | Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s and passed initial three-owner-loss recovery; independent 200-clone audit passed |
 | Native scheduled load | First attempt failed before any window. Independent-session V2 passed full preflight, then RustFS was cgroup-OOM killed: six closed windows, one interrupted prefix and 101 unstarted windows retained |
-| Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; critical-2 recovery passed, full 10K/100 recovery running |
+| Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; full 10K/100 and critical-2 recovery passed, with independent 200-clone/four-mirror audits |
+| New complete load attempt | Original 108-window/114,960-arrival matrix launched after terminal recovery; mandatory full preflight running, no timed window completed at this checkpoint; every-ACK controller captured the actual campaign identity |
 | Performance qualification | Full scheduled load, every post-load ACK recovery, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
