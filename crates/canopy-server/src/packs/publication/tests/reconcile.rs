@@ -544,7 +544,12 @@ async fn reconciliation_rejects_canonical_body_and_graph_conflicts_in_the_new_ba
                 fixture.repository,
                 format,
             );
-            snapshot.append(run)?;
+            let indexes = base.indexes();
+            let run_root = indexes
+                .ranges()
+                .insert(None, base.context().operation, run)
+                .await?;
+            snapshot.append(indexes.ranges(), run_root).await?;
             let catalog = CatalogSnapshot {
                 directory: snapshot.upload(&store, base.context().operation).await?,
                 sources: Some(source),

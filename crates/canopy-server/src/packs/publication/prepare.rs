@@ -4,7 +4,11 @@ use super::*;
 use crate::packs::{
     catalog::CatalogSnapshot,
     closure::{ClosureError, ClosureVerifier, RetainedClosure},
-    directory::{DirectoryBuilder, StoredRun, index::IndexError, snapshot::DirectorySnapshot},
+    directory::{
+        DirectoryBuilder, DirectoryPartitioner, RUN_TARGET_BYTES,
+        index::{IndexError, NodeRef},
+        snapshot::DirectorySnapshot,
+    },
     metadata::{MetadataError, MetadataLimits, MetadataSegment},
     sources::{NativePackDescriptor, SourceIndex, SourceRecord, SourceRoot},
     verification::{PhysicalError, PhysicalPackWitness},
@@ -43,7 +47,7 @@ pub struct PreparedCatalog {
     input_count: u64,
     inputs_digest: [u8; 32],
     inventory_digest: [u8; 32],
-    incoming_run: Option<StoredRun>,
+    incoming_root: Option<NodeRef>,
     incoming_sources: Option<SourceRoot>,
     closure: Arc<RetainedClosure>,
 }
@@ -87,10 +91,10 @@ impl PreparedCatalog {
             } else {
                 self.closure.reconcile(base.context(), &*base).await?;
                 let (mut directory, sources) = base.catalog_parts();
-                if let Some(run) = self.incoming_run {
-                    directory.append(run)?;
-                }
                 let indexes = base.indexes();
+                if let Some(root) = self.incoming_root {
+                    directory.append(indexes.ranges(), root).await?;
+                }
                 let store = indexes.store();
                 let sources = merge_sources(
                     &indexes.sources(),
@@ -117,7 +121,7 @@ impl PreparedCatalog {
                 input_count: self.input_count,
                 inputs_digest: self.inputs_digest,
                 inventory_digest: self.inventory_digest,
-                incoming_run: self.incoming_run,
+                incoming_root: self.incoming_root,
                 incoming_sources: self.incoming_sources,
                 closure: Arc::clone(&self.closure),
             })
@@ -162,6 +166,8 @@ pub struct CatalogPreparation {
     incoming_sources: Option<SourceRoot>,
     snapshot: DirectorySnapshot,
     directory: Option<DirectoryBuilder>,
+    budget: DiskBudget,
+    output_limits: MetadataLimits,
     closure: Option<ClosureVerifier>,
     active: Option<NativePackDescriptor>,
     failed: bool,
@@ -173,6 +179,28 @@ impl CatalogPreparation {
         base: Arc<PreparationBaseResolver>,
         limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
+        Self::new_with_run_limits(
+            root,
+            budget,
+            base,
+            limits,
+            MetadataLimits {
+                max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
+                ..limits
+            },
+        )
+        .await
+    }
+    /// Separate the incoming verification spool class from bounded immutable
+    /// output runs. Larger spool admission never raises the point-lookup bound.
+    pub async fn new_with_run_limits(
+        root: &Path,
+        budget: DiskBudget,
+        base: Arc<PreparationBaseResolver>,
+        limits: MetadataLimits,
+        output_limits: MetadataLimits,
+    ) -> Result<Self, CatalogPreparationError> {
+        DirectoryPartitioner::validate_limits(output_limits)?;
         let (lease, deadline) = base.live_lease()?;
         let indexes = base.indexes();
         let (snapshot, source_root) = base.catalog_parts();
@@ -194,10 +222,11 @@ impl CatalogPreparation {
                 limits,
             )
             .await?;
+            let directory_budget = budget.clone();
             let directory = tokio::task::spawn_blocking(move || {
                 let mut builder = DirectoryBuilder::new(
                     workspace.path(),
-                    budget,
+                    directory_budget,
                     lease.token.repository,
                     lease.token.artifact_operation,
                     lease.format,
@@ -216,6 +245,8 @@ impl CatalogPreparation {
                 incoming_sources: None,
                 snapshot,
                 directory: Some(directory),
+                budget,
+                output_limits,
                 closure: Some(closure),
                 active: None,
                 failed: false,
@@ -343,26 +374,51 @@ impl CatalogPreparation {
             .directory
             .take()
             .ok_or(CatalogPreparationError::Integrity)?;
-        let run = tokio::task::spawn_blocking(move || {
+        let budget = self.budget;
+        let limits = self.output_limits;
+        let (partitioner, witness) = tokio::task::spawn_blocking(move || {
             if witness.object_count() == 0 {
                 drop(directory);
                 Ok((None, witness))
             } else {
                 let run = directory.seal()?;
                 witness.verify_run(run.descriptor())?;
-                Ok::<_, CatalogPreparationError>((Some(Arc::new(run)), witness))
+                let partitioner = DirectoryPartitioner::new(Arc::new(run), budget, limits)?;
+                Ok::<_, CatalogPreparationError>((Some(partitioner), witness))
             }
         })
         .await??;
-        let (run, witness) = run;
-        let incoming_run = match run {
-            Some(run) => {
+        let indexes = self.base.indexes();
+        let index = indexes.ranges();
+        let mut incoming_root = None;
+        if let Some(mut partitioner) = partitioner {
+            loop {
+                let (next, retained) = tokio::task::spawn_blocking(move || {
+                    let next = partitioner.next_run()?;
+                    Ok::<_, MetadataError>((next, partitioner))
+                })
+                .await??;
+                partitioner = retained;
+                let Some(run) = next else {
+                    break;
+                };
                 let stored = run.upload(&self.store).await?;
-                self.snapshot.append(stored)?;
-                Some(stored)
+                incoming_root = Some(
+                    index
+                        .insert(incoming_root, context.operation, stored)
+                        .await?,
+                );
             }
-            None => None,
-        };
+            // Exhaustion checked the exact canonical inventory before any root
+            // can escape this private preparation. Earlier uploads grant no authority.
+        }
+        match (incoming_root, witness.object_count()) {
+            (Some(root), count) if count > 0 && root.object_count == count => {
+                self.snapshot.append(index, root).await?;
+            }
+            (None, 0) => {}
+            _ => return Err(CatalogPreparationError::Integrity),
+        }
         self.source_root = merge_sources(
             &self.sources,
             self.source_root,
@@ -384,7 +440,7 @@ impl CatalogPreparation {
             input_count: witness.input_count(),
             inputs_digest: witness.inputs_digest(),
             inventory_digest: witness.inventory_digest(),
-            incoming_run,
+            incoming_root,
             incoming_sources: self.incoming_sources,
             closure: Arc::new(closure),
         })

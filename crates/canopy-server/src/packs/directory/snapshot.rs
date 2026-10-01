@@ -10,17 +10,18 @@ use std::future::Future;
 mod codec;
 pub use codec::StoredSnapshot;
 
-pub const LEVEL_ZERO_RUNS: usize = 32;
+pub const LEVEL_ZERO_ROOTS: usize = 32;
 pub const MAX_LEVELS: usize = 16;
-pub const MAX_SELECTED_RUNS: usize = LEVEL_ZERO_RUNS + MAX_LEVELS;
+pub const MAX_SELECTED_RUNS: usize = LEVEL_ZERO_ROOTS + MAX_LEVELS;
 
-/// Higher-level roots each index disjoint OID ranges. Only level 0 overlaps.
-/// No point lookup materializes every run descriptor in a level.
+/// Every root indexes disjoint OID ranges. Different level-zero roots may
+/// overlap, but a partitioned ingress batch consumes only one root slot.
+/// No point lookup materializes every run descriptor in a root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectorySnapshot {
     pub repository: [u8; 16],
     pub format: ObjectFormat,
-    pub level_zero: Vec<StoredRun>,
+    pub level_zero: Vec<NodeRef>,
     pub levels: Vec<Option<NodeRef>>,
 }
 pub trait RunLoader: Sync {
@@ -39,15 +40,12 @@ impl DirectorySnapshot {
         }
     }
     pub fn validate(&self) -> Result<(), IndexError> {
-        if self.level_zero.len() > LEVEL_ZERO_RUNS || self.levels.len() > MAX_LEVELS {
+        if self.level_zero.len() > LEVEL_ZERO_ROOTS || self.levels.len() > MAX_LEVELS {
             return Err(IndexError::Limit);
         }
-        for (at, run) in self.level_zero.iter().enumerate() {
-            run.validate()?;
-            if run.run.repository != self.repository
-                || run.run.format != self.format
-                || self.level_zero[..at].contains(run)
-            {
+        for (at, root) in self.level_zero.iter().enumerate() {
+            root.validate(self.format)?;
+            if self.level_zero[..at].contains(root) {
                 return Err(IndexError::Integrity);
             }
         }
@@ -57,20 +55,21 @@ impl DirectorySnapshot {
         Ok(())
     }
     /// Bounded ingress. When full, preparation must wait/reject until admitted
-    /// compaction publishes a replacement root; it cannot append extra runs.
-    pub fn append(&mut self, run: StoredRun) -> Result<(), IndexError> {
+    /// compaction publishes a replacement root; it cannot append extra roots.
+    /// Authenticate the run-set root in this repository before accepting it.
+    pub async fn append(&mut self, index: &RangeIndex, root: NodeRef) -> Result<(), IndexError> {
         self.validate()?;
-        run.validate()?;
-        if run.run.repository != self.repository || run.run.format != self.format {
+        if index.repository() != self.repository || index.format() != self.format {
             return Err(IndexError::Integrity);
         }
-        if self.level_zero.contains(&run) {
+        index.validate_root(root).await?;
+        if self.level_zero.contains(&root) {
             return Ok(());
         }
-        if self.level_zero.len() == LEVEL_ZERO_RUNS {
+        if self.level_zero.len() == LEVEL_ZERO_ROOTS {
             return Err(IndexError::Limit);
         }
-        self.level_zero.push(run);
+        self.level_zero.push(root);
         Ok(())
     }
     pub async fn selected_runs(
@@ -85,14 +84,15 @@ impl DirectorySnapshot {
         if oid.format() != self.format {
             return Ok(Vec::new());
         }
-        let mut selected = self
+        let mut selected = Vec::new();
+        for root in self
             .level_zero
             .iter()
-            .filter(|run| run.run.first_oid <= oid && oid <= run.run.last_oid)
             .copied()
-            .collect::<Vec<_>>();
-        for root in &self.levels {
-            if let Some(run) = index.find(*root, oid).await?
+            .map(Some)
+            .chain(self.levels.iter().copied())
+        {
+            if let Some(run) = index.find(root, oid).await?
                 && !selected.contains(&run)
             {
                 selected.push(run);

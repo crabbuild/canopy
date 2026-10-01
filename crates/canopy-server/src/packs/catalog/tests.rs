@@ -82,14 +82,15 @@ pub(in crate::packs) async fn prepared_for_repository(
     )?;
     directory.add_segment(&segment)?;
     let run = Arc::new(directory.seal()?).upload(&store).await?;
+    let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), format));
+    let root = indexes.ranges().insert(None, [5; 16], run).await?;
     let mut directory = DirectorySnapshot::empty(repository, format);
-    directory.append(run)?;
+    directory.append(indexes.ranges(), root).await?;
     let snapshot = CatalogSnapshot {
         directory: directory.upload(&store, [7; 16]).await?,
         sources: Some(sources),
     };
     let stored = snapshot.upload(&store, [8; 16]).await?;
-    let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), format));
     Ok(Prepared {
         fixture,
         store,

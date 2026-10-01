@@ -2,6 +2,9 @@ use super::*;
 use crate::packs::metadata::tests::{Fixture, builder, fill, fixture, limits};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
+mod partition;
+mod partition_lifetime;
+
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn segment(fixture: &Fixture, budget: DiskBudget, operation: [u8; 16]) -> Result<MetadataSegment> {
     let mut identity = fixture.identity;
@@ -375,7 +378,7 @@ impl snapshot::RunLoader for Loaded {
 
 #[tokio::test]
 async fn snapshot_bounds_selection_and_roundtrips_authenticated_root_bytes() -> Result {
-    use snapshot::{DirectorySnapshot, LEVEL_ZERO_RUNS, MAX_LEVELS, MAX_SELECTED_RUNS};
+    use snapshot::{DirectorySnapshot, LEVEL_ZERO_ROOTS, MAX_LEVELS, MAX_SELECTED_RUNS};
     let fixture = fixture(ObjectFormat::Sha256, 4).await?;
     let budget = DiskBudget::new(128 << 20);
     let source = segment(&fixture, budget.clone(), [1; 16])?;
@@ -402,19 +405,18 @@ async fn snapshot_bounds_selection_and_roundtrips_authenticated_root_bytes() -> 
         let run = Arc::new(writer.seal()?);
         let stored = Arc::clone(&run).upload(&artifacts).await?;
         loaded.0.push(run);
-        if n < LEVEL_ZERO_RUNS {
-            snapshot.append(stored)?;
+        let root = index.insert(None, [n as u8 + 70; 16], stored).await?;
+        if n < LEVEL_ZERO_ROOTS {
+            snapshot.append(&index, root).await?;
         } else if n < MAX_SELECTED_RUNS {
-            snapshot
-                .levels
-                .push(Some(index.insert(None, [n as u8 + 70; 16], stored).await?));
+            snapshot.levels.push(Some(root));
         } else {
             assert!(matches!(
-                snapshot.append(stored),
+                snapshot.append(&index, root).await,
                 Err(index::IndexError::Limit)
             ));
         }
-        last = Some(stored);
+        last = Some(root);
     }
     assert_eq!(snapshot.levels.len(), MAX_LEVELS);
     let oid = *fixture.objects.keys().next().ok_or("oid")?;
@@ -442,6 +444,17 @@ async fn snapshot_bounds_selection_and_roundtrips_authenticated_root_bytes() -> 
     let restored = DirectorySnapshot::download(&artifacts, stored).await?;
     assert_eq!(restored, snapshot);
     let bytes = snapshot.encode([90; 16])?;
+    let mut old_layout = bytes.clone();
+    let domain = b"canopy.directory-root.v2\0";
+    let at = old_layout
+        .windows(domain.len())
+        .position(|bytes| bytes == domain)
+        .ok_or("domain")?;
+    old_layout[at + domain.len() - 2] = b'1';
+    assert!(matches!(
+        DirectorySnapshot::decode(&old_layout),
+        Err(index::IndexError::Integrity)
+    ));
     for length in [0, 1, bytes.len() - 1] {
         assert!(DirectorySnapshot::decode(&bytes[..length]).is_err());
     }
@@ -496,7 +509,8 @@ async fn newer_placement_does_not_hide_conflicting_canonical_headers_in_other_le
     let bad_stored = Arc::clone(&bad_run).upload(&artifacts).await?;
     let mut snapshot =
         DirectorySnapshot::empty(fixture.identity.repository, fixture.identity.format);
-    snapshot.append(new_stored)?;
+    let new_root = index.insert(None, [72; 16], new_stored).await?;
+    snapshot.append(&index, new_root).await?;
     snapshot
         .levels
         .push(Some(index.insert(None, [70; 16], bad_stored).await?));
@@ -512,7 +526,7 @@ async fn newer_placement_does_not_hide_conflicting_canonical_headers_in_other_le
     ));
     let mut legitimate =
         DirectorySnapshot::empty(fixture.identity.repository, fixture.identity.format);
-    legitimate.append(new_stored)?;
+    legitimate.append(&index, new_root).await?;
     let old = Arc::new(first);
     let old_stored = Arc::clone(&old).upload(&artifacts).await?;
     legitimate

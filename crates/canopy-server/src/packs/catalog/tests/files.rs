@@ -25,7 +25,13 @@ fn files(
 async fn run(prepared: &Prepared) -> Result<StoredRun> {
     let snapshot =
         DirectorySnapshot::download(&prepared.store, prepared.snapshot.directory).await?;
-    Ok(*snapshot.level_zero.first().ok_or("run")?)
+    let root = *snapshot.level_zero.first().ok_or("root")?;
+    Ok(prepared
+        .indexes
+        .ranges()
+        .find(Some(root), root.first_key)
+        .await?
+        .ok_or("run")?)
 }
 async fn source(prepared: &Prepared) -> Result<SourceRecord> {
     let run = run(prepared).await?;
@@ -249,6 +255,12 @@ fn canceled_queued_sql_lookup_retains_file_and_private_directory_until_worker_ex
     drop(borrowed);
     let ranges = RangeIndex::new(Arc::clone(&prepared.store), ObjectFormat::Sha1);
     let oid = *prepared.fixture.objects.keys().next().ok_or("oid")?;
+    // Isolate the SQL cancellation boundary: cold range-node transfer is a
+    // distinct async step, while this test must enqueue the file-pinned read.
+    assert_eq!(
+        runtime.block_on(snapshot.selected_runs(&ranges, oid))?,
+        vec![stored]
+    );
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let blocker = runtime.spawn_blocking(move || {
@@ -397,7 +409,12 @@ async fn authenticated_directory_bytes_cannot_hide_a_late_source_header_conflict
     .upload(&prepared.store)
     .await?;
     let mut snapshot = DirectorySnapshot::empty(prepared.stored.repository, prepared.stored.format);
-    snapshot.append(bad)?;
+    let root = prepared
+        .indexes
+        .ranges()
+        .insert(None, [75; 16], bad)
+        .await?;
+    snapshot.append(prepared.indexes.ranges(), root).await?;
     let catalog = CatalogSnapshot {
         directory: snapshot.upload(&prepared.store, [76; 16]).await?,
         sources: prepared.snapshot.sources,

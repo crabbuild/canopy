@@ -268,6 +268,9 @@ impl AdmittedFile {
     pub(super) fn retain_workspace(&mut self, workspace: std::sync::Arc<tempfile::TempDir>) {
         self.workspace = Some(workspace);
     }
+    pub(super) fn workspace(&self) -> Option<std::sync::Arc<tempfile::TempDir>> {
+        self.workspace.clone()
+    }
     pub(super) fn with_reader(mut self, reader: Option<ReaderAdmission>) -> Self {
         self.reader = reader;
         self

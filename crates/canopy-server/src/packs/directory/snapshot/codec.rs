@@ -1,6 +1,6 @@
 use super::super::index::{
     NODE_BYTES,
-    codec::{fixed, read_reference, read_run, reference, write_run},
+    codec::{fixed, read_reference, reference},
 };
 use super::*;
 use cellule_runtime::codec::{BoundedDecoder, BoundedEncoder};
@@ -28,13 +28,13 @@ impl DirectorySnapshot {
     ) -> Result<Vec<u8>, IndexError> {
         self.validate()?;
         let mut encoder = BoundedEncoder::new(NODE_BYTES)?;
-        encoder.write_bytes(b"canopy.directory-root.v1\0")?;
+        encoder.write_bytes(b"canopy.directory-root.v2\0")?;
         encoder.write_bytes(&self.repository)?;
         encoder.write_bytes(&operation)?;
         encoder.write_u8(self.format.bytes() as u8)?;
         encoder.write_count(self.level_zero.len())?;
-        for run in &self.level_zero {
-            write_run(&mut encoder, *run)?;
+        for root in &self.level_zero {
+            reference(&mut encoder, *root)?;
         }
         encoder.write_count(self.levels.len())?;
         for root in &self.levels {
@@ -49,7 +49,7 @@ impl DirectorySnapshot {
         bytes: &[u8],
     ) -> Result<(Self, [u8; 16]), IndexError> {
         let mut decoder = BoundedDecoder::new(bytes, NODE_BYTES)?;
-        if decoder.read_bytes()? != b"canopy.directory-root.v1\0" {
+        if decoder.read_bytes()? != b"canopy.directory-root.v2\0" {
             return Err(IndexError::Integrity);
         }
         let repository = fixed(&mut decoder)?;
@@ -60,12 +60,12 @@ impl DirectorySnapshot {
             _ => return Err(IndexError::Integrity),
         };
         let count = decoder.read_count()?;
-        if count > LEVEL_ZERO_RUNS {
+        if count > LEVEL_ZERO_ROOTS {
             return Err(IndexError::Limit);
         }
         let mut level_zero = Vec::with_capacity(count);
         for _ in 0..count {
-            level_zero.push(read_run(&mut decoder, repository, format)?);
+            level_zero.push(read_reference(&mut decoder, format)?);
         }
         let count = decoder.read_count()?;
         if count > MAX_LEVELS {

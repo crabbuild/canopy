@@ -116,8 +116,18 @@ async fn complete_physical_partitions_build_exact_catalogs_and_reuse_the_certifi
         let token = base.context_token();
         let root = tempfile::TempDir::new()?;
         let budget = DiskBudget::new(256 << 20);
-        let mut assembler =
-            CatalogPreparation::new(root.path(), budget.clone(), base, limits()).await?;
+        let run_limits = crate::packs::metadata::MetadataLimits {
+            max_file_bytes: 16 << 10,
+            cache_kib: 16,
+        };
+        let mut assembler = CatalogPreparation::new_with_run_limits(
+            root.path(),
+            budget.clone(),
+            base,
+            limits(),
+            run_limits,
+        )
+        .await?;
         let mut expected_segments = Vec::new();
         // Repeated exact inputs must not add source leaves or duplicate objects.
         for _ in 0..2 {
@@ -150,6 +160,18 @@ async fn complete_physical_partitions_build_exact_catalogs_and_reuse_the_certifi
         proof.ensure_live()?;
         let stored = proof.catalog();
         let snapshot = CatalogSnapshot::download(&prepared.store, stored).await?;
+        let directory = DirectorySnapshot::download(&prepared.store, snapshot.directory).await?;
+        assert_eq!(directory.level_zero.len(), 1);
+        let run_root = directory.level_zero[0];
+        assert!(run_root.record_count > crate::packs::directory::snapshot::LEVEL_ZERO_ROOTS as u64);
+        assert_eq!(run_root.object_count, proof.object_count());
+        let mut run_cursor = indexes.ranges().cursor(Some(run_root), None)?;
+        let mut run_count = 0;
+        while let Some(run) = run_cursor.next().await? {
+            assert!(run.run.size <= run_limits.max_file_bytes);
+            run_count += 1;
+        }
+        assert_eq!(run_count, run_root.record_count);
         let sources = indexes.sources();
         let mut cursor = sources.cursor(snapshot.sources, None)?;
         let mut found = Vec::new();

@@ -20,6 +20,8 @@ use std::{
 
 mod writer;
 pub use writer::DirectoryBuilder;
+mod partition;
+pub use partition::DirectoryPartitioner;
 pub mod index;
 pub mod snapshot;
 

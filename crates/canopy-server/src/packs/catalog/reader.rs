@@ -22,6 +22,9 @@ impl CatalogIndexes {
     pub(in crate::packs) fn sources(&self) -> Arc<SourceIndex> {
         Arc::clone(&self.sources)
     }
+    pub(in crate::packs) fn ranges(&self) -> &RangeIndex {
+        &self.ranges
+    }
     pub fn stats(
         &self,
     ) -> (
@@ -62,9 +65,13 @@ impl CatalogReader {
         if nonempty && snapshot.sources.is_none() {
             return Err(IndexError::Integrity);
         }
-        // At most sixteen directory roots and one source root, independent of
+        // At most 48 directory roots and one source root, independent of
         // the number of objects/artifacts. Node clients retain bounded caches.
-        for root in directory.levels.iter().flatten() {
+        for root in directory
+            .level_zero
+            .iter()
+            .chain(directory.levels.iter().flatten())
+        {
             indexes.ranges.validate_root(*root).await?;
         }
         if let Some(root) = snapshot.sources {
