@@ -110,18 +110,30 @@ impl DirectoryBuilder {
         self.failed = true;
         let mut after = None;
         let mut copied = 0_u64;
+        let mut inventory = inventory_seed(self.format);
+        let mut first = None;
         loop {
             let entries = run.entries_after(after)?;
             if entries.is_empty() {
                 break;
             }
-            copied = copied
-                .checked_add(entries.len() as u64)
-                .ok_or(MetadataError::Limit)?;
-            after = entries.last().map(|entry| entry.header.object.oid);
+            for entry in &entries {
+                let oid = entry.header.object.oid;
+                if after.is_some_and(|last| last >= oid) {
+                    return Err(MetadataError::Integrity);
+                }
+                first.get_or_insert(oid);
+                inventory = fold_header(inventory, copied, entry.header);
+                copied = copied.checked_add(1).ok_or(MetadataError::Limit)?;
+                after = Some(oid);
+            }
             self.put_entries(&entries)?;
         }
-        if copied != descriptor.object_count {
+        if copied != descriptor.object_count
+            || inventory != descriptor.inventory_digest
+            || first != Some(descriptor.first_oid)
+            || after != Some(descriptor.last_oid)
+        {
             return Err(MetadataError::Integrity);
         }
         self.failed = false;
@@ -250,13 +262,19 @@ impl DirectoryBuilder {
         transaction.commit()?;
         Ok(())
     }
-    pub fn seal(mut self) -> Result<DirectoryRun, MetadataError> {
+    pub fn seal(self) -> Result<DirectoryRun, MetadataError> {
+        self.seal_with_edges().map(|(run, _)| run)
+    }
+    pub(in crate::packs) fn seal_with_edges(
+        mut self,
+    ) -> Result<(DirectoryRun, u64), MetadataError> {
         if self.failed {
             return Err(MetadataError::Integrity);
         }
         let mut inventory = inventory_seed(self.format);
         let mut after = Vec::new();
         let mut count = 0_u64;
+        let mut edges = 0_u64;
         let mut first = None;
         let mut last = None;
         loop {
@@ -272,6 +290,9 @@ impl DirectoryBuilder {
             for entry in entries {
                 inventory = fold_header(inventory, count, entry.header);
                 count = count.checked_add(1).ok_or(MetadataError::Limit)?;
+                edges = edges
+                    .checked_add(entry.header.edge_count)
+                    .ok_or(MetadataError::Limit)?;
                 first.get_or_insert(entry.header.object.oid);
                 last = Some(entry.header.object.oid);
                 after = entry.header.object.oid.to_vec();
@@ -312,6 +333,9 @@ impl DirectoryBuilder {
             digest: file_digest(self.admitted.file().path(), size)?,
         };
         self.admitted.reservation().resize(size)?;
-        DirectoryRun::open_admitted(self.admitted, descriptor, self.limits.cache_kib)
+        Ok((
+            DirectoryRun::open_admitted(self.admitted, descriptor, self.limits.cache_kib)?,
+            edges,
+        ))
     }
 }

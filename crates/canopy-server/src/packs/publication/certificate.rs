@@ -5,7 +5,7 @@ use crate::packs::directory::index::codec::fixed;
 
 pub const CERTIFICATE_BYTES: u32 = 1024;
 const PAYLOAD_BYTES: u32 = 960;
-const DOMAIN: &[u8] = b"canopy.catalog-attestation.v1\0";
+const DOMAIN: &[u8] = b"canopy.catalog-attestation.v2\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogCertificate {
@@ -14,6 +14,7 @@ pub struct CatalogCertificate {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CertificateData {
+    pub(super) compaction: bool,
     pub(super) tenant: [u8; 16],
     pub(super) application: [u8; 16],
     pub(super) token: PreparationToken,
@@ -37,6 +38,7 @@ impl CertificateData {
     pub(super) fn from_prepared(prepared: &PreparedCatalog) -> Self {
         let (_, target, check) = prepared.base.capability();
         Self {
+            compaction: false,
             tenant: *target.tenant().as_bytes(),
             application: *target.application().as_bytes(),
             token: prepared.token(),
@@ -72,6 +74,7 @@ impl CertificateData {
                 .any(|value| *value > i64::MAX as u64)
             || (self.input_count == 0) != (self.object_count == 0)
             || (self.object_count == 0 && self.edge_count != 0)
+            || (self.compaction && (self.refs_digest.is_some() || self.completion_digest.is_some()))
         {
             return Err(CodecError::Invalid("invalid catalog attestation facts"));
         }
@@ -82,6 +85,7 @@ impl WireValue for CertificateData {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         self.validate()?;
         e.write_bytes(DOMAIN)?;
+        e.write_bool(self.compaction)?;
         e.write_bytes(&self.tenant)?;
         e.write_bytes(&self.application)?;
         self.token.encode(e)?;
@@ -113,6 +117,7 @@ impl WireValue for CertificateData {
             return Err(CodecError::Invalid("invalid catalog attestation domain"));
         }
         let value = Self {
+            compaction: d.read_bool()?,
             tenant: fixed(d)?,
             application: fixed(d)?,
             token: PreparationToken::decode(d)?,

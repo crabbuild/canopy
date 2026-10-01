@@ -329,6 +329,21 @@ CREATE TABLE catalog_state (
 ) WITHOUT ROWID;
 INSERT INTO catalog_state VALUES(1, 0);
 
+-- Exact logical outcomes for catalog-only maintenance. Kept separately from
+-- network push response/product facts; no per-object outcome rows are created.
+CREATE TABLE catalog_compactions (
+    id BLOB PRIMARY KEY CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    verification_digest BLOB NOT NULL CHECK(length(verification_digest)=32),
+    result BLOB NOT NULL CHECK(length(result) BETWEEN 1 AND 128)
+) WITHOUT ROWID;
+CREATE TRIGGER catalog_compactions_immutable BEFORE UPDATE ON catalog_compactions
+BEGIN SELECT RAISE(ABORT, 'compaction outcomes are immutable'); END;
+CREATE TRIGGER catalog_compactions_not_replaced BEFORE INSERT ON catalog_compactions
+WHEN EXISTS(SELECT 1 FROM catalog_compactions WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'compaction outcomes cannot be replaced'); END;
+
 -- Each attempt pins a generation floor and every later generation. This permits
 -- read-only frontier refresh without a new durable pin/Claim per publication.
 -- Replacement/abort preserves the old floor until its independent pin is reaped.

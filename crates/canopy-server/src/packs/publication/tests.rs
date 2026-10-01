@@ -1,5 +1,6 @@
 use super::*;
 mod attestation;
+mod compaction;
 mod completion;
 mod coordinator;
 mod frontier;
@@ -69,6 +70,7 @@ impl CellModule for Module {
                     descriptor(17),
                     publish_descriptor,
                     complete_descriptor,
+                    descriptor(22),
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -76,6 +78,7 @@ impl CellModule for Module {
                     descriptor(15),
                     descriptor(20),
                     descriptor(21),
+                    descriptor(23),
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],

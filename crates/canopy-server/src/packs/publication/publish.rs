@@ -145,6 +145,9 @@ pub(super) fn publish_authenticated(
     data: super::certificate::CertificateData,
     key: [u8; 32],
 ) -> cellule_runtime::Result<CommandResult<PublicationReply>> {
+    if data.compaction {
+        return Ok(denied(PreparationDenial::Unauthorized));
+    }
     if data.actor != input.plan.actor {
         return Ok(denied(PreparationDenial::Unauthorized));
     }
@@ -258,39 +261,8 @@ pub(super) fn publish_authenticated(
     }
     let certificate = input.certificate.bytes()?;
     let certificate_digest = *blake3::hash(&certificate).as_bytes();
-    let previous = context.sql(&statement(
-        "SELECT attestation,attestation_digest FROM catalog_operations WHERE id=?1",
-        vec![blob(data.token.operation)],
-    ))?;
-    let pinned = context.sql(&statement("SELECT attestation,attestation_digest FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", vec![blob(data.token.owner.incarnation.as_bytes()), number(data.token.attempt)?]))?;
-    if rows(&previous)? != rows(&pinned)? {
-        return Err(Error::Command("publication checkpoint differs from pin"));
-    }
-    let checkpoint_missing = match rows(&previous)?.first().map(Vec::as_slice) {
-        Some([SqlValue::Null, SqlValue::Null]) => true,
-        Some([SqlValue::Blob(bytes), digest]) => {
-            if fixed::<32>(digest)? != *blake3::hash(bytes).as_bytes() {
-                return Err(Error::Command("publication checkpoint digest differs"));
-            }
-            let mut d = BoundedDecoder::new(bytes, CERTIFICATE_BYTES)?;
-            let old = CatalogCertificate::decode(&mut d)?;
-            d.finish()?;
-            let mut old_data = old.data()?;
-            if old_data.base.generation > data.base.generation {
-                return Ok(denied(PreparationDenial::Conflict));
-            }
-            // Reconciliation changes only selected roots. Exact verified input
-            // facts, attempt and retention floor must still match the checkpoint.
-            old_data.base = data.base;
-            old_data.catalog = data.catalog;
-            old_data.refs_digest = data.refs_digest;
-            old_data.completion_digest = data.completion_digest;
-            if !old.authenticated(&key) || old_data != data {
-                return Ok(denied(PreparationDenial::Conflict));
-            }
-            false
-        }
-        _ => return Err(Error::Command("invalid publication checkpoint")),
+    let Some(checkpoint_missing) = checkpoint(context, &data, &key)? else {
+        return Ok(denied(PreparationDenial::Conflict));
     };
     if row.expires <= now(context.now_ms())? {
         return Ok(denied(PreparationDenial::Expired));
@@ -352,6 +324,47 @@ pub(super) fn publish_authenticated(
         vec![blob(data.token.operation)],
     ))?)?;
     Ok(CommandResult::Success(PublicationReply::Published(result)))
+}
+pub(super) fn checkpoint(
+    context: &CommandContext<'_, '_>,
+    data: &super::certificate::CertificateData,
+    key: &[u8; 32],
+) -> cellule_runtime::Result<Option<bool>> {
+    let previous = context.sql(&statement(
+        "SELECT attestation,attestation_digest FROM catalog_operations WHERE id=?1",
+        vec![blob(data.token.operation)],
+    ))?;
+    let pinned = context.sql(&statement("SELECT attestation,attestation_digest FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", vec![blob(data.token.owner.incarnation.as_bytes()), number(data.token.attempt)?]))?;
+    if rows(&previous)? != rows(&pinned)? {
+        return Err(Error::Command("publication checkpoint differs from pin"));
+    }
+    let missing = match rows(&previous)?.first().map(Vec::as_slice) {
+        Some([SqlValue::Null, SqlValue::Null]) => true,
+        Some([SqlValue::Blob(bytes), digest]) => {
+            if fixed::<32>(digest)? != *blake3::hash(bytes).as_bytes() {
+                return Err(Error::Command("publication checkpoint digest differs"));
+            }
+            let mut d = BoundedDecoder::new(bytes, CERTIFICATE_BYTES)?;
+            let old = CatalogCertificate::decode(&mut d)?;
+            d.finish()?;
+            let mut old_data = old.data()?;
+            if old_data.base.generation > data.base.generation {
+                return Ok(None);
+            }
+            // Reconciliation changes only selected roots. Exact verified input
+            // facts, attempt and retention floor must still match the checkpoint.
+            old_data.base = data.base;
+            old_data.catalog = data.catalog;
+            old_data.refs_digest = data.refs_digest;
+            old_data.completion_digest = data.completion_digest;
+            if !old.authenticated(key) || old_data != *data {
+                return Ok(None);
+            }
+            false
+        }
+        _ => return Err(Error::Command("invalid publication checkpoint")),
+    };
+    Ok(Some(missing))
 }
 pub(super) fn changed(sets: Vec<SqlResultSet>) -> cellule_runtime::Result<()> {
     if sets.first().is_none_or(|set| set.rows_affected != 1) {

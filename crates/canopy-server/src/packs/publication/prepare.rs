@@ -20,6 +20,8 @@ use tokio::time::timeout_at;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogPreparationError {
+    #[error("preparation encoding failed")]
+    Codec(#[from] CodecError),
     #[error("preparation base is inactive or inconsistent")]
     Base(#[from] PreparationBaseError),
     #[error("preparation closure failed")]

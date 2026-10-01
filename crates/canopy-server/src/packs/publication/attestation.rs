@@ -61,45 +61,71 @@ impl PreparedCatalog {
         refs_digest: Option<[u8; 32]>,
         completion_digest: Option<[u8; 32]>,
     ) -> Result<CatalogCertificate, CatalogAttestationError> {
-        let (client, target, check) = self.base.capability();
-        let live = client
-            .query::<CheckPreparation>(target, None, check.clone())
-            .await
-            .map_err(|error| PreparationBaseError::Query(Box::new(error)))?
-            .output
-            .ok_or(PreparationBaseError::Inactive)?;
-        if live.token != self.token()
-            || live.base != self.base.retention_floor()
-            || live.format != self.catalog().format
-        {
-            return Err(PreparationBaseError::Context.into());
-        }
-        let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
-        let result = sql.query(None, SqlBatch { statements: vec![
-            SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2".into(), parameters:vec![blob(live.token.repository),SqlValue::Text(live.format.as_str().into())] },
-            SqlStatement { sql: GENERATION.into(), parameters:vec![number(self.base().generation)?] },
-        ] }).await
-            .map_err(|error| CatalogAttestationError::Query(Box::new(error)))?;
-        let seed = seed(&result.output)?;
-        if generation(
-            result
-                .output
-                .get(1..)
-                .ok_or(Error::Command("missing selected generation"))?,
-            live.token.repository,
-            live.format,
-        )? != self.base()
-        {
-            return Err(PreparationBaseError::Context.into());
-        }
         let mut data = CertificateData::from_prepared(self);
         data.refs_digest = refs_digest;
         data.completion_digest = completion_digest;
-        let certificate = CatalogCertificate::seal(&data, &seed)?;
-        self.ensure_live()?;
-        Ok(certificate)
+        issue_data_certificate(&self.base, data).await
     }
 }
+/// Shared trusted issuer. Only private verified preparation factories construct
+/// these facts; decoded descriptors cannot invoke it from a product surface.
+pub(super) async fn issue_data_certificate(
+    base: &PreparationBaseResolver,
+    data: CertificateData,
+) -> Result<CatalogCertificate, CatalogAttestationError> {
+    let (client, target, check) = base.capability();
+    let live = client
+        .query::<CheckPreparation>(target, None, check.clone())
+        .await
+        .map_err(|error| PreparationBaseError::Query(Box::new(error)))?
+        .output
+        .ok_or(PreparationBaseError::Inactive)?;
+    if live.token != base.context_token()
+        || live.base != base.retention_floor()
+        || live.format != data.catalog.format
+    {
+        return Err(PreparationBaseError::Context.into());
+    }
+    let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
+    let mut statements = vec![
+        SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2".into(), parameters:vec![blob(live.token.repository),SqlValue::Text(live.format.as_str().into())] },
+        SqlStatement { sql: GENERATION.into(), parameters:vec![number(base.generation_fact().generation)?] },
+    ];
+    if data.compaction {
+        statements.push(access_statement(&check.actor));
+    }
+    let result = sql
+        .query(None, SqlBatch { statements })
+        .await
+        .map_err(|error| CatalogAttestationError::Query(Box::new(error)))?;
+    if data.compaction
+        && !decode_access(
+            result
+                .output
+                .get(2..)
+                .ok_or(Error::Command("missing compaction issuer authority"))?,
+        )?
+        .is_some_and(|role| role >= TokenScope::Admin)
+    {
+        return Err(PreparationBaseError::Inactive.into());
+    }
+    let seed = seed(&result.output)?;
+    if generation(
+        result
+            .output
+            .get(1..)
+            .ok_or(Error::Command("missing selected generation"))?,
+        live.token.repository,
+        live.format,
+    )? != base.generation_fact()
+    {
+        return Err(PreparationBaseError::Context.into());
+    }
+    let certificate = CatalogCertificate::seal(&data, &seed)?;
+    base.live_lease()?;
+    Ok(certificate)
+}
+
 pub(super) fn seed(sets: &[SqlResultSet]) -> cellule_runtime::Result<[u8; 32]> {
     let Some([value]) = rows(sets)?.first().map(Vec::as_slice) else {
         return Err(Error::Command("catalog issuer secret is absent"));
@@ -131,7 +157,11 @@ impl Command for RegisterCatalogAttestation {
             context,
             data.token.repository,
             &data.actor,
-            TokenScope::Write,
+            if data.compaction {
+                TokenScope::Admin
+            } else {
+                TokenScope::Write
+            },
         )?
         else {
             return Ok(deny(PreparationDenial::Unauthorized));

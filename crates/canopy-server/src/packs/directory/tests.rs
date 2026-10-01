@@ -2,6 +2,7 @@ use super::*;
 use crate::packs::metadata::tests::{Fixture, builder, fill, fixture, limits};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
+mod compaction_inventory;
 mod partition;
 mod partition_lifetime;
 

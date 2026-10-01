@@ -42,6 +42,11 @@ pub use coordinator::{
     ReadyCatalogPush,
 };
 mod commands;
+mod compaction;
+pub use compaction::{
+    CheckCompletedCompaction, CompactionLimits, CompactionReply, PreparedCompaction,
+    PublishCatalogCompaction, PublishedCompaction,
+};
 mod sql;
 pub use commands::{
     AbortPreparation, BeginPreparation, CheckPreparation, CheckPreparationFrontier,
@@ -147,7 +152,7 @@ pub struct MaintenanceRequest {
 }
 
 /// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19 and query IDs 15/20/21, plus the existing trusted SQL
+/// command IDs 11..14/16..19/22 and query IDs 15/20/21/23, plus the existing trusted SQL
 /// query. No separate Cell or compatibility API.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<BeginPreparation>()?;
@@ -158,6 +163,8 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RegisterCatalogAttestation>()?;
     registry.bind_command::<PublishCatalogRefs>()?;
     registry.bind_command::<CompleteCatalogPush>()?;
+    registry.bind_command::<PublishCatalogCompaction>()?;
+    registry.bind_query::<CheckCompletedCompaction>()?;
     registry.bind_query::<CheckCompletedPush>()?;
     registry.bind_query::<CheckPreparationFrontier>()?;
     registry.bind_query::<CheckPreparation>()

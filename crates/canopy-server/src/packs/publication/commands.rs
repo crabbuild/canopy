@@ -131,6 +131,14 @@ impl Command for BeginPreparation {
         // A logical outcome already exists: callers must look it up before
         // native preparation. Never allocate another namespace for a completed
         // push, or admit an identity conflicting with a pending network push.
+        if !rows(&context.sql(&statement(
+            "SELECT id FROM catalog_compactions WHERE id=?1",
+            vec![blob(input.operation)],
+        ))?)?
+        .is_empty()
+        {
+            return Ok(denied(PreparationDenial::Conflict));
+        }
         let saved = context.sql(&statement(
             "SELECT actor,request_digest,response_id,publication FROM pushes WHERE id=?1",
             vec![blob(input.operation)],
