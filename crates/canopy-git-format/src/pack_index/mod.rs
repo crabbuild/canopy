@@ -129,8 +129,8 @@ impl PackIndex {
         while remaining > 0 {
             let size = remaining.min(PAGE as u64) as usize;
             read_at(&index.file, &mut buffer[..size], at)?;
-            for encoded in buffer[..size].chunks_exact(4) {
-                let raw = u32::from_be_bytes(encoded.try_into().unwrap());
+            for encoded in buffer[..size].as_chunks::<4>().0 {
+                let raw = u32::from_be_bytes(*encoded);
                 index.offset(raw)?;
                 references += u64::from(raw & 0x8000_0000 != 0);
             }
