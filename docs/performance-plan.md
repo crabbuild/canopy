@@ -14,7 +14,7 @@ seed and successful recovery of every recorded ACK.
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
-| Native-volume comparison | Same runtime, provider image/limits and full corpus requested; critical Git setup passed, full seed running |
+| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s; full owner-loss recovery running |
 | Full recovery and scheduled load | Still unqualified; no incomplete seed or narrow functional test closes these gates |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)

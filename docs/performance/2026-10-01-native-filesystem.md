@@ -1,6 +1,6 @@
 # Compare RustFS filesystem backing
 
-**Status: full native-volume seed running; recovery and performance unqualified.**
+**Status: full native-volume seed complete; owner-loss recovery running; performance unqualified.**
 This shared-Mac/Colima diagnostic keeps the 10,000-repository target. It tests
 filesystem backing without replacing the bound runtime or weakening correctness.
 
@@ -43,32 +43,36 @@ environment names and identical values, image, entrypoint, arguments, resource
 settings and owned volume. Only environment ordering differed. The failed
 preparation receipt remains preserved; it was not rerun or overwritten.
 
-The native fleet passed all 17 critical Git checks. At **03:41:52 UTC on
-2026-10-01**, its incomplete seed contained **9,275 identities and 95 populated
-fixtures**. Passing the old failure's repository count does not prove a fix.
+The native fleet passed all 17 critical Git checks. The full seed completed
+with exit 0 on 2026-10-01: **10,000 identities and 100 populated Git/LFS
+fixtures in 3,179.240 seconds**. An independent offline audit checked exact
+corpus identities, fixture selection/digests and controller/source bindings.
+Seed wall time is not scheduled creation, push or fetch throughput. A complete
+seed alone does not prove recovery, a root-cause fix or matched improvement.
 Different wall-clock load and observer overhead remain shared-host variables.
 
 ```mermaid
 flowchart LR
     ack[Every failed-seed ACK verified] --> drain[Graceful diagnostic drain]
-    drain --> seed[Native full 10000 seed<br/>running]
-    seed --> loss[Record three-owner loss]
-    loss --> recovery[Verify all original identities<br/>and Git/LFS fixtures]
+    drain --> seed[Native full 10000 seed<br/>complete]
+    seed --> loss[Three-owner loss and wait<br/>recorded]
+    loss --> recovery[All identities and Git/LFS<br/>verification running]
     recovery --> load[Declared 108-window load plan]
     load --> final[Second owner loss<br/>verify every load ACK and corpus]
 ```
 
-Only the first two stages are complete. Critical Git setup also passed;
-native owner-loss recovery, the [declared load matrix](three-node-baseline.json),
+The seed and recorded fault boundary are also complete. Critical Git setup and
+critical-fixture recovery passed; full native owner-loss recovery, the
+[declared load matrix](three-node-baseline.json),
 higher admission profiles, additional critical-operation load/fault coverage
 and matched performance comparisons remain open. No stage can substitute a
 smaller corpus or retries for its required evidence.
 
 ## Gate the transition and complete load plan
 
-Two separately bound controllers are armed, not completed. The recovery
-controller waits for the exact seed and its setup controller to exit, then
-rereads their final receipt. A failed/incomplete corpus, changed process
+Two separately bound controllers are running, not completed. The recovery
+controller waited for the exact seed and its setup controller to exit, then
+reread their final receipt. A failed/incomplete corpus, changed process
 identity, provider restart/pause/quota/mount change or source drift stops it
 before any owner-loss action.
 
@@ -78,6 +82,15 @@ whole PID/command/kernel-identity batch before sending three SIGKILLs, records
 process absence and the unchanged 32-second expiry wait, and starts fresh
 owners from the preserved deployment. Every original identity and Git/LFS
 fixture, plus both critical repositories, must pass without retries.
+
+The actual fault sent SIGKILL to PIDs 64706/64748/64836 in one verified batch.
+All three exited -9; the launcher recorded no forced fallback. After recorded
+process absence, the expiry wait lasted **32.037 seconds**. A new fleet started
+at 03:45:31 UTC with three new IDs/PIDs and local directories, the same durable
+deployment, admission and immutable binary. Both critical repositories passed
+four exact v0/v2 ref inventories, payload/notes and strict full fsck. Full
+10,000-identity/100-fixture recovery was live at the 1,500-identity checkpoint;
+no load window had started at that checkpoint.
 
 The load controller requires that closed recovery evidence, all source and
 receipt digests, three recorded SIGKILLs and fresh owners. Its plan is the
@@ -104,7 +117,13 @@ Its independent audit is
 This window was after the failed seed, not an observation of the original stall.
 Health and metrics timings do not establish durable-write latency.
 
-The separate native-seed observer started after 1,250 identities, retaining
+The separate native-seed observer started after 1,250 identities and closed
+after seed exit: 459 samples, zero probe errors, 77 unchanged provider-state
+snapshots and 1,377 scoped events with no observed pause/unpause/update/restart/
+kill/OOM events in that observation window. An offline integrity audit checked
+timing bounds, kernel identities/counter continuity and signed-counter deltas.
+This excludes the later intentional owner loss, not all possible shared-host
+interventions or the old failed run. It retained
 provider gauges, signed counters, health timings, VM uptime/CPU/I/O pressure,
 kernel self/reaped-child CPU and continuous scoped events. Errors and gaps stay
 visible. It adds host overhead and cannot account for the whole seed, live child
@@ -129,9 +148,17 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `test_start_native_load.py` | `9a1009d2f57987931beeeead14cb8e1482e3ffd3bbf6f9bb7520a5cd77ae0e0b` |
 | `load-guard-tests-final.log` | `6b307282780ae288f168cfceef2ff771a215534923036eb6875258d24e00622d` |
 | `load-check-final.json` | `3076fafdfc8881746f728f8db498b08731676e33cba1e3181df7a7092e2f4a54` |
+| `corpus-native-10000.json` | `32e7db9cf06a7b4bb57c906f0f2e70c761ed3ae207c95c7057302b55d50a9a32` |
+| `trial.json` | `b618be95af59980fac8f3576f208d17ea83c43ab266c388c82288f0037a5ad12` |
+| `seed-native.log` | `c9585a548c6e9c5f2a7b4fedfb8e1c54e59e7b2707e6fc194e9cec1b8612747d` |
+| `native-seed-audit.json` | `355912c5fb4f21fa15eec96bdfd5301a967a4676a771a4d05307c7aa1fa49db8` |
+| `audit_native_seed.py` | `78e24e4993abb9cfaff1c6121e9ac2b2773d9e30601bf88719d8e0d009a965c1` |
+| `native-seed-observer/observation.json` | `7569827510978ba20827e57d1629b72dfc370afa8fb452773844e40c931137b8` |
+| `native-initial-owner-loss.json` | `3ed0fdb7df452bf586c1c2908f9b66546e73a8177fbbf088531b07ea73baefe7` |
+| `fleet-native-recovery/ready.json` | `2823b1e4b9ab4143fb7c9813e2717cf89d099212f50a5e8f8ad305a1d4043154` |
 
-The corpus, controller report and observer outputs are still live and do not
-have final completion digests. Setup timings are not scheduled throughput.
+The recovery and load controllers are still live and do not have final
+completion digests. Setup timings are not scheduled throughput.
 This is not isolated Linux reference capacity, a proven Cellule bottleneck or
 a passing latest-pin executable comparison. Both hosted workflows for source
 pin `0573f489` passed
