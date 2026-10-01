@@ -1,5 +1,8 @@
 //! Read-only admission of an existing immutable SQL catalog identity.
 
+#[cfg(test)]
+mod tests;
+
 use cellule_runtime::{
     CellTarget, Error, Registry, Result,
     cell::catalog::{CatalogProof, CatalogRole},
