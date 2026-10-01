@@ -274,6 +274,33 @@ in a new directory. It sends no signals and changes no provider settings.
 An incomplete recovery, PID reuse, changed provider/source, reused output or
 shortened plan prevents launch. It is waiting, not a load or recovery pass.
 
+A second independently hosted controller is armed in `wait_bound_load` for
+every-ACK recovery. Three offline tests passed, covering 28 rejection cases,
+and its actual read-only binding check passed. It captures the real campaign
+PID/command/kernel identity when load begins; a never-observed or replaced
+campaign, live controller/event stream, incomplete sidecars, changed input or
+provider, and orphan ledger stop before owner signals.
+
+```mermaid
+flowchart LR
+    closed[Bound campaign/controller/event stream<br/>actually absent] --> ledger[Audit all closed ledgers<br/>retain failures and every ACK]
+    ledger --> loss[Validate whole owner batch<br/>record loss and 32s absence wait]
+    loss --> fresh[New owner IDs and directories<br/>independent process session]
+    fresh --> critical[Critical fixtures]
+    fresh --> corpus[Full 10000/100 corpus]
+    fresh --> creations[Every creation ACK]
+    fresh --> writes[Every Git/LFS write ACK]
+```
+
+The same guarded signal/fresh-boundary functions used by the preserved V2
+controller are digest-bound inputs, not reimplemented weaker guards. Failed
+performance does not skip recovery of readable ACK ledgers. Each of the four
+verification scopes retains failure and continues to the other scopes; counts
+must match the audited ledgers. No-ACK stages explicitly say they are not traffic
+passes. Provider/binary/admission/deadlines stay fixed; no automatic retries,
+restarts or data deletion are permitted. This is an armed gate, not a recovered
+ACK claim or completed load result.
+
 At 05:40:44 UTC, the recovery sidecar had 132 samples: cgroup memory had reached
 the 4-GiB limit, anonymous memory was 1,658,716,160 bytes and file memory was
 1,831,895,040 bytes, with zero observed OOM kills. The separate process probe
@@ -303,6 +330,26 @@ and rejection of corpus/rate/duration/trimming changes. Independent normalized
 diffs confirm that the 500- and 1,000-entry variants change only admission.
 Each keeps 108 windows, 8,640 offered seconds and 114,960 offered arrivals.
 Neither variant has been executed; larger caps do not prove residency or capacity.
+
+### Track latest Cellule source without changing the live artifact
+
+At the source audit, `origin/main` was
+`a4500add51764fa0415791aefbfa561db6ada203`, one upstream
+[web/documentation commit](https://github.com/crabbuild/cellule/pull/35) after
+`0573f489`. Five direct declarations and six lockfile source entries now select
+that exact commit, with no other manifest/lockfile changes. Locked full Cargo
+metadata resolved all six packages to the new SHA. No new executable or
+workspace `target` directory was created; metadata briefly waited on the shared
+Cargo package-cache lock. Other host work remains a shared-machine variable.
+
+The actual cached checkout and upstream Git trees have the same `crates` object
+`587e3215ce1bc0c67db3390a137623b6fead01ac`, Cargo manifest object
+`6b7e13d8439558455ea04458357f3a70992fa367` and lock object
+`b512761a55bba5165101ce9905dfe7f603f5b079` as `0573f489`/`e07670e`.
+The audit also rechecked every frozen input in the live full-recovery, load and
+post-load controllers. All matched after source-pin editing; none now runs a
+newly built binary. This advance is not a Cellule performance fix, a passing
+latest-pin local artifact, or a reason to skip original end-to-end qualification.
 
 ## Separate diagnostics from performance
 
@@ -390,9 +437,15 @@ Artifacts are retained under `canopy-native-filesystem-ceXFad8I`:
 | `test_start_native_load_4g.py` | `8113463ea6ad6c9e5076a94e05b5c45821f5e040ac9ca1405bd0d223f698b6b0` |
 | `load-4g-guard-tests.log` | `ad1dabaf6fd44b97c2ba48c91cc833bc69a88c2e8baf813908fc24f5d1465527` |
 | `load-4g-check.json` | `6865f1c3646548feed611843d84a5eb1daa635801e5df78e3c3862ad63b93a61` |
+| `finish_native_load_4g.py` | `b2fc51fe7cf336d2c3e64f2807fd52744f5561efd8b078446350422d3f37f570` |
+| `test_finish_native_load_4g.py` | `4d198e1148ce20c599b927b8ed33cf498d606f9aa5b3d8c7057d40ba2cb31b3f` |
+| `post-load-4g-guard-tests.log` | `e8b87fc14d3c7fb0ea88fff398ba3c257e73c6ca0cc85a63fa696cc53345a07c` |
+| `post-load-4g-check.json` | `b5a85134289a9689cbe63e8bf4c0ae9590cfc4965212a317ed66133c5b34af59` |
 | `native-recovery-4g-memory-probe.json` | `b078266a61591ff18db05e0efabdca1e11433452e8898ffe65b9bf1e6ae91129` |
 | `native-recovery-4g-allocator-probe.json` | `47da1e7f9ade991395715eaa211bdd830e48578f214622c85c4c9519e258381d` |
 | `higher-admission-plans-v1/preparation.json` | `f2fec01bc047cbe800580b3c8515fcaf2ab29c3af1aee8fee0ba9327a163bc85` |
+| `metadata-a4500add.json` | `78cda3f194d9147dfabc8f1d139de6e2c43ed30f4c3b9736642c9601136dd4a9` |
+| `cellule-a450-source-audit.json` | `87bac9bc1c54e8fba393cfec424436532086e0810f03f48b957c5d6cfb5d01a3` |
 
 The baseline's new independent ledger audit is
 `5416540c9b78b23e5c89ff24e771ab58012af847df4ec961adfc597bff010639`

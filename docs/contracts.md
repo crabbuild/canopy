@@ -1186,8 +1186,10 @@ and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
-persistent preview. The current build pins Cellule revision
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. The earlier entity-partition
+persistent preview. The current source pins Cellule revision
+`a4500add51764fa0415791aefbfa561db6ada203`; running qualification artifacts
+remain bound to their recorded revisions, not silently replaced by this pin.
+The earlier entity-partition
 cutover also made pre-cutover prefixes incompatible; no migration is available.
 
 ## Accounts and authentication

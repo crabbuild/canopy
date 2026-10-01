@@ -2,9 +2,12 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `0573f48998c4e5343cd8b463d79b7bc1820c923c`, a docs-only
-upstream advance from `e07670e` with identical Rust workspace/crates. Both full
-hosted workflows passed; that does not establish three-node capacity.
+dependency pin is `a4500add51764fa0415791aefbfa561db6ada203`, an upstream
+web/documentation advance with the same Rust crate tree and root Cargo objects
+as `0573f489` and `e07670e`. Locked metadata resolves all six packages to the
+new commit without unrelated dependency changes. Hosted verification for the
+previous source pin passed; the latest-pin production artifact and three-node
+qualification remain separate open gates. None establishes reference capacity.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
