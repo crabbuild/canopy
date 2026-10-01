@@ -46,6 +46,7 @@ use crate::{
     repository_http::RepositoryHttp,
 };
 
+mod catalog_admission;
 mod discovery;
 mod lifecycle;
 pub(crate) mod peer;
@@ -762,13 +763,20 @@ async fn acquire_sql_cell(
         layout.clone(),
         ApplicationIdentity::new(target.tenant(), target.application()),
     )?;
-    let proof = releases
-        .provision(
-            &catalog,
-            &registry,
-            CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
-        )
-        .await?;
+    let proof = match catalog.lookup(target.cell_id()).await? {
+        Some(proof) => {
+            catalog_admission::existing_sql_proof(&releases, &registry, target, proof).await?
+        }
+        None => {
+            releases
+                .provision(
+                    &catalog,
+                    &registry,
+                    CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
+                )
+                .await?
+        }
+    };
     acquire_provisioned_sql_cell(node, layout, directory, spec, session, endpoint, proof).await
 }
 
