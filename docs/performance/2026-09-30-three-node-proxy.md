@@ -542,6 +542,51 @@ the running campaign's bound source is not changed mid-measurement.
 These process samples also exclude native Git child CPU, so they cannot support
 a complete server CPU-per-GiB claim.
 
+### Observe kernel self and reaped-child CPU separately
+
+`scripts/fleet_cpu.py` adds a read-only observer without changing the bound
+campaign or production executable. macOS reads `proc_pid_rusage` v2; Linux reads
+the per-process `utime`, `stime`, `cutime` and `cstime` counters. Each record keeps
+raw counters, time scale, RSS and a process-start identity. A changed identity,
+decreased counter, missing process or invalid interval fails the observation;
+earlier samples and an incomplete receipt remain retained.
+
+On this ARM64 Mac, the Mach timebase is 125/3. A 0.150020-second process-CPU
+calibration produced 3,602,003 raw units: scaling yielded 0.150083 seconds;
+dividing by 1e9 alone would incorrectly report 0.003602 seconds. The reader
+queries the platform timebase rather than hard-coding this host's ratio.
+[XNU's task accounting](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)
+uses Mach-time counters. [Linux proc stat](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html)
+uses clock ticks, scaled with `SC_CLK_TCK`.
+
+Child counters cover rolled-up usage, not instantaneous live-tree CPU.
+[XNU's reap path](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exit.c)
+adds child usage to its parent; Linux's child fields cover waited-for children.
+A native regression burns child CPU, holds that child alive, proves the parent's
+child counter is unchanged, then waits and proves the counter increased.
+Seven tests also check SDK layout, Linux names with parentheses, unit
+calibration, identity/clock/counter discontinuities and retained failures.
+The full 59-test Python harness passed on Python 3.12 and 3.14. Candidate-volume
+logs `python312-kernel-cpu-suite.log` and `python314-kernel-cpu-suite.log` have
+SHA-256 `9d316452976529027fe905cdf349710ae4966638f8b87c6fe82a634df809864c`
+and `8abca5145c727e3391d0b9949a6fd61b18e696219526f276b28bc5d005e74649`.
+
+```sh
+python3 -B scripts/fleet_cpu.py \
+  --fleet-dir /dedicated-volume/candidate-fleet \
+  --output-dir /dedicated-volume/new-kernel-cpu-observation \
+  --samples 120 --interval 1
+```
+
+The output binds the fleet, executable and observer/validator digests. Intervals
+separate self CPU percentage from reaped-child CPU seconds. Short-lived reaped
+children need not be caught by a periodic process-list sample, but live and
+unreaped children remain excluded. A child started before a load window may be
+charged when reaped inside it. These counters include all charged children, not
+only Git, and do not close operation-specific CPU/GiB accounting without
+independently verified child boundaries. Historical `ps` results are unchanged;
+no child CPU is retroactively imputed to the failed baseline.
+
 A separate read-only observer records dedicated RustFS container CPU/memory
 samples about every six seconds, beginning during full-corpus preflight. Its
 binding includes the observer digest, campaign PID, container ID and start time;
