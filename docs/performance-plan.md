@@ -2,8 +2,8 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, the latest
-observed upstream main on October 1. Unlike the earlier `a4500add` documentation
+dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, observed upstream
+main at build preparation on October 1. Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
 metadata resolves all six packages; the lockfile changes only their sources.
 The new locked release build passed. Its release workspace suite passed 227
@@ -12,6 +12,9 @@ passed, as did the production binary's initial 17-step check through three nodes
 and a proxy. The 84 Python harness tests cover accounting and guards. Full-corpus
 recovery, scheduled load and every-ACK verification remain separate gates; none
 of these functional checks establishes reference capacity.
+Upstream subsequently advanced to `0dc04a6` with atomic API and test changes.
+That revision needs a separate artifact and runtime qualification; the running
+seed and its frozen source remain on `c51dd121`.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.

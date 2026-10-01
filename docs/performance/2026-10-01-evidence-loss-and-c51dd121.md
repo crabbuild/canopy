@@ -98,7 +98,7 @@ mark old recovery passing, or combine a new run with the old campaign.
 
 ## Latest Cellule candidate
 
-The dependency now pins observed upstream main
+The dependency pins upstream main observed at build preparation,
 `c51dd121284ecc8878b75d32717a4dfbe2c406c2`. Five direct declarations and six
 lockfile sources changed; unrelated dependencies did not. Locked metadata
 resolves all six Cellule packages to that revision.
@@ -107,6 +107,15 @@ Unlike the earlier documentation-only `a4500add` advance, this includes upstream
 routing and host-permit changes. It reuses resident catalog identity for unleased
 requests while still observing fresh authority, and pairs resource charges with
 semaphore permits. Source inspection is not a Canopy latency or correctness result.
+
+Upstream advanced at 17:43:36 UTC to
+[`0dc04a658bd99668936f7ec58032d054f6fbc141`](https://github.com/crabbuild/cellule/commit/0dc04a658bd99668936f7ec58032d054f6fbc141).
+The inspected diff replaces deprecated atomic `fetch_update` calls with
+`try_update` in LTX accounting, host disk budgeting and runtime admission, as
+well as tests and the website-example checker. It is not documentation-only.
+The running experiment remains bound to `c51dd121`; its results do not qualify
+this newer SHA. A separately built and verified candidate is required before
+upgrading the pin or changing the live experiment.
 
 The locked release build completed successfully. Its retained executable has
 SHA-256 `32b114119960608c0a91d1c783bb69eafec432831bfa452d54d8950b09bc0e99`.
@@ -190,6 +199,7 @@ closed evidence. Do not use their intermediate counts as a complete-corpus resul
 | Full 10,000 identities/100 populated fixtures | Seed running; full verification and fresh-owner recovery open |
 | Original matrix, critical Git load and every new ACK after owner loss | Open |
 | Higher admission profiles and matched comparisons | Open |
+| New upstream `0dc04a6` artifact and runtime qualification | Open; separate from the bound `c51dd121` experiment |
 | Old campaign every-ACK recovery | Unverified; original raw inputs unavailable |
 
 The [performance plan](../performance-plan.md) remains the scope. No proven
