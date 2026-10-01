@@ -411,6 +411,63 @@ Retained candidate-directory logs bind the failure and final results:
 | `startup-port-race-atomic-fixed.log`, passed | `585d00b55b4f4ceedf05a216df20635c347d330e86305efb47f20cea0475e04d` |
 | `lease-suite-after-fixture-fix.log`, four passed | `27c4a6d42108bd57ac8c006d48f5b39b28ceb473454bc80d41eb40adced8bf28` |
 
+### Reject expired successful replies
+
+A new real-server/in-memory-store probe holds a successful conditional renewal
+reply past the replacement advertisement's signed expiry. It then releases the
+reply and waits for the server's own supervisor with **no caller stop signal**.
+The supervisor must terminate with `Runtime(Fenced)` and ingress must remain
+unavailable. Explicitly shutting down first could hide an unsafe revival.
+Production lease durations, deadlines and fencing are unchanged.
+
+The final supervised probe passed in 33.25 seconds. All five lease lifecycle
+tests then passed together in 39.95 seconds, with 100 other integration tests
+filtered out. This checks the expired-reply safety branch; it does not reproduce
+the baseline's provider latency or prove a performance fix. The Cellule
+`node/lease.rs` source at `70bd25f` and `e07670e` is byte-identical, SHA-256
+`a903184abec46b149ab90c889699c9820a9023d9635f4d52b67ad6fdacdf9967`.
+
+| Candidate-volume test log | SHA-256 |
+| --- | --- |
+| `expired-renewal-supervised.log` | `006f0cb3208e331372d7432d682b8ac2983dcda8262763e1d2f82b9fe4663d83` |
+| `lease-suite-with-expired-reply.log` | `86250ccc3c174bebaf7b8fa3f8d20ffd04b9ca497f0b6e51d23caec3732e883e` |
+
+### Advance only from a complete candidate seed
+
+The retained one-off `finish_seed_recovery.py` transition is now running, bound
+to seed PID 48549, the immutable candidate binary, current provider and original
+three owner process identities. Its live read-only binding check passed before
+execution. It waits for that exact seed to end and requires 10,000 distinct
+canonical UUID/name pairs and the same 100 two-commit Git/1 MiB LFS fixtures
+before any signals. Incomplete seed, changed source/processes, missing owners
+or a provider restart stop it without a retry, reseed or replacement fixture.
+
+After successful seeding, it records three verified-owner SIGKILLs and process
+absence, waits at least 32 seconds, starts fresh directories on the same durable
+deployment, and verifies both critical fixtures and the complete original
+corpus. HTTP timeout stays 30 seconds, verification concurrency stays four,
+and admission stays 100/node. It does not start scheduled load. At this
+observation its phase is `wait_bound_seed`, not a recovery pass.
+
+Four simulated control-flow tests passed: complete transition, incomplete seed,
+provider restart and missing node. They send no real signals or provider/Git
+requests and are not recovery evidence. The live transition retains
+`seed-to-recovery.json`, fault boundaries and individual verification receipts.
+
+| Candidate-volume control artifact | SHA-256 |
+| --- | --- |
+| `finish_seed_recovery.py` | `a53eef39b0357972204248460896ef6edc6332c9533156263e4bbfdc578ec3bf` |
+| `test_finish_seed_recovery.py` | `60633e5411929d04670a7ea730d766241cb65d93317cc13e4aef79b3b216185f` |
+| `seed-to-recovery-bound-control-tests.log` | `ac30ceeb7a4a6343e722a531212ec3211adc5351aa60b9138d212d97dfc1760a` |
+
+Both full hosted workflows for `9c29627` and `f7fc26f` have now passed, including
+Rust tests, isolated RustFS compatibility, server build and the 66-test harness:
+[36799769344](https://github.com/crabbuild/canopy/actions/runs/36799769344),
+[36799773408](https://github.com/crabbuild/canopy/actions/runs/36799773408),
+[36799971965](https://github.com/crabbuild/canopy/actions/runs/36799971965) and
+[36799975428](https://github.com/crabbuild/canopy/actions/runs/36799975428).
+Those earlier commits did not contain the new expired-reply test.
+
 ## Measure the requested operations
 
 Complete and verify the corpus before interpreting scheduled load results.

@@ -206,3 +206,64 @@ async fn delayed_renewal_reply_does_not_extend_confirmed_authority() -> Result {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expired_successful_renewal_reply_cannot_reopen_ingress() -> Result {
+    let files = tempfile::TempDir::new()?;
+    let store = Arc::new(PausedStore::default());
+    let mut settings = config(available_address().await?, files.path().join("node"));
+    settings.listen.set_port(0);
+    let server = CanopyServer::start(settings, store.clone()).await?;
+    let address = server.local_addr();
+    store.delay_renewals.store(true, Ordering::SeqCst);
+    store.wait().await?;
+    let expires = store
+        .renewal_expiry
+        .lock()
+        .unwrap()
+        .ok_or("renewal expiry missing")?;
+    let now = || -> Result<i64> {
+        Ok(i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis(),
+        )?)
+    };
+    // The conditional write has succeeded. Hold only its reply past the
+    // signed replacement expiry, not merely past the previous lease.
+    let remaining = u64::try_from(expires - now()? + 200)?;
+    tokio::time::sleep(Duration::from_millis(remaining)).await;
+    let expired_at_reply = now()?;
+    store.delay_renewals.store(false, Ordering::SeqCst);
+    store.proceed.notify_one();
+    // No caller stop signal: only the server's own terminal fence may end
+    // supervision. An explicit shutdown could hide an unsafe revival.
+    let shutdown = timeout(
+        Duration::from_secs(10),
+        server.serve_until(std::future::pending::<std::io::Result<()>>()),
+    )
+    .await?;
+    let readiness = reqwest::Client::new()
+        .get(format!("http://{address}/readyz"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await;
+    assert!(expired_at_reply > expires);
+    assert!(
+        matches!(
+            shutdown,
+            Err(canopy_server::server::ServerError::Runtime(
+                cellule_runtime::Error::Fenced
+            ))
+        ),
+        "expired successful refresh did not fence: {shutdown:?}"
+    );
+    assert!(
+        match &readiness {
+            Ok(response) => response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            Err(error) => error.is_connect(),
+        },
+        "expired refresh reopened ingress: {readiness:?}"
+    );
+    Ok(())
+}
