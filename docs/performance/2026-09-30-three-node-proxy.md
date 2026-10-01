@@ -498,8 +498,30 @@ Python harness passed on both Python 3.12 and 3.14. Retained final logs under
 | `python312-pack-probe-final-suite.log` | `9e6e2636cef36997c027c275ae4f32baf6ec4d6b72717624b1784eb1ddc4b725` |
 | `python314-pack-probe-final-suite.log` | `344cc7ad10890a9c8bca494609c2f79c72cd3339b6f0b61c1644f1fea16e2d73` |
 
-This probe has not yet produced candidate RustFS measurements. Its transfer
-rate is pack bytes divided by the entire POST duration, not Ethernet bytes/s or
+The committed probe (`878d111`) subsequently passed three serial samples
+through the candidate proxy/RustFS while the 10,000-repository seed was active.
+Each downloaded pack contained 1,153 bytes and passed strict indexing, exact
+wanted-commit validation and full strict fsck with Apple Git 2.50.1. These are
+setup-load functional/timing observations, not scheduled load or matched
+baseline comparisons. The compressed critical fixture is too small to measure
+bulk transfer capacity.
+
+| Serial sample | Headers (ms) | First pack byte (ms) | Complete POST (ms) | Local validation (ms, outside POST) |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 227.072 | 255.891 | 257.780 | 166.786 |
+| 1 | 490.265 | 507.593 | 509.568 | 144.591 |
+| 2 | 121.930 | 139.526 | 140.933 | 150.131 |
+
+The candidate-directory artifact `pack-probe-during-seed/measurement.json`
+has SHA-256 `59801101b210e16254f5f6ae2d6460eef954ab402326db5369d733ad4bb1dcf3`.
+It binds the immutable production binary, critical receipt, fleet and probe
+digest `82a66363dd2242719fdc5a259d74bc051f03ad6168538064fe404e7f1609e512`.
+Raw monotonic boundaries, request IDs, pack digests and declared bounds are
+retained. The overlapping seed is an explicit setup-load intervention, not
+background-free performance evidence; no seed result is promoted to scheduled
+creation throughput.
+
+The reported transfer rate is pack bytes divided by the entire POST duration, not Ethernet bytes/s or
 steady-state capacity. Serial repetitions can warm server state; neither the
 identity check nor a new HTTP connection establishes cold ownership. Discovery,
 local validation, v2 negotiation, stock clone performance, native Git child CPU
