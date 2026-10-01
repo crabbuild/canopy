@@ -354,6 +354,8 @@ impl RepositoryManager {
         // request instead of turning one transient preflight race into HTTP 503.
         // Bound rescans so a whole busy working set still backpressures callers.
         let mut rejected = HashSet::new();
+        let settle_deadline = Instant::now() + std::time::Duration::from_millis(200);
+        let mut settle_rescans = 0;
         loop {
             let candidates: HashMap<_, _> = self
                 .node
@@ -362,7 +364,7 @@ impl RepositoryManager {
                 .into_iter()
                 .map(|(cell, generation, _, _)| (cell, generation))
                 .collect();
-            let (id, action, _transition) = {
+            let (chosen, may_settle) = {
                 let mut loaded = self.loaded.lock().await;
                 let mut eligible = Vec::new();
                 for (id, repository) in loaded.iter() {
@@ -406,13 +408,35 @@ impl RepositoryManager {
                     chosen = Some((id, action, transition));
                     break;
                 }
-                chosen.ok_or_else(|| {
-                    if rejected.is_empty() {
-                        Error::Capacity("repository residency")
-                    } else {
-                        Error::CellDraining
-                    }
-                })?
+                let may_settle = loaded.iter().any(|(id, repository)| {
+                    !rejected.contains(id)
+                        && repository.local
+                        && Arc::strong_count(&repository.pin) == 1
+                        && matches!(
+                            repository.state,
+                            ResidencyState::Serving | ResidencyState::RefreshHandle
+                        )
+                });
+                (chosen, may_settle)
+            };
+            let Some((id, action, _transition)) = chosen else {
+                // Publication and renewal may still be settling just after an
+                // acknowledged request. Reobserve inventory only: never replay
+                // a mutation or release a Cell the runtime considers busy.
+                // Keep every request/residency permit charged while waiting,
+                // and do not wait at all when every resident is request-pinned.
+                let remaining = settle_deadline.saturating_duration_since(Instant::now());
+                if may_settle && settle_rescans < 8 && !remaining.is_zero() {
+                    settle_rescans += 1;
+                    tokio::time::sleep(remaining.min(std::time::Duration::from_millis(25))).await;
+                    continue;
+                }
+                return Err(if rejected.is_empty() {
+                    Error::Capacity("repository residency")
+                } else {
+                    Error::CellDraining
+                }
+                .into());
             };
             let (cell, generation) = match action {
                 EvictionAction::DropRemote => {
