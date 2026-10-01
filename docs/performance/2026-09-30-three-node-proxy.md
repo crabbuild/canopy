@@ -679,6 +679,36 @@ successfully, including Rust tests, RustFS compatibility and server build:
 and [36797902238](https://github.com/crabbuild/canopy/actions/runs/36797902238).
 Those earlier runs did not include this new provider reader.
 
+The committed reader (`9c29627`) completed 12 live samples at five-second
+intervals, from 01:10:09 to 01:11:06 UTC on October 1. An independent audit
+checked exact indices, retained sample/binding/driver digests and every interval
+delta. Container identity, start time and restart count stayed unchanged.
+Across the roughly 56.743-second client read span, first-to-last counter changes
+were:
+
+| Provider operation | Outcome | Additional requests |
+| --- | --- | ---: |
+| `GetObject` | 2xx | 444 |
+| `GetObject` | 4xx | 52 |
+| `HeadObject` | 2xx | 174 |
+| `PutObject` | 2xx | 2,679 |
+
+All other existing series had zero delta: total 3,349. No scrape overhead was
+subtracted. Seeding/background ownership continued throughout; this is not a
+per-repository cost, a throughput qualification or a matched improvement.
+
+| Candidate-volume artifact | SHA-256 |
+| --- | --- |
+| `provider-request-during-seed/observation.json` | `2d6a80d22480a5d56321fe3cf6e6352317810b2fd1d2e87ed0819239c232ce28` |
+| `provider-request-during-seed/samples.jsonl` | `a034331099cd4e278dddd967de08d3203d9aa8d3f378c3be327aa3efc604e4a5` |
+| `provider-request-audit.json` | `9c00996008d05bb0682154d907ee15383954b5af897003f75683c15da8531de3` |
+| `audit_provider_observation.py` | `414bae05eae1cca67982e68c5e879d164dd892b8ff44a2a7a569ba632a3853ce` |
+
+Both Linux harness jobs for `9c29627` passed all 66 tests:
+[36799769344](https://github.com/crabbuild/canopy/actions/runs/36799769344)
+and [36799773408](https://github.com/crabbuild/canopy/actions/runs/36799773408).
+Their Rust/provider jobs were still running at this observation.
+
 `push_branch` reuses one commit and therefore measures ref publication, not fresh
 pack ingestion. `push_commit` clones prepared base objects locally, creates a new
 child of the original corpus tip, and sends a distinct payload on a unique ref.
