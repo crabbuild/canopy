@@ -253,13 +253,10 @@ impl NativePackedRead {
             {
                 return Err(GatewayError::MalformedCache);
             }
-            let status = tokio::time::timeout(
-                std::time::Duration::from_secs(120),
-                self.process.child.wait(),
-            )
-            .await
-            .map_err(|_| crate::git_http::GitHttpError::Timeout)??;
-            self.process.disarm();
+            let status =
+                tokio::time::timeout(std::time::Duration::from_secs(120), self.process.wait())
+                    .await
+                    .map_err(|_| crate::git_http::GitHttpError::Timeout)??;
             if !status.success() {
                 return Err(GatewayError::MalformedCache);
             }

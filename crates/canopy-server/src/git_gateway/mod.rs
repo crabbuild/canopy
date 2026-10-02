@@ -695,18 +695,45 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
 }
 
 async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
-    let output = crate::native_git::command(git_dir)?
+    use crate::git_http::{GitProcess, WORKER_DEADLINE, read_bounded};
+    use tokio::io::AsyncReadExt;
+    let mut command = crate::native_git::command(git_dir)?;
+    command
         .arg("--git-dir")
         .arg(git_dir)
         .args(args)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(GatewayError::Git(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
-    }
-    Ok(output.stdout)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut process = GitProcess::spawn(command, ())?;
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or(GatewayError::MalformedCache)?;
+    let stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or(GatewayError::MalformedCache)?;
+    let run = async {
+        let mut bytes = Vec::new();
+        let read_stdout = async {
+            stdout.read_to_end(&mut bytes).await?;
+            Ok::<_, GitHttpError>(())
+        };
+        let ((), stderr) = tokio::try_join!(read_stdout, read_bounded(stderr, 64 << 10))?;
+        let status = process.wait().await?;
+        if !status.success() {
+            return Err(GatewayError::Git(
+                String::from_utf8_lossy(&stderr).into_owned(),
+            ));
+        }
+        Ok(bytes)
+    };
+    tokio::time::timeout(WORKER_DEADLINE, run)
+        .await
+        .map_err(|_| GitHttpError::Timeout)?
 }
 
 async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {

@@ -310,8 +310,7 @@ async fn validate_native(
                 64 << 10
             ),
         )?;
-        let status = process.child.wait().await?;
-        process.disarm();
+        let status = process.wait().await?;
         if !status.success() {
             return Err(GitHttpError::GitExit {
                 status,

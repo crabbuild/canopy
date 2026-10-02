@@ -43,6 +43,8 @@ Suggested ownership is a Canopy storage implementer for C–G/I, a Canopy runtim
 4. Add stage timers and physical/logical byte counters from the design before optimizing. Log operation IDs and stage transitions. Keep metric labels bounded; full OIDs and repository UUIDs belong in diagnostic logs.
 5. Remove stale hard-coded 120-second whole-worker assumptions in docs/tests. The working tree already uses a one-hour deadline; implement distinct idle/work budgets and an explicit four-hour bulk-import class.
 
+**Native ownership implemented:** the [shared guard](design/native-process-ownership.md) retains existing owners through Unix inherited-end drain and leader reaping, with bounded supervised cancellation cleanup and conservative quarantine. Decoded-object actors now reuse that guard; production native-resource permits, OS containment/descriptor-preservation qualification and non-Unix descendant support remain required.
+
 **Acceptance:** fresh-format startup succeeds; both directions of format mismatch fail before serving/writing; old prefixes are never adopted; metrics distinguish verification, artifact transfer, Cell publication and cache work; cancellation reaps all native descendants.
 
 **Review artifact:** format decision in persisted contracts, config defaults table, startup rejection tests, one tiny import stage report.

@@ -101,8 +101,7 @@ impl GitGateway {
             result = &mut output => result?,
             result = &mut input => { result?; output.await? }
         };
-        let status = process.child.wait().await?;
-        process.disarm();
+        let status = process.wait().await?;
         if !status.success() {
             return Err(GitHttpError::GitExit {
                 status,

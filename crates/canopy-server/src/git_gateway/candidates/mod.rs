@@ -277,8 +277,7 @@ async fn run(
         read_bounded(stdout, 128 * 1024),
         read_bounded(stderr, 64 * 1024)
     )?;
-    let status = process.child.wait().await?;
-    process.disarm();
+    let status = process.wait().await?;
     Ok(Output {
         status,
         stdout,

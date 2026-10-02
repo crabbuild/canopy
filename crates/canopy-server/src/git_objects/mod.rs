@@ -4,7 +4,7 @@ use std::{io, path::Path, process::Stdio, time::Duration};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, ChildStdout},
+    process::{ChildStdin, ChildStdout},
     time::timeout,
 };
 use tokio_util::task::AbortOnDropHandle;
@@ -34,25 +34,33 @@ pub enum ObjectReadError {
 }
 
 struct Process {
-    child: Child,
+    worker: crate::native_git::process::GitProcess<()>,
     output: BufReader<ChildStdout>,
     stderr: AbortOnDropHandle<Result<Vec<u8>, io::Error>>,
 }
 
 impl Process {
     fn start(git_dir: &Path, args: &[&str]) -> Result<(Self, ChildStdin), ObjectReadError> {
-        let mut child = crate::native_git::command(git_dir)?
+        let mut command = crate::native_git::command(git_dir)?;
+        command
             .arg("--git-dir")
             .arg(git_dir)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-        let input = child.stdin.take().ok_or(ObjectReadError::Malformed)?;
-        let output = child.stdout.take().ok_or(ObjectReadError::Malformed)?;
-        let mut stderr = child.stderr.take().ok_or(ObjectReadError::Malformed)?;
+            .stderr(Stdio::piped());
+        let mut child = crate::native_git::process::GitProcess::spawn(command, ())?;
+        let input = child.child.stdin.take().ok_or(ObjectReadError::Malformed)?;
+        let output = child
+            .child
+            .stdout
+            .take()
+            .ok_or(ObjectReadError::Malformed)?;
+        let mut stderr = child
+            .child
+            .stderr
+            .take()
+            .ok_or(ObjectReadError::Malformed)?;
         let stderr = AbortOnDropHandle::new(tokio::spawn(async move {
             let mut retained = Vec::new();
             let mut chunk = [0; 8192];
@@ -68,7 +76,7 @@ impl Process {
         }));
         Ok((
             Self {
-                child,
+                worker: child,
                 output: BufReader::new(output),
                 stderr,
             },
@@ -77,7 +85,7 @@ impl Process {
     }
 
     async fn finish(mut self) -> Result<(), ObjectReadError> {
-        let status = self.child.wait().await?;
+        let status = self.worker.wait().await?;
         let stderr = self.stderr.await??;
         if !status.success() {
             return Err(ObjectReadError::Git(format!(

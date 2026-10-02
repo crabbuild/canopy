@@ -449,8 +449,7 @@ impl GitCache {
                     64 << 10
                 )
             )?;
-            let status = verify.child.wait().await?;
-            verify.disarm();
+            let status = verify.wait().await?;
             if !status.success() {
                 return Err(GitHttpError::GitExit {
                     status,
@@ -483,9 +482,11 @@ impl GitCache {
     }
 }
 
-async fn finish<T>(process: &mut GitProcess<T>, stderr: Vec<u8>) -> Result<(), GitHttpError> {
-    let status = process.child.wait().await?;
-    process.disarm();
+async fn finish<T: Send + 'static>(
+    process: &mut GitProcess<T>,
+    stderr: Vec<u8>,
+) -> Result<(), GitHttpError> {
+    let status = process.wait().await?;
     if !status.success() {
         return Err(GitHttpError::GitExit {
             status,

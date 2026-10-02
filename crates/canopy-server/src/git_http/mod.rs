@@ -22,7 +22,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::{mpsc, oneshot},
 };
 
@@ -340,8 +340,7 @@ async fn start_stream<T: Send + 'static>(
                 tokio::try_join!(read_stdout, read_bounded(stderr, MAX_CGI_STDERR_BYTES),)?;
             // Keep the group leader unreaped while descendants still own pipes;
             // cancellation can then signal its group without PID reuse ambiguity.
-            let status = process.child.wait().await?;
-            process.disarm();
+            let status = process.wait().await?;
             if !status.success() {
                 return Err(GitHttpError::GitExit {
                     status,
@@ -385,57 +384,7 @@ async fn start_stream<T: Send + 'static>(
     })
 }
 
-pub(crate) struct GitProcess<T> {
-    pub(crate) child: Child,
-    #[cfg(unix)]
-    group: Option<i32>,
-    // Drop signals the process group before fields release cache and input owners.
-    _keep_alive: T,
-}
-
-impl<T> GitProcess<T> {
-    pub(crate) fn spawn(mut command: Command, keep_alive: T) -> Result<Self, GitHttpError> {
-        #[cfg(unix)]
-        command.process_group(0);
-        let child = command.kill_on_drop(true).spawn();
-        // The pre-exec closure owns a parent copy of the worker fence. Release
-        // it before cleanup can drop the cache, including on spawn failure;
-        // only the running child and its descendants should retain that lock.
-        drop(command);
-        let child = child?;
-        #[cfg(unix)]
-        let group = Some(
-            i32::try_from(child.id().ok_or(GitHttpError::Interrupted)?)
-                .map_err(|_| GitHttpError::Interrupted)?,
-        );
-        Ok(Self {
-            child,
-            #[cfg(unix)]
-            group,
-            _keep_alive: keep_alive,
-        })
-    }
-
-    pub(crate) fn disarm(&mut self) {
-        #[cfg(unix)]
-        {
-            self.group = None;
-        }
-    }
-}
-
-impl<T> Drop for GitProcess<T> {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(group) = self.group {
-            // SAFETY: spawn created a separate process group with this positive PID.
-            // Its leader is not reaped until pipes close, preventing PID reuse here.
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-        }
-    }
-}
+pub(crate) use crate::native_git::process::GitProcess;
 
 pub(crate) async fn read_bounded<R: AsyncRead + Unpin>(
     reader: R,

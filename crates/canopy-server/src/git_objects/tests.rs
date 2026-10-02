@@ -167,8 +167,16 @@ async fn dropping_reader_kills_both_children() -> TestResult {
     let tip = oid(directory.path(), "HEAD").await?;
     let objects = GitObjects::start(&directory.path().join(".git"), vec![tip], vec![])?;
     let pids = [
-        objects.walk.as_ref().unwrap().process.child.id().unwrap(),
-        objects.batch.child.id().unwrap(),
+        objects
+            .walk
+            .as_ref()
+            .unwrap()
+            .process
+            .worker
+            .child
+            .id()
+            .unwrap(),
+        objects.batch.worker.child.id().unwrap(),
     ];
     drop(objects);
     timeout(Duration::from_secs(5), async {

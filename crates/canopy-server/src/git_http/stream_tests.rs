@@ -224,7 +224,7 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
     command.current_dir(files.path().join("missing"));
     assert!(matches!(
         GitProcess::spawn(command, cache),
-        Err(GitHttpError::Io(_))
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
     ));
     // Concurrent forks can briefly inherit the parent's queued-command fence
     // before exec closes their CLOEXEC descriptors. Cleanup remains charged
