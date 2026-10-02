@@ -3,12 +3,16 @@ use super::*;
 impl GitGateway {
     pub(super) async fn handle_push(
         &self,
-        request: GitHttpRequest,
-        actor: &str,
-        id: [u8; 16],
-        digest: [u8; 32],
+        preflight: preflight::PushPreflight,
     ) -> Result<GitHttpResponse, GatewayError> {
-        let commands = branch_policy::PushCommands::read(&request).await?;
+        let preflight::PushParts {
+            request,
+            commands,
+            identity,
+        } = preflight.into_parts();
+        let actor = identity.actor.as_str();
+        let id = identity.operation;
+        let digest = identity.request_digest;
         let option_error = commands.option_error().or_else(|| {
             (commands.certificate().is_some() && self.signer_directory.is_none())
                 .then_some("Canopy signed pushes are unavailable on this gateway")

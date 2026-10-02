@@ -38,6 +38,7 @@ mod discovery;
 mod fetch;
 mod hydration;
 mod maintenance;
+mod preflight;
 mod push;
 mod ssh;
 
@@ -217,22 +218,33 @@ impl GitGateway {
             }
             let request = self.receive(request, None, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
-            let digest = request_digest(&request).await?;
+            let encoded = preflight::EncodedPush::new(
+                request,
+                &self.repository.target,
+                self.repository.repository_id(),
+                self.repository.object_format(),
+                actor,
+                id,
+            )
+            .await?;
             // Upload spooling uses a private, budgeted scratch file. Serialize
             // the push-ID check, decode, native Git work and publication, but
             // do not let one slow client block another client's upload.
             let _push = self.push.lock().await;
-            if self.repository.begin_push(id, actor, digest).await? {
+            if self
+                .repository
+                .begin_push(id, actor, encoded.identity().request_digest)
+                .await?
+            {
                 return Ok(http_body(with_push_id(
                     self.repository.completed_response(id).await?,
                     id,
                 )));
             }
-            let request = self.decode(request, None).await?;
-            return self
-                .handle_push(request, actor, id, digest)
-                .await
-                .map(http_body);
+            let preflight = encoded
+                .decode(&self.scratch_root, &self.disk_budget, None)
+                .await?;
+            return self.handle_push(preflight).await.map(http_body);
         }
         let request = self
             .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
@@ -672,30 +684,6 @@ fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
         headers: response.headers,
         body: Body::from(response.body),
     }
-}
-
-async fn request_digest(request: &GitHttpRequest) -> Result<[u8; 32], InputError> {
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"canopy-git-push-v2");
-    hash.update(&[
-        u8::from(request.protocol_v2),
-        u8::from(request.content_type.is_some()),
-        u8::from(request.gzip),
-    ]);
-    for field in [
-        request.method.as_bytes(),
-        request.path_info.as_bytes(),
-        request.query.as_bytes(),
-        request
-            .content_type
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes(),
-    ] {
-        hash.update(&(field.len() as u64).to_le_bytes());
-        hash.update(field);
-    }
-    request.body.digest(hash).await
 }
 
 fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse {

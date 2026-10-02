@@ -205,6 +205,10 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("native_git/process.rs"));
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
+                source.update(include_bytes!("git_gateway/preflight.rs"));
+                source.update(include_bytes!("git_gateway/branch_policy.rs"));
+                source.update(include_bytes!("git_gateway/push.rs"));
+                source.update(include_bytes!("git_input/mod.rs"));
                 source.update(include_bytes!(
                     "../../canopy-object-storage/src/blob/mod.rs"
                 ));
