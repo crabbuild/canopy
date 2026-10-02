@@ -103,7 +103,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         )?;
         let repository = Arc::new(RepositoryCell::new(
             &application_handle,
-            target,
+            target.clone(),
             repository_id,
             canopy_server::ObjectFormat::Sha1,
         )?);
@@ -441,12 +441,21 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         })
         .await?;
         drop(teardown_gateway);
+        // The canonical Cell also owns the shared pack reader. Drop both
+        // owners to prove complete cache teardown before the cold clone.
+        drop(repository);
         assert_eq!(
             disk_budget.used(),
             0,
-            "gateway teardown releases retained object and snapshot charges"
+            "repository teardown releases retained object and snapshot charges"
         );
 
+        let repository = Arc::new(RepositoryCell::new(
+            &application_handle,
+            target,
+            repository_id,
+            canopy_server::ObjectFormat::Sha1,
+        )?);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
             scratch.path().to_path_buf(),
