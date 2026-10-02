@@ -6,8 +6,8 @@ or published roots**. The qualified executable uses Cellule `0dc04a6`; its
 selected release reached **Ready revision 9**. This closes the release-admission
 gate after [same-code maintenance recovery](2026-10-01-original-corpus-recovery.md).
 Activation alone does not establish remote Git/LFS content recovery, throughput
-or capacity. The subsequent remote verification passed; the first ten load
-windows below include failed arrivals and do not establish capacity.
+or capacity. The subsequent remote verification passed; the completed load
+phases below include failed arrivals and do not establish capacity.
 
 ## Activation sequence
 
@@ -132,10 +132,69 @@ Closed receipts are in the qualification root's `upgraded-original-verification`
 directory; the verified copy is
 `/Volumes/Workspace/CrabData/canopy-original-upgraded-remote-dooxekr0`.
 
-## Scheduled load: failed diagnostic baseline
+## Scheduled load results
+
+The unchanged **108-window / 114,960-arrival / 8,640-second** campaign remains
+running on the qualified `0dc04a6` executable and original RustFS provider.
+At October 2, 04:33 UTC (October 1 Pacific), its first four operation phases
+were complete: **40 sealed, audited and preserved windows**. Later clone
+windows had also begun; they are excluded from this completed-phase summary.
+
+| Completed phase | Windows | Scheduled | OK | Busy drops | HTTP 503 | Other failures |
+| --- | --- | --- | --- | --- | --- | --- |
+| Metadata | 18 | 43,200 | 41,485 | 1,669 | 46 | 0 |
+| Repository creation | 6 | 2,160 | 1,464 | 690 | 6 | 0 |
+| HTTP Git v2 discovery | 8 | 57,600 | 10,309 | 9,581 | 37,706 | 4 transport errors |
+| Stock Git ls-remote | 8 | 1,200 | 632 | 514 | Not separately classified | 54 Git errors |
+
+These are failed arrival gates. The HTTP discovery probe checks the v2
+capability response, not the full stock-Git ref exchange; `ls-remote` runs the
+actual Git client and checks the expected main ref. Busy arrivals do not start
+requests and have no completed-request latency. Git errors remain client-level
+failures rather than being silently classified as HTTP 503s.
+
+Fast refusal can make aggregate latency misleading. In the first uniform
+100-RPS discovery window, completed attempts had p50 **7.824 ms**, but successful
+attempts had p50/p95/p99 **1,406.853/4,472.563/6,349.508 ms**. Only 1,343 of
+12,000 arrivals succeeded, delivering **10.992 successful requests/s** inside
+the window. This is not a latency improvement or evidence of 100-RPS capacity.
+
+### Repository creation throughput and latency
+
+Each window lasts 120 seconds with client concurrency 16. Successful completions
+during drain count as OK but not as delivered RPS inside the window. Percentiles
+below cover completed attempts, including HTTP errors; they exclude busy drops.
+
+| Offered RPS / repetition | OK / scheduled | Busy drops | HTTP 503 | Delivered RPS | Scheduled p95 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| 1 / 1 | 120 / 120 | 0 | 0 | 1.000 | 3,205.203 / 5,940.919 |
+| 1 / 2 | 120 / 120 | 0 | 0 | 1.000 | 5,220.908 / 6,795.877 |
+| 1 / 3 | 120 / 120 | 0 | 0 | 1.000 | 5,282.604 / 7,891.099 |
+| 5 / 1 | 394 / 600 | 204 | 2 | 3.150 | 11,488.210 / 13,053.231 |
+| 5 / 2 | 196 / 600 | 400 | 4 | 1.558 | 18,279.797 / 20,765.950 |
+| 5 / 3 | 514 / 600 | 86 | 0 | 4.250 | 5,185.795 / 12,490.197 |
+
+All 1,464 positive creation ACKs have unique canonical UUIDs and their exact
+scheduled names. They do not collide with the original 10,000 repositories,
+the two original critical fixtures or the 38 current critical UUIDs. This checks
+ledger integrity, not recovery after owner loss. Failed writes are not assumed
+to have rolled back.
+
+### Stock Git ref listing
+
+The eight 60-second `ls-remote` windows vary offered rate (1 or 4/s) independently
+of client concurrency (1 or 16), with two repetitions per combination. The
+first concurrency-16, 1-RPS repetition completed all 60 arrivals; the second
+returned **41 OK, 16 Git errors and three busy drops**, with completed-attempt
+p95 **34,429.751 ms**. The two concurrency-16, 4-RPS repetitions returned
+**236/240** and **111/240** OK, delivering **3.833** and **1.750** successful
+operations/s respectively. The variability is retained; no matched speedup or
+root cause is established.
+
+### Earlier ten-window metadata snapshot
 
 The unchanged **108-window / 114,960-arrival / 8,640-second** campaign is running
-on the same qualified executable and original RustFS provider. This snapshot
+on the same qualified executable and original RustFS provider. This earlier snapshot
 covers only its first **ten sealed, audited and preserved metadata windows**,
 observed October 2 at 03:36 UTC. All offer 20 requests/s for 120 seconds, with
 client concurrency 32 and node residency capped at 100. An active set of 500

@@ -49,9 +49,11 @@ passed new-release admission and controlled activation to Ready revision 9.
 All 10,003 Controls and published roots remained unchanged through activation;
 three upgraded gateways subsequently passed full remote verification of 10,000
 identities, 100 full LFS bodies, 200 v0/v2 clones and both critical fixtures.
-The first ten scheduled metadata windows recorded 23,779 OK / 24,000 arrivals,
-206 busy drops and 15 HTTP 503s. Concurrent critical load recorded 19/20 OK,
-one busy drop and 323 successful steps. Both are failed arrival gates, not
+The first four completed load phases recorded 41,485/43,200 metadata OK,
+1,464/2,160 creation OK, 10,309/57,600 HTTP v2 discovery OK and 632/1,200
+stock-Git ls-remote OK across 40 windows. Busy drops and protocol/client errors
+remain in the result tables. Concurrent critical load recorded 19/20 OK,
+one busy drop and 323 successful steps. These are failed arrival gates, not
 capacity passes; the full schedule continues unchanged.
 None of these checkpoints replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
@@ -64,7 +66,7 @@ seed and successful recovery of every recorded ACK.
 | HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
 | Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
 | Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |
-| Current original-corpus load snapshot | First ten metadata windows: 23,779/24,000 OK, 206 busy drops, 15 HTTP 503s. Concurrent critical schedule: 19/20 OK, one busy drop, 323 successful steps, 38 UUIDs. Sealed ledgers audited and copied; unchanged full schedule still running, not reference capacity |
+| Current original-corpus load snapshot | Four completed phases / 40 windows: metadata 41,485/43,200 OK; creation 1,464/2,160; HTTP v2 discovery 10,309/57,600; stock-Git ls-remote 632/1,200. Failed arrivals retained. Concurrent critical schedule: 19/20 OK, 323 successful steps, 38 UUIDs. Sealed ledgers audited and copied; full schedule still running, not reference capacity |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |

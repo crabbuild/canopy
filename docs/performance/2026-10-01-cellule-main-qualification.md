@@ -100,8 +100,9 @@ not reference performance. The later
 [original corpus activation](2026-10-01-original-corpus-activation.md) passed
 full admission and controlled activation of all 10,003 Cells. Its subsequent
 full remote Git/LFS verification passed with an independent audit and verified
-7,061-file copy. The first ten scheduled metadata windows and concurrent
-critical schedule include failed arrivals; see that checkpoint's result tables.
+7,061-file copy. The four completed load phases (40 windows) and concurrent
+critical schedule include failed arrivals; see that checkpoint's result tables
+for metadata, creation, HTTP v2 discovery and stock-Git ls-remote.
 
 The [full performance plan](../performance-plan.md) still requires three nodes
 behind a proxy, 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows,
