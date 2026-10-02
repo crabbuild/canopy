@@ -132,9 +132,12 @@ pub(super) fn authenticate(
 pub(super) fn retention_matches(
     context: &CommandContext<'_, '_>,
     data: &super::certificate::CertificateData,
-    row_generation: u64,
+    row_generation: Option<u64>,
     format: ObjectFormat,
 ) -> cellule_runtime::Result<bool> {
+    let Some(row_generation) = row_generation else {
+        return Ok(false);
+    };
     Ok(row_generation == data.retention_floor
         && fact(context, data.token.repository, format, Some(row_generation))?.certificate
             == data.retention_certificate)

@@ -49,6 +49,10 @@ pub use compaction::{
     CompactionPressure, CompactionReply, CompactionSource, PreparedCompaction,
     PublishCatalogCompaction, PublishedCompaction,
 };
+mod staging;
+pub use staging::{
+    BeginStaging, BindStaging, CheckStaging, ClaimStaging, RenewStaging, StagingLease, StagingReply,
+};
 mod sql;
 pub use commands::{
     AbortPreparation, BeginPreparation, CheckPreparation, CheckPreparationFrontier,
@@ -154,9 +158,14 @@ pub struct MaintenanceRequest {
 }
 
 /// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19/22 and query IDs 15/20/21/23, plus the existing trusted SQL
+/// command IDs 11..14/16..19/22/24..26/28 and query IDs 15/20/21/23/27, plus the existing trusted SQL
 /// query. No separate Cell or compatibility API.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    registry.bind_command::<BeginStaging>()?;
+    registry.bind_command::<RenewStaging>()?;
+    registry.bind_command::<BindStaging>()?;
+    registry.bind_command::<ClaimStaging>()?;
+    registry.bind_query::<CheckStaging>()?;
     registry.bind_command::<BeginPreparation>()?;
     registry.bind_command::<ClaimPreparation>()?;
     registry.bind_command::<RenewPreparation>()?;

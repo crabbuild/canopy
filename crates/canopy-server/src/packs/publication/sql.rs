@@ -30,6 +30,13 @@ pub(super) fn unsigned(value: &SqlValue) -> cellule_runtime::Result<u64> {
         _ => Err(Error::Command("invalid catalog integer")),
     }
 }
+pub(super) fn optional_generation(value: &SqlValue) -> cellule_runtime::Result<Option<u64>> {
+    if *value == SqlValue::Null {
+        Ok(None)
+    } else {
+        unsigned(value).map(Some)
+    }
+}
 pub(super) fn fixed<const N: usize>(value: &SqlValue) -> cellule_runtime::Result<[u8; N]> {
     match value {
         SqlValue::Blob(value) => value
@@ -114,7 +121,7 @@ pub(super) fn generation(
 pub(super) struct Operation {
     pub actor: String,
     pub token: PreparationToken,
-    pub generation: u64,
+    pub generation: Option<u64>,
     pub expires: i64,
 }
 pub(super) fn operation(
@@ -156,7 +163,7 @@ pub(super) fn operation(
     Ok(Some(Operation {
         actor: actor.clone(),
         token,
-        generation: unsigned(generation)?,
+        generation: optional_generation(generation)?,
         expires: *expires,
     }))
 }
@@ -166,7 +173,7 @@ pub(super) fn grant(
     base: GenerationFact,
     now: i64,
 ) -> cellule_runtime::Result<PreparationLease> {
-    if operation.generation != base.generation || operation.expires <= now {
+    if operation.generation != Some(base.generation) || operation.expires <= now {
         return Err(Error::Command("catalog lease and generation differ"));
     }
     Ok(PreparationLease {
@@ -213,10 +220,10 @@ pub(super) fn quota(
 pub(super) fn insert_lease(
     context: &CommandContext<'_, '_>,
     token: PreparationToken,
-    generation: u64,
+    generation: Option<u64>,
     expires: i64,
 ) -> cellule_runtime::Result<()> {
-    context.sql(&statement("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",vec![blob(token.owner.incarnation.as_bytes()),number(token.attempt)?,blob(token.operation),blob(token.owner.epoch.to_be_bytes()),blob(token.artifact_operation),number(generation)?,SqlValue::Integer(expires)]))?;
+    context.sql(&statement("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",vec![blob(token.owner.incarnation.as_bytes()),number(token.attempt)?,blob(token.operation),blob(token.owner.epoch.to_be_bytes()),blob(token.artifact_operation),generation.map(number).transpose()?.unwrap_or(SqlValue::Null),SqlValue::Integer(expires)]))?;
     Ok(())
 }
 

@@ -201,6 +201,58 @@ impl WireValue for PreparationReply {
         })
     }
 }
+impl WireValue for StagingLease {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        if self.observed_at_ms < 0 || self.expires_at_ms <= self.observed_at_ms {
+            return Err(invalid());
+        }
+        self.token.encode(e)?;
+        e.write_u8(self.format.bytes() as u8)?;
+        e.write_i64(self.observed_at_ms)?;
+        e.write_i64(self.expires_at_ms)
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        let token = PreparationToken::decode(d)?;
+        let format = match d.read_u8()? {
+            20 => ObjectFormat::Sha1,
+            32 => ObjectFormat::Sha256,
+            _ => return Err(invalid()),
+        };
+        let value = Self {
+            token,
+            format,
+            observed_at_ms: d.read_i64()?,
+            expires_at_ms: d.read_i64()?,
+        };
+        if value.observed_at_ms < 0 || value.expires_at_ms <= value.observed_at_ms {
+            return Err(invalid());
+        }
+        Ok(value)
+    }
+}
+impl WireValue for StagingReply {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        match self {
+            Self::Granted(lease) => {
+                e.write_u8(0)?;
+                lease.encode(e)
+            }
+            Self::Denied(reason) => PreparationReply::Denied(*reason).encode(e),
+        }
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        Ok(match d.read_u8()? {
+            0 => Self::Granted(Box::new(StagingLease::decode(d)?)),
+            1 => Self::Denied(PreparationDenial::Unauthorized),
+            2 => Self::Denied(PreparationDenial::Conflict),
+            3 => Self::Denied(PreparationDenial::Stale),
+            4 => Self::Denied(PreparationDenial::Expired),
+            5 => Self::Denied(PreparationDenial::Capacity),
+            6 => Self::Denied(PreparationDenial::Missing),
+            _ => return Err(invalid()),
+        })
+    }
+}
 impl WireValue for BeginRequest {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         repo_valid(self.repository)?;

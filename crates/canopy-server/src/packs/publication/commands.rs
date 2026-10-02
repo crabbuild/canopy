@@ -56,7 +56,7 @@ pub(super) fn fact(
 pub(super) fn matched(row: &Operation, check: &LeaseCheck) -> bool {
     row.actor == check.actor && row.token == check.token
 }
-fn pin(sets: &[SqlResultSet], row: &Operation) -> cellule_runtime::Result<()> {
+pub(super) fn pin(sets: &[SqlResultSet], row: &Operation) -> cellule_runtime::Result<()> {
     let Some(
         [
             operation,
@@ -72,14 +72,14 @@ fn pin(sets: &[SqlResultSet], row: &Operation) -> cellule_runtime::Result<()> {
     if fixed::<16>(operation)? != row.token.operation
         || u64::from_be_bytes(fixed(epoch)?) != row.token.owner.epoch
         || fixed::<16>(artifact_operation)? != row.token.artifact_operation
-        || unsigned(generation)? != row.generation
+        || optional_generation(generation)? != row.generation
         || *expires != row.expires
     {
         return Err(Error::Command("catalog attempt pin differs"));
     }
     Ok(())
 }
-fn pin_query(token: PreparationToken) -> cellule_runtime::Result<SqlBatch> {
+pub(super) fn pin_query(token: PreparationToken) -> cellule_runtime::Result<SqlBatch> {
     Ok(statement(
         "SELECT operation,owner_epoch,artifact_operation,generation,expires_at_ms FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2",
         vec![
@@ -94,7 +94,7 @@ pub(super) fn check_pin(
 ) -> cellule_runtime::Result<()> {
     pin(&context.sql(&pin_query(row.token)?)?, row)
 }
-fn token(
+pub(super) fn token(
     context: &CommandContext<'_, '_>,
     repository: [u8; 16],
     operation: [u8; 16],
@@ -113,6 +113,40 @@ fn token(
     })
 }
 
+pub(super) fn logical_available(
+    context: &CommandContext<'_, '_>,
+    input: &BeginRequest,
+) -> cellule_runtime::Result<bool> {
+    // A logical outcome already exists: callers must look it up before
+    // native preparation. Never allocate another namespace for a completed
+    // push, or admit an identity conflicting with a pending network push.
+    if !rows(&context.sql(&statement(
+        "SELECT id FROM catalog_compactions WHERE id=?1",
+        vec![blob(input.operation)],
+    ))?)?
+    .is_empty()
+    {
+        return Ok(false);
+    }
+    let saved = context.sql(&statement(
+        "SELECT actor,request_digest,response_id,publication FROM pushes WHERE id=?1",
+        vec![blob(input.operation)],
+    ))?;
+    if let Some(row) = rows(&saved)?.first() {
+        let [SqlValue::Text(actor), digest, response, publication] = row.as_slice() else {
+            return Err(Error::Command("invalid preparation push identity"));
+        };
+        if *actor != input.actor
+            || fixed::<32>(digest)? != input.request_digest
+            || *response != SqlValue::Null
+            || *publication != SqlValue::Null
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub struct BeginPreparation;
 impl Command for BeginPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
@@ -128,32 +162,8 @@ impl Command for BeginPreparation {
         else {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
-        // A logical outcome already exists: callers must look it up before
-        // native preparation. Never allocate another namespace for a completed
-        // push, or admit an identity conflicting with a pending network push.
-        if !rows(&context.sql(&statement(
-            "SELECT id FROM catalog_compactions WHERE id=?1",
-            vec![blob(input.operation)],
-        ))?)?
-        .is_empty()
-        {
+        if !logical_available(context, &input)? {
             return Ok(denied(PreparationDenial::Conflict));
-        }
-        let saved = context.sql(&statement(
-            "SELECT actor,request_digest,response_id,publication FROM pushes WHERE id=?1",
-            vec![blob(input.operation)],
-        ))?;
-        if let Some(row) = rows(&saved)?.first() {
-            let [SqlValue::Text(actor), digest, response, publication] = row.as_slice() else {
-                return Err(Error::Command("invalid preparation push identity"));
-            };
-            if *actor != input.actor
-                || fixed::<32>(digest)? != input.request_digest
-                || *response != SqlValue::Null
-                || *publication != SqlValue::Null
-            {
-                return Ok(denied(PreparationDenial::Conflict));
-            }
         }
         let now = now(context.now_ms())?;
         let expires = expiry(now, input.lease_ms)?;
@@ -173,8 +183,11 @@ impl Command for BeginPreparation {
             if existing.expires <= now {
                 return Ok(denied(PreparationDenial::Expired));
             }
+            if existing.generation.is_none() {
+                return Ok(denied(PreparationDenial::Conflict));
+            }
             check_pin(context, &existing)?;
-            let base = fact(context, input.repository, format, Some(existing.generation))?;
+            let base = fact(context, input.repository, format, existing.generation)?;
             return Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
                 grant(&existing, format, base, now)?,
             ))));
@@ -189,12 +202,12 @@ impl Command for BeginPreparation {
             input.operation,
             input.request_digest,
         )?;
-        insert_lease(context, new_token, base.generation, expires)?;
+        insert_lease(context, new_token, Some(base.generation), expires)?;
         context.sql(&statement("INSERT INTO catalog_operations(id,actor,request_digest,incarnation,owner_epoch,admission_sequence,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",vec![blob(input.operation),SqlValue::Text(input.actor.clone()),blob(input.request_digest),blob(new_token.owner.incarnation.as_bytes()),blob(new_token.owner.epoch.to_be_bytes()),number(new_token.attempt)?,blob(new_token.artifact_operation),number(base.generation)?,SqlValue::Integer(expires)]))?;
         let row = Operation {
             actor: input.actor,
             token: new_token,
-            generation: base.generation,
+            generation: Some(base.generation),
             expires,
         };
         Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
@@ -230,6 +243,9 @@ impl Command for ClaimPreparation {
         if !matched(&existing, &check) {
             return Ok(denied(PreparationDenial::Stale));
         }
+        if existing.generation.is_none() {
+            return Ok(denied(PreparationDenial::Conflict));
+        }
         check_pin(context, &existing)?;
         if !quota(context, false)? {
             return Ok(denied(PreparationDenial::Capacity));
@@ -243,13 +259,13 @@ impl Command for ClaimPreparation {
             check.token.operation,
             check.token.request_digest,
         )?;
-        insert_lease(context, next, base.generation, expires)?;
+        insert_lease(context, next, Some(base.generation), expires)?;
         // Keep the previous pin unchanged, even when rebasing to a new root.
         context.sql(&statement("UPDATE catalog_operations SET incarnation=?1,owner_epoch=?2,admission_sequence=?3,generation=?4,expires_at_ms=?5,attestation=NULL,attestation_digest=NULL,artifact_operation=?7 WHERE id=?6",vec![blob(next.owner.incarnation.as_bytes()),blob(next.owner.epoch.to_be_bytes()),number(next.attempt)?,number(base.generation)?,SqlValue::Integer(expires),blob(next.operation),blob(next.artifact_operation)]))?;
         let row = Operation {
             actor: check.actor,
             token: next,
-            generation: base.generation,
+            generation: Some(base.generation),
             expires,
         };
         Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
@@ -288,17 +304,15 @@ impl Command for RenewPreparation {
         if !matched(&existing, &check) {
             return Ok(denied(PreparationDenial::Stale));
         }
+        if existing.generation.is_none() {
+            return Ok(denied(PreparationDenial::Conflict));
+        }
         check_pin(context, &existing)?;
         let now = now(context.now_ms())?;
         if existing.expires <= now {
             return Ok(denied(PreparationDenial::Expired));
         }
-        let base = fact(
-            context,
-            check.token.repository,
-            format,
-            Some(existing.generation),
-        )?;
+        let base = fact(context, check.token.repository, format, existing.generation)?;
         existing.expires = existing.expires.max(expiry(now, input.lease_ms)?);
         context.sql(&statement("UPDATE catalog_leases SET expires_at_ms=?1 WHERE incarnation=?2 AND admission_sequence=?3",vec![SqlValue::Integer(existing.expires),blob(existing.token.owner.incarnation.as_bytes()),number(existing.token.attempt)?]))?;
         context.sql(&statement(
@@ -392,9 +406,12 @@ impl Query for CheckPreparation {
         if row.expires <= now {
             return Ok(None);
         }
+        let Some(floor) = row.generation else {
+            return Ok(None);
+        };
         pin(&context.sql(&pin_query(row.token)?)?, &row)?;
         let base = generation(
-            &context.sql(&statement(GENERATION, vec![number(row.generation)?]))?,
+            &context.sql(&statement(GENERATION, vec![number(floor)?]))?,
             check.token.repository,
             format,
         )?;

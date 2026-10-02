@@ -10,7 +10,7 @@ async fn refresh(
         .await?
         .output)
 }
-async fn reap(fixture: &Fixture) -> Result<u64> {
+pub(super) async fn reap(fixture: &Fixture) -> Result<u64> {
     Ok(fixture
         .client()
         .command::<ReapPreparation>(
@@ -25,7 +25,7 @@ async fn reap(fixture: &Fixture) -> Result<u64> {
         .await?
         .output)
 }
-async fn facts(fixture: &Fixture) -> Result<Vec<u8>> {
+pub(super) async fn facts(fixture: &Fixture) -> Result<Vec<u8>> {
     Ok(fixture
         .handle
         .query(0, 4096, |connection| {
@@ -38,7 +38,7 @@ async fn facts(fixture: &Fixture) -> Result<Vec<u8>> {
         })
         .await?)
 }
-fn expected(values: &[u64]) -> Vec<u8> {
+pub(super) fn expected(values: &[u64]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|value| value.to_be_bytes())

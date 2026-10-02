@@ -344,7 +344,8 @@ CREATE TRIGGER catalog_compactions_not_replaced BEFORE INSERT ON catalog_compact
 WHEN EXISTS(SELECT 1 FROM catalog_compactions WHERE id=NEW.id)
 BEGIN SELECT RAISE(ABORT, 'compaction outcomes cannot be replaced'); END;
 
--- Each attempt pins a generation floor and every later generation. This permits
+-- Staging attempts retain their creating namespace with a NULL generation.
+-- A one-way late bind pins a generation floor and every later generation. This permits
 -- read-only frontier refresh without a new durable pin/Claim per publication.
 -- Replacement/abort preserves the old floor until its independent pin is reaped.
 CREATE TABLE catalog_leases (
@@ -353,11 +354,15 @@ CREATE TABLE catalog_leases (
     operation BLOB NOT NULL CHECK(length(operation) = 16),
     owner_epoch BLOB NOT NULL CHECK(length(owner_epoch) = 8 AND owner_epoch != zeroblob(8)),
     artifact_operation BLOB NOT NULL CHECK(length(artifact_operation) = 16),
-    generation INTEGER NOT NULL REFERENCES catalog_generations(generation),
+    generation INTEGER REFERENCES catalog_generations(generation),
+    -- Normalize the unbound staging phase for the deferred exact binding. A
+    -- nullable FK alone would skip validation of every other identity field.
+    binding_generation INTEGER GENERATED ALWAYS AS (coalesce(generation, -1)) STORED,
     expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
     attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
     CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
+    CHECK(generation IS NOT NULL OR attestation IS NULL),
     PRIMARY KEY(incarnation, admission_sequence)
 ) WITHOUT ROWID;
 CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnation, admission_sequence);
@@ -370,11 +375,13 @@ CREATE TRIGGER catalog_lease_not_replaced BEFORE INSERT ON catalog_leases
 WHEN EXISTS(SELECT 1 FROM catalog_leases WHERE incarnation=NEW.incarnation AND admission_sequence=NEW.admission_sequence)
   OR EXISTS(SELECT 1 FROM catalog_leases WHERE artifact_operation=NEW.artifact_operation)
 BEGIN SELECT RAISE(ABORT, 'catalog attempt pin cannot be replaced'); END;
-CREATE UNIQUE INDEX catalog_leases_binding ON catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, generation, expires_at_ms);
+CREATE UNIQUE INDEX catalog_leases_binding ON catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, binding_generation, expires_at_ms);
 CREATE TRIGGER catalog_lease_identity_immutable BEFORE UPDATE OF incarnation, admission_sequence, operation, owner_epoch, artifact_operation, generation ON catalog_leases
 WHEN NEW.incarnation != OLD.incarnation OR NEW.admission_sequence != OLD.admission_sequence
   OR NEW.operation != OLD.operation OR NEW.owner_epoch != OLD.owner_epoch
-  OR NEW.artifact_operation != OLD.artifact_operation OR NEW.generation != OLD.generation
+  OR NEW.artifact_operation != OLD.artifact_operation
+  OR (NEW.generation IS NOT OLD.generation AND NOT
+      (OLD.generation IS NULL AND NEW.generation IS NOT NULL AND OLD.attestation IS NULL))
 BEGIN SELECT RAISE(ABORT, 'catalog attempt identity is immutable'); END;
 CREATE TRIGGER catalog_lease_attestation_immutable BEFORE UPDATE OF attestation, attestation_digest ON catalog_leases
 WHEN OLD.attestation IS NOT NULL AND (NEW.attestation IS NOT OLD.attestation OR NEW.attestation_digest IS NOT OLD.attestation_digest)
@@ -388,13 +395,17 @@ CREATE TABLE catalog_operations (
     owner_epoch BLOB NOT NULL CHECK(length(owner_epoch) = 8 AND owner_epoch != zeroblob(8)),
     admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence) = 'integer' AND admission_sequence > 0),
     artifact_operation BLOB NOT NULL CHECK(length(artifact_operation) = 16),
-    generation INTEGER NOT NULL REFERENCES catalog_generations(generation),
+    generation INTEGER REFERENCES catalog_generations(generation),
+    -- Normalize the unbound staging phase for the deferred exact binding. A
+    -- nullable FK alone would skip validation of every other identity field.
+    binding_generation INTEGER GENERATED ALWAYS AS (coalesce(generation, -1)) STORED,
     expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
     attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
     CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
-    FOREIGN KEY(incarnation, admission_sequence, id, owner_epoch, artifact_operation, generation, expires_at_ms)
-        REFERENCES catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, generation, expires_at_ms)
+    CHECK(generation IS NOT NULL OR attestation IS NULL),
+    FOREIGN KEY(incarnation, admission_sequence, id, owner_epoch, artifact_operation, binding_generation, expires_at_ms)
+        REFERENCES catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, binding_generation, expires_at_ms)
         DEFERRABLE INITIALLY DEFERRED
 ) WITHOUT ROWID;
 CREATE INDEX catalog_operations_by_expiry ON catalog_operations(expires_at_ms, id);

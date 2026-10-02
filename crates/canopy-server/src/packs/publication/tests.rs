@@ -9,6 +9,7 @@ mod prepare;
 mod publishing;
 mod reconcile;
 mod refs;
+mod staging;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};
 use cellule_runtime::{
     ApplicationId, BuildDescriptor, CellClient, CellRuntime, CellTarget, Digest, InvocationError,
@@ -71,6 +72,10 @@ impl CellModule for Module {
                     publish_descriptor,
                     complete_descriptor,
                     descriptor(22),
+                    descriptor(24),
+                    descriptor(25),
+                    descriptor(26),
+                    descriptor(28),
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -79,6 +84,7 @@ impl CellModule for Module {
                     descriptor(20),
                     descriptor(21),
                     descriptor(23),
+                    descriptor(27),
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],
