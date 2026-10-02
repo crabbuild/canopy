@@ -121,7 +121,7 @@ pub(super) fn logical_available(
     // native preparation. Never allocate another namespace for a completed
     // push, or admit an identity conflicting with a pending network push.
     if !rows(&context.sql(&statement(
-        "SELECT id FROM catalog_compactions WHERE id=?1",
+        "SELECT id FROM catalog_compactions WHERE id=?1 UNION ALL SELECT id FROM catalog_initialization WHERE id=?1",
         vec![blob(input.operation)],
     ))?)?
     .is_empty()

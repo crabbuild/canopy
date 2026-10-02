@@ -330,6 +330,24 @@ CREATE TABLE catalog_state (
 ) WITHOUT ROWID;
 INSERT INTO catalog_state VALUES(1, 0);
 
+-- One immutable initialization outcome per repository. Its shared generation
+-- fact retains the small empty catalog/ref metadata for exact logical recovery.
+CREATE TABLE catalog_initialization (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    id BLOB NOT NULL UNIQUE CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    verification_digest BLOB NOT NULL CHECK(length(verification_digest)=32),
+    result BLOB NOT NULL CHECK(length(result) BETWEEN 1 AND 512)
+) WITHOUT ROWID;
+CREATE TRIGGER catalog_initialization_immutable BEFORE UPDATE ON catalog_initialization
+BEGIN SELECT RAISE(ABORT, 'initialization outcome is immutable'); END;
+CREATE TRIGGER catalog_initialization_not_replaced BEFORE INSERT ON catalog_initialization
+WHEN EXISTS(SELECT 1 FROM catalog_initialization WHERE singleton=NEW.singleton)
+BEGIN SELECT RAISE(ABORT, 'initialization outcome cannot be replaced'); END;
+CREATE TRIGGER catalog_initialization_retained BEFORE DELETE ON catalog_initialization
+BEGIN SELECT RAISE(ABORT, 'initialization outcome must be retained'); END;
+
 -- Exact logical outcomes for catalog-only maintenance. Kept separately from
 -- network push response/product facts; no per-object outcome rows are created.
 CREATE TABLE catalog_compactions (

@@ -29,6 +29,11 @@ mod prepare;
 pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
 pub(in crate::packs) mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
+mod initialization;
+pub use initialization::{
+    CheckInitializedCatalog, INITIALIZATION_BYTES, InitialRefProof, InitializationPreparationError,
+    InitializationReply, InitializeCatalogRefs,
+};
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
 mod publish;
@@ -182,7 +187,7 @@ pub struct MaintenanceRequest {
 }
 
 /// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19/22/24..26/28 and query IDs 15/20/21/23/27, plus the existing trusted SQL
+/// command IDs 11..14/16..19/22/24..26/28/31 and query IDs 15/20/21/23/27/32, plus the existing trusted SQL
 /// query. No separate Cell or compatibility API.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<BeginStaging>()?;
@@ -198,6 +203,8 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<AbortPreparation>()?;
     registry.bind_command::<ReapPreparation>()?;
     registry.bind_command::<RegisterCatalogAttestation>()?;
+    registry.bind_command::<InitializeCatalogRefs>()?;
+    registry.bind_query::<CheckInitializedCatalog>()?;
     registry.bind_command::<PublishCatalogRefs>()?;
     registry.bind_command::<CompleteCatalogPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;

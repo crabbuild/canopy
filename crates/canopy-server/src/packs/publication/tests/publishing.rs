@@ -187,7 +187,9 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
         let pushes = connection.query_row("SELECT count(*) FROM pushes WHERE publication IS NOT NULL", [], |row|row.get::<_,u64>(0))?;
         let mut checkpoints=connection.prepare("SELECT artifact_operation,attestation,attestation_digest FROM catalog_leases ORDER BY artifact_operation")?;
         let checkpoints=checkpoints.query_map([],|row|Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,Option<Vec<u8>>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints)).map_err(|_| Error::Command("fixture publication state"))
+        let mut initial=connection.prepare("SELECT id,actor,request_digest,verification_digest,result FROM catalog_initialization")?;
+        let initial=initial.query_map([],|row|Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Vec<u8>>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints,initial)).map_err(|_| Error::Command("fixture publication state"))
     }).await?)
 }
 fn published(reply: PublicationReply) -> Result<PublishedRefs> {

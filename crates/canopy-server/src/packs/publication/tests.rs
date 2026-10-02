@@ -4,6 +4,7 @@ mod compaction;
 mod completion;
 mod coordinator;
 mod frontier;
+mod initialization;
 mod inputs;
 mod namespaces;
 mod native_capture;
@@ -53,6 +54,11 @@ impl CellModule for Module {
             publish_descriptor.input_limit = 4 << 20;
             let mut complete_descriptor = descriptor(19);
             complete_descriptor.input_limit = 4 << 20;
+            let mut initial_descriptor = descriptor(31);
+            initial_descriptor.input_limit = INITIALIZATION_BYTES;
+            initial_descriptor.output_limit = 512;
+            let mut initial_query = descriptor(32);
+            initial_query.output_limit = 512;
             let mut sql_query = descriptor(2);
             sql_query.output_limit = 1 << 20;
             ModuleDescriptor {
@@ -81,6 +87,7 @@ impl CellModule for Module {
                     descriptor(26),
                     descriptor(28),
                     descriptor(29),
+                    initial_descriptor,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -91,6 +98,7 @@ impl CellModule for Module {
                     descriptor(23),
                     descriptor(27),
                     descriptor(30),
+                    initial_query,
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],
