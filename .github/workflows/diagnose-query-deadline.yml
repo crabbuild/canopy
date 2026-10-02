@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'codex/cellule-release-ci-query-deadline-*'
+      - 'codex/cellule-active-owner-recovery'
   workflow_dispatch:
 
 permissions:
@@ -42,7 +43,14 @@ jobs:
 
           baseline = '7497fc720e68a440e27614a83a1442576511cfd2'
           changed = subprocess.check_output(['git', 'diff', '--name-only', baseline, '--', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
-          assert changed == ['crates/canopy-server/src/server/lifecycle.rs', 'crates/canopy-server/src/server/lifecycle/tests.rs', 'crates/canopy-server/src/server/mod.rs', 'crates/canopy-server/src/server/residency/mod.rs', 'crates/canopy-server/src/server/residency/tests.rs'], changed
+          assert changed == ['Cargo.lock', 'crates/canopy-server/Cargo.toml', 'crates/canopy-server/src/server/lifecycle.rs', 'crates/canopy-server/src/server/lifecycle/tests.rs', 'crates/canopy-server/src/server/mod.rs', 'crates/canopy-server/src/server/residency/mod.rs', 'crates/canopy-server/src/server/residency/tests.rs'], changed
+          old_revision = '0f4ca0919b0dfe20a3dcd964d21da03135e42eed'
+          revision = '49921181f1dfe78cc9442931ce6dfb36349c0525'
+          for name, count in [('crates/canopy-server/Cargo.toml', 5), ('Cargo.lock', 12)]:
+              content = Path(name).read_bytes()
+              assert content.count(revision.encode()) == count
+              assert content.replace(revision.encode(), old_revision.encode()) == subprocess.check_output(['git', 'show', baseline + ':' + name])
+          assert b'[DEBUG-active-cache-0f4]' not in Path('crates/canopy-server/src/server/residency/mod.rs').read_bytes()
           lifecycle = Path('crates/canopy-server/src/server/lifecycle.rs').read_bytes()
           test_module = b'\n#[cfg(test)]\nmod tests;\n'
           assert lifecycle.count(test_module) == 1
@@ -58,7 +66,6 @@ jobs:
           assert Path(regression).read_bytes().startswith(subprocess.check_output(['git', 'show', 'd1a0f1e840333f479883e9b1fec210404f59d79e:' + regression]))
           files = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts', '.github/workflows'], text=True).splitlines()
           metadata = json.loads(Path('diagnostic/metadata.json').read_text())
-          revision = '0f4ca0919b0dfe20a3dcd964d21da03135e42eed'
           packages = {row['name']: row['source'] for row in metadata['packages'] if row['name'].startswith('cellule-')}
           assert set(packages) == {'cellule-app', 'cellule-host', 'cellule-ltx', 'cellule-runtime', 'cellule-store', 'cellule-types'}
           assert all(source == f'git+https://github.com/crabbuild/cellule.git?rev={revision}#{revision}' for source in packages.values())
@@ -66,8 +73,8 @@ jobs:
                     'baseline_head': baseline, 'diagnostic_changes': changed, 'cellule_revision': revision,
                     'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
                     'scope': 'Started-query deadline and next HTTP metadata request on an owned in-memory fixture. '
-                             'Diagnostic metadata fallback for non-resident owners, pinned recovery and account admission. '
-                             'Unchanged original regression, deadlines and permit limits; do not promote hot-path metadata I/O. '
+                             'Experimental Cellule active-owner API, pinned recovery and account admission. '
+                             'Unchanged original regression, deadlines and permit limits. No diagnostic metadata fallback. '
                              'Not original-corpus recovery, every-ACK verification or performance.'}
           Path('diagnostic/inputs.json').write_text(json.dumps(record, indent=2) + '\n')
           PY
@@ -114,11 +121,13 @@ jobs:
           target = 'server::lifecycle::tests::metadata_after_started_query_deadline_reacquires_released_cell'
           pinned = 'server::lifecycle::tests::deadline_recovery_keeps_pinned_files_and_acknowledged_data'
           admission = 'residency::faults::admission::one_accounts_cold_requests_leave_capacity_for_another_account'
+          disconnected = 'residency::faults::disconnected_admission_finishes_release_and_allows_a_later_restore'
           schedule = [('isolated-regression', executable, [target, '--exact', '--nocapture'], 3, 180),
                       ('pinned-recovery', executable, [pinned, '--exact', '--nocapture'], 3, 180),
                       ('full-library', executable, ['--test-threads=4', '--nocapture'], 1, 180),
                       ('account-admission', multi_server, [admission, '--exact', '--nocapture'], 3, 180),
-                      ('full-multi-server', multi_server, ['--test-threads=4', '--nocapture'], 1, 900)]
+                      ('full-multi-server', multi_server, ['--test-threads=4', '--nocapture'], 1, 900),
+                      ('disconnected-admission', multi_server, [disconnected, '--exact', '--nocapture'], 3, 180)]
           runs = []
           for phase, binary, arguments, count, deadline in schedule:
               for index in range(count):

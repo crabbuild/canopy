@@ -176,27 +176,11 @@ impl RepositoryManager {
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
         // This actor lookup reads no object-store metadata. A cached client may
         // outlive deadline fencing and must not hide the normal admission path.
-        let mut current = self
+        let current = self
             .node
             .runtime()
-            .resident_handle(&target, CatalogRole::Sql)
+            .active_handle(&target, CatalogRole::Sql)
             .await?;
-        // DIAGNOSTIC ONLY: distinguish an admitted non-resident local owner
-        // from a fenced owner. Do not promote metadata I/O on the hot path.
-        if current.is_none()
-            && let Some(control) =
-                cellule_runtime::control::authority::CellAuthority::new(self.layout.clone())
-                    .load(target.cell_id())
-                    .await?
-            && let Some(proof) =
-                cellule_runtime::cell::catalog::CellCatalog::new(self.layout.clone(), self.tenant)
-                    .lookup(target.cell_id())
-                    .await?
-        {
-            current = self.node.runtime().local_handle(proof, &control).await?;
-            tracing::info!(cell = ?target.cell_id(), active = current.is_some(),
-                "[DEBUG-active-cache-0f4] resident-only lookup missed cached local route");
-        }
         if current.is_none_or(|handle| handle.owner_fence() != fence) {
             return Ok(None);
         }
@@ -255,7 +239,7 @@ impl RepositoryManager {
             && self
                 .node
                 .runtime()
-                .resident_handle(&target, CatalogRole::Sql)
+                .active_handle(&target, CatalogRole::Sql)
                 .await?
                 .is_none()
         {
@@ -308,7 +292,7 @@ impl RepositoryManager {
                 let handle = self
                     .node
                     .runtime()
-                    .resident_handle(&target, CatalogRole::Sql)
+                    .active_handle(&target, CatalogRole::Sql)
                     .await?
                     .ok_or(ServerError::Repository(
                         "Cell release failed; restart the node to recover",
