@@ -245,16 +245,18 @@ pub struct MetadataSegment {
 }
 // Reader slots and the private workspace follow the file through queued jobs.
 pub(super) struct ReaderAdmission {
-    pub(super) _slot: tokio::sync::OwnedSemaphorePermit,
     pub(super) _root: std::sync::Arc<tempfile::TempDir>,
+    pub(super) _slot: tokio::sync::OwnedSemaphorePermit,
 }
 
 // Keep file cleanup ahead of budget release on validation errors too.
 pub(super) struct AdmittedFile {
     file: Option<tempfile::NamedTempFile>,
-    reservation: Option<DiskReservation>,
     reader: Option<ReaderAdmission>,
     workspace: Option<std::sync::Arc<tempfile::TempDir>>,
+    // Rust drops fields in declaration order after Drop. Keep workspace/reader
+    // cleanup ahead of admission release even after successful file.close().
+    reservation: Option<DiskReservation>,
 }
 impl AdmittedFile {
     pub(super) fn new(file: tempfile::NamedTempFile, reservation: DiskReservation) -> Self {
