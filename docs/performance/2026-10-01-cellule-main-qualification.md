@@ -10,6 +10,10 @@ This follows the [retained catalog admission checkpoint](2026-10-01-retained-cat
 That checkpoint and the [authentication and residency results](2026-10-01-bounded-authentication-and-residency.md)
 retain their original Cellule revision and artifacts.
 
+Upstream later advanced to `191409685b001a82bd02780def45102b4fc2f164`.
+The PR still pins the independently qualified `0dc04a6`; this checkpoint does
+not qualify the newer runtime or peer HTTP CI changes.
+
 ## Dependency change and source equivalence
 
 The tested source is `bbd784a40c3867646044a8c716b7ee517f9aca49`. The dependency
@@ -92,12 +96,15 @@ verified actual old-executable RustFS data, controlled admission, new-executable
 restore, twenty scheduled critical workflows and their complete fresh-owner
 recovery. Its earlier clone-byte mismatch was traced to missing client LFS
 filters; the full-byte assertion was retained. This closes a small prerequisite,
-not full same-corpus upgrade or reference performance.
+not reference performance. The later
+[original corpus activation](2026-10-01-original-corpus-activation.md) passed
+full admission and controlled activation of all 10,003 Cells. Remote Git/LFS
+content verification remains a separate open gate.
 
 The [full performance plan](../performance-plan.md) still requires three nodes
 behind a proxy, 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows,
 114,960 arrivals and 8,640 scheduled seconds. Full remote verification,
-same-corpus upgrade admission, concurrent critical operations and faults,
+concurrent critical operations and faults,
 every acknowledged write after owner loss, higher admission profiles, matched
 comparisons, non-sparse five-GiB transfers and isolated Linux capacity remain open.
 The separate diagnostic fleet's terminal lease-fencing failure is also unresolved.

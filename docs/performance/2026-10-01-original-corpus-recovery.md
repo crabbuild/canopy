@@ -1,16 +1,21 @@
 # Original corpus maintenance recovery
 
-The original RustFS corpus now has **10,003 durably idle, unowned Cells**:
+At this recovery checkpoint, the original RustFS corpus had
+**10,003 durably idle, unowned Cells**:
 10,000 repository identities, two critical Git repositories and Directory.
 Normal fenced recovery with the exact old executable settled all 301 remaining
 Cells. Two complete post-recovery snapshots and an independent receipt audit
 passed. All published roots, catalog identities and Cell incarnations stayed
 unchanged.
 
-The deployment remains in **old-release Maintenance**, revision 5. No new
+The deployment remained in **old-release Maintenance**, revision 5. No new
 release or serving gateway was admitted. This closes the offline metadata and
 maintenance-recovery prerequisite, not remote Git/LFS content verification,
 same-corpus upgrade, performance or an explanation of the earlier lease failure.
+
+The subsequent [full-corpus release activation](2026-10-01-original-corpus-activation.md)
+passed separate new-release admission and reached Ready revision 9 without
+changing these Controls or roots. Remote Git/LFS verification remains open.
 
 ## Recovery sequence
 
@@ -102,14 +107,14 @@ collision are preserved separately; existing receipts were never overwritten.
 | Independent closed audit | `219331a18c0dcb0e9be65885f22f73bea610befefb66ec3d70e4b018824fd95a` |
 
 The checks ran October 2 at 01:46–01:57 UTC, October 1 Pacific.
-The selected old release remains
+The selected old release at this checkpoint was
 `e31bf1a951e2fa19d91e9f964b2ddeade1a81b05a20ad628362819a1487c16b1`;
 maintenance operation is `74f10df1-417c-4c63-83b0-b554fdb996e4`.
 The UI preview and unrelated providers were not changed or signalled.
 
-Next gates are rolling-descriptor and full actual-Control admission of the new
-executable on this same corpus, controlled activation, three fresh gateways and
-a proxy, full remote Git/LFS verification and fresh-owner/every-ACK recovery.
+The subsequent activation checkpoint closes rolling-descriptor and full
+actual-Control admission, controlled activation and three-gateway readiness.
+Full remote Git/LFS verification and fresh-owner/every-ACK recovery remain open.
 The [full campaign](../performance-plan.md) remains **108 windows, 114,960
 arrivals and 8,640 scheduled seconds**, with independent rates/concurrency,
 uniform/skewed access, higher residency profiles, concurrent critical workflows
