@@ -19,15 +19,20 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Initialize qualification evidence before tool setup
+        run: |
+          mkdir qualification
+          git rev-parse HEAD > qualification/head.txt
+          cp .github/workflows/qualify-release.yml qualification/qualify-release.yml
       - name: Install tools
         run: |
           rustup component add clippy rustfmt
           sudo apt-get update
-          sudo apt-get install -y awscli git-lfs openssh-client
+          sudo apt-get install -y git-lfs openssh-client
+          aws --version
           git lfs install
       - name: Bind exact source and dependency inputs
         run: |
-          mkdir qualification
           cargo metadata --locked --format-version 1 > qualification/metadata.json
           docker pull rustfs/rustfs:1.0.0-beta.8-glibc
           python3 - <<'PY'
