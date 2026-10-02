@@ -7,12 +7,32 @@ impl CanopyServer {
         config: ServerConfig,
         store: Arc<dyn ObjectStore>,
     ) -> Result<Self, ServerError> {
+        Self::start_supervised(config, store, None).await
+    }
+
+    /// Starts a node using an already-bound HTTP listener, without rebinding it.
+    /// The listener's local address must exactly match `config.listen`; the
+    /// public URL may still name a proxy. All readiness and drain checks apply.
+    /// Cancelling startup requests cleanup after admitted initialization settles.
+    pub async fn start_with_listener(
+        config: ServerConfig,
+        store: Arc<dyn ObjectStore>,
+        listener: TcpListener,
+    ) -> Result<Self, ServerError> {
+        Self::start_supervised(config, store, Some(listener)).await
+    }
+
+    async fn start_supervised(
+        config: ServerConfig,
+        store: Arc<dyn ObjectStore>,
+        listener: Option<TcpListener>,
+    ) -> Result<Self, ServerError> {
         let (ready, receive_ready) = oneshot::channel();
         let (shutdown, receive_shutdown) = oneshot::channel();
         // The task owns startup, drain and the workspace together. Dropping any
         // caller future only closes a channel; it cannot abandon admitted work.
         let finished = tokio::spawn(async move {
-            let server = match RunningServer::start(config, store).await {
+            let server = match RunningServer::start(config, store, listener).await {
                 Ok(server) => server,
                 Err(error) => {
                     let _ = ready.send(Err(error));

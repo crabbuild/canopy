@@ -15,10 +15,12 @@ async fn sha256_real_provider_round_trip() -> Result {
 
 async fn sha256_repository_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     let workspace = tempfile::TempDir::new()?;
-    let first_address = available_address().await?;
-    let first = CanopyServer::start(
+    let first_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let first_address = first_listener.local_addr()?;
+    let first = CanopyServer::start_with_listener(
         config(first_address, workspace.path().join("first")),
         Arc::clone(&store),
+        first_listener,
     )
     .await?;
     let response: serde_json::Value = reqwest::Client::new()
@@ -134,10 +136,12 @@ async fn sha256_repository_round_trip(store: Arc<dyn ObjectStore>) -> Result {
     assert_eq!(expected.trim_ascii().len(), 64);
     first.shutdown().await?;
 
-    let second_address = available_address().await?;
-    let second = CanopyServer::start(
+    let second_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let second_address = second_listener.local_addr()?;
+    let second = CanopyServer::start_with_listener(
         config(second_address, workspace.path().join("second")),
         Arc::clone(&store),
+        second_listener,
     )
     .await?;
     let second_url = format!("http://{second_address}/canopy/sha256.git");
@@ -263,10 +267,12 @@ async fn sha256_checks_reviews_and_merge_survive_restore() -> Result {
 
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
-    let address = available_address().await?;
-    let server = CanopyServer::start(
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = CanopyServer::start_with_listener(
         config(address, workspace.path().join("first")),
         Arc::clone(&store),
+        listener,
     )
     .await?;
     let client = Client::new();
@@ -421,10 +427,12 @@ async fn sha256_checks_reviews_and_merge_survive_restore() -> Result {
     assert_eq!(merged["merge"]["oid"], source);
     server.shutdown().await?;
 
-    let restored_address = available_address().await?;
-    let restored = CanopyServer::start(
+    let restored_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let restored_address = restored_listener.local_addr()?;
+    let restored = CanopyServer::start_with_listener(
         config(restored_address, workspace.path().join("restored")),
         store,
+        restored_listener,
     )
     .await?;
     let restored_repo = format!("http://{restored_address}/api/repositories/sha256-review");
@@ -479,10 +487,12 @@ async fn sha256_native_merge_candidates(store: Arc<dyn ObjectStore>) -> Result {
     use serde_json::json;
 
     let workspace = tempfile::TempDir::new()?;
-    let address = available_address().await?;
-    let server = CanopyServer::start(
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = CanopyServer::start_with_listener(
         config(address, workspace.path().join("first")),
         Arc::clone(&store),
+        listener,
     )
     .await?;
     let client = Client::new();
@@ -596,10 +606,12 @@ async fn sha256_native_merge_candidates(store: Arc<dyn ObjectStore>) -> Result {
     }
     server.shutdown().await?;
 
-    let restored_address = available_address().await?;
-    let restored = CanopyServer::start(
+    let restored_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let restored_address = restored_listener.local_addr()?;
+    let restored = CanopyServer::start_with_listener(
         config(restored_address, workspace.path().join("restored")),
         store,
+        restored_listener,
     )
     .await?;
     for (name, repository, request, candidate) in prepared {

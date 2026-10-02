@@ -1,7 +1,11 @@
 mod accounts;
+mod capacity;
+mod compatibility;
 mod expiry;
 #[path = "../support/objects.rs"]
 mod objects;
+#[path = "../support/retained_directory.rs"]
+mod retained_directory;
 mod ssh_keys;
 
 use std::{

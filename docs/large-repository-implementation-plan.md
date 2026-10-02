@@ -53,7 +53,7 @@ Suggested ownership is a Canopy storage implementer for C–G/I, a Canopy runtim
 
 ## B. Expose Cellule's existing owner fence
 
-**Runtime delivered:** [Cellule draft PR #38](https://github.com/crabbuild/cellule/pull/38), revision `cea9b9a7913f88cca114a2010e6b5c0a0aacbcf0`, implements the accessor using activation-specific admission capabilities. Workspace tests, lints, API docs and contract checks pass. All Canopy pins consume that exact revision. The Canopy prepared-operation acceptance scenario below remains part of package D; exposing the runtime accessor does not implement it.
+**Runtime delivered:** [Cellule PR #38](https://github.com/crabbuild/cellule/pull/38) merged the accessor using activation-specific admission capabilities. After merging Canopy main, all Canopy pins consume revision `0f4ca0919b0dfe20a3dcd964d21da03135e42eed`, which includes that API. The original draft revision's workspace tests, lints, API docs and contract checks passed; those historical results do not qualify this newer dependency revision. The Canopy prepared-operation acceptance scenario below remains part of package D; exposing the runtime accessor does not implement it.
 
 **Repository:** Cellule. **Files:** `crates/cellule-runtime/src/registry/handlers.rs`, registry execution construction sites, `cell/actor/` admission/execution paths and tests; reuse `control` authority and `identity::IncarnationId`. Update all Canopy Cellule dependency revisions together after the dependency change passes.
 

@@ -232,6 +232,24 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
 #[tokio::test]
 async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
+    const ISOLATED: &str = "CANOPY_TEST_ISOLATED_FAILED_SPAWN";
+    if std::env::var(ISOLATED).as_deref() != Ok("1") {
+        // This checks the command's parent fence, not unrelated forks that can
+        // briefly inherit its CLOEXEC descriptor. An inherited live fence must
+        // prevent cleanup; exercise that case separately below.
+        let status = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "git_http::stream_tests::failed_spawn_releases_parent_fence_before_cache_cleanup",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ISOLATED, "1")
+            .status()
+            .await?;
+        assert!(status.success());
+        return Ok(());
+    }
     let resources = crate::native_resources::NativeResources::default();
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
@@ -260,6 +278,134 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
     })
     .await?;
     assert_eq!(budget.used(), 0);
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
+    Ok(())
+}
+
+// A concurrent fork can inherit the cache fence until it execs, even though
+// CLOEXEC remains set in the parent. Failed-spawn cleanup must not undercount
+// or delete such a generation; deferred cleanup waits for the inherited fence.
+#[cfg(unix)]
+#[tokio::test]
+async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::{Read, Write},
+        os::unix::{io::AsRawFd, net::UnixStream, process::CommandExt},
+        thread::JoinHandle,
+    };
+
+    struct ForkBarrier {
+        control: UnixStream,
+        thread: Option<JoinHandle<std::io::Result<std::process::ExitStatus>>>,
+    }
+    impl ForkBarrier {
+        fn finish(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            self.control.write_all(b"X")?;
+            let status = self
+                .thread
+                .take()
+                .ok_or("missing helper thread")?
+                .join()
+                .map_err(|_| "helper thread panicked")??;
+            assert!(status.success());
+            Ok(())
+        }
+    }
+    impl Drop for ForkBarrier {
+        fn drop(&mut self) {
+            if let Some(thread) = self.thread.take() {
+                let _ = self.control.write_all(b"X");
+                let _ = thread.join();
+            }
+        }
+    }
+
+    let resources = crate::native_resources::NativeResources::default();
+    let files = tempfile::TempDir::new()?;
+    let budget = DiskBudget::new(1 << 20);
+    let cache = GitCache::create(
+        files.path().into(),
+        budget.clone(),
+        "refs/heads/main",
+        crate::ObjectFormat::Sha1,
+        resources.scope(crate::native_resources::NativeClass::Foreground),
+    )
+    .await?;
+    let charged = budget.used();
+    assert!(charged > 0);
+    let git_dir = cache.git_dir();
+    let mut command = crate::native_git::command(&git_dir)?;
+    command.current_dir(files.path().join("missing"));
+
+    let (control, child_control) = UnixStream::pair()?;
+    control.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let executable = std::env::current_exe()?;
+    let thread = std::thread::spawn(move || {
+        let mut unrelated = std::process::Command::new(executable);
+        unrelated
+            .arg("--help")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: the child uses only async-signal-safe read/write, with an
+        // owned live socket and stack/static byte buffers, before exec. Holding
+        // this barrier models a concurrent fork's inherited CLOEXEC descriptors.
+        unsafe {
+            unrelated.pre_exec(move || {
+                let fd = child_control.as_raw_fd();
+                let mut release = 0_u8;
+                if libc::write(fd, b"R".as_ptr().cast(), 1) != 1
+                    || libc::read(fd, (&mut release as *mut u8).cast(), 1) != 1
+                    || release != b'X'
+                {
+                    return Err(std::io::Error::from_raw_os_error(libc::EIO));
+                }
+                Ok(())
+            });
+        }
+        unrelated.spawn()?.wait()
+    });
+    let mut barrier = ForkBarrier {
+        control,
+        thread: Some(thread),
+    };
+    let mut ready = [0_u8];
+    barrier.control.read_exact(&mut ready)?;
+    assert_eq!(ready, *b"R");
+    assert!(matches!(
+        GitProcess::spawn(
+            command,
+            cache,
+            resources.scope(crate::native_resources::NativeClass::Foreground)
+                .try_admit(crate::native_resources::NativeWork::Read)?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert_eq!(budget.used(), charged);
+    assert!(
+        git_dir.exists(),
+        "live inherited fence must prevent cache deletion"
+    );
+    let busy =
+        crate::native_git::idle_fence(&git_dir).expect_err("inherited fence should still be held");
+    assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+    barrier.finish()?;
+    // Once the inherited worker has exec'd and drained its descriptor, the
+    // deferred reaper must remove the files before releasing their disk charge.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(
+        !git_dir.exists(),
+        "released disk admission requires reclamation"
+    );
     assert_eq!(
         resources.usage()?,
         crate::native_resources::NativeUsage::default()

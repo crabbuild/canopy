@@ -18,10 +18,15 @@ use cellule_app::{ApplicationHandle, CellType};
 use cellule_runtime::{
     ApplicationId, CellModule, CellTarget, Committed, Digest, Error, InvocationError,
     MigrationDescriptor, ModuleDescriptor, MutationIdentity, NamespaceDescriptor, NamespaceId,
-    Observed, Receipt, RegistryBuilder, SqlCell, SqlModule, TenantId, cell::catalog::CatalogRole,
-    partition_for_shard, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
-    primitives::sql::SqlStatement, primitives::sql::SqlValue, primitives::sql::register_sql,
-    registry::OperationDescriptor,
+    Observed, Receipt, RegistryBuilder, SqlCell, SqlModule, TenantId,
+    cell::catalog::CatalogRole,
+    partition_for_shard,
+    primitives::sql::SqlBatch,
+    primitives::sql::SqlResultSet,
+    primitives::sql::SqlStatement,
+    primitives::sql::SqlValue,
+    primitives::sql::register_sql,
+    registry::{OperationDescriptor, RetainedCodeDescriptor},
 };
 
 use crate::{CanopyApplication, ReadIdentity, validate_repository_id};
@@ -31,7 +36,24 @@ pub const SCHEMA: &str = include_str!("../directory_schema.sql");
 pub const REPOSITORY_PAGE_SIZE: usize = 32;
 
 const COMMANDS: [OperationDescriptor; 2] = [operation(1), operation(3)];
-const QUERIES: [OperationDescriptor; 2] = [operation(2), operation(4)];
+const QUERIES: [OperationDescriptor; 3] = [
+    operation(2),
+    operation(4),
+    timed_sql::AUTHENTICATE_OPERATION,
+];
+
+// The selected c51 release used the same schema and credential contracts,
+// before the separately bounded authentication query was added. Keep that
+// exact code executable while persisted Cells roll to the new descriptor.
+const RETAINED_CODES: [RetainedCodeDescriptor; 1] = [RetainedCodeDescriptor {
+    code: Digest::from_bytes([
+        0xf7, 0x25, 0x4e, 0xda, 0x9d, 0x5d, 0x33, 0x95, 0x66, 0xf4, 0x54, 0x57, 0x50, 0x26, 0x18,
+        0xad, 0x13, 0xcb, 0xbf, 0x6e, 0x5a, 0x74, 0x59, 0x5f, 0x5b, 0x3c, 0xe4, 0x66, 0x53, 0xea,
+        0x12, 0xf1,
+    ]),
+    schema_min: 1,
+    schema_max: 1,
+}];
 
 const fn operation(id: u32) -> OperationDescriptor {
     OperationDescriptor {
@@ -72,7 +94,7 @@ impl CellModule for DirectoryModule {
                 source.update(SCHEMA.as_bytes());
                 Digest::from_bytes(*source.finalize().as_bytes())
             },
-            retained_codes: &[],
+            retained_codes: &RETAINED_CODES,
             schema_min: 1,
             schema_max: 1,
             migrations: MIGRATIONS.get_or_init(|| {
@@ -100,7 +122,8 @@ impl CellModule for DirectoryModule {
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
         registry.bind_command::<timed_sql::CredentialCommand>()?;
-        registry.bind_query::<timed_sql::CredentialQuery>()
+        registry.bind_query::<timed_sql::CredentialQuery>()?;
+        registry.bind_query::<timed_sql::AuthenticateQuery>()
     }
 }
 
@@ -309,12 +332,10 @@ impl DirectoryCell {
         token_digest: [u8; 32],
         minimum: Option<Receipt>,
     ) -> Result<Observed<Option<Principal>>, InvocationError<Vec<SqlResultSet>>> {
-        let result = self.credential_query(minimum, SqlBatch {
-            statements: vec![SqlStatement {
-                sql: "SELECT a.name, t.scope, t.id FROM access_tokens AS t JOIN accounts AS a ON a.name = t.account WHERE t.digest = ?2 AND t.enabled = 1 AND (t.expires_ms IS NULL OR t.expires_ms > ?1) AND a.enabled = 1".into(),
-                parameters: vec![SqlValue::Blob(token_digest.to_vec())],
-            }],
-        }).await?;
+        let result = self
+            .application
+            .query::<timed_sql::AuthenticateQuery>(&self.target, minimum, token_digest.to_vec())
+            .await?;
         let principal = result
             .output
             .first()

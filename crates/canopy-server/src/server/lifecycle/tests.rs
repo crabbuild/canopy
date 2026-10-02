@@ -29,6 +29,7 @@ async fn native_drain_retains_cell_workspace_and_lease_past_one_lease()
             max_active_repositories: 3,
         },
         Arc::new(InMemory::new()),
+        None,
     )
     .await?;
     let native = server.native.clone();

@@ -1,25 +1,107 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results.
-It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `0573f48998c4e5343cd8b463d79b7bc1820c923c`, a docs-only
-upstream advance from `e07670e` with identical Rust workspace/crates. Both full
-hosted workflows passed; that does not establish three-node capacity.
+Use this plan to design capacity work and interpret Canopy benchmark results. Fresh-fixture correctness passes, but the complete original-corpus load failed its arrival gates and post-load recovery remains incomplete. No reference capacity or matched performance improvement is established.
+
+## Current verification status
+
+The current PR pins Cellule to `0f4ca0919b0dfe20a3dcd964d21da03135e42eed`. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md) records five passing Linux CI checks at `7497fc7`: 244 top-level release Rust tests, 91 Python tests, release lints and all eight fresh RustFS gates. An independent audit binds the executable, dependencies and 268 source/workflow inputs. These results do not qualify native retained-store recovery or performance.
+
+The original-corpus campaign uses the separate, frozen `0dc04a6` executable. Its [full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md) records pre-load remote verification and all 108 scheduled windows. Of 114,960 arrivals, 59,554 succeeded and 55,406 failed. Concurrent critical load completed 19/20 workflows, retaining one busy drop. Two subsequent full recovery attempts failed; neither completed original-corpus and every-ACK verification.
+
+The earlier disconnected-admission failure and the diagnostic fleet's terminal lease-fencing failure remain unresolved despite later passing checks. Results do not transfer between dependency revisions or binaries.
+
+## Historical qualification checkpoints
+
+The preceding `c51dd121` build is historical evidence.
+Unlike the earlier `a4500add` documentation
+advance, this changes routing and resource-permit implementation. Locked
+metadata resolves all six packages; the lockfile changes only their sources.
+The original rebuilt artifact passed its locked release build and 227 release
+tests with 9 ignored gates; all eight real-RustFS compatibility gates subsequently
+passed, as did the production binary's initial 17-step check through three nodes
+and a proxy. The 84 Python harness tests cover accounting and guards. Full-corpus
+recovery, scheduled load and every-ACK verification remain separate gates; none
+of these functional checks establishes reference capacity.
+Upstream subsequently advanced to `0dc04a6` with atomic API and test changes.
+The new candidate is independently qualified; the original corpus experiment
+and its original frozen source used `c51dd121`; the later activation below uses
+the separately qualified `0dc04a6` executable.
+The subsequent [listener handoff correction](performance/2026-10-01-listener-handoff.md)
+passes 244 release Rust tests, lints, 84 Python tests and eight fresh RustFS gates
+on its own frozen source. It changes no runtime budget and supplies no new
+throughput or latency measurement; the earlier measured executable remains
+separately bound.
+The [combined authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
+is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
+20 unchanged cold-activation repetitions and all 15 residency tests. It has not
+been deployed at that checkpoint. Descriptor compatibility passed, but
+the original corpus's new-release restore and the diagnostic fleet's terminal
+lease-fencing failure remain open. The [catalog admission follow-up](performance/2026-10-01-retained-catalog-admission.md)
+reproduces and fixes immutable-identity reprovisioning and late rejection of
+unsupported Control metadata. Its combined candidate passed 239 release tests,
+all eight RustFS gates, 20 cold-activation repetitions and 20 three-case retained
+startup repetitions, plus all 15 residency tests. Retained startup uses an owned
+in-memory fixture; the separate owned old-binary RustFS upgrade passed, while
+original-corpus verification had not run at that checkpoint. The
+[original corpus maintenance recovery](performance/2026-10-01-original-corpus-recovery.md)
+left all 10,003 Controls durably idle under the old Maintenance release.
+Its catalog, roots and 9,702 previously idle Controls stayed unchanged; no new
+gateway, remote payload verification or performance result is established.
+The subsequent [full-corpus activation](performance/2026-10-01-original-corpus-activation.md)
+passed new-release admission and controlled activation to Ready revision 9.
+All 10,003 Controls and published roots remained unchanged through activation;
+three upgraded gateways subsequently passed full remote verification of 10,000
+identities, 100 full LFS bodies, 200 v0/v2 clones and both critical fixtures.
+The first four completed load phases recorded 41,485/43,200 metadata OK,
+1,464/2,160 creation OK, 10,309/57,600 HTTP v2 discovery OK and 632/1,200
+stock-Git ls-remote OK across 40 windows. Busy drops and protocol/client errors
+remain in the result tables. Concurrent critical load recorded 19/20 OK,
+one busy drop and 323 successful steps. These are failed arrival gates, not
+capacity passes. The full schedule subsequently closed with the totals above.
+None of these checkpoints replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
+| Current Cellule pin and historical runtime | PR pins `0f4ca09`: all five Linux CI checks passed at `7497fc7`, including 244 release Rust tests, 91 Python tests and eight fresh RustFS gates. Frozen `0dc04a6`: release qualification and original-corpus activation passed. Earlier failures remain unresolved; recovery and performance results do not transfer between revisions |
+| HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
+| Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
+| Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |
+| Complete original-corpus load | All 108 windows / 114,960 arrivals / 8,640 scheduled seconds closed and independently audited: 59,554 OK, 55,406 failed arrivals. Concurrent critical schedule: 19/20 OK, 323 successful steps, 38 UUIDs. Every positive ACK inventoried; not reference capacity |
+| Post-load fresh-owner recovery | Exact original owners removed; 32.008191 seconds of confirmed absence, unchanged RustFS. First full recovery attempt failed a Git v2 clone with exit 128; 3,684 attempt files preserved. A second attempt recorded nine metadata timeouts, one metadata 503 and one LFS 500; all 64 Git commands passed. All 1,454 attempt/input files and 653 bound inputs preserved. Neither attempt completed a stage or every-ACK recovery |
+| Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
+| Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
+| Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
+| Retained catalog admission follow-up | 239 release tests, eight RustFS gates, 20 cold-activation and 20 three-case retained-startup repetitions, 15 residency tests, lints and 84 Python tests passed. Existing supported identities restore without reprovisioning; unsupported Controls stay unchanged on refusal. Owned in-memory retained fixture, not old-binary RustFS upgrade, live deployment or performance qualification |
 | Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
 | Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
 | Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
-| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s; full owner-loss recovery running |
-| Full recovery and scheduled load | Still unqualified; no incomplete seed or narrow functional test closes these gates |
+| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s and passed initial three-owner-loss recovery; independent 200-clone audit passed |
+| Native scheduled load | First attempt failed before any window. Independent-session V2 passed full preflight, then RustFS was cgroup-OOM killed: six closed windows, one interrupted prefix and 101 unstarted windows retained |
+| Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; full 10K/100 and critical-2 recovery passed, with independent 200-clone/four-mirror audits |
+| Complete 4-GiB load attempt | All 108 windows finished: 60,197 OK and 54,763 failed arrivals. The original attempt remains failed; local raw evidence is now unavailable |
+| Post-load ACK recovery | Recorded three-owner loss and 32.249-s wait; critical fixtures passed. Fresh fleet then recorded ENOSPC and shut down; full corpus and every-ACK verification are incomplete |
+| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. Original-corpus concurrent load closed at 19/20 OK with one busy drop; all 19 attempted receipts complete. Fresh-owner verification of all 38 UUIDs and concurrent fault coverage remain open; the small-fixture 20/20 recovery result is separate |
+| Evidence availability | Old benchmark directories and executable disappeared; old receipts remain unavailable. New closed artifacts, all build bindings and the completed seed have verified backups on a separate filesystem outside Cargo targets; changing outputs are excluded |
+| Performance qualification | Pre-load remote verification and complete schedule/ledger audit passed their integrity checks. Arrival gate failed. Original-corpus and every-ACK recovery after owner loss, concurrent faults, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
-No Cellule bottleneck or matched performance improvement is proven.
+The [evidence-loss checkpoint](performance/2026-10-01-evidence-loss-and-c51dd121.md)
+supersedes its earlier running/retained-artifact status. Historical observations
+are not currently replayable; a new run cannot certify the old ACKs.
+The separate diagnostic build passed 230 release workspace tests with 9 ignored
+after isolating a concurrent-fork cleanup test and adding fence-safety coverage.
+All 20 subsequent full-library repetitions passed at four test threads.
+That local test finding does not explain the Directory 503, change production
+cleanup or qualify its original frozen artifact. The cleanup-test correction is
+included in the combined candidate; temporary diagnostic logging stays outside
+the PR.
+No Cellule bottleneck or matched performance improvement is proven. The 4-GiB
+diagnostic is a new resource envelope, not a passing 2-GiB result. Offline plans
+for 500/1,000-entry admission retain the full matrix but have not been executed.
 The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
 and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
 That baseline stopped after 20 fully bound windows and one interrupted creation
@@ -782,10 +864,59 @@ acknowledgements. It does not kill a server or establish that an owner restarted
 record old/new node identities, process exit and fresh local-state evidence
 alongside it. Run the separate corpus `verify` for seeded identities and data.
 
+New benchmark arrival samples retain optional `git_failure` details: the Git
+command stage, nonzero exit or unchanged timeout, and up to **2,048 UTF-8 bytes**
+of redacted stderr. Configured tokens, authorization headers, URL userinfo and
+common secret query parameters are removed before truncation and hashing.
+`redacted_stderr_sha256` and `redacted_stderr_bytes` describe the full redacted
+text, not the original stderr. Review excerpts before sharing: this is not a
+general-purpose secret detector. Raw command arguments are not added to these
+details. Failures remain failed arrivals; no retry or timeout widening is added.
+
+The closed-ledger auditor validates the optional fields, their outcome/deadline
+consistency, excerpt bounds and non-truncated digest. It still accepts historical
+samples without these fields; their missing stderr cannot be reconstructed.
+For matched comparisons, use the same instrumented driver for both binaries.
+
 Regression fixtures cover SHA-1/SHA-256 pushes, wrong tips, exact-body
 differences, corrupt LFS, lost acknowledgements, tampered samples and inconsistent
 accounting. These driver checks do not themselves qualify production recovery
 or the 10,000-repository target.
+
+### Audit closed three-node campaign ledgers
+
+After the campaign process has exited, independently reconcile its reports:
+
+```sh
+python3 -B scripts/audit_three_node_campaign.py \
+  --directory /path/to/closed-campaign \
+  --manifest /path/to/canopy-corpus.json \
+  --plan docs/performance/three-node-baseline.json \
+  --fleet-dir /path/to/original-fleet \
+  --output /path/to/new-ledger-audit.json \
+  --require-complete
+```
+
+The auditor sends no Git or provider traffic. It checks input/artifact digests,
+full-corpus preflight counts, deterministic repository selection, declared
+rates/concurrency/deadlines, exact arrival sequences and outcomes, nearest-rank
+percentiles and both in-window and drained throughput. Completed errors remain
+in the main latency population; success-only latency is reported separately.
+Busy arrivals have no fabricated latency. Interrupted reports without resource
+bindings remain unqualified; sample ledgers without closed reports stop the
+audit and must be preserved for separate reconciliation.
+
+Resource summaries cover observed node self CPU/RSS and proxy protocol bytes,
+including setup/drain, not all live Git children or payload-only throughput.
+`--require-complete` writes the integrity result before rejecting an incomplete
+declared schedule. Integrity can pass while arrivals failed: read completion,
+errors and resource coverage separately. Neither this audit nor a complete
+schedule establishes owner-loss recovery. Run the full seeded-corpus,
+critical-fixture and every-ACK checks after the separately recorded owner loss.
+
+The retained failed baseline passed this audit for all 21 closed ledgers,
+20 resource-bound windows and 136 acknowledged creations. Its 108-window
+schedule is still incomplete; none of the failed recovery evidence changes.
 
 ## Measurement history
 
