@@ -9,10 +9,7 @@ use crate::packs::{
     metadata::PAGE_OBJECTS,
 };
 use cellule_runtime::{CellClient, CellTarget, InvocationError, MutationIdentity, Receipt};
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::time::{Instant, timeout_at};
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +47,13 @@ impl PreparationBaseResolver {
         minimum: Option<Receipt>,
     ) -> Result<Self, PreparationBaseError> {
         let session = PreparationSession::open(client, target, check, minimum).await?;
+        Self::from_session(session, indexes, files).await
+    }
+    pub(super) async fn from_session(
+        session: PreparationSession,
+        indexes: Arc<CatalogIndexes>,
+        files: Arc<CatalogFiles>,
+    ) -> Result<Self, PreparationBaseError> {
         let (lease, deadline) = session.live_lease()?;
         if indexes.store().repository() != lease.token.repository
             || indexes.sources().format() != lease.format
@@ -65,9 +69,7 @@ impl PreparationBaseResolver {
         } else {
             None
         };
-        if Instant::now() >= deadline {
-            return Err(PreparationBaseError::Inactive);
-        }
+        session.live_lease()?;
         Ok(Self {
             session,
             selected: lease.base,
@@ -212,19 +214,18 @@ impl BaseResolver for PreparationBaseResolver {
         {
             return Err(ClosureError::Integrity);
         }
-        let deadline = *self
+        let (_, deadline) = self
             .session
-            .deadline
-            .lock()
-            .map_err(|_| ClosureError::Integrity)?;
-        if self.session.fenced.load(Ordering::Acquire) || Instant::now() >= deadline {
-            return Err(ClosureError::LeaseExpired);
-        }
+            .live_lease()
+            .map_err(|_| ClosureError::LeaseExpired)?;
         let reader = self.reader.as_ref().ok_or(ClosureError::Integrity)?;
         let headers = timeout_at(deadline, reader.headers(ids, &*self.files, &*self.files))
             .await
             .map_err(|_| ClosureError::LeaseExpired)??;
-        if self.session.fenced.load(Ordering::Acquire) || Instant::now() >= deadline {
+        self.session
+            .live_lease()
+            .map_err(|_| ClosureError::LeaseExpired)?;
+        if Instant::now() >= deadline {
             return Err(ClosureError::LeaseExpired);
         }
         Ok(BaseBatch {

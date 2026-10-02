@@ -17,6 +17,7 @@ pub struct PreparationSession {
     pub(super) check: LeaseCheck,
     pub(super) lease: PreparationLease,
     pub(super) deadline: Arc<Mutex<Instant>>,
+    pub(super) ceiling: Option<Instant>,
     pub(super) fenced: Arc<AtomicBool>,
 }
 impl PreparationSession {
@@ -43,6 +44,7 @@ impl PreparationSession {
             check,
             lease,
             deadline: Arc::new(Mutex::new(deadline)),
+            ceiling: None,
             fenced: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -54,6 +56,7 @@ impl PreparationSession {
             .deadline
             .lock()
             .map_err(|_| PreparationBaseError::Context)?;
+        let deadline = self.ceiling.map_or(deadline, |limit| deadline.min(limit));
         if self.fenced.load(Ordering::Acquire) || Instant::now() >= deadline {
             return Err(PreparationBaseError::Inactive);
         }
@@ -77,7 +80,9 @@ impl PreparationSession {
         identity: MutationIdentity,
         lease_ms: u64,
     ) -> Result<(), PreparationBaseError> {
-        if self.fenced.load(Ordering::Acquire) {
+        if self.fenced.load(Ordering::Acquire)
+            || self.ceiling.is_some_and(|limit| Instant::now() >= limit)
+        {
             return Err(PreparationBaseError::Inactive);
         }
         let committed = self
@@ -105,7 +110,9 @@ impl PreparationSession {
         result
     }
     async fn refresh_inner(&self, minimum: Receipt) -> Result<(), PreparationBaseError> {
-        if self.fenced.load(Ordering::Acquire) {
+        if self.fenced.load(Ordering::Acquire)
+            || self.ceiling.is_some_and(|limit| Instant::now() >= limit)
+        {
             return Err(PreparationBaseError::Inactive);
         }
         let (lease, deadline) =
@@ -120,7 +127,9 @@ impl PreparationSession {
             .deadline
             .lock()
             .map_err(|_| PreparationBaseError::Context)?;
-        if self.fenced.load(Ordering::Acquire) {
+        if self.fenced.load(Ordering::Acquire)
+            || self.ceiling.is_some_and(|limit| Instant::now() >= limit)
+        {
             return Err(PreparationBaseError::Inactive);
         }
         *shared = deadline;

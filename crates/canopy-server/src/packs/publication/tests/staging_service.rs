@@ -1,3 +1,4 @@
+mod bound;
 use super::*;
 use tokio::{
     sync::oneshot,
@@ -356,14 +357,27 @@ async fn staged_service_owned_native_verification_hands_off_to_the_existing_priv
             CatalogFileLimits::default(),
         )?);
         let base = Arc::new(ticket.open_base(indexes, files).await?);
-        let mut assembler =
-            CatalogPreparation::new(root.path(), budget.clone(), base, limits()).await?;
-        assembler.begin_pack(witness)?;
-        for segment in segments {
-            assembler.add_segment(segment).await?;
-        }
-        assembler.finish_pack().await?;
-        let proof = assembler.finish().await?;
+        let bound_work = {
+            let root = root.clone();
+            let budget = budget.clone();
+            ticket.spawn_bound(move |_| async move {
+                async {
+                    let mut assembler =
+                        CatalogPreparation::new(root.path(), budget.clone(), base, limits())
+                            .await?;
+                    assembler.begin_pack(witness)?;
+                    for segment in segments {
+                        assembler.add_segment(segment).await?;
+                    }
+                    assembler.finish_pack().await?;
+                    let proof = assembler.finish().await?;
+                    Ok(proof)
+                }
+                .await
+                .map_err(|e: CatalogPreparationError| StagingError::Input(Box::new(e)))
+            })?
+        };
+        let proof = bound_work.wait().await.map_err(|e| e.to_string())?;
         assert_eq!(proof.token(), initial.token);
         assert_eq!(proof.object_count(), native.fixture.objects.len() as u64);
         assert!(matches!(

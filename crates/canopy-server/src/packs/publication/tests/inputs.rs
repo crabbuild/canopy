@@ -43,7 +43,7 @@ async fn capture_real(
     Ok(context.seal_native_inputs(store, inputs).await?)
 }
 
-async fn active(
+pub(super) async fn active(
     fixture: &Fixture,
     operation: [u8; 16],
 ) -> Result<(StagingCoordinator, StagingTicket)> {
@@ -87,7 +87,7 @@ fn records(
         }
     })
 }
-async fn seal(
+pub(super) async fn seal(
     fixture: &Fixture,
     ticket: &StagingTicket,
     store: Arc<ArtifactStore>,

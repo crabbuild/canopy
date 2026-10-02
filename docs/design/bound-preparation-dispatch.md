@@ -18,7 +18,7 @@ Renewal preserves the original generation floor and creating namespace. Claim cr
 
 ## Remaining lifecycle work
 
-This dispatcher owns one accepted Claim or Renew command, not the entire bound preparation lifecycle. Automatic renewal scheduling, bounded preparation/worker ownership, serialization with checkpoints and final publication, maximum lifetime/floor residence, shutdown drain, production producer integration and durable takeover reconstruction remain required. The process-local exact command survives caller cancellation, not process loss. Unknown or expired SDK evidence cannot justify issuing a replacement command; durable exact/logical recovery must preserve that distinction. Complete retained-root enumeration, writer/reader drain and isolated restore remain required before collection. No remote deletion authority is introduced.
+This dispatcher owns one accepted Claim or Renew command, not the entire bound preparation lifecycle. Automatic renewal, bound worker/result ownership, checkpoint serialization, a separate local residence ceiling and shutdown drain now reuse the staging lifecycle; see the [bound lifecycle contract](bound-preparation-lifecycle.md). Final-publication lifecycle serialization, production producer integration, SQL floor-capacity qualification and durable takeover reconstruction remain required. The process-local exact command survives caller cancellation, not process loss. Unknown or expired SDK evidence cannot justify issuing a replacement command; durable exact/logical recovery must preserve that distinction. Complete retained-root enumeration, writer/reader drain and isolated restore remain required before collection. No remote deletion authority is introduced.
 
 ## Validation scope
 

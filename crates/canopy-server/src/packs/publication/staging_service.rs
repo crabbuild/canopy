@@ -17,6 +17,9 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
+mod bound;
+use bound::accept_bound;
+
 const COMMAND_BYTES: u32 = 4096;
 #[derive(Clone, Copy, Debug)]
 pub struct StagingLimits {
@@ -27,6 +30,7 @@ pub struct StagingLimits {
     pub lease_ms: u64,
     pub renew_before_ms: u64,
     pub lifetime_ms: u64,
+    pub bound_lifetime_ms: u64,
 }
 impl Default for StagingLimits {
     fn default() -> Self {
@@ -38,6 +42,7 @@ impl Default for StagingLimits {
             lease_ms: DEFAULT_LEASE_MS,
             renew_before_ms: DEFAULT_LEASE_MS / 2,
             lifetime_ms: 4 * 60 * 60 * 1000,
+            bound_lifetime_ms: DEFAULT_LEASE_MS,
         }
     }
 }
@@ -57,6 +62,8 @@ impl StagingLimits {
             || self.renew_before_ms >= self.lease_ms
             || self.lifetime_ms < self.lease_ms
             || self.lifetime_ms > 24 * 60 * 60 * 1000
+            || self.bound_lifetime_ms == 0
+            || self.bound_lifetime_ms > MAX_LEASE_MS
         {
             return Err(StagingError::InvalidLimits);
         }
@@ -95,6 +102,10 @@ pub enum StagingError {
     Checkpoint(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging renewal failed")]
     Renew(#[source] Box<InvocationError<StagingReply>>),
+    #[error("bound preparation renewal failed")]
+    BoundRenew(#[source] Box<InvocationError<PreparationReply>>),
+    #[error("bound preparation claim failed")]
+    BoundClaim(#[source] Box<InvocationError<PreparationReply>>),
     #[error("staging bind failed")]
     Bind(#[source] Box<InvocationError<PreparationReply>>),
     #[error("staging query failed")]
@@ -112,7 +123,7 @@ impl StagingError {
         }
         match self {
             Self::Begin(e) | Self::Renew(e) | Self::Claim(e) | Self::Checkpoint(e) => unknown(e),
-            Self::Bind(e) => unknown(e),
+            Self::Bind(e) | Self::BoundRenew(e) | Self::BoundClaim(e) => unknown(e),
             _ => false,
         }
     }
@@ -149,6 +160,7 @@ struct StagingRequest {
     target: CellTarget,
     request: BeginRequest,
     command: Exact,
+    bound_source: Option<LeaseCheck>,
 }
 impl ReadyStaging {
     pub async fn new(
@@ -176,6 +188,7 @@ impl ReadyStaging {
                 target,
                 request,
                 command: Exact::Begin(command),
+                bound_source: None,
             }),
         })
     }
@@ -213,6 +226,46 @@ impl ReadyStaging {
                 target,
                 request: begin,
                 command: Exact::Claim(command),
+                bound_source: None,
+            }),
+        })
+    }
+    /// Admit a bound takeover into the same operation/worker lifecycle. The
+    /// exact old token is checked at execution; no prior live session is needed.
+    pub async fn claim_bound(
+        client: CellClient,
+        target: CellTarget,
+        request: LeaseRequest,
+        identity: MutationIdentity,
+    ) -> Result<Self, StagingError> {
+        let begin = BeginRequest {
+            repository: request.check.token.repository,
+            operation: request.check.token.operation,
+            request_digest: request.check.token.request_digest,
+            actor: request.check.actor.clone(),
+            lease_ms: request.lease_ms,
+        };
+        if crate::repository_target(target.tenant(), target.application(), begin.repository)
+            .map_err(|_| StagingError::Context)?
+            != target
+        {
+            return Err(StagingError::Context);
+        }
+        request
+            .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
+            .map_err(|_| StagingError::Context)?;
+        let source = request.check.clone();
+        let command = client
+            .prepare_command::<ClaimPreparation>(&target, identity, request)
+            .await
+            .map_err(|e| StagingError::BoundClaim(Box::new(e)))?;
+        Ok(Self {
+            inner: Box::new(StagingRequest {
+                client,
+                target,
+                request: begin,
+                command: Exact::BoundClaim(command),
+                bound_source: Some(source),
             }),
         })
     }
@@ -238,6 +291,11 @@ struct Inner {
 }
 struct Local {
     lease: Option<StagingLease>,
+    bound: Option<Arc<PreparationSession>>,
+    bound_source: Option<LeaseCheck>,
+    bound_started: Option<Instant>,
+    bound_result: Option<Arc<StagingBound>>,
+    bound_renewal: Option<Committed<PreparationReply>>,
     deadline: Instant,
     lifetime: Instant,
     workers: usize,
@@ -274,13 +332,19 @@ enum Exact {
     Begin(PreparedCommand<BeginStaging>),
     Claim(PreparedCommand<ClaimStaging>),
     Checkpoint(PreparedCommand<RegisterStagedInputs>),
+    BoundCheckpoint(PreparedCommand<RegisterStagedInputs>),
     Renew(PreparedCommand<RenewStaging>),
     Bind(PreparedCommand<BindStaging>),
+    BoundClaim(PreparedCommand<ClaimPreparation>),
+    BoundRenew(PreparedCommand<RenewPreparation>),
 }
 enum Outcome {
     Stage(Committed<StagingReply>),
     Bound(Committed<PreparationReply>),
+    BoundClaim(Committed<PreparationReply>),
+    BoundRenew(Committed<PreparationReply>),
     Checkpoint(Committed<StagingReply>),
+    BoundCheckpoint(Committed<StagingReply>),
 }
 impl Exact {
     fn pending(&self) -> StagingError {
@@ -291,12 +355,18 @@ impl Exact {
             Self::Claim(c) => StagingError::Claim(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
-            Self::Checkpoint(c) => StagingError::Checkpoint(Box::new(InvocationError::Pending(
-                Box::new(c.evidence().clone()),
-            ))),
+            Self::Checkpoint(c) | Self::BoundCheckpoint(c) => StagingError::Checkpoint(Box::new(
+                InvocationError::Pending(Box::new(c.evidence().clone())),
+            )),
             Self::Renew(c) => StagingError::Renew(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
+            Self::BoundClaim(c) => StagingError::BoundClaim(Box::new(InvocationError::Pending(
+                Box::new(c.evidence().clone()),
+            ))),
+            Self::BoundRenew(c) => StagingError::BoundRenew(Box::new(InvocationError::Pending(
+                Box::new(c.evidence().clone()),
+            ))),
             Self::Bind(c) => StagingError::Bind(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
@@ -321,10 +391,24 @@ impl Exact {
                 .await
                 .map(Outcome::Checkpoint)
                 .map_err(|e| StagingError::Checkpoint(Box::new(e))),
+            Self::BoundCheckpoint(c) => {
+                super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                    .await
+                    .map(Outcome::BoundCheckpoint)
+                    .map_err(|e| StagingError::Checkpoint(Box::new(e)))
+            }
             Self::Renew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Stage)
                 .map_err(|e| StagingError::Renew(Box::new(e))),
+            Self::BoundClaim(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                .await
+                .map(Outcome::BoundClaim)
+                .map_err(|e| StagingError::BoundClaim(Box::new(e))),
+            Self::BoundRenew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                .await
+                .map(Outcome::BoundRenew)
+                .map_err(|e| StagingError::BoundRenew(Box::new(e))),
             Self::Bind(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Bound)
@@ -416,6 +500,11 @@ impl StagingCoordinator {
             actor_workers,
             local: Mutex::new(Local {
                 lease: None,
+                bound: None,
+                bound_source: ready.inner.bound_source.clone(),
+                bound_started: ready.inner.bound_source.as_ref().map(|_| now),
+                bound_result: None,
+                bound_renewal: None,
                 deadline: now,
                 lifetime: now + Duration::from_millis(self.inner.limits.lifetime_ms),
                 workers: 0,
@@ -526,6 +615,7 @@ impl StagingCoordinator {
 struct InputRegistration {
     request: Mutex<Option<(NativeInputCertificate, MutationIdentity)>>,
     result: watch::Sender<Option<Result<Receipt, Arc<StagingError>>>>,
+    bound_digest: Option<[u8; 32]>,
 }
 impl InputRegistration {
     fn finish(&self, result: Result<Receipt, Arc<StagingError>>) {
@@ -584,19 +674,35 @@ impl StagingTicket {
             Err(_) => return Err((StagingError::Context, Box::new(proof))),
         };
         let local = self.job.local.lock().expect("staging local");
+        let bound = local.bound.is_some();
         if local.fenced
             || local.stop
-            || local.seal
+            || (local.seal && !bound)
             || Instant::now() >= local.deadline.min(local.lifetime)
-            || !matches!(self.state(), StagingState::Active(_))
+            || !(matches!(self.state(), StagingState::Active(_)) && !bound
+                || matches!(self.state(), StagingState::Bound(_)) && bound)
         {
             return Err((StagingError::Inactive, Box::new(proof)));
         }
-        if !local.lease.is_some_and(|lease| lease.token == check.token)
-            || check.actor != self.job.actor
-        {
+        let expected = local
+            .bound
+            .as_ref()
+            .map(|s| s.lease.token)
+            .or_else(|| local.lease.map(|s| s.token));
+        if expected != Some(check.token) || check.actor != self.job.actor {
             return Err((StagingError::Context, Box::new(proof)));
         }
+        let digest = if let Some(session) = &local.bound {
+            if session.live_lease().is_err() {
+                return Err((StagingError::Inactive, Box::new(proof)));
+            }
+            match proof.bound_digest(session) {
+                Ok(digest) => Some(digest),
+                Err(_) => return Err((StagingError::Context, Box::new(proof))),
+            }
+        } else {
+            None
+        };
         let mut checkpoint = self.job.checkpoint.lock().expect("staging checkpoint");
         if checkpoint.is_some() {
             return Err((StagingError::Duplicate, Box::new(proof)));
@@ -604,6 +710,7 @@ impl StagingTicket {
         let registration = Arc::new(InputRegistration {
             request: Mutex::new(Some((proof, identity))),
             result: watch::channel(None).0,
+            bound_digest: digest,
         });
         *checkpoint = Some(Arc::clone(&registration));
         self.job.changed.notify_one();
@@ -684,25 +791,70 @@ impl StagingTicket {
         indexes: Arc<CatalogIndexes>,
         files: Arc<CatalogFiles>,
     ) -> Result<PreparationBaseResolver, StagingError> {
-        let StagingState::Bound(bound) = self.state() else {
-            return Err(StagingError::NotReady);
-        };
-        Ok(PreparationBaseResolver::open(
-            self.job.client.clone(),
-            self.job.target.clone(),
-            LeaseCheck {
-                token: bound.lease.token,
-                actor: self.job.actor.clone(),
-            },
-            indexes,
-            files,
-            Some(bound.receipt),
-        )
-        .await?)
+        let session = self.bound_session()?;
+        let receipt = self.bound_result().ok_or(StagingError::NotReady)?.receipt;
+        session.refresh(receipt).await?;
+        Ok(PreparationBaseResolver::from_session((*session).clone(), indexes, files).await?)
     }
+    /// A fresh live shared session, never authority reconstructed from Bound's
+    /// recorded timestamps. Shutdown and lifetime fences also cover every base.
+    pub fn bound_session(&self) -> Result<Arc<PreparationSession>, StagingError> {
+        let l = self.job.local.lock().expect("staging local");
+        if l.stop
+            || l.fenced
+            || Instant::now() >= l.lifetime
+            || !matches!(self.state(), StagingState::Bound(_))
+        {
+            return Err(StagingError::Inactive);
+        }
+        let session = l.bound.clone().ok_or(StagingError::NotReady)?;
+        session.live_lease()?;
+        Ok(session)
+    }
+    /// Known Bind/Claim outcome survives failed fresh custody and graceful stop.
+    pub fn bound_result(&self) -> Option<Arc<StagingBound>> {
+        self.job
+            .local
+            .lock()
+            .expect("staging local")
+            .bound_result
+            .clone()
+    }
+    pub fn bound_renewal(&self) -> Option<Committed<PreparationReply>> {
+        self.job
+            .local
+            .lock()
+            .expect("staging local")
+            .bound_renewal
+            .clone()
+    }
+
     /// Own input work in a task, separately from its observer. A producer error,
     /// panic, expired custody or lost authority fences the session before Bind.
     pub fn spawn<F, Fut, T>(&self, producer: F) -> Result<StagingTask<T>, StagingError>
+    where
+        F: FnOnce(StagingContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, StagingError>> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.spawn_in_phase(false, producer)
+    }
+    /// Bound verification, reconciliation and publication use the same worker
+    /// slots, cancellation/drain and typed result ownership as staging inputs.
+    pub fn spawn_bound<F, Fut, T>(&self, producer: F) -> Result<StagingTask<T>, StagingError>
+    where
+        F: FnOnce(Arc<PreparationSession>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, StagingError>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let session = self.bound_session()?;
+        self.spawn_in_phase(true, move |_| producer(session))
+    }
+    fn spawn_in_phase<F, Fut, T>(
+        &self,
+        bound: bool,
+        producer: F,
+    ) -> Result<StagingTask<T>, StagingError>
     where
         F: FnOnce(StagingContext) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, StagingError>> + Send + 'static,
@@ -716,7 +868,8 @@ impl StagingTicket {
             .map_err(|_| StagingError::Capacity)?;
         let context = {
             let mut l = self.job.local.lock().expect("staging local");
-            if l.seal
+            if (l.seal && !bound)
+                || l.bound.is_some() != bound
                 || l.stop
                 || l.fenced
                 || l.deadline <= Instant::now()
@@ -727,12 +880,23 @@ impl StagingTicket {
             {
                 return Err(StagingError::Inactive);
             }
-            let lease = l.lease.ok_or(StagingError::NotReady)?;
+            let (token, format) = if bound {
+                let (lease, _) = l
+                    .bound
+                    .as_ref()
+                    .ok_or(StagingError::NotReady)?
+                    .live_lease()?;
+                (lease.token, lease.format)
+            } else {
+                let lease = l.lease.ok_or(StagingError::NotReady)?;
+                (lease.token, lease.format)
+            };
             l.workers += 1;
             StagingContext {
                 job: Arc::clone(&self.job),
-                token: lease.token,
-                format: lease.format,
+                token,
+                format,
+                bound,
             }
         };
         let guard = Activity {
@@ -759,7 +923,12 @@ impl StagingTicket {
             let result = tokio::select! { result = &mut task => result.unwrap_or(Err(StagingError::Worker)), _ = observe.fenced() => { task.abort(); let _ = task.await; Err(StagingError::Inactive) } };
             let failed = {
                 let mut local = job.local.lock().expect("staging local");
-                let result = if local.fenced || Instant::now() >= local.deadline.min(local.lifetime)
+                let result = if local.fenced
+                    || local
+                        .bound
+                        .as_ref()
+                        .is_some_and(|s| s.live_lease().is_err())
+                    || Instant::now() >= local.deadline.min(local.lifetime)
                 {
                     drop(result);
                     Err(StagingError::Inactive)
@@ -832,6 +1001,7 @@ pub struct StagingContext {
     job: Arc<Job>,
     token: PreparationToken,
     format: ObjectFormat,
+    bound: bool,
 }
 impl StagingContext {
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, LeaseCheck) {
@@ -853,7 +1023,11 @@ impl StagingContext {
     }
     pub fn ensure_live(&self) -> Result<(), StagingError> {
         let l = self.job.local.lock().expect("staging local");
-        if l.fenced || l.deadline <= Instant::now() || l.lifetime <= Instant::now() {
+        if l.fenced
+            || l.bound.is_some() != self.bound
+            || l.deadline <= Instant::now()
+            || l.lifetime <= Instant::now()
+        {
             Err(StagingError::Inactive)
         } else {
             Ok(())
@@ -864,7 +1038,7 @@ impl StagingContext {
         loop {
             let deadline = {
                 let l = self.job.local.lock().expect("staging local");
-                if l.fenced {
+                if l.fenced || l.bound.is_some() != self.bound {
                     return;
                 }
                 l.deadline.min(l.lifetime)
@@ -974,7 +1148,13 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
         if task.await.is_ok() {
             return;
         }
-        job.local.lock().expect("staging local").fenced = true;
+        {
+            let mut local = job.local.lock().expect("staging local");
+            local.fenced = true;
+            if let Some(session) = &local.bound {
+                session.fence();
+            }
+        }
         let exact = job.exact.lock().expect("staging exact").clone();
         let Some(exact) = exact else {
             fence_and_drain(&inner, &job, StagingError::Worker).await;
@@ -994,7 +1174,9 @@ async fn await_recovery(job: &Job) {
         wake.as_mut().enable();
         let ready = {
             let mut l = job.local.lock().expect("staging local");
-            if l.lease.is_some() && Instant::now() >= l.deadline.min(l.lifetime) {
+            if (l.lease.is_some() || l.bound.is_some())
+                && Instant::now() >= l.deadline.min(l.lifetime)
+            {
                 l.fenced = true;
             }
             let ready = l.recovery;
@@ -1038,37 +1220,99 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 }
                 Ok(Outcome::Bound(value)) => {
                     job.exact.lock().expect("staging exact").take();
-                    match value.output {
-                        PreparationReply::Granted(lease) => {
-                            let matches =
-                                job.local.lock().expect("staging local").lease.is_some_and(
-                                    |staged| {
-                                        staged.token == lease.token
-                                            && staged.format == lease.format
-                                            && lease.expires_at_ms >= staged.expires_at_ms
-                                    },
-                                );
-                            if !matches {
-                                fence_and_drain(&inner, &job, StagingError::Context).await;
-                                return;
-                            }
-                            job.local.lock().expect("staging local").fenced = true;
-                            job.status
-                                .send_replace(StagingState::Bound(Arc::new(StagingBound {
-                                    lease: *lease,
-                                    receipt: value.receipt,
-                                })));
-                            remove(&inner, &job);
-                        }
-                        _ => fence_and_drain(&inner, &job, StagingError::Context).await,
+                    if !accept_bound(&inner, &job, value, false).await {
+                        return;
                     }
-                    return;
+                    recover = false;
+                }
+                Ok(Outcome::BoundClaim(value)) => {
+                    job.exact.lock().expect("staging exact").take();
+                    if !accept_bound(&inner, &job, value, true).await {
+                        return;
+                    }
+                    recover = false;
+                }
+                Ok(Outcome::BoundCheckpoint(value)) => {
+                    job.exact.lock().expect("staging exact").take();
+                    let session = job
+                        .local
+                        .lock()
+                        .expect("staging local")
+                        .bound
+                        .clone()
+                        .expect("bound checkpoint session");
+                    let registration = job
+                        .checkpoint
+                        .lock()
+                        .expect("staging checkpoint")
+                        .clone()
+                        .expect("bound checkpoint slot");
+                    registration.finish(Ok(value.receipt));
+                    let matched = matches!(&value.output, StagingReply::Granted(lease)
+                        if lease.token == session.lease.token && lease.format == session.lease.format);
+                    let result = if matched {
+                        super::inputs::observe_bound_registration(
+                            &session,
+                            registration.bound_digest.expect("bound checkpoint digest"),
+                            value.receipt,
+                        )
+                        .await
+                    } else {
+                        Err(PreparationBaseError::Context.into())
+                    };
+                    if let Err(error) = result {
+                        fence_and_drain(&inner, &job, StagingError::Input(Box::new(error))).await;
+                        return;
+                    }
+                    let mut local = job.local.lock().expect("staging local");
+                    local.deadline = *session.deadline.lock().expect("bound deadline");
+                    job.status.send_replace(StagingState::Bound(
+                        local.bound_result.clone().expect("bound original result"),
+                    ));
+                    recover = false;
+                }
+                Ok(Outcome::BoundRenew(value)) => {
+                    job.exact.lock().expect("staging exact").take();
+                    let session = {
+                        let mut local = job.local.lock().expect("staging local");
+                        local.bound_renewal = Some(value.clone());
+                        local.bound.clone().expect("bound renewal session")
+                    };
+                    let matched = matches!(&value.output, PreparationReply::Granted(lease)
+                        if lease.token == session.lease.token && lease.base == session.lease.base && lease.format == session.lease.format);
+                    let result = if matched {
+                        session.refresh(value.receipt).await
+                    } else {
+                        Err(PreparationBaseError::Context)
+                    };
+                    if let Err(error) = result {
+                        fence_and_drain(&inner, &job, StagingError::Base(error)).await;
+                        return;
+                    }
+                    let (_, _) = match session.live_lease() {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            fence_and_drain(&inner, &job, StagingError::Base(error)).await;
+                            return;
+                        }
+                    };
+                    let mut local = job.local.lock().expect("staging local");
+                    local.deadline = *session.deadline.lock().expect("bound deadline");
+                    job.status.send_replace(StagingState::Bound(
+                        local.bound_result.clone().expect("bound original result"),
+                    ));
+                    recover = false;
                 }
                 Ok(outcome @ (Outcome::Stage(_) | Outcome::Checkpoint(_))) => {
                     let (value, checkpoint) = match outcome {
                         Outcome::Stage(value) => (value, false),
                         Outcome::Checkpoint(value) => (value, true),
-                        Outcome::Bound(_) => unreachable!(),
+                        Outcome::Bound(_)
+                        | Outcome::BoundClaim(_)
+                        | Outcome::BoundRenew(_)
+                        | Outcome::BoundCheckpoint(_) => {
+                            unreachable!()
+                        }
                     };
                     let StagingReply::Granted(lease) = value.output else {
                         job.exact.lock().expect("staging exact").take();
@@ -1134,6 +1378,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Fence,
             Bind(LeaseCheck),
             Renew(LeaseCheck),
+            BoundRenew(LeaseCheck),
             Checkpoint(Arc<InputRegistration>),
             Wait(Instant),
         }
@@ -1142,9 +1387,14 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
         wake.as_mut().enable();
         let next = {
             let mut l = job.local.lock().expect("staging local");
-            let lease = l.lease.expect("active stage lease");
+            let token = l
+                .bound
+                .as_ref()
+                .map(|s| s.lease.token)
+                .or_else(|| l.lease.map(|s| s.token))
+                .expect("active preparation lease");
             let check = LeaseCheck {
-                token: lease.token,
+                token,
                 actor: job.actor.clone(),
             };
             let now = Instant::now();
@@ -1168,11 +1418,20 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 Next::Fence
             } else if l.stop && l.workers == 0 && checkpoint.is_none() {
                 Next::Stop
-            } else if l.seal && l.workers == 0 && !l.stop && checkpoint.is_none() {
+            } else if l.bound.is_none()
+                && l.seal
+                && l.workers == 0
+                && !l.stop
+                && checkpoint.is_none()
+            {
                 Next::Bind(check)
             } else if l.renew || now >= due {
                 l.renew = false;
-                Next::Renew(check)
+                if l.bound.is_some() {
+                    Next::BoundRenew(check)
+                } else {
+                    Next::Renew(check)
+                }
             } else if let Some(registration) = checkpoint {
                 Next::Checkpoint(registration)
             } else {
@@ -1181,8 +1440,20 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
         };
         match next {
             Next::Stop => {
-                job.local.lock().expect("staging local").fenced = true;
-                job.status.send_replace(StagingState::Stopped);
+                let mut local = job.local.lock().expect("staging local");
+                local.fenced = true;
+                if let Some(session) = &local.bound {
+                    session.fence();
+                }
+                // Keep the original binding receipt observable after graceful stop.
+                job.status.send_replace(
+                    local
+                        .bound_result
+                        .clone()
+                        .map(StagingState::Bound)
+                        .unwrap_or(StagingState::Stopped),
+                );
+                drop(local);
                 remove(&inner, &job);
                 return;
             }
@@ -1208,7 +1479,11 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 {
                     Ok(command) => {
                         *job.exact.lock().expect("staging exact") =
-                            Some(Exact::Checkpoint(command));
+                            Some(if registration.bound_digest.is_some() {
+                                Exact::BoundCheckpoint(command)
+                            } else {
+                                Exact::Checkpoint(command)
+                            });
                     }
                     Err(error) => {
                         fence_and_drain(&inner, &job, StagingError::Checkpoint(Box::new(error)))
@@ -1218,6 +1493,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 }
             }
             Next::Bind(check) => {
+                job.local.lock().expect("staging local").bound_started = Some(Instant::now());
                 job.status.send_replace(StagingState::Binding);
                 let identity = crate::server::mutation_identity().map_err(|_| StagingError::Clock);
                 let result = match identity {
@@ -1235,6 +1511,34 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     }
                     Err(e) => {
                         fence_and_drain(&inner, &job, e).await;
+                        return;
+                    }
+                }
+            }
+            Next::BoundRenew(check) => {
+                let identity = crate::server::mutation_identity().map_err(|_| StagingError::Clock);
+                let result = match identity {
+                    Ok(id) => job
+                        .client
+                        .prepare_command::<RenewPreparation>(
+                            &job.target,
+                            id,
+                            LeaseRequest {
+                                check,
+                                lease_ms: inner.limits.lease_ms,
+                            },
+                        )
+                        .await
+                        .map(Exact::BoundRenew)
+                        .map_err(|e| StagingError::BoundRenew(Box::new(e))),
+                    Err(e) => Err(e),
+                };
+                match result {
+                    Ok(command) => {
+                        *job.exact.lock().expect("staging exact") = Some(command);
+                    }
+                    Err(error) => {
+                        fence_and_drain(&inner, &job, error).await;
                         return;
                     }
                 }
@@ -1271,7 +1575,13 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
     }
 }
 async fn fence_and_drain(inner: &Inner, job: &Job, error: StagingError) {
-    job.local.lock().expect("staging local").fenced = true;
+    {
+        let mut local = job.local.lock().expect("staging local");
+        local.fenced = true;
+        if let Some(session) = &local.bound {
+            session.fence();
+        }
+    }
     let error = Arc::new(error);
     job.status
         .send_replace(StagingState::Fenced(Arc::clone(&error)));
