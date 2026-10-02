@@ -25,10 +25,10 @@ The planner binds repository/object format after its first successful preparatio
 1. Begin an admitted maintenance preparation under the current owner fence and open its query-derived base using existing lease/retention APIs.
 2. Call `prepare_next` with a service-owned planner, private workspace, shared disk budget and qualified compaction limits. The API checks live deadlines and current admin access, including when it reports no eligible work.
 3. The selected source and target window use the existing `PreparedCompaction::prepare_range`. Verify complete source/projection folds, output inventory and exact path replacement. A required physical input outside the resource profile fails admission; selection never expands the configured limit.
-4. Issue the purpose-bound maintenance certificate. Publish through command 22 under the selected catalog CAS. On a changed frontier, reuse `reconcile` only while its exact selected source/target incarnation checks hold. Replaced inputs require a new preparation.
+4. Use `ready_compaction` to issue the purpose-bound maintenance certificate and retain exact command 22, then submit through the [shared foreground/maintenance dispatcher](shared-publication-dispatch.md) under the selected catalog CAS. On a changed frontier, reuse `reconcile` only while its exact selected source/target incarnation checks hold. Replaced inputs require a new preparation.
 5. Keep unknown outcomes and their inputs admitted until authoritative recovery. After a known outcome, release private scratch and obtain a new queried base before the next job. Do not use a local rotation advancement as evidence that bytes were published or can be collected.
 
-The selection API does not run a timer, choose maintenance/foreground resource shares, provide a durable service outbox, or replace owner-loss reconstruction. Those components must integrate it before production schema selection. An unadmittable required file needs a qualified resource profile; repeatedly selecting it cannot prove service progress.
+The selection API does not run a timer, choose maintenance/foreground CPU/I/O resource shares, provide a durable service outbox, or replace owner-loss reconstruction. Those components must integrate it before production schema selection. An unadmittable required file needs a qualified resource profile; repeatedly selecting it cannot prove service progress.
 
 ## Performance and acceptance
 

@@ -82,7 +82,14 @@ pub(super) async fn entries(
     prepared: &Prepared,
     catalog: crate::packs::catalog::StoredCatalog,
 ) -> Result<std::collections::BTreeMap<ObjectId, crate::packs::directory::DirectoryEntry>> {
-    let reader = CatalogReader::open(Arc::clone(&prepared.indexes), catalog).await?;
+    entries_for(&prepared.indexes, &prepared.files, catalog).await
+}
+pub(super) async fn entries_for(
+    indexes: &Arc<CatalogIndexes>,
+    files: &Arc<CatalogFiles>,
+    catalog: crate::packs::catalog::StoredCatalog,
+) -> Result<std::collections::BTreeMap<ObjectId, crate::packs::directory::DirectoryEntry>> {
+    let reader = CatalogReader::open(Arc::clone(indexes), catalog).await?;
     let directory = reader.directory();
     let mut ids = std::collections::BTreeSet::new();
     for root in directory
@@ -92,8 +99,8 @@ pub(super) async fn entries(
         .map(Some)
         .chain(directory.levels)
     {
-        for stored in runs(&prepared.indexes, root).await? {
-            let run = prepared.files.load(stored).await?;
+        for stored in runs(indexes, root).await? {
+            let run = files.load(stored).await?;
             let mut after = None;
             loop {
                 let page = run.entries_after(after)?;
@@ -110,11 +117,9 @@ pub(super) async fn entries(
     for page in ids.chunks(512) {
         let entries = reader
             .directory()
-            .lookup_batch(prepared.indexes.ranges(), &*prepared.files, page)
+            .lookup_batch(indexes.ranges(), &**files, page)
             .await?;
-        let headers = reader
-            .headers(page, &*prepared.files, &*prepared.files)
-            .await?;
+        let headers = reader.headers(page, &**files, &**files).await?;
         for ((oid, entry), header) in page.iter().zip(entries).zip(headers) {
             let entry = entry.ok_or("object")?;
             assert_eq!(header, Some(entry.header));

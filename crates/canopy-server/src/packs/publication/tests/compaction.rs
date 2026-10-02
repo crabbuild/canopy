@@ -12,6 +12,7 @@ use crate::packs::{
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
 
+mod coordinator;
 mod range;
 mod recovery;
 mod schedule;

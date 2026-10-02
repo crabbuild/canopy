@@ -23,6 +23,12 @@ use tokio::{
 /// Scratch/native work remains independently charged to its DiskBudget.
 const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
+mod work;
+use work::MAINTENANCE_RESERVATION;
+pub use work::{
+    CompactionReadyError, PublicationClass, PublicationError, PublicationOutcome,
+    ReadyCatalogCompaction, ReadyPublication,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct PublicationLimits {
@@ -32,6 +38,11 @@ pub struct PublicationLimits {
     pub command_bytes: u64,
     /// Commands awaiting durable outcome, not concurrent Cell transactions.
     pub in_flight: usize,
+    /// Reserved admitted slots, including uncertain maintenance commands.
+    pub maintenance_operations: usize,
+    /// Maintenance cannot consume every concurrent durability wait slot.
+    pub maintenance_in_flight: usize,
+    pub foreground_burst: u8,
 }
 impl Default for PublicationLimits {
     fn default() -> Self {
@@ -40,18 +51,31 @@ impl Default for PublicationLimits {
             per_actor: 8,
             command_bytes: 256 << 20,
             in_flight: 8,
+            maintenance_operations: 4,
+            maintenance_in_flight: 2,
+            foreground_burst: 3,
         }
     }
 }
 impl PublicationLimits {
     fn validate(self) -> Result<(), PublicationScheduleError> {
-        if self.operations < 2
+        if self.operations < 3
             || self.operations > MAX_OPERATIONS as usize
+            || self.maintenance_operations == 0
+            || self.maintenance_operations >= self.operations
             || self.per_actor == 0
-            || self.per_actor >= self.operations
-            || self.command_bytes / COMMAND_RESERVATION <= self.per_actor as u64
+            || self.per_actor >= self.operations - self.maintenance_operations
+            || self
+                .command_bytes
+                .saturating_sub(self.maintenance_operations as u64 * MAINTENANCE_RESERVATION)
+                / COMMAND_RESERVATION
+                <= self.per_actor as u64
             || self.in_flight == 0
             || self.in_flight > self.operations
+            || self.maintenance_in_flight == 0
+            || self.maintenance_in_flight > self.in_flight
+            || (self.in_flight > 1 && self.maintenance_in_flight == self.in_flight)
+            || !(1..=32).contains(&self.foreground_burst)
         {
             return Err(PublicationScheduleError::InvalidLimits);
         }
@@ -110,7 +134,7 @@ pub enum PublicationScheduleError {
 }
 pub struct PublicationAdmissionFailure {
     pub reason: PublicationScheduleError,
-    pub ready: ReadyCatalogPush,
+    pub ready: ReadyPublication,
 }
 impl std::fmt::Debug for PublicationAdmissionFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -131,11 +155,9 @@ pub enum PublicationState {
     Queued,
     Running,
     /// Retained in the coordinator and charged until explicit resolution.
-    Uncertain(Arc<InvocationError<CatalogCompletionReply>>),
+    Uncertain(Arc<PublicationError>),
     /// Rejected carries its durable receipt; NotStarted never acknowledges.
-    Finished(
-        Result<Committed<CatalogCompletionReply>, Arc<InvocationError<CatalogCompletionReply>>>,
-    ),
+    Finished(Result<PublicationOutcome, Arc<PublicationError>>),
 }
 impl PublicationState {
     fn observed(&self) -> bool {
@@ -152,7 +174,8 @@ struct Job {
     actor: String,
     // Removed before terminal notification; tickets never retain command
     // payloads or local inventory after the admission charge is released.
-    ready: Mutex<Option<ReadyCatalogPush>>,
+    ready: Mutex<Option<ReadyPublication>>,
+    class: PublicationClass,
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
@@ -194,12 +217,53 @@ impl<T> FairQueue<T> {
         work
     }
 }
+struct ClassQueue<T> {
+    foreground: FairQueue<T>,
+    maintenance: FairQueue<T>,
+    foreground_streak: u8,
+}
+impl<T> Default for ClassQueue<T> {
+    fn default() -> Self {
+        Self {
+            foreground: FairQueue::default(),
+            maintenance: FairQueue::default(),
+            foreground_streak: 0,
+        }
+    }
+}
+impl<T> ClassQueue<T> {
+    fn push(&mut self, class: PublicationClass, actor: String, work: T) {
+        match class {
+            PublicationClass::Foreground => self.foreground.push(actor, work),
+            PublicationClass::Maintenance => self.maintenance.push(actor, work),
+        }
+    }
+    fn pop(&mut self, maintenance_ready: bool, burst: u8) -> Option<T> {
+        if maintenance_ready
+            && self.foreground_streak >= burst
+            && let Some(work) = self.maintenance.pop()
+        {
+            self.foreground_streak = 0;
+            return Some(work);
+        }
+        if let Some(work) = self.foreground.pop() {
+            self.foreground_streak = self.foreground_streak.saturating_add(1);
+            return Some(work);
+        }
+        if maintenance_ready && let Some(work) = self.maintenance.pop() {
+            self.foreground_streak = 0;
+            return Some(work);
+        }
+        None
+    }
+}
 #[derive(Default)]
 struct State {
     jobs: HashMap<[u8; 16], Arc<Job>>,
-    actors: HashMap<String, usize>,
-    queue: FairQueue<Work>,
-    bytes: u64,
+    actors: HashMap<String, [usize; 2]>,
+    queue: ClassQueue<Work>,
+    counts: [usize; 2],
+    bytes: [u64; 2],
     worker: bool,
     closed: bool,
 }
@@ -243,6 +307,8 @@ pub struct PublicationStats {
     pub uncertain: usize,
     pub command_bytes: u64,
     pub closed: bool,
+    pub foreground: usize,
+    pub maintenance: usize,
 }
 impl PublicationCoordinator {
     pub fn new(
@@ -268,20 +334,38 @@ impl PublicationCoordinator {
     /// The account key comes from the private lease, never a request label.
     pub async fn submit(
         &self,
-        ready: ReadyCatalogPush,
+        ready: impl Into<ReadyPublication>,
     ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
-        let (client, target, check) = ready.prepared.base.capability();
+        let ready = ready.into();
+        let class = ready.class();
+        let at = class.index();
+        let (client, target, check) = ready.capability();
         let mut state = self.inner.state.lock().await;
         let limits = self.inner.limits;
+        let (operation_limit, byte_limit) = match class {
+            PublicationClass::Foreground => (
+                limits.operations - limits.maintenance_operations,
+                limits.command_bytes
+                    - limits.maintenance_operations as u64 * MAINTENANCE_RESERVATION,
+            ),
+            PublicationClass::Maintenance => (
+                limits.maintenance_operations,
+                limits.maintenance_operations as u64 * MAINTENANCE_RESERVATION,
+            ),
+        };
         let reason = if target != &self.inner.target {
             Some(PublicationScheduleError::Foreign)
         } else if state.closed {
             Some(PublicationScheduleError::Closed)
         } else if state.jobs.contains_key(&check.token.operation) {
             Some(PublicationScheduleError::Duplicate)
-        } else if state.jobs.len() >= limits.operations
-            || state.actors.get(&check.actor).copied().unwrap_or(0) >= limits.per_actor
-            || state.bytes > limits.command_bytes - COMMAND_RESERVATION
+        } else if state.counts[at] >= operation_limit
+            || state
+                .actors
+                .get(&check.actor)
+                .map_or(0, |counts| counts[at])
+                >= limits.per_actor
+            || state.bytes[at] > byte_limit - class.reservation()
         {
             Some(PublicationScheduleError::Capacity)
         } else {
@@ -304,15 +388,18 @@ impl PublicationCoordinator {
         let job = Arc::new(Job {
             operation: check.token.operation,
             actor: check.actor.clone(),
+            class,
             ready: Mutex::new(Some(ready)),
             status: watch::channel(PublicationState::Queued).0,
             read,
             admitted: Instant::now(),
         });
-        *state.actors.entry(job.actor.clone()).or_default() += 1;
-        state.bytes += COMMAND_RESERVATION;
+        state.actors.entry(job.actor.clone()).or_default()[at] += 1;
+        state.counts[at] += 1;
+        state.bytes[at] += class.reservation();
         state.jobs.insert(job.operation, Arc::clone(&job));
         state.queue.push(
+            job.class,
             job.actor.clone(),
             Work {
                 job: Arc::clone(&job),
@@ -348,6 +435,7 @@ impl PublicationCoordinator {
         }
         ticket.job.status.send_replace(PublicationState::Queued);
         state.queue.push(
+            ticket.job.class,
             ticket.job.actor.clone(),
             Work {
                 job: Arc::clone(&ticket.job),
@@ -412,8 +500,10 @@ impl PublicationCoordinator {
             queued: 0,
             in_flight: 0,
             uncertain: 0,
-            command_bytes: state.bytes,
+            command_bytes: state.bytes.iter().sum(),
             closed: state.closed,
+            foreground: state.counts[0],
+            maintenance: state.counts[1],
         };
         for job in state.jobs.values() {
             match *job.status.borrow() {
@@ -449,10 +539,17 @@ impl PublicationCoordinator {
     #[cfg(test)]
     pub(super) async fn reservations_for_test(&self) -> (usize, u64, usize) {
         let state = self.inner.state.lock().await;
-        (state.jobs.len(), state.bytes, state.actors.len())
+        (
+            state.jobs.len(),
+            state.bytes.iter().sum(),
+            state.actors.len(),
+        )
     }
 }
 impl PublicationTicket {
+    pub fn class(&self) -> PublicationClass {
+        self.job.class
+    }
     pub fn state(&self) -> PublicationState {
         self.job.status.borrow().clone()
     }
@@ -471,7 +568,7 @@ impl PublicationTicket {
     }
     pub async fn response(&self) -> Result<GitHttpResponse, CatalogPushResponseError> {
         let completed = match self.state() {
-            PublicationState::Finished(Ok(completed)) => completed,
+            PublicationState::Finished(Ok(PublicationOutcome::Push(completed))) => completed,
             _ => return Err(CatalogPushResponseError::Invalid),
         };
         let CatalogCompletionReply::Completed(output) = completed.output else {
@@ -503,19 +600,16 @@ async fn supervise(inner: Arc<Inner>) {
             let running = matches!(*job.status.borrow(), PublicationState::Running);
             if running && let Some(ready) = job.ready.lock().await.as_ref() {
                 job.status
-                    .send_replace(PublicationState::Uncertain(Arc::new(
-                        InvocationError::Pending(Box::new(ready.command.evidence().clone())),
-                    )));
+                    .send_replace(PublicationState::Uncertain(Arc::new(ready.pending())));
             }
         }
         drop(state);
     }
 }
-type DispatchResult =
-    Result<Committed<CatalogCompletionReply>, InvocationError<CatalogCompletionReply>>;
+type DispatchResult = Result<PublicationOutcome, PublicationError>;
 async fn run(inner: Arc<Inner>) {
     let mut tasks = tokio::task::JoinSet::new();
-    let mut active = HashMap::new();
+    let mut active: HashMap<tokio::task::Id, Arc<Job>> = HashMap::new();
     loop {
         let wake = inner.changed.notified();
         tokio::pin!(wake);
@@ -523,10 +617,19 @@ async fn run(inner: Arc<Inner>) {
         {
             let mut state = inner.state.lock().await;
             while tasks.len() < inner.limits.in_flight {
-                let Some(work) = state.queue.pop() else { break };
+                let maintenance_active = active
+                    .values()
+                    .filter(|job| job.class == PublicationClass::Maintenance)
+                    .count();
+                let Some(work) = state.queue.pop(
+                    maintenance_active < inner.limits.maintenance_in_flight,
+                    inner.limits.foreground_burst,
+                ) else {
+                    break;
+                };
                 work.job.status.send_replace(PublicationState::Running);
                 tracing::debug!(target: "canopy::publication", event = "dispatch",
-                    operation = ?work.job.operation, recovery = work.recover,
+                    operation = ?work.job.operation, class = ?work.job.class, recovery = work.recover,
                     queue_wait_us = work.queued.elapsed().as_micros());
                 let job = Arc::clone(&work.job);
                 let handle = tasks.spawn(dispatch(Arc::clone(&inner), work));
@@ -550,8 +653,8 @@ async fn run(inner: Arc<Inner>) {
                     }
                     Err(error) => {
                         let job = active.remove(&error.id()).expect("failed publication identity");
-                        let evidence = job.ready.lock().await.as_ref().expect("failed command retained").command.evidence().clone();
-                        finish(&inner, &job, Err(InvocationError::Pending(Box::new(evidence)))).await;
+                        let error = job.ready.lock().await.as_ref().expect("failed command retained").pending();
+                        finish(&inner, &job, Err(error)).await;
                     }
                 }
             }
@@ -572,55 +675,31 @@ async fn dispatch(inner: Arc<Inner>, work: Work) -> DispatchResult {
     }
     #[cfg(not(test))]
     drop(inner);
-    let command = {
-        let ready = work.job.ready.lock().await;
-        ready
-            .as_ref()
-            .expect("admitted publication retains its command")
-            .command
-            .clone()
-    };
+    let ready = work
+        .job
+        .ready
+        .lock()
+        .await
+        .as_ref()
+        .expect("admitted publication retains its command")
+        .dispatch_copy();
     #[cfg(test)]
     let fault = inner.fault.swap(0, std::sync::atomic::Ordering::AcqRel);
-    #[cfg(test)]
-    let evidence = command.evidence().clone();
-    #[cfg(test)]
-    let outcome = if fault == 1 {
-        Err(InvocationError::Pending(Box::new(evidence.clone())))
-    } else if work.recover {
-        resolve(&work.job.read.client, command).await
-    } else {
-        Box::pin(command.execute()).await
-    };
     #[cfg(not(test))]
-    let outcome = if work.recover {
-        resolve(&work.job.read.client, command).await
-    } else {
-        Box::pin(command.execute()).await
-    };
-    #[cfg(test)]
-    let outcome = if fault == 2 {
-        Err(InvocationError::Pending(Box::new(evidence)))
-    } else {
-        assert_ne!(fault, 3, "injected dispatch panic after execution");
-        outcome
-    };
-    outcome
+    let fault = 0;
+    ready.dispatch(work.recover, fault).await
 }
 async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
-    let disposition = match &outcome {
-        Ok(_) => "committed",
-        Err(InvocationError::Rejected(_)) => "rejected",
-        Err(InvocationError::NotStarted(_)) => "not_started",
-        Err(InvocationError::Pending(_)) => "pending",
-        Err(InvocationError::InvalidPublishedResult { .. }) => "invalid_published_result",
-    };
+    let disposition = outcome
+        .as_ref()
+        .err()
+        .map_or("committed", PublicationError::disposition);
     tracing::debug!(target: "canopy::publication", event = "observed", operation = ?job.operation,
-        disposition, residence_us = job.admitted.elapsed().as_micros());
-    let uncertain = matches!(
-        &outcome,
-        Err(InvocationError::Pending(_) | InvocationError::InvalidPublishedResult { .. })
-    );
+        class = ?job.class, disposition, residence_us = job.admitted.elapsed().as_micros());
+    let uncertain = outcome
+        .as_ref()
+        .err()
+        .is_some_and(PublicationError::uncertain);
     if uncertain {
         job.status
             .send_replace(PublicationState::Uncertain(Arc::new(outcome.unwrap_err())));
@@ -633,20 +712,22 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
             .actors
             .get_mut(&job.actor)
             .expect("admitted actor count");
-        *count -= 1;
-        if *count == 0 {
+        let at = job.class.index();
+        count[at] -= 1;
+        if *count == [0, 0] {
             state.actors.remove(&job.actor);
         }
-        state.bytes -= COMMAND_RESERVATION;
+        state.counts[at] -= 1;
+        state.bytes[at] -= job.class.reservation();
         job.status
             .send_replace(PublicationState::Finished(outcome.map_err(Arc::new)));
     }
 }
 
-async fn resolve(
+async fn resolve<C: Command>(
     client: &CellClient,
-    command: PreparedCommand<CompleteCatalogPush>,
-) -> Result<Committed<CatalogCompletionReply>, InvocationError<CatalogCompletionReply>> {
+    command: PreparedCommand<C>,
+) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
     let evidence = command.evidence().clone();
     match client.resolve(&evidence).await {
         Ok(Resolution::Absent) => Box::pin(command.execute()).await,
@@ -658,7 +739,7 @@ async fn resolve(
             };
             let decoded = (|| {
                 let mut decoder = BoundedDecoder::new(outcome.result(), 128)?;
-                let output = CatalogCompletionReply::decode(&mut decoder)?;
+                let output = C::Output::decode(&mut decoder)?;
                 decoder.finish()?;
                 Ok::<_, CodecError>(Committed { output, receipt })
             })()
@@ -710,6 +791,30 @@ mod fairness {
                 in_flight: 33,
                 ..PublicationLimits::default()
             },
+            PublicationLimits {
+                maintenance_operations: 0,
+                ..PublicationLimits::default()
+            },
+            PublicationLimits {
+                maintenance_operations: 32,
+                ..PublicationLimits::default()
+            },
+            PublicationLimits {
+                maintenance_in_flight: 0,
+                ..PublicationLimits::default()
+            },
+            PublicationLimits {
+                maintenance_in_flight: 8,
+                ..PublicationLimits::default()
+            },
+            PublicationLimits {
+                foreground_burst: 0,
+                ..PublicationLimits::default()
+            },
+            PublicationLimits {
+                foreground_burst: 33,
+                ..PublicationLimits::default()
+            },
         ] {
             assert_eq!(
                 limits.validate(),
@@ -740,5 +845,38 @@ mod fairness {
         assert!(queue.actors.is_empty() && queue.queues.is_empty());
         queue.push("busy".into(), 9);
         assert_eq!(queue.pop(), Some(9));
+    }
+    #[test]
+    fn ready_classes_bound_foreground_bursts_and_preserve_blocked_maintenance() {
+        let mut queue = ClassQueue::default();
+        for n in 0..12 {
+            queue.push(PublicationClass::Foreground, "busy".into(), n);
+        }
+        queue.push(PublicationClass::Maintenance, "admin-a".into(), 100);
+        queue.push(PublicationClass::Maintenance, "admin-b".into(), 200);
+        assert_eq!(
+            (queue.pop(true, 3), queue.pop(true, 3), queue.pop(true, 3)),
+            (Some(0), Some(1), Some(2))
+        );
+        // A running maintenance job at its concurrency cap must not block ready
+        // foreground work or remove the waiting maintenance command.
+        assert_eq!(queue.pop(false, 3), Some(3));
+        assert_eq!(queue.pop(true, 3), Some(100));
+        assert_eq!(
+            (
+                queue.pop(true, 3),
+                queue.pop(true, 3),
+                queue.pop(true, 3),
+                queue.pop(true, 3)
+            ),
+            (Some(4), Some(5), Some(6), Some(200))
+        );
+        for n in 7..12 {
+            assert_eq!(queue.pop(true, 3), Some(n));
+        }
+        assert_eq!(queue.pop(true, 3), None);
+        queue.push(PublicationClass::Maintenance, "admin-a".into(), 101);
+        assert_eq!(queue.pop(false, 3), None);
+        assert_eq!(queue.pop(true, 3), Some(101));
     }
 }

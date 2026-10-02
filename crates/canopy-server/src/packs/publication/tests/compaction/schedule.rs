@@ -13,6 +13,8 @@ async fn geometric_planner_drains_native_ingress_and_level_debt_without_changing
             urgent_burst: 2,
         };
         let mut planner = CompactionPlanner::new(policy)?;
+        let coordinator =
+            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
         let mut expected = None;
         let mut first_catalog = None;
         let mut jobs = 0;
@@ -43,19 +45,28 @@ async fn geometric_planner_drains_native_ingress_and_level_debt_without_changing
                 assert_eq!(Some(&prior), expected.as_ref());
                 let after = range::entries(&prepared, prepared.compact.catalog()).await?;
                 assert_eq!(after, prior);
-                let proof = prepared.compact.certificate().await?;
-                let result = fixture
-                    .client()
-                    .command::<PublishCatalogCompaction>(&fixture.target, identity()?, proof)
+                let compact = Arc::new(prepared.compact);
+                let ticket = coordinator
+                    .submit(compact.ready_compaction(identity()?).await?)
                     .await?;
-                assert!(matches!(result.output, CompactionReply::Published(_)));
+                let result = ticket.wait().await;
+                assert!(
+                    matches!(result, PublicationState::Finished(Ok(PublicationOutcome::Compaction(value))) if matches!(value.output, CompactionReply::Published(_)))
+                );
                 assert_eq!(refs(&fixture.handle).await?, original_refs);
                 assert_eq!(
-                    Some(range::entries(&prepared, first_catalog.ok_or("old")?).await?),
+                    Some(
+                        range::entries_for(
+                            &prepared.indexes,
+                            &prepared.files,
+                            first_catalog.ok_or("old")?
+                        )
+                        .await?
+                    ),
                     expected
                 );
                 jobs += 1;
-                drop(prepared.compact);
+                drop(compact);
                 cleaned(prepared.root.path(), &prepared.budget).await?;
             } else {
                 let pressure = policy.pressure(&current)?;
@@ -76,6 +87,8 @@ async fn geometric_planner_drains_native_ingress_and_level_debt_without_changing
         assert!(done, "geometric debt must drain in the bounded fixture");
         assert!(jobs > 4, "exercise both ingress and higher-level jobs");
         assert_eq!(outcomes(&fixture.handle).await?, jobs);
+        assert!(coordinator.close_and_drain().await.is_empty());
+        assert_eq!(coordinator.stats().await.admitted, 0);
         fixture.runtime.shutdown().await?;
     }
     Ok(())

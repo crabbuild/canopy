@@ -14,14 +14,14 @@ use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
 use tokio::time::{Duration, timeout};
 
-fn refused() -> GitHttpResponse {
+pub(super) fn refused() -> GitHttpResponse {
     GitHttpResponse {
         status: 400,
         headers: vec![("X-Native-Trace".into(), "exact-refusal".into())],
         body: b"native input refused\n".to_vec(),
     }
 }
-fn request(response: GitHttpResponse) -> PushCompletionRequest {
+pub(super) fn request(response: GitHttpResponse) -> PushCompletionRequest {
     PushCompletionRequest {
         plan: None,
         response,
@@ -47,9 +47,11 @@ fn accepted(tip: crate::ObjectId, name: &str) -> PushCompletionRequest {
         certificate: None,
     }
 }
-fn finished(state: PublicationState) -> Result<cellule_runtime::Committed<CatalogCompletionReply>> {
+pub(super) fn finished(
+    state: PublicationState,
+) -> Result<cellule_runtime::Committed<CatalogCompletionReply>> {
     match state {
-        PublicationState::Finished(Ok(value)) => Ok(value),
+        PublicationState::Finished(Ok(PublicationOutcome::Push(value))) => Ok(value),
         other => Err(format!("unexpected {other:?}").into()),
     }
 }
@@ -57,6 +59,18 @@ async fn empty(
     fixture: &Fixture,
     operation: [u8; 16],
     actor: &str,
+) -> Result<(Arc<PreparedCatalog>, tempfile::TempDir, DiskBudget)> {
+    let store = Arc::new(ArtifactStore::new(
+        Arc::new(InMemory::new()),
+        fixture.repository,
+    ));
+    empty_in_store(fixture, operation, actor, store).await
+}
+pub(super) async fn empty_in_store(
+    fixture: &Fixture,
+    operation: [u8; 16],
+    actor: &str,
+    store: Arc<ArtifactStore>,
 ) -> Result<(Arc<PreparedCatalog>, tempfile::TempDir, DiskBudget)> {
     let mut input = fixture.begin(operation);
     input.actor = actor.into();
@@ -67,10 +81,6 @@ async fn empty(
     let token = lease(started.output)?.token;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(256 << 20);
-    let store = Arc::new(ArtifactStore::new(
-        Arc::new(InMemory::new()),
-        fixture.repository,
-    ));
     let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), fixture.format));
     let files = Arc::new(CatalogFiles::new(
         root.path(),
@@ -165,10 +175,13 @@ async fn admission_accounts_for_running_and_queued_work_without_losing_rejected_
     let coordinator = PublicationCoordinator::new(
         fixture.target.clone(),
         PublicationLimits {
-            operations: 4,
+            operations: 5,
             per_actor: 2,
-            command_bytes: 24 << 20,
+            command_bytes: (24 << 20) + (8 << 10),
             in_flight: 1,
+            maintenance_operations: 1,
+            maintenance_in_flight: 1,
+            foreground_burst: 3,
         },
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
@@ -189,7 +202,7 @@ async fn admission_accounts_for_running_and_queued_work_without_losing_rejected_
             limits(),
         ))
         .await?;
-        attempts.push((prepared, root, budget, Some(ready)));
+        attempts.push((prepared, root, budget, Some(ReadyPublication::from(ready))));
     }
     let first = coordinator
         .submit(attempts[0].3.take().ok_or("ready")?)
@@ -302,7 +315,7 @@ async fn unknown_absent_lost_ack_and_worker_panic_recover_exact_native_command()
         let PublicationState::Uncertain(error) = &uncertain else {
             return Err("no retained evidence".into());
         };
-        let InvocationError::Pending(evidence) = error.as_ref() else {
+        let PublicationError::Push(InvocationError::Pending(evidence)) = error.as_ref() else {
             return Err("no exact mutation evidence".into());
         };
         let original_sequence = match fixture.client().resolve(evidence).await? {
@@ -418,6 +431,7 @@ async fn stale_ready_command_has_durable_conflict_then_reconciliation_can_reente
         fixture.target.clone(),
         PublicationLimits {
             in_flight: 1,
+            maintenance_in_flight: 1,
             ..PublicationLimits::default()
         },
     )?;
@@ -429,7 +443,7 @@ async fn stale_ready_command_has_durable_conflict_then_reconciliation_can_reente
     finished(a_ticket.wait().await)?;
     let old = old_ticket.wait().await;
     assert!(
-        matches!(old, PublicationState::Finished(Err(ref error)) if matches!(error.as_ref(), InvocationError::Rejected(value) if value.output==CatalogCompletionReply::Denied(PreparationDenial::Conflict)))
+        matches!(old, PublicationState::Finished(Err(ref error)) if matches!(error.as_ref(), PublicationError::Push(InvocationError::Rejected(value)) if value.output==CatalogCompletionReply::Denied(PreparationDenial::Conflict)))
     );
     assert_eq!(
         replay_push_response(
@@ -525,6 +539,7 @@ async fn bounded_dispatch_allows_another_command_to_progress_before_first_outcom
         fixture.target.clone(),
         PublicationLimits {
             in_flight: 2,
+            maintenance_in_flight: 1,
             ..PublicationLimits::default()
         },
     )?;

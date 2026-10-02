@@ -76,6 +76,9 @@ pub struct PreparedCompaction {
     inventory_digest: [u8; 32],
 }
 impl PreparedCompaction {
+    pub(super) fn preparation_base(&self) -> &PreparationBaseResolver {
+        &self.base
+    }
     pub fn catalog(&self) -> StoredCatalog {
         self.catalog
     }

@@ -37,9 +37,10 @@ pub use completion::{
     PushCompletionRequest, SignedPushAnnotation, replay_push_response,
 };
 pub use coordinator::{
-    PublicationAdmissionFailure, PublicationCoordinator, PublicationLimits,
-    PublicationScheduleError, PublicationState, PublicationStats, PublicationTicket,
-    ReadyCatalogPush,
+    CompactionReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
+    PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
+    PublicationState, PublicationStats, PublicationTicket, ReadyCatalogCompaction,
+    ReadyCatalogPush, ReadyPublication,
 };
 mod commands;
 mod compaction;
