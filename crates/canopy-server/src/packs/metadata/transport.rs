@@ -108,7 +108,7 @@ impl MetadataSegment {
     }
 }
 
-pub(in crate::packs) trait PinnedFile: Send + Sync + 'static {
+pub(crate) trait PinnedFile: Send + Sync + 'static {
     fn path(&self) -> &Path;
 }
 impl PinnedFile for MetadataSegment {
@@ -117,7 +117,7 @@ impl PinnedFile for MetadataSegment {
     }
 }
 
-pub(in crate::packs) async fn upload_file<T: PinnedFile>(
+pub(crate) async fn upload_file<T: PinnedFile>(
     owner: Arc<T>,
     store: &ArtifactStore,
     key: ArtifactKey,

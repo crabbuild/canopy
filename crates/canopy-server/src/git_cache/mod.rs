@@ -51,7 +51,7 @@ pub(crate) enum ReceiveHook {
 }
 
 pub(crate) struct GitCache {
-    object_format: crate::ObjectFormat,
+    pub(crate) object_format: crate::ObjectFormat,
     pub(crate) native: crate::native_resources::NativeScope,
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,

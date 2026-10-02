@@ -64,40 +64,12 @@ impl NativePackDescriptor {
         if index.len() != self.object_count || index.pack_checksum() != self.git_checksum {
             return Err(IndexError::Integrity);
         }
-        let mut file = File::open(pack_path).map_err(MetadataError::from)?;
-        if file.metadata().map_err(MetadataError::from)?.len() != self.pack.size {
-            return Err(IndexError::Integrity);
-        }
-        let mut header = [0; 12];
-        file.read_exact(&mut header).map_err(MetadataError::from)?;
-        let version =
-            u32::from_be_bytes(header[4..8].try_into().map_err(|_| IndexError::Integrity)?);
-        let count = u32::from_be_bytes(header[8..].try_into().map_err(|_| IndexError::Integrity)?);
-        if &header[..4] != b"PACK" || !matches!(version, 2 | 3) || count != self.object_count {
-            return Err(IndexError::Integrity);
-        }
-        let mut whole = blake3::Hasher::new();
-        let mut native = ObjectHasher::raw(self.format);
-        whole.update(&header);
-        native.update(&header);
-        let mut remaining = self.pack.size - 12 - self.format.bytes() as u64;
-        let mut buffer = [0; 64 << 10];
-        while remaining > 0 {
-            let length = remaining.min(buffer.len() as u64) as usize;
-            file.read_exact(&mut buffer[..length])
-                .map_err(MetadataError::from)?;
-            whole.update(&buffer[..length]);
-            native.update(&buffer[..length]);
-            remaining -= length as u64;
-        }
-        let mut trailer = [0; 32];
-        let trailer = &mut trailer[..self.format.bytes()];
-        file.read_exact(trailer).map_err(MetadataError::from)?;
-        whole.update(trailer);
-        if trailer != self.git_checksum.as_ref()
-            || native.finalize() != self.git_checksum
-            || whole.finalize().as_bytes() != &self.pack.digest
-            || file.read(&mut buffer[..1]).map_err(MetadataError::from)? != 0
+        if pack_digest(
+            pack_path,
+            self.pack.size,
+            self.git_checksum,
+            self.object_count,
+        )? != self.pack.digest
         {
             return Err(IndexError::Integrity);
         }
@@ -106,4 +78,92 @@ impl NativePackDescriptor {
             index,
         })
     }
+    /// Local precursor only: manifest digests are filled by authenticated
+    /// upload before this descriptor escapes the capture service.
+    pub(crate) fn inspect_files(
+        repository: [u8; 16],
+        operation: [u8; 16],
+        format: ObjectFormat,
+        pack_path: &Path,
+        index_path: &Path,
+    ) -> Result<Self, IndexError> {
+        let pack_size = std::fs::metadata(pack_path)
+            .map_err(MetadataError::from)?
+            .len();
+        let index_size = std::fs::metadata(index_path)
+            .map_err(MetadataError::from)?
+            .len();
+        let index = PackIndex::open(index_path, format).map_err(MetadataError::from)?;
+        let mut descriptor = Self {
+            repository,
+            operation,
+            format,
+            git_checksum: index.pack_checksum(),
+            object_count: index.len(),
+            pack: ArtifactDescriptor {
+                size: pack_size,
+                digest: [0; 32],
+                manifest_digest: [0; 32],
+            },
+            index: ArtifactDescriptor {
+                size: index_size,
+                digest: [0; 32],
+                manifest_digest: [0; 32],
+            },
+        };
+        descriptor.validate(repository, format)?;
+        descriptor.index.digest = file_digest(index_path, index_size)?;
+        descriptor.pack.digest = pack_digest(
+            pack_path,
+            pack_size,
+            descriptor.git_checksum,
+            descriptor.object_count,
+        )?;
+        Ok(descriptor)
+    }
+}
+
+fn pack_digest(
+    pack_path: &Path,
+    size: u64,
+    git_checksum: ObjectId,
+    object_count: u32,
+) -> Result<[u8; 32], IndexError> {
+    let format = git_checksum.format();
+    let mut file = File::open(pack_path).map_err(MetadataError::from)?;
+    if file.metadata().map_err(MetadataError::from)?.len() != size {
+        return Err(IndexError::Integrity);
+    }
+    let mut header = [0; 12];
+    file.read_exact(&mut header).map_err(MetadataError::from)?;
+    let version = u32::from_be_bytes(header[4..8].try_into().map_err(|_| IndexError::Integrity)?);
+    let count = u32::from_be_bytes(header[8..].try_into().map_err(|_| IndexError::Integrity)?);
+    if &header[..4] != b"PACK" || !matches!(version, 2 | 3) || count != object_count {
+        return Err(IndexError::Integrity);
+    }
+    let mut whole = blake3::Hasher::new();
+    let mut native = ObjectHasher::raw(format);
+    whole.update(&header);
+    native.update(&header);
+    let mut remaining = size - 12 - format.bytes() as u64;
+    let mut buffer = [0; 64 << 10];
+    while remaining > 0 {
+        let length = remaining.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..length])
+            .map_err(MetadataError::from)?;
+        whole.update(&buffer[..length]);
+        native.update(&buffer[..length]);
+        remaining -= length as u64;
+    }
+    let mut trailer = [0; 32];
+    let trailer = &mut trailer[..format.bytes()];
+    file.read_exact(trailer).map_err(MetadataError::from)?;
+    whole.update(trailer);
+    if trailer != git_checksum.as_ref()
+        || native.finalize() != git_checksum
+        || file.read(&mut buffer[..1]).map_err(MetadataError::from)? != 0
+    {
+        return Err(IndexError::Integrity);
+    }
+    Ok(*whole.finalize().as_bytes())
 }

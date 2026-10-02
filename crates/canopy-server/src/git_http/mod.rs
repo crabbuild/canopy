@@ -11,11 +11,13 @@ use std::{
 };
 
 pub use crate::git_cache::CacheError;
+mod capture;
 use crate::{
     git_cache::GitCache,
     git_input::{GitInput, MAX_FETCH_REQUEST_BYTES},
 };
 use bytes::Bytes;
+pub use capture::NativeCaptureError;
 use cellule_ltx::DiskBudget;
 use futures_core::Stream;
 use tokio_util::task::AbortOnDropHandle;
@@ -123,6 +125,32 @@ impl GitHttpBackend {
     /// Runs Git on decoded input and collects a bounded reply for durable push publication.
     pub async fn run(&self, request: GitHttpRequest) -> Result<GitHttpResponse, GitHttpError> {
         let response = self.stream(request, ()).await?;
+        self.collect(response).await
+    }
+
+    /// Receives native pack/index inputs for staged catalog preparation. The
+    /// caller must authenticate and admit the decoded request before invoking
+    /// this API, then capture and verify inputs before durable publication.
+    pub async fn run_native_receive(
+        &self,
+        request: GitHttpRequest,
+    ) -> Result<GitHttpResponse, GitHttpError> {
+        if request.method != "POST"
+            || request.path_info != "/repo.git/git-receive-pack"
+            || !request.query.is_empty()
+        {
+            return Err(GitHttpError::InvalidPath);
+        }
+        let mut command = self.transport_command()?;
+        command.args(["-c", "receive.unpackLimit=0"]);
+        let response = self.stream_command(request, (), command).await?;
+        self.collect(response).await
+    }
+
+    async fn collect(
+        &self,
+        response: GitHttpResponse<GitBody>,
+    ) -> Result<GitHttpResponse, GitHttpError> {
         let GitHttpResponse {
             status,
             headers,
@@ -206,6 +234,16 @@ impl GitHttpBackend {
         request: GitHttpRequest,
         keep_alive: T,
     ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
+        self.stream_command(request, keep_alive, self.transport_command()?)
+            .await
+    }
+
+    async fn stream_command<T: Send + 'static>(
+        &self,
+        request: GitHttpRequest,
+        keep_alive: T,
+        mut process: Command,
+    ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
         if request.gzip {
             return Err(GitHttpError::EncodedInput);
         }
@@ -215,7 +253,6 @@ impl GitHttpBackend {
         {
             return Err(GitHttpError::InvalidPath);
         }
-        let mut process = self.transport_command()?;
         process
             .arg("http-backend")
             .env("GIT_PROJECT_ROOT", self.cache.root())

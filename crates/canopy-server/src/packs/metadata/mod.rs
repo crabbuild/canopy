@@ -17,7 +17,7 @@ use std::{
 pub(in crate::packs) mod growth;
 mod writer;
 pub use writer::MetadataBuilder;
-pub(super) mod transport;
+pub(crate) mod transport;
 pub use transport::StoredSegment;
 
 pub const PAGE_OBJECTS: usize = 512;
@@ -204,7 +204,7 @@ fn validate_identity(identity: SegmentIdentity) -> Result<(), MetadataError> {
     }
     Ok(())
 }
-pub(super) fn file_digest(path: &Path, expected_size: u64) -> Result<[u8; 32], MetadataError> {
+pub(crate) fn file_digest(path: &Path, expected_size: u64) -> Result<[u8; 32], MetadataError> {
     file_digest_with(path, expected_size, || Ok(()))
 }
 pub(super) fn file_digest_with<E: From<MetadataError>>(

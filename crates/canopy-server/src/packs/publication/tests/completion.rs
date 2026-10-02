@@ -8,7 +8,7 @@ use crate::{
 };
 use sha2::{Digest as _, Sha256};
 
-fn packet(out: &mut Vec<u8>, body: &[u8]) {
+pub(super) fn packet(out: &mut Vec<u8>, body: &[u8]) {
     assert!(body.len() + 4 <= 65520);
     out.extend_from_slice(format!("{:04x}", body.len() + 4).as_bytes());
     out.extend_from_slice(body);

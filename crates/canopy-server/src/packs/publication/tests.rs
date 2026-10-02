@@ -5,6 +5,7 @@ mod completion;
 mod coordinator;
 mod frontier;
 mod namespaces;
+mod native_capture;
 mod prepare;
 mod publishing;
 mod reconcile;
