@@ -168,6 +168,7 @@ struct RunningServer {
     ssh_serving: Option<JoinHandle<std::io::Result<()>>>,
     tasks: TaskTracker,
     local: Arc<workspace::Workspace>,
+    native: crate::native_resources::NativeResources,
 }
 
 pub(crate) struct RepositoryManager {
@@ -592,7 +593,7 @@ impl RunningServer {
                 local: Arc::clone(&local),
                 external_store,
                 disk_budget,
-                native,
+                native: native.clone(),
                 owner: config.owner,
                 public_url: config.public_url,
                 ready,
@@ -616,6 +617,11 @@ impl RunningServer {
         let (api, peer, manager) = match startup {
             Ok(api) => api,
             Err(error) => {
+                maintenance_stop.cancel();
+                native.close();
+                tasks.close();
+                tasks.wait().await;
+                native.drain().await;
                 match node.shutdown().await {
                     Ok(()) => local.confirm_drained(),
                     Err(cleanup) => tracing::error!(error = %cleanup, "startup drain failed"),
@@ -674,6 +680,7 @@ impl RunningServer {
             serving,
             tasks,
             local,
+            native,
         })
     }
 }

@@ -69,6 +69,12 @@ async fn closed_stdio_does_not_complete_wait_before_descendant_drain() -> Result
         crate::native_resources::NativeWork::Read.claim()
     );
     assert_eq!(permits.available_permits(), 0);
+    let mut drain = std::pin::pin!(resources.drain());
+    std::future::poll_fn(|cx| {
+        assert!(drain.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     std::fs::write(root.path().join("release"), b"drain")?;
     assert!(
         tokio::time::timeout(Duration::from_secs(5), process.wait())
@@ -79,12 +85,7 @@ async fn closed_stdio_does_not_complete_wait_before_descendant_drain() -> Result
     drop(process);
     tokio::time::timeout(Duration::from_secs(5), wait_done).await??;
     assert_eq!(permits.available_permits(), 1);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while resources.usage().unwrap().foreground.processes != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(5), drain).await?;
     assert_eq!(
         resources.usage()?,
         crate::native_resources::NativeUsage::default()
@@ -150,15 +151,16 @@ async fn canceled_owner_remains_charged_when_a_descendant_escapes_the_group() ->
         crate::native_resources::NativeWork::Read.claim()
     );
     assert_eq!(permits.available_permits(), 0);
+    let mut drain = std::pin::pin!(resources.drain());
+    std::future::poll_fn(|cx| {
+        assert!(drain.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     std::fs::write(root.path().join("release"), b"drain")?;
     tokio::time::timeout(Duration::from_secs(5), wait_done).await??;
     assert_eq!(permits.available_permits(), 1);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while resources.usage().unwrap().foreground.processes != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(5), drain).await?;
     assert_eq!(
         resources.usage()?,
         crate::native_resources::NativeUsage::default()

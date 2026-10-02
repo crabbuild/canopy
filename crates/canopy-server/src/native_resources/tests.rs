@@ -1,4 +1,156 @@
 use super::*;
+use std::{future::Future, task::Poll, time::Duration};
+
+async fn pending(future: std::pin::Pin<&mut impl Future>) {
+    let mut future = future;
+    std::future::poll_fn(|cx| {
+        assert!(future.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn idle_drain_permanently_closes_every_scope() -> io::Result<()> {
+    let pool = NativeResources::default();
+    let foreground = pool.scope(NativeClass::Foreground);
+    let maintenance = foreground.for_class(NativeClass::Maintenance);
+    pool.drain().await;
+    pool.close();
+    pool.drain().await;
+    for scope in [foreground, maintenance, pool.scope(NativeClass::Foreground)] {
+        for work in [NativeWork::Read, NativeWork::Pack] {
+            let denied = scope.try_admit(work).err().unwrap();
+            assert!(is_exhausted(&denied));
+            assert!(denied.get_ref().unwrap().is::<NativeClosed>());
+        }
+    }
+    assert_eq!(pool.usage()?, NativeUsage::default());
+    Ok(())
+}
+
+#[tokio::test]
+async fn all_drain_observers_wait_for_both_classes_and_survive_cancellation() -> io::Result<()> {
+    let pool = NativeResources::default();
+    let read = pool
+        .scope(NativeClass::Foreground)
+        .try_admit(NativeWork::Read)?;
+    let pack = pool
+        .scope(NativeClass::Maintenance)
+        .try_admit(NativeWork::Pack)?;
+    {
+        let mut canceled = std::pin::pin!(pool.drain());
+        pending(canceled.as_mut()).await;
+    }
+    assert!(
+        pool.scope(NativeClass::Foreground)
+            .try_admit(NativeWork::Read)
+            .is_err()
+    );
+    let mut first = std::pin::pin!(pool.drain());
+    let mut second = std::pin::pin!(pool.drain());
+    pending(first.as_mut()).await;
+    pending(second.as_mut()).await;
+    drop(read);
+    pending(first.as_mut()).await;
+    pending(second.as_mut()).await;
+    assert_eq!(pool.usage()?.maintenance, NativeWork::Pack.claim());
+    drop(pack);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(first, second);
+    })
+    .await
+    .map_err(io::Error::other)?;
+    // A late observer needs no notification retained from the final release.
+    pool.drain().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_release_racing_observer_registration_cannot_strand_drain() -> io::Result<()> {
+    for _ in 0..100 {
+        let pool = NativeResources::default();
+        let claim = pool
+            .scope(NativeClass::Foreground)
+            .try_admit(NativeWork::Read)?;
+        let observer = pool.clone();
+        let drain = tokio::spawn(async move { observer.drain().await });
+        drop(claim);
+        tokio::time::timeout(Duration::from_secs(1), drain)
+            .await
+            .map_err(io::Error::other)?
+            .map_err(io::Error::other)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn close_racing_shared_admission_is_terminal() -> io::Result<()> {
+    let pool = NativeResources::default();
+    let race = Arc::new(std::sync::Barrier::new(9));
+    let mut threads = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let race = Arc::clone(&race);
+        threads.push(std::thread::spawn(move || {
+            race.wait();
+            let before = pool
+                .scope(NativeClass::Foreground)
+                .try_admit(NativeWork::Read)
+                .ok();
+            pool.close();
+            let denied = pool
+                .scope(NativeClass::Maintenance)
+                .try_admit(NativeWork::Read)
+                .err()
+                .unwrap();
+            assert!(denied.get_ref().unwrap().is::<NativeClosed>());
+            before
+        }));
+    }
+    race.wait();
+    pool.close();
+    let claims: Vec<_> = threads
+        .into_iter()
+        .filter_map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(pool.usage()?.foreground.processes as usize, claims.len());
+    drop(claims);
+    assert_eq!(pool.usage()?, NativeUsage::default());
+    Ok(())
+}
+
+#[tokio::test]
+async fn poisoned_or_underflowed_accounting_cannot_prove_zero_owner_drain() -> io::Result<()> {
+    for poison in [false, true] {
+        let pool = NativeResources::default();
+        let claim = pool
+            .scope(NativeClass::Foreground)
+            .try_admit(NativeWork::Read)?;
+        let mut drain = std::pin::pin!(pool.drain());
+        pending(drain.as_mut()).await;
+        if poison {
+            let _panic = std::panic::catch_unwind(|| {
+                let _lock = pool.0.state.lock().unwrap();
+                panic!("fault injection");
+            });
+        } else {
+            // Deliberate counter corruption: a failed release at zero must
+            // poison the proof rather than report successful shutdown.
+            pool.0.state.lock().unwrap().used = NativeUsage::default();
+        }
+        drop(claim);
+        pending(drain.as_mut()).await;
+        let mut another = std::pin::pin!(pool.drain());
+        pending(another.as_mut()).await;
+        assert!(
+            pool.scope(NativeClass::Foreground)
+                .try_admit(NativeWork::Read)
+                .is_err()
+        );
+    }
+    Ok(())
+}
 #[test]
 fn vector_denials_do_not_leak_other_dimensions() -> io::Result<()> {
     let pool = NativeResources::default();
@@ -134,12 +286,12 @@ fn poisoned_admission_never_returns_a_live_claim() -> io::Result<()> {
     let permit = scope.try_admit(NativeWork::Read)?;
     let prior = pool.usage()?;
     let _panic = std::panic::catch_unwind(|| {
-        let _lock = pool.0.used.lock().unwrap();
+        let _lock = pool.0.state.lock().unwrap();
         panic!("fault injection");
     });
     assert!(scope.try_admit(NativeWork::Read).is_err());
     drop(permit);
     assert!(pool.usage().is_err());
-    assert_eq!(*pool.0.used.lock().unwrap_err().into_inner(), prior);
+    assert_eq!(pool.0.state.lock().err().unwrap().into_inner().used, prior);
     Ok(())
 }

@@ -4,6 +4,7 @@ use std::{
     io,
     sync::{Arc, Mutex},
 };
+use tokio::sync::Notify;
 
 /// Capacity charged atomically as one vector; no partially held reservations.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -107,7 +108,14 @@ pub struct NativeUsage {
 struct Pool {
     limits: NativeLimits,
     foreground: NativeCapacity,
-    used: Mutex<NativeUsage>,
+    state: Mutex<PoolState>,
+    changed: Notify,
+}
+#[derive(Debug, Default)]
+struct PoolState {
+    used: NativeUsage,
+    closed: bool,
+    faulted: bool,
 }
 
 /// Create once per node and clone into all gateways and preparation services.
@@ -155,7 +163,8 @@ impl NativeResources {
         Ok(Self(Arc::new(Pool {
             limits,
             foreground,
-            used: Mutex::new(NativeUsage::default()),
+            state: Mutex::new(PoolState::default()),
+            changed: Notify::new(),
         })))
     }
     pub fn scope(&self, class: NativeClass) -> NativeScope {
@@ -166,10 +175,44 @@ impl NativeResources {
     }
     pub fn usage(&self) -> io::Result<NativeUsage> {
         self.0
-            .used
+            .state
             .lock()
-            .map(|used| *used)
+            .map(|state| state.used)
             .map_err(|_| io::Error::other("native admission poisoned"))
+    }
+
+    /// Permanently reject launches through every cloned scope. Serialized with
+    /// admission: an already admitted claim remains owned until actual drain.
+    pub fn close(&self) {
+        match self.0.state.lock() {
+            Ok(mut state) => state.closed = true,
+            Err(poisoned) => {
+                poisoned.into_inner().closed = true;
+                tracing::error!("native admission poisoned; shutdown ownership retained");
+            }
+        }
+        self.0.changed.notify_waiters();
+    }
+
+    /// Close admission and wait for all foreground and maintenance owners.
+    /// Cancellation only abandons this observer, never claims or closure.
+    /// Poison, underflow or quarantined owners cannot prove drain; callers
+    /// must retain workspace and lease ownership while this remains pending.
+    pub async fn drain(&self) {
+        self.close();
+        loop {
+            let changed = self.0.changed.notified();
+            tokio::pin!(changed);
+            // Register before checking state so a final release cannot be lost,
+            // including when several independent observers wait for drain.
+            changed.as_mut().enable();
+            if self.0.state.lock().is_ok_and(|state| {
+                state.closed && !state.faulted && state.used == NativeUsage::default()
+            }) {
+                return;
+            }
+            changed.await;
+        }
     }
 }
 impl Default for NativeResources {
@@ -193,16 +236,22 @@ impl NativeScope {
             NativeWork::Read => self.resources.0.limits.read,
             NativeWork::Pack => self.resources.0.limits.pack,
         };
-        let mut used = self
+        let mut state = self
             .resources
             .0
-            .used
+            .state
             .lock()
             .map_err(|_| io::Error::other("native admission poisoned"))?;
+        if state.closed {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, NativeClosed));
+        }
+        if state.faulted {
+            return Err(io::Error::other("native admission faulted"));
+        }
         let (current, limit) = match self.class {
-            NativeClass::Foreground => (&mut used.foreground, self.resources.0.foreground),
+            NativeClass::Foreground => (&mut state.used.foreground, self.resources.0.foreground),
             NativeClass::Maintenance => (
-                &mut used.maintenance,
+                &mut state.used.maintenance,
                 self.resources.0.limits.maintenance_reserved,
             ),
         };
@@ -225,19 +274,22 @@ pub struct NativePermit {
 }
 impl Drop for NativePermit {
     fn drop(&mut self) {
-        let Ok(mut used) = self.scope.resources.0.used.lock() else {
+        let Ok(mut state) = self.scope.resources.0.state.lock() else {
             tracing::error!("native admission poisoned; claim quarantined");
             return;
         };
         let current = match self.scope.class {
-            NativeClass::Foreground => &mut used.foreground,
-            NativeClass::Maintenance => &mut used.maintenance,
+            NativeClass::Foreground => &mut state.used.foreground,
+            NativeClass::Maintenance => &mut state.used.maintenance,
         };
         if let Some(next) = current.sub(self.claim) {
             *current = next;
         } else {
+            state.faulted = true;
             tracing::error!("native admission underflow; claim quarantined");
         }
+        drop(state);
+        self.scope.resources.0.changed.notify_waiters();
     }
 }
 
@@ -248,8 +300,12 @@ mod tests;
 #[error("native resource admission exhausted")]
 struct NativeExhausted;
 
+#[derive(Debug, thiserror::Error)]
+#[error("native resource admission closed")]
+struct NativeClosed;
+
 pub(crate) fn is_exhausted(error: &io::Error) -> bool {
     error
         .get_ref()
-        .is_some_and(|source| source.is::<NativeExhausted>())
+        .is_some_and(|source| source.is::<NativeExhausted>() || source.is::<NativeClosed>())
 }
