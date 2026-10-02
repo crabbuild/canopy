@@ -5,6 +5,7 @@ on:
     branches:
       - 'codex/cellule-release-ci-query-deadline-*'
       - 'codex/cellule-active-owner-recovery'
+      - 'codex/cellule-active-owner-admission-diagnostic'
   workflow_dispatch:
 
 permissions:
@@ -50,7 +51,9 @@ jobs:
               content = Path(name).read_bytes()
               assert content.count(revision.encode()) == count
               assert content.replace(revision.encode(), old_revision.encode()) == subprocess.check_output(['git', 'show', baseline + ':' + name])
-          assert b'[DEBUG-active-cache-0f4]' not in Path('crates/canopy-server/src/server/residency/mod.rs').read_bytes()
+          production = Path('crates/canopy-server/src/server/residency/mod.rs').read_bytes()
+          assert b'[DEBUG-active-cache-0f4]' not in production
+          assert b'[DEBUG-release-admission-44]' in production
           lifecycle = Path('crates/canopy-server/src/server/lifecycle.rs').read_bytes()
           test_module = b'\n#[cfg(test)]\nmod tests;\n'
           assert lifecycle.count(test_module) == 1
@@ -73,7 +76,7 @@ jobs:
                     'baseline_head': baseline, 'diagnostic_changes': changed, 'cellule_revision': revision,
                     'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
                     'scope': 'Started-query deadline and next HTTP metadata request on an owned in-memory fixture. '
-                             'Experimental Cellule active-owner API, pinned recovery and account admission. '
+                             'Experimental Cellule active-owner API and diagnostic-only locked refusal snapshots. '
                              'Unchanged original regression, deadlines and permit limits. No diagnostic metadata fallback. '
                              'Not original-corpus recovery, every-ACK verification or performance.'}
           Path('diagnostic/inputs.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -127,7 +130,7 @@ jobs:
                       ('full-library', executable, ['--test-threads=4', '--nocapture'], 1, 180),
                       ('account-admission', multi_server, [admission, '--exact', '--nocapture'], 3, 180),
                       ('full-multi-server', multi_server, ['--test-threads=4', '--nocapture'], 1, 900),
-                      ('disconnected-admission', multi_server, [disconnected, '--exact', '--nocapture'], 3, 180)]
+                      ('disconnected-admission', multi_server, [disconnected, '--exact', '--nocapture'], 10, 180)]
           runs = []
           for phase, binary, arguments, count, deadline in schedule:
               for index in range(count):

@@ -444,7 +444,7 @@ impl RepositoryManager {
                 .into_iter()
                 .map(|(cell, generation, _, _)| (cell, generation))
                 .collect();
-            let (chosen, may_settle) = {
+            let (chosen, may_settle, refusal_snapshot) = {
                 let mut loaded = self.loaded.lock().await;
                 let mut eligible = Vec::new();
                 for (id, repository) in loaded.iter() {
@@ -497,7 +497,41 @@ impl RepositoryManager {
                             ResidencyState::Serving | ResidencyState::RefreshHandle
                         )
                 });
-                (chosen, may_settle)
+                // DIAGNOSTIC ONLY: snapshot the same locked state that made the
+                // no-candidate decision. At most eight rows; no origin reads.
+                let refusal_snapshot = if chosen.is_none() {
+                    Some((
+                        loaded.len(),
+                        loaded
+                            .iter()
+                            .take(8)
+                            .map(|(id, repository)| {
+                                let state = match repository.state {
+                                    ResidencyState::Serving => "serving",
+                                    ResidencyState::Releasing => "releasing",
+                                    ResidencyState::RefreshHandle => "refresh-handle",
+                                    ResidencyState::Released => "released",
+                                };
+                                let candidate =
+                                    repository_target(self.tenant, self.application, *id)
+                                        .ok()
+                                        .is_some_and(|target| {
+                                            candidates.contains_key(&target.cell_id())
+                                        });
+                                (
+                                    hex::encode(id),
+                                    state,
+                                    repository.local,
+                                    Arc::strong_count(&repository.pin),
+                                    candidate,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ))
+                } else {
+                    None
+                };
+                (chosen, may_settle, refusal_snapshot)
             };
             let Some((id, action, _transition)) = chosen else {
                 // Publication and renewal may still be settling just after an
@@ -511,6 +545,16 @@ impl RepositoryManager {
                     tokio::time::sleep(remaining.min(std::time::Duration::from_millis(25))).await;
                     continue;
                 }
+                tracing::info!(
+                    available_slots = self.residency_slots.available_permits(),
+                    runtime_candidates = candidates.len(),
+                    may_settle,
+                    settle_rescans,
+                    remaining_ms = remaining.as_millis(),
+                    rejected = rejected.len(),
+                    snapshot = ?refusal_snapshot,
+                    "[DEBUG-release-admission-44] no repository eviction candidate"
+                );
                 return Err(if rejected.is_empty() {
                     Error::Capacity("repository residency")
                 } else {
