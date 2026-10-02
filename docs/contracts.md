@@ -2799,8 +2799,10 @@ The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.
 The [current revision checkpoint](performance/2026-10-01-cellule-main-qualification.md)
-records release correctness and fresh RustFS compatibility separately from the
-still-open retained-store upgrade and performance gates.
+records release correctness and fresh RustFS compatibility separately from
+performance. The [owned retained-store qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
+records actual old-executable restore and fresh-owner recovery; it does not
+provide a general upgrade controller or qualify the existing 10K corpus.
 
 The application declares one entity-partitioned SQL Cell type for repositories.
 `repository_target` validates the canonical UUID, then calls the app crate's

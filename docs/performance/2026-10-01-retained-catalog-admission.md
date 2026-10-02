@@ -2,9 +2,11 @@
 
 The candidate reopens a supported predecessor Directory Cell after explicit fixture
 activation without rewriting its immutable catalog identity. It also rejects
-unsupported persisted Control code/schema before ownership changes. PR #18
-still does not provide an automatic upgrade controller or establish old-binary
-RustFS upgrade, full-corpus recovery or reference performance.
+unsupported persisted Control code/schema before ownership changes. This
+checkpoint does not establish old-binary RustFS upgrade, full-corpus recovery or
+reference performance. The [subsequent owned-fixture run](2026-10-01-old-binary-rustfs-upgrade.md)
+records actual old-binary RustFS restore and recovery separately. PR #18 still
+does not provide an automatic upgrade controller.
 
 This extends the [authentication and residency checkpoint](2026-10-01-bounded-authentication-and-residency.md).
 The results below use Cellule `c51dd121284ecc8878b75d32717a4dfbe2c406c2`.

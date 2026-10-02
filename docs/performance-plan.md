@@ -5,7 +5,7 @@ It separates demonstrated behavior from proposed targets. The current Cellule
 dependency pin is `0dc04a658bd99668936f7ec58032d054f6fbc141`, verified against
 upstream main on October 1. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
 records 239 release Rust tests, 84 Python tests, lints and all eight fresh RustFS
-gates, with separately retained artifacts. Retained-store upgrade and reference
+gates, with separately retained artifacts. Original-corpus upgrade and reference
 performance remain open. The preceding `c51dd121` build is historical evidence.
 Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
@@ -38,6 +38,7 @@ seed and successful recovery of every recorded ACK.
 | Current gate | Evidence / status |
 | --- | --- |
 | Current Cellule revision | `0dc04a6`: independently rebuilt release correctness, lints, Python harness and eight fresh RustFS gates passed. See the latest checkpoint for repeated regressions and exact bindings. Not retained-store upgrade, live deployment or measured performance |
+| Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
 | Retained catalog admission follow-up | 239 release tests, eight RustFS gates, 20 cold-activation and 20 three-case retained-startup repetitions, 15 residency tests, lints and 84 Python tests passed. Existing supported identities restore without reprovisioning; unsupported Controls stay unchanged on refusal. Owned in-memory retained fixture, not old-binary RustFS upgrade, live deployment or performance qualification |

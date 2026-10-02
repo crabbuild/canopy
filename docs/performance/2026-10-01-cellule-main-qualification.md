@@ -85,11 +85,12 @@ These are local, not off-machine backups.
 
 ## Remaining upgrade and performance gates
 
-PR #18 remains draft. The actual old-executable RustFS fixture has not reached
-upgrade admission: an attempted reserved-ref push was correctly rejected, and
-a subsequent fresh clone failed the exact remote Git/LFS byte comparison.
-Partial acknowledged writes and failed attempts remain retained. The byte
-mismatch is unresolved; no old-to-new RustFS restore pass is claimed.
+PR #18 remains draft. The [subsequent owned-fixture upgrade and recovery](2026-10-01-old-binary-rustfs-upgrade.md)
+verified actual old-executable RustFS data, controlled admission, new-executable
+restore, twenty scheduled critical workflows and their complete fresh-owner
+recovery. Its earlier clone-byte mismatch was traced to missing client LFS
+filters; the full-byte assertion was retained. This closes a small prerequisite,
+not full same-corpus upgrade or reference performance.
 
 The [full performance plan](../performance-plan.md) still requires three nodes
 behind a proxy, 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows,

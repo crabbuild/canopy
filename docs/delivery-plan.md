@@ -86,8 +86,10 @@ These are the next implementation slices. Each slice must update its contract, b
    gates and repeated startup/residency regressions passed. The
    [latest Cellule qualification](performance/2026-10-01-cellule-main-qualification.md)
    reruns these checks on the new immutable revision without changing runtime
-   budgets. Actual old-binary
-   RustFS upgrade, full-corpus recovery and performance remain open.
+   budgets. The [owned old-binary RustFS qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
+   passed controlled upgrade, twenty scheduled critical workflows and complete
+   recovery of that fixture after three-owner loss. Original-corpus upgrade,
+   full reference performance and the CI port-handoff failure remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits
