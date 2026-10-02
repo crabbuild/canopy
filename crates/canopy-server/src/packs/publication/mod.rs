@@ -49,6 +49,12 @@ pub use compaction::{
     CompactionPressure, CompactionReply, CompactionSource, PreparedCompaction,
     PublishCatalogCompaction, PublishedCompaction,
 };
+mod exact;
+mod staging_service;
+pub use staging_service::{
+    ReadyStaging, StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits,
+    StagingState, StagingStats, StagingTask, StagingTicket,
+};
 mod staging;
 pub use staging::{
     BeginStaging, BindStaging, CheckStaging, ClaimStaging, RenewStaging, StagingLease, StagingReply,

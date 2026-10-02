@@ -118,14 +118,18 @@ impl ReadyPublication {
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
         let client = self.capability().0.clone();
         match self {
-            Self::Push(ready) => invoke(&client, ready.command, recover, fault)
-                .await
-                .map(PublicationOutcome::Push)
-                .map_err(PublicationError::Push),
-            Self::Compaction(ready) => invoke(&client, ready.command, recover, fault)
-                .await
-                .map(PublicationOutcome::Compaction)
-                .map_err(PublicationError::Compaction),
+            Self::Push(ready) => {
+                super::super::exact::invoke(&client, ready.command, recover, 128, fault)
+                    .await
+                    .map(PublicationOutcome::Push)
+                    .map_err(PublicationError::Push)
+            }
+            Self::Compaction(ready) => {
+                super::super::exact::invoke(&client, ready.command, recover, 128, fault)
+                    .await
+                    .map(PublicationOutcome::Compaction)
+                    .map_err(PublicationError::Compaction)
+            }
         }
     }
 }
@@ -168,27 +172,5 @@ impl PublicationError {
             Self::Push(error) => unknown(error),
             Self::Compaction(error) => unknown(error),
         }
-    }
-}
-
-async fn invoke<C: Command>(
-    client: &CellClient,
-    command: PreparedCommand<C>,
-    recover: bool,
-    fault: u8,
-) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
-    let evidence = command.evidence().clone();
-    let outcome = if fault == 1 {
-        Err(InvocationError::Pending(Box::new(evidence.clone())))
-    } else if recover {
-        resolve(client, command).await
-    } else {
-        Box::pin(command.execute()).await
-    };
-    if fault == 2 {
-        Err(InvocationError::Pending(Box::new(evidence)))
-    } else {
-        assert_ne!(fault, 3, "injected dispatch panic after execution");
-        outcome
     }
 }

@@ -6,8 +6,7 @@ use super::*;
 use crate::{git_http::GitHttpResponse, packs::metadata::MetadataLimits};
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{
-    CellClient, CellTarget, Committed, InvocationError, MutationIdentity, PreparedCommand, Receipt,
-    Resolution, cell::executor::StoredOutcome,
+    CellClient, CellTarget, Committed, InvocationError, MutationIdentity, PreparedCommand,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -721,42 +720,6 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
         state.bytes[at] -= job.class.reservation();
         job.status
             .send_replace(PublicationState::Finished(outcome.map_err(Arc::new)));
-    }
-}
-
-async fn resolve<C: Command>(
-    client: &CellClient,
-    command: PreparedCommand<C>,
-) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
-    let evidence = command.evidence().clone();
-    match client.resolve(&evidence).await {
-        Ok(Resolution::Absent) => Box::pin(command.execute()).await,
-        Ok(Resolution::Committed(outcome)) => {
-            let receipt = Receipt {
-                cell: evidence.target().cell_id(),
-                incarnation: evidence.incarnation(),
-                commit_sequence: outcome.commit_sequence(),
-            };
-            let decoded = (|| {
-                let mut decoder = BoundedDecoder::new(outcome.result(), 128)?;
-                let output = C::Output::decode(&mut decoder)?;
-                decoder.finish()?;
-                Ok::<_, CodecError>(Committed { output, receipt })
-            })()
-            .map_err(|source| InvocationError::InvalidPublishedResult {
-                receipt,
-                source: Box::new(source.into()),
-            })?;
-            match outcome {
-                StoredOutcome::Success { .. } => Ok(decoded),
-                StoredOutcome::Rejected { .. } => Err(InvocationError::Rejected(Box::new(decoded))),
-            }
-        }
-        // Unknown, expiration and changed incarnation never prove that an
-        // earlier submission failed. Keep exact evidence for logical recovery.
-        Ok(Resolution::Unknown | Resolution::Expired) | Err(_) => {
-            Err(InvocationError::Pending(Box::new(evidence)))
-        }
     }
 }
 

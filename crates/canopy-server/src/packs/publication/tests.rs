@@ -10,6 +10,7 @@ mod publishing;
 mod reconcile;
 mod refs;
 mod staging;
+mod staging_service;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};
 use cellule_runtime::{
     ApplicationId, BuildDescriptor, CellClient, CellRuntime, CellTarget, Digest, InvocationError,

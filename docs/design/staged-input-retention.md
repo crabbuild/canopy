@@ -1,6 +1,6 @@
 # Staged input retention and late catalog binding
 
-Long imports now acquire artifact custody without retaining every catalog generation published during upload and physical verification. This uses the existing preparation token, namespace allocator, operation rows and independent lease rows. A one-way bind adds the current catalog floor only when catalog-dependent preparation starts. Production producer wiring, automatic renewal, authenticated takeover reconstruction and full-history qualification remain required.
+Long imports now acquire artifact custody without retaining every catalog generation published during upload and physical verification. This uses the existing preparation token, namespace allocator, operation rows and independent lease rows. A one-way bind adds the current catalog floor only when catalog-dependent preparation starts. A [service-owned staging coordinator](staging-service-lifecycle.md) now supplies bounded admission, automatic renewal, retained typed input results, drain before Bind and exact uncertainty recovery. Production producer wiring, authenticated takeover reconstruction and full-history qualification remain required.
 
 ## Stored phases and exact identity
 
@@ -35,7 +35,7 @@ Regular Begin, Renew and Claim preparation paths reject staging rows. Staging Be
 5. Complete private verification and certification, enqueue the exact ready command, and retain inputs through ambiguous outcomes. Reconcile through the existing frontier protocol; never rebind a live floor or substitute another mutation identity while acceptance is unknown.
 6. On owner loss, resolve exact and logical outcomes first. ClaimStaging stamps the new admitted owner and a fresh namespace. The old pin remains intact. Reusing old physical inputs under the new attempt requires authenticated adoption/reconstruction work that is still open; raw descriptors cannot bypass the assembler's creating-namespace check.
 
-The input phase must be service-owned and renewed while workers or detached readers remain active. A DTO or canceled observer is not sufficient lifecycle management. Such producer orchestration is not selected in production yet.
+The input phase must be service-owned and renewed while workers or detached readers remain active. A DTO or canceled observer is not sufficient lifecycle management. The service lifecycle primitive now exists, including observer-independent input execution, retained results and exact command recovery; it is not selected in production yet.
 
 ## Expiry and capacity
 
@@ -53,4 +53,4 @@ Nine tests cover normalized nullable-phase binding and immutable floors, bounded
 
 The retention fixture injects 10,240 intervening immutable generation facts in bounded batches with the production reaper between batches, keeping only generation zero and current. It uses trusted tiny catalog facts to test retention independently of publication and throughput. It does not simulate an hours-long import, prove provider durability or qualify full-history memory/CPU/I/O.
 
-Required release work includes production HTTP/SSH/mirror/generated producers; service-owned renewal/drain and uncertainty handling; durable authenticated input inventories and takeover adoption; larger normalized input/metadata limits; capacity-aware scheduling of the remaining floor; complete retained-root collection and isolated restore; and the mandatory full-history hot-repository mixed-load campaigns. The full implementation goal remains open.
+Required release work includes production HTTP/SSH/mirror/generated producers integrating the service-owned renewal/drain and uncertainty handling; durable authenticated input inventories and takeover adoption; larger normalized input/metadata limits; capacity-aware scheduling of the remaining floor; complete retained-root collection and isolated restore; and the mandatory full-history hot-repository mixed-load campaigns. The full implementation goal remains open.
