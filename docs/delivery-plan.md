@@ -91,9 +91,12 @@ These are the next implementation slices. Each slice must update its contract, b
    recovery of that fixture after three-owner loss. The
    [listener handoff follow-up](performance/2026-10-01-listener-handoff.md)
    removes the affected test's reservation gap and passes 244 release tests,
-   lints, 84 Python tests and eight fresh RustFS gates. Its changed head needs
-   fresh Linux CI. Original-corpus upgrade and full reference performance
-   remain open.
+   lints, 84 Python tests and eight fresh RustFS gates. Both Linux CI workflows
+   at `eaebfc4` passed. The
+   [original corpus maintenance recovery](performance/2026-10-01-original-corpus-recovery.md)
+   settled all 301 remaining Cells and verified 10,003 idle Controls with
+   unchanged catalog and published roots. Old Maintenance still closes serving
+   admission; new-release verification and full reference performance remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits

@@ -28,13 +28,18 @@ The [combined authentication and residency candidate](performance/2026-10-01-bou
 is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
 20 unchanged cold-activation repetitions and all 15 residency tests. It has not
 been deployed on the existing corpus. Descriptor compatibility passed, but
-actual old-binary restore and the diagnostic fleet's terminal lease-fencing
-failure remain open. The [catalog admission follow-up](performance/2026-10-01-retained-catalog-admission.md)
+the original corpus's new-release restore and the diagnostic fleet's terminal
+lease-fencing failure remain open. The [catalog admission follow-up](performance/2026-10-01-retained-catalog-admission.md)
 reproduces and fixes immutable-identity reprovisioning and late rejection of
 unsupported Control metadata. Its combined candidate passed 239 release tests,
 all eight RustFS gates, 20 cold-activation repetitions and 20 three-case retained
 startup repetitions, plus all 15 residency tests. Retained startup uses an owned
-in-memory fixture; actual old-binary RustFS upgrade remains open.
+in-memory fixture; the separate owned old-binary RustFS upgrade passed, while
+original-corpus new-release verification remains open. The
+[original corpus maintenance recovery](performance/2026-10-01-original-corpus-recovery.md)
+now leaves all 10,003 Controls durably idle under the old Maintenance release.
+Its catalog, roots and 9,702 previously idle Controls stayed unchanged; no new
+gateway, remote payload verification or performance result is established.
 Neither checkpoint replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
@@ -43,7 +48,8 @@ seed and successful recovery of every recorded ACK.
 | Current gate | Evidence / status |
 | --- | --- |
 | Current Cellule revision | `0dc04a6`: independently rebuilt release correctness, lints, Python harness and eight fresh RustFS gates passed. See the latest checkpoint for repeated regressions and exact bindings. Not retained-store upgrade, live deployment or measured performance |
-| HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. New PR head requires fresh Linux CI; not measured performance |
+| HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
+| Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged. Old Maintenance remains closed to serving; new-release admission and remote Git/LFS verification remain open |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |

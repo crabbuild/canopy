@@ -114,10 +114,16 @@ These are different local filesystems, not off-machine backups.
 | RustFS receipt | `b5a1baa082d8178a2ceedcb589edb0c2aa542d0cea95ea550989549ab23216b2` |
 | RustFS log | `3ed9009bb25bd7fb348eec0bec10c729cae3722976479cac24329f5ae0c2ba3b` |
 
-The changed PR head needs fresh Linux CI. PR #18 remains draft. The
-[full campaign](../performance-plan.md) still requires original-corpus offline
-recovery and upgrade admission, full remote Git/LFS verification, all 108 load
+Both [Linux PR CI](https://github.com/crabbuild/canopy/actions/runs/36950769630)
+and [push CI](https://github.com/crabbuild/canopy/actions/runs/36950765768) at
+`eaebfc4cdd7ead54a8d62978aebcd8656f0de0b8` passed Rust, real RustFS compatibility,
+server build and Python harness checks. PR #18 remains draft. The
+[full campaign](../performance-plan.md) still requires original-corpus new-release
+admission, full remote Git/LFS verification, all 108 load
 windows, every acknowledged write after owner loss, higher admission profiles,
 matched comparisons, non-sparse five-GiB transfers and isolated Linux capacity.
-The original provider's last read-only status had zero advertised writers and
-301 unsettled Cells; neither its release nor its data was changed here.
+The original provider's read-only status at this qualification had zero advertised
+writers and 301 unsettled Cells; neither its release nor its data was changed here.
+The later [maintenance recovery](2026-10-01-original-corpus-recovery.md) settled
+those Cells without changing catalog identities or published roots. It remains
+in old Maintenance; that later action is not a new listener-build performance result.

@@ -137,18 +137,22 @@ October 1 in the local Pacific timezone.
 
 ## Remaining full campaign and CI work
 
-The original 10,000-repository provider was not upgraded or restarted. Its
-read-only status observation reports the old Ready release, zero advertised
-writers and **301 unsettled Cells**. It requires supported offline recovery and
-full same-corpus admission before any new release or gateway launch. Restarting
-the small fixture does not explain the original fleet's terminal lease failure.
+The original 10,000-repository provider was not upgraded or restarted during
+this small-fixture qualification. The later
+[original corpus maintenance recovery](2026-10-01-original-corpus-recovery.md)
+settled its 301 remaining Cells using the exact old executable. All 10,003
+Controls are now idle and unowned; catalog identities and published roots stayed
+unchanged. It remains in old Maintenance pending full new-release admission and
+remote Git/LFS verification. Recovery does not explain the earlier fleet's
+terminal lease failure.
 
 At PR head `240203a7`, both Python CI jobs and one complete Rust job passed.
 The other Rust job failed with `AddrInUse` in the SHA-256 merge-candidate test.
 The failure log is retained; a passing parallel job does not erase it. The
 [listener handoff follow-up](2026-10-01-listener-handoff.md) reproduces the
 reservation gap, removes it from the affected SHA-256 tests and passes release
-and fresh-RustFS checks. The changed PR head still needs its own Linux CI.
+and fresh-RustFS checks. Both Linux PR and push workflows at `eaebfc4` then passed
+Rust, real RustFS compatibility, server build and Python harness checks.
 
 The [full performance plan](../performance-plan.md) remains unchanged:
 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows, 114,960 arrivals
