@@ -104,6 +104,25 @@ impl WireValue for Inputs {
     }
 }
 impl NativeInputCertificate {
+    pub(super) fn scoped_check(&self, target: &CellTarget) -> Result<LeaseCheck, CodecError> {
+        let data: Inputs = self.0.data()?;
+        if data.tenant != *target.tenant().as_bytes()
+            || data.application != *target.application().as_bytes()
+            || crate::repository_target(
+                target.tenant(),
+                target.application(),
+                data.token.repository,
+            )
+            .map_err(|_| CodecError::Invalid("input target"))?
+                != *target
+        {
+            return Err(CodecError::Invalid("input target"));
+        }
+        Ok(LeaseCheck {
+            token: data.token,
+            actor: data.actor,
+        })
+    }
     pub fn token(&self) -> Result<PreparationToken, CodecError> {
         Ok(self.0.data::<Inputs>()?.token)
     }

@@ -56,8 +56,8 @@ pub use compaction::{
 mod exact;
 mod staging_service;
 pub use staging_service::{
-    ReadyStaging, StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits,
-    StagingState, StagingStats, StagingTask, StagingTicket,
+    ReadyStaging, StagedInputsTicket, StagingBound, StagingContext, StagingCoordinator,
+    StagingError, StagingLimits, StagingState, StagingStats, StagingTask, StagingTicket,
 };
 mod inputs;
 mod staging;

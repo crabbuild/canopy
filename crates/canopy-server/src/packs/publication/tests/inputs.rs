@@ -700,3 +700,340 @@ async fn restored_owner_claims_and_adopts_only_a_retained_exact_input_checkpoint
     runtime.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn service_checkpoint_retains_exact_identity_after_cancellation_absence_lost_reply_and_panic()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [1, 2, 3] {
+            let fixture = Fixture::new(format).await?;
+            let (coordinator, ticket) = active(&fixture, [177; 16]).await?;
+            let store = Arc::new(ArtifactStore::new(
+                Arc::new(InMemory::new()),
+                fixture.repository,
+            ));
+            let proof = seal(&fixture, &ticket, store, 1).await?;
+            let mutation = identity()?;
+            coordinator.fault_for_test(fault);
+            let observer = ticket
+                .register_inputs(proof.clone(), mutation)
+                .map_err(|(e, _)| e)?;
+            drop(observer);
+            let StagingState::Uncertain(error) =
+                timeout(Duration::from_secs(10), ticket.wait_terminal()).await?
+            else {
+                return Err("checkpoint uncertainty".into());
+            };
+            let StagingError::Checkpoint(error) = &*error else {
+                return Err("checkpoint command".into());
+            };
+            let InvocationError::Pending(evidence) = &**error else {
+                return Err("checkpoint evidence".into());
+            };
+            let evidence = (**evidence).clone();
+            let retained = ticket.pending_inputs().ok_or("checkpoint observer")?;
+            assert!(
+                matches!(retained.wait().await, Err(e) if matches!(&*e, StagingError::Checkpoint(_)))
+            );
+            assert_eq!(coordinator.stats().command_bytes, 3 * 4096);
+            // Closing retains unknown registrations and their charged command.
+            let pending = timeout(Duration::from_secs(10), coordinator.close_and_drain()).await?;
+            assert_eq!(pending.len(), 1);
+            coordinator.recover(&pending[0])?;
+            let receipt = timeout(Duration::from_secs(10), retained.wait())
+                .await?
+                .map_err(|e| format!("registration recovery: {e:?}"))?;
+            assert!(matches!(
+                timeout(Duration::from_secs(10), pending[0].wait_terminal()).await?,
+                StagingState::Stopped
+            ));
+            let replay = fixture
+                .client()
+                .command::<RegisterStagedInputs>(&fixture.target, mutation, proof.clone())
+                .await?;
+            assert_eq!(receipt, replay.receipt);
+            let cellule_runtime::Resolution::Committed(outcome) =
+                fixture.client().resolve(&evidence).await?
+            else {
+                return Err("original checkpoint outcome".into());
+            };
+            assert_eq!(receipt.commit_sequence, outcome.commit_sequence());
+            assert_eq!(
+                check(&fixture.client(), &fixture.target, proof.token()?).await?,
+                Some(proof)
+            );
+            assert_eq!(fixture.counts().await?, (1, 1));
+            assert_eq!(coordinator.stats().admitted, 0);
+            assert_eq!(coordinator.stats().command_bytes, 0);
+            assert!(coordinator.close_and_drain().await.is_empty());
+            fixture.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_checkpoint_seal_orders_registration_before_binding_and_keeps_original_receipt()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let (coordinator, ticket) = active(&fixture, [178; 16]).await?;
+        let store = Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        ));
+        let proof = seal(&fixture, &ticket, store, 1).await?;
+        let mutation = identity()?;
+        let observer = ticket
+            .register_inputs(proof.clone(), mutation)
+            .map_err(|(e, _)| e)?;
+        ticket.seal()?;
+        let StagingState::Bound(bound) =
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?
+        else {
+            return Err("checkpoint then bind".into());
+        };
+        let receipt = observer
+            .wait()
+            .await
+            .map_err(|e| format!("checkpoint: {e:?}"))?;
+        assert!(receipt.commit_sequence < bound.receipt.commit_sequence);
+        assert_eq!(
+            receipt,
+            ticket
+                .pending_inputs()
+                .ok_or("retained receipt")?
+                .wait()
+                .await
+                .map_err(|e| e.to_string())?
+        );
+        assert_eq!(
+            check(&fixture.client(), &fixture.target, proof.token()?).await?,
+            Some(proof.clone())
+        );
+        let replay = fixture
+            .client()
+            .command::<RegisterStagedInputs>(&fixture.target, mutation, proof.clone())
+            .await?;
+        assert_eq!(receipt, replay.receipt);
+        denied(
+            fixture
+                .client()
+                .command::<RegisterStagedInputs>(&fixture.target, identity()?, proof)
+                .await,
+            PreparationDenial::Conflict,
+        );
+        assert!(coordinator.close_and_drain().await.is_empty());
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_checkpoint_rejects_foreign_attempt_duplicate_and_closed_admission_without_execution()
+-> Result {
+    let fixture = Fixture::new(ObjectFormat::Sha256).await?;
+    let (coordinator, ticket) = active(&fixture, [179; 16]).await?;
+    let store = Arc::new(ArtifactStore::new(
+        Arc::new(InMemory::new()),
+        fixture.repository,
+    ));
+    let proof = seal(&fixture, &ticket, store.clone(), 1).await?;
+    let ready = ReadyStaging::new(
+        fixture.client(),
+        fixture.target.clone(),
+        fixture.begin([180; 16]),
+        identity()?,
+    )
+    .await?;
+    let other = coordinator.submit(ready).map_err(|(e, _)| e)?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), other.wait()).await?,
+        StagingState::Active(_)
+    ));
+    let foreign_attempt = other.register_inputs(proof.clone(), identity()?);
+    assert!(matches!(foreign_attempt, Err((StagingError::Context, _))));
+    assert!(other.pending_inputs().is_none());
+    let another = Fixture::new(ObjectFormat::Sha256).await?;
+    let (another_coordinator, another_ticket) = active(&another, [181; 16]).await?;
+    let foreign = seal(
+        &another,
+        &another_ticket,
+        Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            another.repository,
+        )),
+        1,
+    )
+    .await?;
+    assert!(matches!(
+        ticket.register_inputs(foreign, identity()?),
+        Err((StagingError::Context, _))
+    ));
+    assert!(ticket.pending_inputs().is_none());
+    let mutation = identity()?;
+    let registration = ticket
+        .register_inputs(proof.clone(), mutation)
+        .map_err(|(e, _)| e)?;
+    let receipt = timeout(Duration::from_secs(10), registration.wait())
+        .await?
+        .map_err(|e| e.to_string())?;
+    // Wait for the fresh live probe before checking duplicate admission.
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait()).await?,
+        StagingState::Active(_)
+    ));
+    let refused_identity = identity()?;
+    assert!(matches!(
+        ticket.register_inputs(proof.clone(), refused_identity),
+        Err((StagingError::Duplicate, _))
+    ));
+    let unused = fixture
+        .client()
+        .prepare_command::<RegisterStagedInputs>(&fixture.target, refused_identity, proof.clone())
+        .await?;
+    assert!(matches!(
+        fixture.client().resolve(unused.evidence()).await?,
+        cellule_runtime::Resolution::Absent
+    ));
+    other.stop();
+    ticket.stop();
+    assert!(matches!(
+        ticket.register_inputs(proof, identity()?),
+        Err((StagingError::Inactive, _))
+    ));
+    assert_eq!(
+        registration.wait().await.map_err(|e| e.to_string())?,
+        receipt
+    );
+    assert!(coordinator.close_and_drain().await.is_empty());
+    another_ticket.stop();
+    assert!(another_coordinator.close_and_drain().await.is_empty());
+    another.runtime.shutdown().await?;
+    fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_checkpoint_recovery_preserves_commit_but_refuses_fresh_authority_after_revocation()
+-> Result {
+    for fault in [1, 2] {
+        let fixture = Fixture::new(ObjectFormat::Sha256).await?;
+        let (coordinator, ticket) = active(&fixture, [182; 16]).await?;
+        let proof = seal(
+            &fixture,
+            &ticket,
+            Arc::new(ArtifactStore::new(
+                Arc::new(InMemory::new()),
+                fixture.repository,
+            )),
+            1,
+        )
+        .await?;
+        let mutation = identity()?;
+        coordinator.fault_for_test(fault);
+        let registration = ticket
+            .register_inputs(proof.clone(), mutation)
+            .map_err(|(e, _)| e)?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Uncertain(_)
+        ));
+        mutate(
+            &fixture.handle,
+            "UPDATE repository_identity SET owner='other' WHERE singleton=1".into(),
+        )
+        .await?;
+        coordinator.recover(&ticket)?;
+        let StagingState::Fenced(_) =
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?
+        else {
+            return Err("revoked checkpoint fence".into());
+        };
+        let result = registration.wait().await;
+        if fault == 2 {
+            let receipt = result.map_err(|e| e.to_string())?;
+            let replay = fixture
+                .client()
+                .command::<RegisterStagedInputs>(&fixture.target, mutation, proof.clone())
+                .await?;
+            assert_eq!(receipt, replay.receipt);
+        } else {
+            assert!(
+                matches!(result, Err(e) if matches!(&*e, StagingError::Checkpoint(error) if matches!(&**error, InvocationError::Rejected(value) if value.output == StagingReply::Denied(PreparationDenial::Unauthorized))))
+            );
+        }
+        assert!(
+            check(&fixture.client(), &fixture.target, proof.token()?)
+                .await?
+                .is_none()
+        );
+        assert!(coordinator.close_and_drain().await.is_empty());
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_checkpoint_absent_recovery_rejects_authoritative_expiry_without_attaching_inventory()
+-> Result {
+    let fixture = Fixture::new(ObjectFormat::Sha256).await?;
+    let (coordinator, ticket) = active(&fixture, [183; 16]).await?;
+    let proof = seal(
+        &fixture,
+        &ticket,
+        Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        )),
+        1,
+    )
+    .await?;
+    coordinator.fault_for_test(1);
+    let registration = ticket
+        .register_inputs(proof.clone(), identity()?)
+        .map_err(|(e, _)| e)?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+        StagingState::Uncertain(_)
+    ));
+    mutate(
+        &fixture.handle,
+        "UPDATE catalog_operations SET expires_at_ms=0; UPDATE catalog_leases SET expires_at_ms=0"
+            .into(),
+    )
+    .await?;
+    coordinator.recover(&ticket)?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+        StagingState::Fenced(_)
+    ));
+    assert!(
+        matches!(registration.wait().await, Err(e) if matches!(&*e, StagingError::Checkpoint(error) if matches!(&**error, InvocationError::Rejected(value) if value.output == StagingReply::Denied(PreparationDenial::Expired))))
+    );
+    let sql = cellule_runtime::primitives::sql::SqlCell::<RepositoryModule>::new(
+        fixture.client(),
+        fixture.target.clone(),
+    )?;
+    let result = sql
+        .query(
+            None,
+            sql::statement(
+                "SELECT input_checkpoint,input_checkpoint_digest FROM catalog_leases",
+                vec![],
+            ),
+        )
+        .await?;
+    assert!(matches!(
+        sql::rows(&result.output)?[0].as_slice(),
+        [SqlValue::Null, SqlValue::Null]
+    ));
+    assert!(
+        check(&fixture.client(), &fixture.target, proof.token()?)
+            .await?
+            .is_none()
+    );
+    assert!(coordinator.close_and_drain().await.is_empty());
+    fixture.runtime.shutdown().await?;
+    Ok(())
+}

@@ -91,6 +91,8 @@ pub enum StagingError {
     Begin(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging claim failed")]
     Claim(#[source] Box<InvocationError<StagingReply>>),
+    #[error("input checkpoint registration failed")]
+    Checkpoint(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging renewal failed")]
     Renew(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging bind failed")]
@@ -109,7 +111,7 @@ impl StagingError {
             )
         }
         match self {
-            Self::Begin(e) | Self::Renew(e) | Self::Claim(e) => unknown(e),
+            Self::Begin(e) | Self::Renew(e) | Self::Claim(e) | Self::Checkpoint(e) => unknown(e),
             Self::Bind(e) => unknown(e),
             _ => false,
         }
@@ -126,6 +128,7 @@ pub enum StagingState {
     Active(StagingLease),
     Draining(StagingLease),
     Binding,
+    RegisteringInputs,
     Resolving,
     Uncertain(Arc<StagingError>),
     Bound(Arc<StagingBound>),
@@ -262,6 +265,7 @@ struct Job {
     local: Mutex<Local>,
     work: Mutex<WorkSlots>,
     exact: Mutex<Option<Exact>>,
+    checkpoint: Mutex<Option<Arc<InputRegistration>>>,
     status: watch::Sender<StagingState>,
     changed: Notify,
 }
@@ -269,12 +273,14 @@ struct Job {
 enum Exact {
     Begin(PreparedCommand<BeginStaging>),
     Claim(PreparedCommand<ClaimStaging>),
+    Checkpoint(PreparedCommand<RegisterStagedInputs>),
     Renew(PreparedCommand<RenewStaging>),
     Bind(PreparedCommand<BindStaging>),
 }
 enum Outcome {
     Stage(Committed<StagingReply>),
     Bound(Committed<PreparationReply>),
+    Checkpoint(Committed<StagingReply>),
 }
 impl Exact {
     fn pending(&self) -> StagingError {
@@ -285,6 +291,9 @@ impl Exact {
             Self::Claim(c) => StagingError::Claim(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
+            Self::Checkpoint(c) => StagingError::Checkpoint(Box::new(InvocationError::Pending(
+                Box::new(c.evidence().clone()),
+            ))),
             Self::Renew(c) => StagingError::Renew(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
@@ -308,6 +317,10 @@ impl Exact {
                 .await
                 .map(Outcome::Stage)
                 .map_err(|e| StagingError::Claim(Box::new(e))),
+            Self::Checkpoint(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                .await
+                .map(Outcome::Checkpoint)
+                .map_err(|e| StagingError::Checkpoint(Box::new(e))),
             Self::Renew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Stage)
@@ -414,6 +427,7 @@ impl StagingCoordinator {
             }),
             work: Mutex::new(WorkSlots::default()),
             exact: Mutex::new(Some(ready.inner.command)),
+            checkpoint: Mutex::new(None),
             status: watch::channel(StagingState::Starting).0,
             changed: Notify::new(),
         });
@@ -459,7 +473,15 @@ impl StagingCoordinator {
                 .values()
                 .filter(|j| matches!(*j.status.borrow(), StagingState::Uncertain(_)))
                 .count(),
-            command_bytes: a.jobs.len() as u64 * 2 * COMMAND_BYTES as u64,
+            command_bytes: a
+                .jobs
+                .values()
+                .map(|job| {
+                    let copies =
+                        2 + u64::from(job.checkpoint.lock().expect("staging checkpoint").is_some());
+                    copies * COMMAND_BYTES as u64
+                })
+                .sum(),
             closed: a.closed,
         }
     }
@@ -501,7 +523,107 @@ impl StagingCoordinator {
             .store(fault, std::sync::atomic::Ordering::Release);
     }
 }
+struct InputRegistration {
+    request: Mutex<Option<(NativeInputCertificate, MutationIdentity)>>,
+    result: watch::Sender<Option<Result<Receipt, Arc<StagingError>>>>,
+}
+impl InputRegistration {
+    fn finish(&self, result: Result<Receipt, Arc<StagingError>>) {
+        self.request
+            .lock()
+            .expect("staging checkpoint request")
+            .take();
+        self.result.send_if_modified(|old| {
+            if old.is_some() {
+                false
+            } else {
+                *old = Some(result);
+                true
+            }
+        });
+    }
+}
+#[derive(Clone)]
+#[must_use]
+pub struct StagedInputsTicket {
+    job: Arc<Job>,
+    registration: Arc<InputRegistration>,
+}
+impl StagedInputsTicket {
+    /// Observe the original durable registration receipt. An uncertain error
+    /// retains the exact command in the coordinator; recover and wait again.
+    /// A receipt is not a fresh authority or lease observation.
+    pub async fn wait(&self) -> Result<Receipt, Arc<StagingError>> {
+        let mut result = self.registration.result.subscribe();
+        let mut state = self.job.status.subscribe();
+        loop {
+            if let Some(value) = result.borrow_and_update().clone() {
+                return value;
+            }
+            match state.borrow_and_update().clone() {
+                StagingState::Uncertain(error) | StagingState::Fenced(error) => return Err(error),
+                _ => {}
+            }
+            tokio::select! {
+                value = result.changed() => { if value.is_err() { return Err(Arc::new(StagingError::Worker)); } },
+                value = state.changed() => { if value.is_err() { return Err(Arc::new(StagingError::Worker)); } },
+            }
+        }
+    }
+}
 impl StagingTicket {
+    /// Synchronously transfer one bounded checkpoint request into service
+    /// custody. A dropped observer cannot cancel or replace its exact identity.
+    pub fn register_inputs(
+        &self,
+        proof: NativeInputCertificate,
+        identity: MutationIdentity,
+    ) -> Result<StagedInputsTicket, (StagingError, Box<NativeInputCertificate>)> {
+        let check = match proof.scoped_check(&self.job.target) {
+            Ok(check) => check,
+            Err(_) => return Err((StagingError::Context, Box::new(proof))),
+        };
+        let local = self.job.local.lock().expect("staging local");
+        if local.fenced
+            || local.stop
+            || local.seal
+            || Instant::now() >= local.deadline.min(local.lifetime)
+            || !matches!(self.state(), StagingState::Active(_))
+        {
+            return Err((StagingError::Inactive, Box::new(proof)));
+        }
+        if !local.lease.is_some_and(|lease| lease.token == check.token)
+            || check.actor != self.job.actor
+        {
+            return Err((StagingError::Context, Box::new(proof)));
+        }
+        let mut checkpoint = self.job.checkpoint.lock().expect("staging checkpoint");
+        if checkpoint.is_some() {
+            return Err((StagingError::Duplicate, Box::new(proof)));
+        }
+        let registration = Arc::new(InputRegistration {
+            request: Mutex::new(Some((proof, identity))),
+            result: watch::channel(None).0,
+        });
+        *checkpoint = Some(Arc::clone(&registration));
+        self.job.changed.notify_one();
+        Ok(StagedInputsTicket {
+            job: Arc::clone(&self.job),
+            registration,
+        })
+    }
+    /// Retrieve the accepted checkpoint observer after cancellation.
+    pub fn pending_inputs(&self) -> Option<StagedInputsTicket> {
+        self.job
+            .checkpoint
+            .lock()
+            .expect("staging checkpoint")
+            .as_ref()
+            .map(|registration| StagedInputsTicket {
+                job: Arc::clone(&self.job),
+                registration: Arc::clone(registration),
+            })
+    }
     pub fn state(&self) -> StagingState {
         self.job.status.borrow().clone()
     }
@@ -513,6 +635,7 @@ impl StagingTicket {
                 state,
                 StagingState::Starting
                     | StagingState::Binding
+                    | StagingState::RegisteringInputs
                     | StagingState::Resolving
                     | StagingState::Draining(_)
             ) {
@@ -941,12 +1064,33 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     }
                     return;
                 }
-                Ok(Outcome::Stage(value)) => {
-                    job.exact.lock().expect("staging exact").take();
+                Ok(outcome @ (Outcome::Stage(_) | Outcome::Checkpoint(_))) => {
+                    let (value, checkpoint) = match outcome {
+                        Outcome::Stage(value) => (value, false),
+                        Outcome::Checkpoint(value) => (value, true),
+                        Outcome::Bound(_) => unreachable!(),
+                    };
                     let StagingReply::Granted(lease) = value.output else {
+                        job.exact.lock().expect("staging exact").take();
                         fence_and_drain(&inner, &job, StagingError::Context).await;
                         return;
                     };
+                    if checkpoint {
+                        let expected = job.local.lock().expect("staging local").lease;
+                        if !expected.is_some_and(|old| {
+                            old.token == lease.token && old.format == lease.format
+                        }) {
+                            fence_and_drain(&inner, &job, StagingError::Context).await;
+                            return;
+                        }
+                        job.checkpoint
+                            .lock()
+                            .expect("staging checkpoint")
+                            .as_ref()
+                            .expect("accepted input checkpoint")
+                            .finish(Ok(value.receipt));
+                    }
+                    job.exact.lock().expect("staging exact").take();
                     {
                         let mut l = job.local.lock().expect("staging local");
                         if l.lease.is_none() {
@@ -990,6 +1134,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Fence,
             Bind(LeaseCheck),
             Renew(LeaseCheck),
+            Checkpoint(Arc<InputRegistration>),
             Wait(Instant),
         }
         let wake = job.changed.notified();
@@ -1007,15 +1152,29 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 .deadline
                 .checked_sub(Duration::from_millis(inner.limits.renew_before_ms))
                 .unwrap_or(now);
+            let checkpoint = job
+                .checkpoint
+                .lock()
+                .expect("staging checkpoint")
+                .as_ref()
+                .filter(|slot| {
+                    slot.request
+                        .lock()
+                        .expect("staging checkpoint request")
+                        .is_some()
+                })
+                .cloned();
             if l.fenced || now >= l.deadline.min(l.lifetime) {
                 Next::Fence
-            } else if l.stop && l.workers == 0 {
+            } else if l.stop && l.workers == 0 && checkpoint.is_none() {
                 Next::Stop
-            } else if l.seal && l.workers == 0 && !l.stop {
+            } else if l.seal && l.workers == 0 && !l.stop && checkpoint.is_none() {
                 Next::Bind(check)
             } else if l.renew || now >= due {
                 l.renew = false;
                 Next::Renew(check)
+            } else if let Some(registration) = checkpoint {
+                Next::Checkpoint(registration)
             } else {
                 Next::Wait(due.min(l.lifetime))
             }
@@ -1033,6 +1192,30 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             }
             Next::Wait(deadline) => {
                 tokio::select! { _ = wake => {}, _ = sleep_until(deadline) => {} }
+            }
+            Next::Checkpoint(registration) => {
+                job.status.send_replace(StagingState::RegisteringInputs);
+                let (proof, identity) = registration
+                    .request
+                    .lock()
+                    .expect("staging checkpoint request")
+                    .take()
+                    .expect("queued checkpoint");
+                match job
+                    .client
+                    .prepare_command::<RegisterStagedInputs>(&job.target, identity, proof)
+                    .await
+                {
+                    Ok(command) => {
+                        *job.exact.lock().expect("staging exact") =
+                            Some(Exact::Checkpoint(command));
+                    }
+                    Err(error) => {
+                        fence_and_drain(&inner, &job, StagingError::Checkpoint(Box::new(error)))
+                            .await;
+                        return;
+                    }
+                }
             }
             Next::Bind(check) => {
                 job.status.send_replace(StagingState::Binding);
@@ -1089,8 +1272,12 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
 }
 async fn fence_and_drain(inner: &Inner, job: &Job, error: StagingError) {
     job.local.lock().expect("staging local").fenced = true;
+    let error = Arc::new(error);
     job.status
-        .send_replace(StagingState::Fenced(Arc::new(error)));
+        .send_replace(StagingState::Fenced(Arc::clone(&error)));
+    if let Some(registration) = job.checkpoint.lock().expect("staging checkpoint").as_ref() {
+        registration.finish(Err(error));
+    }
     // Release the service's completed-result ownership. In-flight supervisors
     // still own their slots until abort/join and retain their admission guards.
     let slots = std::mem::take(&mut job.work.lock().expect("staging work").slots);

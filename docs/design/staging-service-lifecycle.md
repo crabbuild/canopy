@@ -1,6 +1,6 @@
 # Service owned staging lifecycle
 
-`StagingCoordinator` now owns admitted Begin/Claim/Renew/Bind commands, input tasks and completed input results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
+`StagingCoordinator` now owns admitted Begin/Claim/Renew/RegisterStagedInputs/Bind commands, input tasks and completed input results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
 
 ## Admission and ownership
 
@@ -13,7 +13,8 @@ Keep one service-owned coordinator per repository. `ReadyStaging::new` prepares 
 | Input workers and retained completed results | 64 |
 | Workers and retained results per actor | Eight |
 | Encoded command envelope | 4 KiB |
-| Command reservation per operation | 8 KiB for retained and transport copies |
+| Command reservation per operation | 8 KiB for retained and transport copies; another 4 KiB after checkpoint admission |
+| Checkpoint slots per operation | One bounded request and retained result |
 | Renewed input lease | 60 seconds |
 | Renewal lead time | 30 seconds |
 | Session lifetime | Four hours |
@@ -32,6 +33,14 @@ The service periodically prepares and executes RenewStaging before that deadline
 
 Use existing admitted native-process, workspace, reader and disk primitives inside producers. The callback counter does not account for arbitrary heap allocation, unjoined descendants or detached physical readers. Their independent admission and retention obligations remain in force; production integration must preserve them through work and handoff.
 
+## Durable input checkpoint registration
+
+After sealing a NativeInputCertificate, call `ticket.register_inputs(proof, identity)` before seal or stop. Admission synchronously transfers that bounded envelope and exact mutation identity into one service-owned checkpoint slot. Local checks require an active live stage, matching actor/token/target and no prior checkpoint; failure returns the original proof without executing. The slot remains charged while the job is admitted, including uncertainty and retained completion. It adds 4 KiB to the existing 8 KiB command reservation; it cannot form an unbounded queue.
+
+The same supervisor prepares command 29 and stores its exact SDK command before dispatch. Due renewal precedes queued registration; accepted registration precedes Bind or graceful stop. `StagedInputsTicket::wait` observes the original durable receipt or uncertainty/error. Dropping it never discards the queued or executing command; `pending_inputs` retrieves the observer. `recover(ticket)` resolves the exact registration without replacing identity or bytes. Closing returns uncertain registrations with their existing reservations.
+
+A known registration stores its original receipt before a fresh CheckStaging query. That query alone can establish usable custody. Revocation after a lost acknowledgement preserves the original committed receipt while fencing the stage; authoritative absence followed by revocation or expiry rejects registration without attaching the checkpoint. Bind can start only after accepted registration resolves successfully and the fresh live probe succeeds. A retained receipt and completed replay never resurrect permission, expiry or a preparation floor.
+
 ## Seal and catalog handoff
 
 Call seal when the input phase should finish. It prevents new producer admission and enters Draining. Existing producers and retained completed results continue under renewed staging custody. Bind does not begin until all input slots have drained through handoff or failure. This prevents a canceled observer from silently losing a physical witness while the service advances to catalog preparation.
@@ -44,16 +53,18 @@ Bound preparation is not automatically renewed by this staging service. Transfer
 
 ## Exact uncertainty and shutdown
 
-Begin, Claim, Renew and Bind share the same exact invocation/resolution implementation with push and compaction dispatch. Resolution of authoritative absence permits execution of the retained exact command. A committed outcome decodes with its original receipt; it never reruns the handler. Unknown, expired, unreachable, changed-incarnation and malformed published results retain evidence and reservation.
+Begin, Claim, Renew, RegisterStagedInputs and Bind share the same exact invocation/resolution implementation with push and compaction dispatch. Resolution of authoritative absence permits execution of the retained exact command. A committed outcome decodes with its original receipt; it never reruns the handler. Unknown, expired, unreachable, changed-incarnation and malformed published results retain evidence and reservation.
 
-Uncertain stops new producer admission. Existing work can continue only through its previously established deadline. `recover(ticket)` resumes the exact retained command; it cannot replace its identity or bytes. No new renewal or bind is issued while an earlier command remains ambiguous. Panicked command tasks retain pending evidence. Unexpected service-worker failure fences local work and requires explicit exact recovery before restarting supervision.
+Uncertain stops new producer admission. Existing work can continue only through its previously established deadline. `recover(ticket)` resumes the exact retained command; it cannot replace its identity or bytes. No new renewal, registration or bind is issued while an earlier command remains ambiguous. Panicked command tasks retain pending evidence. Unexpected service-worker failure fences local work and requires explicit exact recovery before restarting supervision.
 
 `stop` prevents new workers and waits for accepted input tasks/results to drain while renewal continues. It does not retract an independent SQL pin. `close_and_drain` closes all admission, stops jobs and returns still-charged uncertain tickets once running commands and input slots have drained. Service consumers must take retained completed results before a graceful stop can finish; retrieve lost observers through pending_task. Recovery remains possible after closing. A reached lifetime or lost authority fences and discards untransferred results conservatively.
 
-This service is process-local ownership, not a durable outbox or authenticated input inventory after process loss. Owner takeover must resolve exact/logical outcomes and reconstruct or adopt retained physical inputs under the new admitted namespace through the [authenticated input checkpoint protocol](native-input-checkpoint.md). ReadyStaging::claim now retains/resolves the exact Claim command and supplies a fresh staging context. Checkpoint registration supervision and complete wire-plan/response recovery remain production integration work. Neither local completion nor SQL reaping authorizes remote deletion.
+This service is process-local ownership, not a durable outbox or authenticated input inventory after process loss. Owner takeover must resolve exact/logical outcomes and reconstruct or adopt retained physical inputs under the new admitted namespace through the [authenticated input checkpoint protocol](native-input-checkpoint.md). ReadyStaging::claim now retains/resolves the exact Claim command and supplies a fresh staging context. Staging checkpoint supervision now exists; production producer wiring, exact checkpoint supervision after bound preparation Claim, and complete wire-plan/response recovery remain required. Neither local completion nor SQL reaping authorizes remote deletion.
 
 ## Evidence and remaining work
 
 Nine service tests cover canceled observers and single typed handoff; operation/account/global and actor worker admission; rejected ready-command reuse; automatic renewal without a waiter or manual tick; Begin/Renew/Bind absent, lost-acknowledgement and post-execution panic recovery with original bind receipts; close/drain retaining uncertainty; fresh renewal queries after revocation; producer error/panic fencing; completed-resource drop before credit release with a live observer; and native SHA-1/SHA-256 physical verification followed by late binding, the existing private catalog proof and durable attestation.
+
+Five additional checkpoint service tests cover canceled observers; absent, lost-reply and panicked exact dispatch in both OID formats; registration-before-Bind ordering and original receipt replay; one-slot and foreign/duplicate/closed refusal without execution; committed recovery followed by current-access revocation; and authoritative expiry after absence. The real receive/publication/cold-clone fixture uses service-owned registration in both formats.
 
 These tests establish protocol composition and ownership on small fixtures. They do not establish four-hour full-history throughput, stable maintenance under peak traffic, source-independent restore or capacity for 10,000 engineers. Production producer wiring, complete resource/descendant admission, authenticated durable input inventories and owner-loss adoption, remaining-floor configuration, complete retained-root reclamation, accelerated readers and mandatory mixed-load/recovery campaigns remain release gates.

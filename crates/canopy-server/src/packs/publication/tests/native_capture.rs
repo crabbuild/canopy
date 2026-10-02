@@ -136,20 +136,16 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         assert_eq!(inputs[0].operation, initial.token.artifact_operation);
         assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
         assert_ne!(inputs[0].index.manifest_digest, [0; 32]);
-        let checkpoint = fixture
-            .client()
-            .command::<RegisterStagedInputs>(
-                &fixture.target,
-                identity()?,
-                input_certificate.clone(),
-            )
-            .await?;
+        let checkpoint = ticket
+            .register_inputs(input_certificate.clone(), identity()?)
+            .map_err(|(error, _)| error)?;
+        let checkpoint_receipt = checkpoint.wait().await.map_err(|error| error.to_string())?;
         assert_eq!(
             fixture
                 .client()
                 .query::<CheckStagedInputs>(
                     &fixture.target,
-                    Some(checkpoint.receipt),
+                    Some(checkpoint_receipt),
                     LeaseCheck {
                         token: initial.token,
                         actor: "owner".into()
