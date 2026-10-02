@@ -108,7 +108,24 @@ impl DirectoryBuilder {
             return Err(MetadataError::Integrity);
         }
         self.failed = true;
-        run.verify_entries(|entries| self.put_entries(entries))?;
+        run.copy_coverage(descriptor.coverage(), |entries| self.put_entries(entries))?;
+        self.failed = false;
+        Ok(())
+    }
+    /// Merge only the catalog's certified logical coverage of a physical file.
+    pub(in crate::packs) fn add_coverage(
+        &mut self,
+        run: &DirectoryRun,
+        coverage: RunCoverage,
+    ) -> Result<(), MetadataError> {
+        if self.failed
+            || run.descriptor.repository != self.repository
+            || run.descriptor.format != self.format
+        {
+            return Err(MetadataError::Integrity);
+        }
+        self.failed = true;
+        run.copy_coverage(coverage, |entries| self.put_entries(entries))?;
         self.failed = false;
         Ok(())
     }

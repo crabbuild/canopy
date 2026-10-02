@@ -29,6 +29,12 @@ fn run(n: u64, format: ObjectFormat) -> StoredRun {
             digest,
         },
         artifact,
+        coverage: RunCoverage {
+            object_count: 2,
+            first_oid: oid(3 * n + 1, format),
+            last_oid: oid(3 * n + 2, format),
+            inventory_digest: [4; 32],
+        },
     }
 }
 fn index(format: ObjectFormat) -> (RangeIndex, Arc<dyn ObjectStore>) {
@@ -86,9 +92,9 @@ async fn incremental_split_and_removal_preserve_old_roots_for_both_formats() -> 
         assert!(root.is_none());
         assert_eq!(
             index
-                .find(Some(old), run(200, format).run.first_oid)
+                .find(Some(old), run((count - 1) as u64, format).run.first_oid)
                 .await?,
-            Some(run(200, format))
+            Some(run((count - 1) as u64, format))
         );
         assert!(index.cache.lock().unwrap().len() <= CACHE_NODES);
     }
@@ -103,6 +109,7 @@ async fn overlap_detection_includes_ranges_enclosing_existing_runs() -> Result {
     let mut enclosing = run(0, format);
     enclosing.run.first_oid = oid(1, format);
     enclosing.run.last_oid = oid(100, format);
+    enclosing.coverage = enclosing.run.coverage();
     assert!(index.find(root, enclosing.run.first_oid).await?.is_none());
     assert!(index.find(root, enclosing.run.last_oid).await?.is_none());
     assert!(matches!(
@@ -111,6 +118,7 @@ async fn overlap_detection_includes_ranges_enclosing_existing_runs() -> Result {
     ));
     let mut touching = run(19, format);
     touching.run.last_oid = run(20, format).run.first_oid;
+    touching.coverage = touching.run.coverage();
     assert!(matches!(
         index.insert(root, [6; 16], touching).await,
         Err(IndexError::RangeOverlap)
@@ -197,7 +205,7 @@ fn node_codec_rejects_bad_count_ranges_height_framing_and_large_input() -> Resul
         trailing.push(0);
         assert!(Node::<StoredRun>::decode(&trailing).is_err());
         assert!(Node::<StoredRun>::decode(&vec![0; NODE_BYTES as usize + 1]).is_err());
-        let count_at = 4 + b"canopy.range-index.v1\0".len() + 4 + 16 + 4 + 16 + 1 + 1;
+        let count_at = 4 + b"canopy.range-index.v2\0".len() + 4 + 16 + 4 + 16 + 1 + 1;
         for count in [0_u32, FANOUT as u32 + 1, u32::MAX] {
             let mut bad = bytes.clone();
             bad[count_at..count_at + 4].copy_from_slice(&count.to_be_bytes());
@@ -419,6 +427,80 @@ async fn bounded_overlap_seek_includes_enclosing_ranges_and_rejects_truncation()
                 .await?
                 .is_empty()
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn covered_run_codec_matches_independent_vectors_and_rejects_old_leaf_domain() -> Result {
+    use cellule_runtime::codec::{BoundedDecoder, BoundedEncoder};
+    for (format, golden) in [
+        (
+            ObjectFormat::Sha1,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../docs/design/directory-run-v2-sha1.hex"
+            )),
+        ),
+        (
+            ObjectFormat::Sha256,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../docs/design/directory-run-v2-sha256.hex"
+            )),
+        ),
+    ] {
+        // Codec-only descriptors: this never asserts native inventory/closure.
+        let stored = StoredRun {
+            run: RunDescriptor {
+                repository: [1; 16],
+                operation: [2; 16],
+                format,
+                object_count: 10,
+                first_oid: oid(1, format),
+                last_oid: oid(20, format),
+                inventory_digest: [4; 32],
+                size: 16 << 10,
+                digest: [5; 32],
+            },
+            artifact: ArtifactDescriptor {
+                size: 16 << 10,
+                digest: [5; 32],
+                manifest_digest: [6; 32],
+            },
+            coverage: RunCoverage {
+                object_count: 2,
+                first_oid: oid(4, format),
+                last_oid: oid(7, format),
+                inventory_digest: [9; 32],
+            },
+        };
+        stored.validate()?;
+        let expected = hex::decode(golden.trim())?;
+        let mut encoder = BoundedEncoder::new(1024)?;
+        codec::write_run(&mut encoder, stored)?;
+        assert_eq!(encoder.finish(), expected);
+        let mut decoder = BoundedDecoder::new(&expected, 1024)?;
+        assert_eq!(codec::read_run(&mut decoder, [1; 16], format)?, stored);
+        decoder.finish()?;
+        let node = Node {
+            repository: [1; 16],
+            operation: [3; 16],
+            format,
+            height: 0,
+            contents: Contents::Runs(vec![stored]),
+        };
+        let mut old = node.encode()?;
+        let domain = b"canopy.range-index.v2\0";
+        let at = old
+            .windows(domain.len())
+            .position(|bytes| bytes == domain)
+            .ok_or("domain")?;
+        old[at + domain.len() - 2] = b'1';
+        assert!(matches!(
+            Node::<StoredRun>::decode(&old),
+            Err(IndexError::Integrity)
+        ));
     }
     Ok(())
 }

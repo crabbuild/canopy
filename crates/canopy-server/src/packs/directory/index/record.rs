@@ -53,15 +53,15 @@ impl sealed::Record for StoredRun {}
 impl IndexRecord for StoredRun {
     type Key = ObjectId;
     const FANOUT: usize = FANOUT;
-    const DOMAIN: &'static [u8] = b"canopy.range-index.v1\0";
+    const DOMAIN: &'static [u8] = b"canopy.range-index.v2\0";
     fn first_key(self) -> ObjectId {
-        self.run.first_oid
+        self.coverage.first_oid
     }
     fn last_key(self) -> ObjectId {
-        self.run.last_oid
+        self.coverage.last_oid
     }
     fn object_count(self) -> u64 {
-        self.run.object_count
+        self.coverage.object_count
     }
     fn validate_record(self, repository: [u8; 16], format: ObjectFormat) -> Result<(), IndexError> {
         self.validate()?;

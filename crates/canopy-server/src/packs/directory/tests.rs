@@ -3,6 +3,7 @@ use crate::packs::metadata::tests::{Fixture, builder, fill, fixture, limits};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
 mod compaction_inventory;
+mod coverage;
 mod partition;
 mod partition_lifetime;
 
@@ -446,16 +447,18 @@ async fn snapshot_bounds_selection_and_roundtrips_authenticated_root_bytes() -> 
     assert_eq!(restored, snapshot);
     let bytes = snapshot.encode([90; 16])?;
     let mut old_layout = bytes.clone();
-    let domain = b"canopy.directory-root.v2\0";
+    let domain = b"canopy.directory-root.v3\0";
     let at = old_layout
         .windows(domain.len())
         .position(|bytes| bytes == domain)
         .ok_or("domain")?;
-    old_layout[at + domain.len() - 2] = b'1';
-    assert!(matches!(
-        DirectorySnapshot::decode(&old_layout),
-        Err(index::IndexError::Integrity)
-    ));
+    for version in *b"12" {
+        old_layout[at + domain.len() - 2] = version;
+        assert!(matches!(
+            DirectorySnapshot::decode(&old_layout),
+            Err(index::IndexError::Integrity)
+        ));
+    }
     for length in [0, 1, bytes.len() - 1] {
         assert!(DirectorySnapshot::decode(&bytes[..length]).is_err());
     }

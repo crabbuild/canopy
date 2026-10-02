@@ -138,7 +138,7 @@ impl DirectorySnapshot {
                     digest: stored.artifact.digest,
                 };
                 let group = groups.entry(key).or_insert_with(|| (stored, Vec::new()));
-                if group.0 != stored {
+                if group.0.run != stored.run || group.0.artifact != stored.artifact {
                     return Err(IndexError::Integrity);
                 }
                 group.1.push(at);

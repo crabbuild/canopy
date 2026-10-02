@@ -25,20 +25,24 @@ async fn prepare_range(
     source: CompactionSource,
     after: Option<ObjectId>,
 ) -> Result<Prepared> {
+    prepare_range_with_limits(fixture, inventory, operation, source, after, job_limits()).await
+}
+async fn prepare_range_with_limits(
+    fixture: &Fixture,
+    inventory: &Inventory,
+    operation: u8,
+    source: CompactionSource,
+    after: Option<ObjectId>,
+    limits: CompactionLimits,
+) -> Result<Prepared> {
     let (base, files, indexes) =
         opened(fixture, [operation; 16], Arc::clone(&inventory.store)).await?;
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(128 << 20);
-    let compact = PreparedCompaction::prepare_range(
-        root.path(),
-        budget.clone(),
-        base,
-        source,
-        after,
-        job_limits(),
-    )
-    .await?
-    .ok_or("empty job")?;
+    let compact =
+        PreparedCompaction::prepare_range(root.path(), budget.clone(), base, source, after, limits)
+            .await?
+            .ok_or("empty job")?;
     Ok(Prepared {
         compact,
         root,
@@ -439,18 +443,36 @@ async fn range_job_rejects_limits_and_invalid_positions_without_scratch_or_outco
         },
     ] {
         let budget = DiskBudget::new(128 << 20);
-        assert!(
-            PreparedCompaction::prepare_range(
-                root.path(),
-                budget.clone(),
-                Arc::clone(&base),
-                CompactionSource::Ingress(0),
-                None,
-                limits
-            )
-            .await
-            .is_err()
-        );
+        let result = PreparedCompaction::prepare_range(
+            root.path(),
+            budget.clone(),
+            Arc::clone(&base),
+            CompactionSource::Ingress(0),
+            None,
+            limits,
+        )
+        .await;
+        if source.coverage.first_oid < target.coverage.first_oid
+            && limits.input_bytes >= source.run.size
+        {
+            // The budget can still admit the nonoverlapping prefix before the
+            // first target. Verify that this progress preserves the exact suffix.
+            let prepared = result?.ok_or("prefix")?;
+            assert_eq!(prepared.input_count(), 1);
+            let next = directory(&inventory, prepared.catalog()).await?;
+            let remainder = runs(&first.indexes, Some(next.level_zero[0])).await?;
+            assert_eq!(remainder[0].run, source.run);
+            assert_eq!(remainder[0].artifact, source.artifact);
+            assert!(remainder[0].coverage.object_count < source.coverage.object_count);
+            assert!(
+                runs(&first.indexes, next.levels[0])
+                    .await?
+                    .contains(&target)
+            );
+            prepared.certificate().await?;
+        } else {
+            assert!(result.is_err());
+        }
         cleaned(root.path(), &budget).await?;
     }
     for source in [
@@ -571,6 +593,96 @@ async fn native_range_jobs_partition_large_inputs_and_merge_multiple_target_file
             let Prepared { root, budget, .. } = prepared;
             cleaned(root.path(), &budget).await?;
         }
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bounded_windows_finish_native_ingress_without_rewriting_suffix_files_or_losing_objects()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let inventory = seed(&fixture, 0).await?;
+        push(&fixture, &inventory, 20, 260).await?;
+        let first = prepare_range(
+            &fixture,
+            &inventory,
+            180,
+            CompactionSource::Ingress(0),
+            None,
+        )
+        .await?;
+        let target = directory(&inventory, first.compact.catalog()).await?;
+        let targets = runs(&first.indexes, target.levels[0]).await?;
+        assert!(targets.len() > 3);
+        publish(&fixture, &first.compact).await?;
+        push(&fixture, &inventory, 21, 261).await?;
+        let limits = CompactionLimits {
+            input_runs: 2,
+            ..job_limits()
+        };
+        let competing = prepare_range_with_limits(
+            &fixture,
+            &inventory,
+            181,
+            CompactionSource::Ingress(0),
+            None,
+            limits,
+        )
+        .await?;
+        let original = competing.compact.base().catalog.ok_or("base")?;
+        let original_directory = directory(&inventory, original).await?;
+        let source = runs(&competing.indexes, Some(original_directory.level_zero[0])).await?[0];
+        let canonical = entries(&competing, original).await?;
+        let before = refs(&fixture.handle).await?;
+        let mut previous = source.coverage.object_count;
+        let mut jobs = 0;
+        loop {
+            jobs += 1;
+            assert!(jobs <= targets.len() + 2, "no bounded progress");
+            let prepared = prepare_range_with_limits(
+                &fixture,
+                &inventory,
+                182 + jobs as u8,
+                CompactionSource::Ingress(0),
+                None,
+                limits,
+            )
+            .await?;
+            assert!(prepared.compact.input_count() <= 2);
+            let next = directory(&inventory, prepared.compact.catalog()).await?;
+            if let Some(root) = next.level_zero.first() {
+                let remainder = runs(&prepared.indexes, Some(*root)).await?;
+                assert_eq!(remainder.len(), 1);
+                assert_eq!(remainder[0].run, source.run);
+                assert_eq!(remainder[0].artifact, source.artifact);
+                assert!(remainder[0].coverage.object_count < previous);
+                assert_eq!(remainder[0].coverage.last_oid, source.coverage.last_oid);
+                previous = remainder[0].coverage.object_count;
+            }
+            assert_eq!(
+                entries(&prepared, prepared.compact.catalog()).await?,
+                canonical
+            );
+            publish(&fixture, &prepared.compact).await?;
+            assert_eq!(refs(&fixture.handle).await?, before);
+            if jobs == 1 {
+                assert!(matches!(
+                    competing.compact.reconcile().await,
+                    Err(CatalogPreparationError::Catalog(IndexError::Stale))
+                ));
+            }
+            let done = next.level_zero.is_empty();
+            let Prepared { root, budget, .. } = prepared;
+            cleaned(root.path(), &budget).await?;
+            if done {
+                break;
+            }
+        }
+        assert!(jobs > 1);
+        assert_eq!(outcomes(&fixture.handle).await?, jobs as u64 + 1);
+        assert_eq!(entries(&competing, original).await?, canonical);
         fixture.runtime.shutdown().await?;
     }
     Ok(())

@@ -17,7 +17,7 @@ mod cursor;
 mod update;
 pub use cursor::RangeCursor;
 
-pub const FANOUT: usize = 256;
+pub const FANOUT: usize = 128;
 pub const NODE_BYTES: u32 = 64 << 10;
 pub const MAX_HEIGHT: u8 = 7;
 const CACHE_NODES: usize = 64;
@@ -49,8 +49,8 @@ pub struct NodeRef<R: IndexRecord = StoredRun> {
     pub first_key: R::Key,
     pub last_key: R::Key,
     pub record_count: u64,
-    /// Physical leaf inventory, including overlaps between metadata shards or
-    /// runs in other roots. Never a unique canonical-object coverage proof.
+    /// Represented leaf inventory, including overlaps between metadata shards or
+    /// logical run projections in other roots. Never a unique canonical-object coverage proof.
     pub object_count: u64,
 }
 impl<R: IndexRecord> NodeRef<R> {

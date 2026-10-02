@@ -69,7 +69,11 @@ pub(in crate::packs) fn write_run(
     encoder.write_bytes(&run.first_oid)?;
     encoder.write_bytes(&run.last_oid)?;
     encoder.write_bytes(&run.inventory_digest)?;
-    artifact(encoder, stored.artifact)
+    artifact(encoder, stored.artifact)?;
+    encoder.write_u64(stored.coverage.object_count)?;
+    encoder.write_bytes(&stored.coverage.first_oid)?;
+    encoder.write_bytes(&stored.coverage.last_oid)?;
+    encoder.write_bytes(&stored.coverage.inventory_digest)
 }
 pub(in crate::packs) fn read_run(
     decoder: &mut BoundedDecoder<'_>,
@@ -82,6 +86,12 @@ pub(in crate::packs) fn read_run(
     let last_oid = oid(decoder, format)?;
     let inventory_digest = fixed(decoder)?;
     let artifact = read_artifact(decoder)?;
+    let coverage = RunCoverage {
+        object_count: decoder.read_u64()?,
+        first_oid: oid(decoder, format)?,
+        last_oid: oid(decoder, format)?,
+        inventory_digest: fixed(decoder)?,
+    };
     Ok(StoredRun {
         run: RunDescriptor {
             repository,
@@ -95,6 +105,7 @@ pub(in crate::packs) fn read_run(
             digest: artifact.digest,
         },
         artifact,
+        coverage,
     })
 }
 impl<R: IndexRecord> Node<R> {

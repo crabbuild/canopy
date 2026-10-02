@@ -67,10 +67,10 @@ impl PreparedCompaction {
             while let Some(stored) = cursor.next().await? {
                 runs = runs.checked_add(1).ok_or(MetadataError::Limit)?;
                 objects = objects
-                    .checked_add(stored.run.object_count)
+                    .checked_add(stored.coverage.object_count)
                     .ok_or(MetadataError::Limit)?;
-                first.get_or_insert(stored.run.first_oid);
-                last = Some(stored.run.last_oid);
+                first.get_or_insert(stored.coverage.first_oid);
+                last = Some(stored.coverage.last_oid);
                 input_count = input_count.checked_add(1).ok_or(MetadataError::Limit)?;
                 input_bytes = input_bytes
                     .checked_add(stored.run.size)
@@ -175,7 +175,7 @@ pub(super) async fn copy_run(
         if run.descriptor() != stored.run {
             return Err(MetadataError::Integrity);
         }
-        builder.add_run(&run)?;
+        builder.add_coverage(&run, stored.coverage)?;
         Ok::<_, MetadataError>(builder)
     })
     .await?

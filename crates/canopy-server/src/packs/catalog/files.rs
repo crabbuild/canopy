@@ -265,7 +265,15 @@ impl CatalogFiles {
 }
 impl RunLoader for CatalogFiles {
     async fn load(&self, run: StoredRun) -> Result<Arc<DirectoryRun>, MetadataError> {
-        match self.load_value(Key::Run(run)).await? {
+        run.validate()?;
+        // Cache the complete authenticated file once across disjoint projections.
+        // Coverage is certified by the catalog and explicitly folded by writers;
+        // a different physical descriptor/manifest still rejects on a cache hit.
+        let physical = StoredRun {
+            coverage: run.run.coverage(),
+            ..run
+        };
+        match self.load_value(Key::Run(physical)).await? {
             Value::Run(run) => Ok(run),
             Value::Metadata(_) => Err(MetadataError::Integrity),
         }

@@ -24,14 +24,18 @@ enum Source {
 pub(super) struct RangeSelection {
     source: Source,
     run: StoredRun,
+    portion: StoredRun,
+    remainder: Option<StoredRun>,
     target: usize,
     overlaps: Vec<StoredRun>,
 }
 impl PreparedCompaction {
     /// Move one source run plus every intersecting target run into the next
-    /// level. `after` is the exclusive last OID of a previously processed source
-    /// run; None starts at the first run. None output means the source is empty
-    /// or exhausted. Oversized overlap sets reject before copying any input.
+    /// level. If overlaps exceed the input budget, move a verified source prefix
+    /// and retain its exact verified suffix in the same physical file. `after`
+    /// is the exclusive last OID of a previously processed source portion; None starts at the first run. None output means the source is empty
+    /// or exhausted. A source/target file exceeding the physical input budget
+    /// rejects; selected target windows never truncate coverage silently.
     /// Unchanged disjoint files are verified and promoted without rewriting.
     pub async fn prepare_range(
         root: &Path,
@@ -70,27 +74,32 @@ impl PreparedCompaction {
             if run.run.size > limits.input_bytes {
                 return Err(MetadataError::Limit.into());
             }
-            let overlaps = indexes
-                .ranges()
-                .overlapping(
-                    directory.levels.get(target).copied().flatten(),
-                    run.run.first_oid,
-                    run.run.last_oid,
-                    limits.input_runs as usize - 1,
-                )
-                .await?;
-            let mut bytes = run.run.size;
-            for target in &overlaps {
-                bytes = bytes
-                    .checked_add(target.run.size)
-                    .ok_or(MetadataError::Limit)?;
-                if bytes > limits.input_bytes {
-                    return Err(MetadataError::Limit.into());
+            let (overlaps, through) = select_window(
+                indexes.ranges(),
+                directory.levels.get(target).copied().flatten(),
+                run,
+                limits,
+            )
+            .await?;
+            let file = base.files().load(run).await?;
+            let (portion, remainder, portion_edges) = tokio::task::spawn_blocking(move || {
+                if file.descriptor() != run.run {
+                    return Err(MetadataError::Integrity);
                 }
-            }
+                let (left, right, edges) = file.split_coverage(run.coverage, through)?;
+                let portion = StoredRun {
+                    coverage: left.ok_or(MetadataError::Integrity)?,
+                    ..run
+                };
+                let remainder = right.map(|coverage| StoredRun { coverage, ..run });
+                Ok::<_, MetadataError>((portion, remainder, edges))
+            })
+            .await??;
             let selection = RangeSelection {
                 source,
                 run,
+                portion,
+                remainder,
                 target,
                 overlaps,
             };
@@ -99,27 +108,21 @@ impl PreparedCompaction {
                 selection.digest(base.context().repository, base.context().format)?;
             let (output, descriptor, edge_count) =
                 if selection.overlaps.is_empty() && run.run.size <= limits.output.max_file_bytes {
-                    let file = base.files().load(run).await?;
-                    let edges = tokio::task::spawn_blocking(move || {
-                        if file.descriptor() != run.run {
-                            return Err(MetadataError::Integrity);
-                        }
-                        file.verify_inventory()
-                    })
-                    .await??;
                     let output = indexes
                         .ranges()
-                        .insert(None, base.context().operation, run)
+                        .insert(None, base.context().operation, portion)
                         .await?;
-                    (output, run.run, edges)
+                    (output, portion.coverage, portion_edges)
                 } else {
                     let mut builder =
                         prepare::new_builder(root, budget.clone(), &base, limits.spool).await?;
-                    for input in std::iter::once(&run).chain(selection.overlaps.iter()) {
+                    for input in std::iter::once(&portion).chain(selection.overlaps.iter()) {
                         builder = prepare::copy_run(builder, &base, *input).await?;
                         base.live_lease()?;
                     }
-                    prepare::finish_output(builder, budget, &base, limits.output).await?
+                    let (output, descriptor, edges) =
+                        prepare::finish_output(builder, budget, &base, limits.output).await?;
+                    (output, descriptor.coverage(), edges)
                 };
             let selected = Selection::Range(Box::new(selection));
             let catalog = replacement(&base, &selected, output).await?;
@@ -144,7 +147,7 @@ impl RangeSelection {
     fn digest(&self, repository: [u8; 16], format: ObjectFormat) -> Result<[u8; 32], CodecError> {
         let mut hash = blake3::Hasher::new();
         let mut e = BoundedEncoder::new(1024)?;
-        e.write_bytes(b"canopy.range-compaction.v1\0")?;
+        e.write_bytes(b"canopy.range-compaction.v2\0")?;
         e.write_bytes(&repository)?;
         e.write_u8(format.bytes() as u8)?;
         match self.source {
@@ -159,8 +162,15 @@ impl RangeSelection {
         }
         e.write_u8(self.target as u8)?;
         e.write_count(self.overlaps.len())?;
+        write_run(&mut e, self.run)?;
         hash.update(&e.finish());
-        for run in std::iter::once(&self.run).chain(self.overlaps.iter()) {
+        let mut e = BoundedEncoder::new(1024)?;
+        e.write_bool(self.remainder.is_some())?;
+        if let Some(remainder) = self.remainder {
+            write_run(&mut e, remainder)?;
+        }
+        hash.update(&e.finish());
+        for run in std::iter::once(&self.portion).chain(self.overlaps.iter()) {
             let mut e = BoundedEncoder::new(1024)?;
             write_run(&mut e, *run)?;
             hash.update(&e.finish());
@@ -187,21 +197,21 @@ impl RangeSelection {
             Source::Ingress(root) => Some(root),
             Source::Level(at) => directory.levels.get(at).copied().flatten(),
         };
-        if index.find(source_root, self.run.run.first_oid).await? != Some(self.run) {
+        if index.find(source_root, self.run.coverage.first_oid).await? != Some(self.run) {
             return Err(IndexError::Stale);
         }
         let first = self
             .overlaps
             .iter()
-            .map(|run| run.run.first_oid)
-            .chain(std::iter::once(self.run.run.first_oid))
+            .map(|run| run.coverage.first_oid)
+            .chain(std::iter::once(self.portion.coverage.first_oid))
             .min()
             .ok_or(IndexError::Integrity)?;
         let last = self
             .overlaps
             .iter()
-            .map(|run| run.run.last_oid)
-            .chain(std::iter::once(self.run.run.last_oid))
+            .map(|run| run.coverage.last_oid)
+            .chain(std::iter::once(self.portion.coverage.last_oid))
             .max()
             .ok_or(IndexError::Integrity)?;
         if output.first_key != first || output.last_key != last {
@@ -220,7 +230,10 @@ impl RangeSelection {
             Ok(_) | Err(IndexError::Limit) => return Err(IndexError::Stale),
             Err(error) => return Err(error),
         }
-        let remaining = index.remove(source_root, operation, self.run).await?;
+        let mut remaining = index.remove(source_root, operation, self.run).await?;
+        if let Some(remainder) = self.remainder {
+            remaining = Some(index.insert(remaining, operation, remainder).await?);
+        }
         match self.source {
             Source::Ingress(_) => {
                 if let Some(root) = remaining {
@@ -251,4 +264,72 @@ impl RangeSelection {
         directory.levels[self.target] = target;
         directory.validate()
     }
+}
+
+/// A bounded consecutive target prefix. A later target outside the returned
+/// interval is never read/copied or removed by this operation.
+async fn select_window(
+    index: &RangeIndex,
+    target: Option<NodeRef>,
+    source: StoredRun,
+    limits: CompactionLimits,
+) -> Result<(Vec<StoredRun>, ObjectId), CatalogPreparationError> {
+    let mut selected = Vec::new();
+    let mut bytes = source.run.size;
+    let mut physical = std::collections::BTreeMap::new();
+    physical.insert(
+        (source.run.operation, source.artifact.digest),
+        (source.run, source.artifact),
+    );
+    let mut next = index.successor(target, source.coverage.first_oid).await?;
+    let mut cursor = if let Some(first) = next {
+        Some(index.cursor(target, Some(first.coverage.first_oid))?)
+    } else {
+        None
+    };
+    while let Some(run) = next {
+        if run.coverage.first_oid > source.coverage.last_oid {
+            break;
+        }
+        let key = (run.run.operation, run.artifact.digest);
+        let extra = match physical.get(&key) {
+            Some(descriptor) if *descriptor == (run.run, run.artifact) => 0,
+            Some(_) => return Err(MetadataError::Integrity.into()),
+            None => run.run.size,
+        };
+        let total = bytes.checked_add(extra).ok_or(MetadataError::Limit)?;
+        if selected.len() + 1 >= limits.input_runs as usize || total > limits.input_bytes {
+            let through = if let Some(last) = selected.last() {
+                let last: &StoredRun = last;
+                last.coverage.last_oid.min(source.coverage.last_oid)
+            } else if run.coverage.first_oid > source.coverage.first_oid {
+                predecessor(run.coverage.first_oid)?
+            } else {
+                return Err(MetadataError::Limit.into());
+            };
+            return Ok((selected, through));
+        }
+        bytes = total;
+        physical.insert(key, (run.run, run.artifact));
+        selected.push(run);
+        if run.coverage.last_oid >= source.coverage.last_oid {
+            break;
+        }
+        next = match &mut cursor {
+            Some(cursor) => cursor.next().await?,
+            None => None,
+        };
+    }
+    Ok((selected, source.coverage.last_oid))
+}
+fn predecessor(oid: ObjectId) -> Result<ObjectId, MetadataError> {
+    let mut bytes = oid.to_vec();
+    for byte in bytes.iter_mut().rev() {
+        if *byte != 0 {
+            *byte -= 1;
+            return bytes.try_into().map_err(|_| MetadataError::Integrity);
+        }
+        *byte = 255;
+    }
+    Err(MetadataError::Integrity)
 }

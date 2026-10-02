@@ -28,7 +28,7 @@ impl DirectorySnapshot {
     ) -> Result<Vec<u8>, IndexError> {
         self.validate()?;
         let mut encoder = BoundedEncoder::new(NODE_BYTES)?;
-        encoder.write_bytes(b"canopy.directory-root.v2\0")?;
+        encoder.write_bytes(b"canopy.directory-root.v3\0")?;
         encoder.write_bytes(&self.repository)?;
         encoder.write_bytes(&operation)?;
         encoder.write_u8(self.format.bytes() as u8)?;
@@ -49,7 +49,7 @@ impl DirectorySnapshot {
         bytes: &[u8],
     ) -> Result<(Self, [u8; 16]), IndexError> {
         let mut decoder = BoundedDecoder::new(bytes, NODE_BYTES)?;
-        if decoder.read_bytes()? != b"canopy.directory-root.v2\0" {
+        if decoder.read_bytes()? != b"canopy.directory-root.v3\0" {
             return Err(IndexError::Integrity);
         }
         let repository = fixed(&mut decoder)?;
