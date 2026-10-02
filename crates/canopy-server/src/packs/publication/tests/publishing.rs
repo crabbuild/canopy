@@ -2,7 +2,7 @@ use super::prepare::{cleaned, opened, opened_native, physical};
 use super::*;
 use crate::packs::{
     catalog::CatalogReader,
-    metadata::tests::limits,
+    metadata::{MetadataError, tests::limits},
     verification::physical::tests::{Prepared, independence::git_input},
 };
 use crate::{ObjectId, ObjectKind, PushPlan, RefExpectation, RefUpdate};
@@ -452,6 +452,206 @@ async fn final_current_policies_use_certified_ancestry_and_current_check_version
         cleaned(graph.root.path(), &graph.budget).await?;
         drop(next.prepared);
         cleaned(next.root.path(), &next.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ancestry_growth_reuses_pairs_only_in_one_exact_native_catalog() -> Result {
+    use super::super::ref_proof::{RefProofError, ancestry::Walker};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let graph = assembled(&fixture, [151; 16], 1200).await?;
+        let reader =
+            CatalogReader::open(graph.prepared.base.indexes(), graph.prepared.catalog()).await?;
+        let files = graph.prepared.base.files();
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(4 << 20);
+        let mut walk = Walker::new(root.path(), budget.clone(), limits()).await?;
+        assert_eq!(
+            budget.used(),
+            crate::packs::metadata::growth::INITIAL_BYTES * 3
+        );
+        assert!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.initial,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await?
+        );
+        assert!(
+            !walk
+                .is_ancestor(
+                    &reader,
+                    &files,
+                    graph.other,
+                    graph.tip,
+                    &graph.prepared.base
+                )
+                .await?
+        );
+        assert!(budget.used() > crate::packs::metadata::growth::INITIAL_BYTES * 3);
+        // Both cached answers retain their meaning after another queue was used.
+        assert!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.initial,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await?
+        );
+        assert!(
+            !walk
+                .is_ancestor(
+                    &reader,
+                    &files,
+                    graph.other,
+                    graph.tip,
+                    &graph.prepared.base
+                )
+                .await?
+        );
+        let other = assembled(&fixture, [152; 16], 4).await?;
+        let foreign =
+            CatalogReader::open(other.prepared.base.indexes(), other.prepared.catalog()).await?;
+        assert!(matches!(
+            walk.is_ancestor(
+                &foreign,
+                &other.prepared.base.files(),
+                other.initial,
+                other.tip,
+                &other.prepared.base
+            )
+            .await,
+            Err(RefProofError::Invalid)
+        ));
+        assert!(matches!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.initial,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await,
+            Err(RefProofError::Canceled)
+        ));
+        drop(walk);
+        cleaned(root.path(), &budget).await?;
+        drop((reader, foreign, files, graph.prepared, other.prepared));
+        cleaned(graph.root.path(), &graph.budget).await?;
+        cleaned(other.root.path(), &other.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn denied_native_ancestry_growth_cannot_become_a_negative_or_reused_answer() -> Result {
+    use super::super::ref_proof::{RefProofError, ancestry::Walker};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let graph = assembled(&fixture, [153; 16], 1200).await?;
+        let reader =
+            CatalogReader::open(graph.prepared.base.indexes(), graph.prepared.catalog()).await?;
+        let files = graph.prepared.base.files();
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(crate::packs::metadata::growth::INITIAL_BYTES * 3);
+        let mut walk = Walker::new(root.path(), budget.clone(), limits()).await?;
+        assert!(matches!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.other,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await,
+            Err(RefProofError::Metadata(MetadataError::Budget(_)))
+        ));
+        assert_eq!(
+            budget.used(),
+            crate::packs::metadata::growth::INITIAL_BYTES * 3
+        );
+        assert!(matches!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.initial,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await,
+            Err(RefProofError::Canceled)
+        ));
+        drop(walk);
+        cleaned(root.path(), &budget).await?;
+        drop((reader, files, graph.prepared));
+        cleaned(graph.root.path(), &graph.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn canceled_native_ancestry_fences_reuse_and_retains_queued_worker_credit() -> Result {
+    use super::super::ref_proof::{RefProofError, ancestry::Walker};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let graph = assembled(&fixture, [154; 16], 4).await?;
+        let reader =
+            CatalogReader::open(graph.prepared.base.indexes(), graph.prepared.catalog()).await?;
+        let files = graph.prepared.base.files();
+        // Warm membership so cancellation occurs with the walk awaiting scratch.
+        reader
+            .headers(&[graph.initial, graph.tip], &*files, &*files)
+            .await?;
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(4 << 20);
+        let mut walk = Walker::new(root.path(), budget.clone(), limits()).await?;
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let worker = walk.test_blocker(entered, gate);
+        started.await?;
+        let held = budget.used();
+        let mut pending = Box::pin(walk.is_ancestor(
+            &reader,
+            &files,
+            graph.initial,
+            graph.tip,
+            &graph.prepared.base,
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), &mut pending)
+                .await
+                .is_err()
+        );
+        drop(pending);
+        assert!(matches!(
+            walk.is_ancestor(
+                &reader,
+                &files,
+                graph.initial,
+                graph.tip,
+                &graph.prepared.base
+            )
+            .await,
+            Err(RefProofError::Canceled)
+        ));
+        drop(walk);
+        assert_eq!(budget.used(), held);
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+        release.send(())?;
+        worker.await??;
+        cleaned(root.path(), &budget).await?;
+        drop((reader, files, graph.prepared));
+        cleaned(graph.root.path(), &graph.budget).await?;
         fixture.runtime.shutdown().await?;
     }
     Ok(())

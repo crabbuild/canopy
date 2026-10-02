@@ -13,7 +13,7 @@ use cellule_runtime::{InvocationError, primitives::sql::SqlCell};
 use std::{collections::BTreeSet, path::Path};
 use tokio::time::timeout_at;
 
-mod ancestry;
+pub(super) mod ancestry;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RefProofError {
@@ -238,7 +238,7 @@ impl PreparedCatalog {
                         walk = Some(ancestry::Walker::new(root, budget.clone(), limits).await?);
                     }
                     if walk
-                        .as_ref()
+                        .as_mut()
                         .ok_or(RefProofError::Invalid)?
                         .is_ancestor(
                             &reader,
