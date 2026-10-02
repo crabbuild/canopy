@@ -1,0 +1,136 @@
+name: Probe residency failure stages under fixed suite concurrency
+
+on:
+  push:
+    branches:
+      - 'codex/residency-stage-probe-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  stage-context-reproduction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Initialize evidence
+        run: |
+          mkdir diagnostic
+          git rev-parse HEAD > diagnostic/head.txt
+          cp .github/workflows/diagnose-residency-stages.yml diagnostic/workflow.yml
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs openssh-client
+          git lfs install
+      - name: Bind unchanged production and exact diagnostic test change
+        run: |
+          git fetch --depth=1 origin 0ba777536ac390e58d9d6b12bce3d7826f16792c
+          git diff --exit-code 0ba777536ac390e58d9d6b12bce3d7826f16792c -- Cargo.toml Cargo.lock crates/canopy-server/src crates/canopy-server/Cargo.toml crates/canopy-protocol crates/canopy-cli scripts
+          cargo fmt --all -- --check
+          cargo metadata --locked --format-version 1 > diagnostic/metadata.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          files = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '0ba777536ac390e58d9d6b12bce3d7826f16792c', '--', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
+          assert changed == ['crates/canopy-server/tests/multi_server/residency/faults/mod.rs'], changed
+          record = {'diagnostic_changes': changed, 'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'baseline_head': '0ba777536ac390e58d9d6b12bce3d7826f16792c',
+                    'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
+                    'scope': 'Test-only stage context and fixed concurrent-suite pressure; not a fix, production benchmark or correctness qualification.'}
+          Path('diagnostic/inputs.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - name: Compile and retain exact release test executable
+        run: |
+          cargo test --release --locked -p canopy-server --test multi_server --no-run --message-format=json > diagnostic/build.jsonl 2> diagnostic/build.log
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          rows = [json.loads(line) for line in Path('diagnostic/build.jsonl').read_text().splitlines()]
+          paths = [row['executable'] for row in rows if row.get('reason') == 'compiler-artifact'
+                   and row['target']['name'] == 'multi_server' and row.get('executable')]
+          assert len(paths) == 1
+          executable = Path(paths[0])
+          record = {'executable': str(executable), 'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
+                    'bytes': executable.stat().st_size}
+          Path('diagnostic/test-executable.json').write_text(json.dumps(record, indent=2) + '\n')
+          subprocess.run(['tar', '-czf', 'diagnostic/multi-server-release.tar.gz', '-C', str(executable.parent), executable.name], check=True)
+          PY
+      - name: Record all declared repetitions without retry-until-green
+        run: |
+          python3 - <<'PY'
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import time
+          
+          root = Path('diagnostic')
+          executable = json.loads((root / 'test-executable.json').read_text())['executable']
+          target = 'residency::faults::disconnected_admission_finishes_release_and_allows_a_later_restore'
+          environment = {**os.environ, 'RUST_LOG': 'warn', 'RUST_BACKTRACE': '1'}
+          runs = []
+          
+          def execute(phase, index, arguments):
+              log = root / f'{phase}-{index:03d}.log'
+              started = time.monotonic()
+              with log.open('xb') as output:
+                  try:
+                      result = subprocess.run([executable, *arguments], env=environment,
+                                              stdout=output, stderr=subprocess.STDOUT, timeout=900)
+                      code, timed_out = result.returncode, False
+                  except subprocess.TimeoutExpired:
+                      code, timed_out = None, True
+              return {'phase': phase, 'repetition': index, 'arguments': arguments,
+                      'exit_code': code, 'timeout': timed_out,
+                      'elapsed_seconds': time.monotonic() - started, 'log': str(log),
+                      'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest()}
+          
+          def retain(row):
+              runs.append(row)
+              (root / 'repetitions.json').write_text(json.dumps({'completed': False, 'runs': runs}, indent=2) + '\n')
+              print(json.dumps(row), flush=True)
+          
+          # Fixed controls precede one declared pressure batch. No failure is retried.
+          retain(execute('isolated', 0, [target, '--exact', '--nocapture']))
+          for index in range(2):
+              retain(execute('full-target', index, ['--test-threads=4', '--nocapture']))
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              futures = [pool.submit(execute, 'concurrent-full-target', index,
+                                     ['--test-threads=4', '--nocapture']) for index in range(4)]
+              for future in as_completed(futures):
+                  retain(future.result())
+          inputs = json.loads((root / 'inputs.json').read_text())
+          assert all(hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
+                     for name, digest in inputs['source_sha256'].items())
+          assert len(runs) == 7
+          result = {'completed': True, 'runs': runs, 'bound_source_unchanged': True,
+                    'failed_repetitions': sum(row['exit_code'] != 0 for row in runs),
+                    'concurrent_full_target_processes': 4, 'runner_cpu_count': os.cpu_count(),
+                    'scope': inputs['scope']}
+          (root / 'repetitions.json').write_text(json.dumps(result, indent=2) + '\n')
+          raise SystemExit(1 if result['failed_repetitions'] else 0)
+          PY
+      - name: Retain negative and positive evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: residency-stage-probe-${{ github.sha }}-${{ github.run_attempt }}
+          path: diagnostic/
+          if-no-files-found: error
+          retention-days: 30

@@ -13,6 +13,13 @@ use super::*;
 mod admission;
 mod git_discovery;
 
+// Diagnostic-only error context; do not change ordering, retries or assertions.
+fn diagnostic_stage<T>(stage: &str, address: std::net::SocketAddr, result: Result<T>) -> Result<T> {
+    result.map_err(|error| {
+        format!("[DEBUG-residency-stage] stage={stage} address={address} error={error}").into()
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ReleaseFault {
     Pause,
@@ -180,7 +187,11 @@ impl Fixture {
         );
         let server = CanopyServer::start(settings, store.clone()).await?;
         let client = reqwest::Client::new();
-        let (url, id) = create(&client, address, "original").await?;
+        let (url, id) = diagnostic_stage(
+            "fixture-create-original",
+            address,
+            create(&client, address, "original").await,
+        )?;
         let source = workspace.path().join("source");
         run_git(None, &["init", "-b", "main", path_str(&source)?]).await?;
         run_git(Some(&source), &["config", "user.name", "Canopy Test"]).await?;
@@ -208,8 +219,16 @@ impl Fixture {
         )
         .await?;
         let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
-        create(&client, address, "second").await?;
-        create(&client, address, "third").await?;
+        diagnostic_stage(
+            "fixture-create-second",
+            address,
+            create(&client, address, "second").await,
+        )?;
+        diagnostic_stage(
+            "fixture-create-third",
+            address,
+            create(&client, address, "third").await,
+        )?;
         let local = workspace.path().join("server/runtime-v1");
         Ok(Self {
             workspace,
@@ -359,13 +378,29 @@ async fn lost_release_reply_is_resolved_before_local_cleanup() -> Result {
 #[tokio::test(flavor = "multi_thread")]
 async fn disconnected_admission_finishes_release_and_allows_a_later_restore() -> Result {
     let fixture = Fixture::new().await?;
-    let pending = fixture.interrupt_release(ReleaseFault::Pause).await?;
+    let pending = diagnostic_stage(
+        "interrupt-release",
+        fixture.address,
+        fixture.interrupt_release(ReleaseFault::Pause).await,
+    )?;
     pending.abort();
     assert!(pending.await.unwrap_err().is_cancelled());
     fixture.store.proceed.notify_one();
-    create(&fixture.client, fixture.address, "fourth").await?;
-    fixture.clone_original(fixture.address).await?;
-    fixture.server.shutdown().await?;
+    diagnostic_stage(
+        "create-fourth-after-client-cancellation",
+        fixture.address,
+        create(&fixture.client, fixture.address, "fourth").await,
+    )?;
+    diagnostic_stage(
+        "clone-original-after-client-cancellation",
+        fixture.address,
+        fixture.clone_original(fixture.address).await,
+    )?;
+    fixture
+        .server
+        .shutdown()
+        .await
+        .map_err(|error| format!("[DEBUG-residency-stage] stage=shutdown error={error}"))?;
     Ok(())
 }
 
