@@ -210,17 +210,15 @@ impl GitGateway {
                         .get(1)
                         .and_then(|set| set.rows.first())
                         .map(Vec::as_slice),
-                ) {
-                    if usize::try_from(*count).ok() == Some(shared.packed_count()) {
-                        // Never invert build_cache's lock order by waiting here.
-                        if let Ok(mut objects) = self.objects.try_lock() {
-                            if let Some(objects) = objects
-                                .as_mut()
-                                .filter(|objects| Arc::ptr_eq(&objects.cache, &shared))
-                            {
-                                objects.through = objects.through.max(*high_water);
-                            }
-                        }
+                ) && usize::try_from(*count).ok() == Some(shared.packed_count())
+                {
+                    // Never invert build_cache's lock order by waiting here.
+                    if let Ok(mut objects) = self.objects.try_lock()
+                        && let Some(objects) = objects
+                            .as_mut()
+                            .filter(|objects| Arc::ptr_eq(&objects.cache, &shared))
+                    {
+                        objects.through = objects.through.max(*high_water);
                     }
                 }
             }

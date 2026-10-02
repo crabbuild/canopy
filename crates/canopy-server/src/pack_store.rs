@@ -1,10 +1,10 @@
 //! Immutable pack artifacts; SQLite retains canonical identities and closure.
 use crate::{
     ObjectId, ObjectKind, RepositoryCell,
+    blob::{LargeBlobReference, LargeBlobStore},
     git_cache::GitCache,
     git_gateway::GatewayError,
     git_http::GitProcess,
-    blob::{LargeBlobReference, LargeBlobStore},
 };
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{

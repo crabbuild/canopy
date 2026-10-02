@@ -627,10 +627,10 @@ impl GitGateway {
                     );
                 }
                 Ok(retained) => {
-                    if retained == count {
-                        if let Some(record) = &archive {
-                            shared.cache.mark_durable_pack(record.pack.sha256);
-                        }
+                    if retained == count
+                        && let Some(record) = &archive
+                    {
+                        shared.cache.mark_durable_pack(record.pack.sha256);
                     }
                 }
                 Err(error) => {

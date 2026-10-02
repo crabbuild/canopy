@@ -500,7 +500,7 @@ impl GitCache {
                 Ok::<_, io::Error>(())
             })
             .await
-            .map_err(|error| io::Error::other(error))??;
+            .map_err(io::Error::other)??;
             Ok::<_, GitHttpError>(())
         };
         let result = tokio::time::timeout(WORKER_DEADLINE, run)
