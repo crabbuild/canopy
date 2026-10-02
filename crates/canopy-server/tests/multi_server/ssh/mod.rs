@@ -112,6 +112,42 @@ async fn start_sha256_ssh_server(
     )
 }
 
+// Capture only the failed local port. This runs after a failure, never retries
+// a bind, and leaves all reservation/startup/drain assertions unchanged.
+fn reservation_rebind_error(
+    name: &str,
+    protocol: &str,
+    address: std::net::SocketAddr,
+    error: std::io::Error,
+) -> std::io::Error {
+    #[cfg(target_os = "linux")]
+    let sockets = {
+        let filter = format!("( sport = :{} )", address.port());
+        match std::process::Command::new("ss")
+            .args(["-Htanp", &filter])
+            .output()
+        {
+            Ok(output) => format!(
+                "status={} stdout={}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout)
+                    .chars()
+                    .take(8192)
+                    .collect::<String>()
+            ),
+            Err(failure) => format!("socket observation failed: {failure}"),
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sockets = "socket observation requires Linux";
+    std::io::Error::new(
+        error.kind(),
+        format!(
+            "[DEBUG-ssh-reservation-9a0] {name} {protocol} rebind {address}: {error}; sockets: {sockets}"
+        ),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup() -> Result {
     let workspace = tempfile::TempDir::new()?;
@@ -146,20 +182,14 @@ async fn sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup
             .await
             .map_err(|error| format!("[DEBUG-ssh-reservation-9a0] {name} shutdown: {error:?}"))?;
         eprintln!("[DEBUG-ssh-reservation-9a0] {name} shutdown complete http={http} ssh={ssh}");
-        let released_http = TcpListener::bind(http).await.map_err(|error| {
-            std::io::Error::new(
-                error.kind(),
-                format!("[DEBUG-ssh-reservation-9a0] {name} HTTP rebind {http}: {error}"),
-            )
-        })?;
+        let released_http = TcpListener::bind(http)
+            .await
+            .map_err(|error| reservation_rebind_error(name, "HTTP", http, error))?;
         assert_eq!(released_http.local_addr()?, http);
         drop(released_http);
-        let released_ssh = TcpListener::bind(ssh).await.map_err(|error| {
-            std::io::Error::new(
-                error.kind(),
-                format!("[DEBUG-ssh-reservation-9a0] {name} SSH rebind {ssh}: {error}"),
-            )
-        })?;
+        let released_ssh = TcpListener::bind(ssh)
+            .await
+            .map_err(|error| reservation_rebind_error(name, "SSH", ssh, error))?;
         assert_eq!(released_ssh.local_addr()?, ssh);
         drop(released_ssh);
         eprintln!("[DEBUG-ssh-reservation-9a0] {name} both rebind checks passed");
