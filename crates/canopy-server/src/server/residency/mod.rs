@@ -14,7 +14,9 @@ use axum::{
     http::{Request, Response},
 };
 use cellule_runtime::{
-    CellClient, CellId, CellModule, CellTarget, Error, cell::catalog::CatalogRole,
+    CellClient, CellId, CellModule, CellTarget, Error,
+    cell::catalog::CatalogRole,
+    control::{Control, ControlState, OwnerFence},
 };
 use http_body::{Frame, SizeHint};
 use tokio::sync::{Mutex, OwnedSemaphorePermit};
@@ -38,6 +40,7 @@ pub(super) struct LoadedRepository {
     last_used: Instant,
     initialized: bool,
     local: bool,
+    local_fence: Option<OwnerFence>,
     state: ResidencyState,
     slot: Arc<OwnedSemaphorePermit>,
 }
@@ -152,11 +155,42 @@ impl RepositoryManager {
         &self,
         entry: &RepositoryEntry,
     ) -> Result<Option<RepositoryRoute>, ServerError> {
+        let candidate = {
+            let loaded = self.loaded.lock().await;
+            loaded
+                .get(&entry.repository_id)
+                .filter(|repository| {
+                    repository.local
+                        && repository.initialized
+                        && repository.state == ResidencyState::Serving
+                })
+                .and_then(|repository| {
+                    repository
+                        .local_fence
+                        .map(|fence| (fence, Arc::downgrade(&repository.pin)))
+                })
+        };
+        let Some((fence, pin)) = candidate else {
+            return Ok(None);
+        };
+        let target = repository_target(self.tenant, self.application, entry.repository_id)?;
+        // This actor lookup reads no object-store metadata. A cached client may
+        // outlive deadline fencing and must not hide the normal admission path.
+        let current = self
+            .node
+            .runtime()
+            .resident_handle(&target, CatalogRole::Sql)
+            .await?;
+        if current.is_none_or(|handle| handle.owner_fence() != fence) {
+            return Ok(None);
+        }
         let mut loaded = self.loaded.lock().await;
         let Some(repository) = loaded.get_mut(&entry.repository_id).filter(|repository| {
             repository.local
                 && repository.initialized
                 && repository.state == ResidencyState::Serving
+                && repository.local_fence == Some(fence)
+                && std::sync::Weak::ptr_eq(&pin, &Arc::downgrade(&repository.pin))
         }) else {
             return Ok(None);
         };
@@ -187,6 +221,48 @@ impl RepositoryManager {
         }
         let target = repository_target(self.tenant, self.application, entry.repository_id)?;
         let mut reclaimed = None;
+        // The caller owns this repository's transition lock. Absence of a
+        // serving handle alone is not release proof: unsettled work, owner loss
+        // and an unpublished node-log tail must retain their local files.
+        let local_fence = self
+            .loaded
+            .lock()
+            .await
+            .get(&entry.repository_id)
+            .filter(|repository| {
+                repository.local
+                    && repository.state == ResidencyState::Serving
+                    && Arc::strong_count(&repository.pin) == 1
+            })
+            .and_then(|repository| repository.local_fence);
+        if let Some(fence) = local_fence
+            && self
+                .node
+                .runtime()
+                .resident_handle(&target, CatalogRole::Sql)
+                .await?
+                .is_none()
+        {
+            let observed =
+                cellule_runtime::control::authority::CellAuthority::new(self.layout.clone())
+                    .load(target.cell_id())
+                    .await?;
+            if observed
+                .as_ref()
+                .is_some_and(|control| released_local_fence(control.value(), fence))
+            {
+                let mut loaded = self.loaded.lock().await;
+                let repository = loaded
+                    .get_mut(&entry.repository_id)
+                    .ok_or(ServerError::Repository("loaded repository is absent"))?;
+                if repository.state == ResidencyState::Serving
+                    && repository.local_fence == Some(fence)
+                    && Arc::strong_count(&repository.pin) == 1
+                {
+                    repository.state = ResidencyState::Released;
+                }
+            }
+        }
         let remote_route = self
             .loaded
             .lock()
@@ -221,6 +297,7 @@ impl RepositoryManager {
                     .ok_or(ServerError::Repository(
                         "Cell release failed; restart the node to recover",
                     ))?;
+                let fence = handle.owner_fence();
                 let mut loaded = self.loaded.lock().await;
                 let slot = Arc::clone(
                     &loaded
@@ -234,7 +311,7 @@ impl RepositoryManager {
                         entry,
                         target,
                         CellClient::local(self.node.application().registry(), handle),
-                        true,
+                        Some(fence),
                         slot,
                     )?,
                 );
@@ -252,9 +329,9 @@ impl RepositoryManager {
                     Err(_) => self.evict_repository().await?,
                 },
             };
-            let mut remote = self.peer.remote_owner(&target).await?;
-            let client = if remote {
-                self.peer.client()
+            let remote = self.peer.remote_owner(&target).await?;
+            let (client, local_fence) = if remote {
+                (self.peer.client(), None)
             } else {
                 let directory = self.local.path().join(hex::encode(entry.repository_id));
                 tokio::fs::create_dir_all(&directory).await?;
@@ -276,7 +353,11 @@ impl RepositoryManager {
                 match acquired {
                     Ok(handle) => {
                         tracing::debug!(repository = %hex::encode(entry.repository_id), elapsed_seconds = started.elapsed().as_secs_f64(), "acquired repository Cell");
-                        CellClient::local(self.node.application().registry(), handle)
+                        let fence = handle.owner_fence();
+                        (
+                            CellClient::local(self.node.application().registry(), handle),
+                            Some(fence),
+                        )
                     }
                     Err(error) => {
                         // Another gateway can win after our initial owner read.
@@ -286,14 +367,13 @@ impl RepositoryManager {
                         if !matches!(self.peer.remote_owner(&target).await, Ok(true)) {
                             return Err(error);
                         }
-                        remote = true;
-                        self.peer.client()
+                        (self.peer.client(), None)
                     }
                 }
             };
             self.loaded.lock().await.insert(
                 entry.repository_id,
-                self.bind_repository(entry, target, client, !remote, slot)?,
+                self.bind_repository(entry, target, client, local_fence, slot)?,
             );
         }
         let initialize = self
@@ -512,7 +592,7 @@ impl RepositoryManager {
         entry: &RepositoryEntry,
         target: CellTarget,
         client: CellClient,
-        local: bool,
+        local_fence: Option<OwnerFence>,
         slot: Arc<OwnedSemaphorePermit>,
     ) -> Result<LoadedRepository, ServerError> {
         let application = self.node.application_handle::<CanopyApplication>(
@@ -544,7 +624,8 @@ impl RepositoryManager {
             pin: Arc::new(()),
             last_used: Instant::now(),
             initialized: false,
-            local,
+            local: local_fence.is_some(),
+            local_fence,
             state: ResidencyState::Serving,
             slot,
         })
@@ -567,4 +648,12 @@ impl RepositoryManager {
         )
         .router())
     }
+}
+
+fn released_local_fence(control: &Control, fence: OwnerFence) -> bool {
+    control.state == ControlState::Idle
+        && control.owner.is_none()
+        && control.root.is_some()
+        && control.recovery.is_none()
+        && control.owner_fence() == fence
 }

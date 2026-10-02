@@ -59,3 +59,56 @@ fn disconnect_releases_a_response_pin_without_polling_the_body() {
     drop(response);
     assert_eq!(Arc::strong_count(&pin), 1);
 }
+
+#[test]
+fn fenced_cleanup_requires_the_exact_released_published_activation() {
+    use cellule_runtime::{
+        Digest, SessionId,
+        control::{Owner, RootRef},
+        identity::IncarnationId,
+    };
+
+    let owner = Owner {
+        session: SessionId::from_bytes([3; 16]),
+        endpoint: "https://owned.test".into(),
+    };
+    let mut control = Control::initial(
+        CellId::from_bytes([1; 32]),
+        IncarnationId::from_bytes([2; 16]),
+        owner.clone(),
+        Digest::from_bytes([4; 32]),
+        1,
+    )
+    .unwrap();
+    let fence = control.owner_fence();
+    control.state = ControlState::Idle;
+    control.owner = None;
+    control.root = Some(RootRef {
+        digest: Digest::from_bytes([5; 32]),
+        txid: 1,
+        checksum: 1,
+        commit_sequence: 1,
+    });
+    assert!(released_local_fence(&control, fence));
+    for state in [
+        ControlState::Recovering,
+        ControlState::Serving,
+        ControlState::Tombstoned,
+    ] {
+        let mut unsettled = control.clone();
+        unsettled.state = state;
+        assert!(!released_local_fence(&unsettled, fence));
+    }
+    let mut changed = control.clone();
+    changed.owner = Some(owner);
+    assert!(!released_local_fence(&changed, fence));
+    let mut changed = control.clone();
+    changed.root = None;
+    assert!(!released_local_fence(&changed, fence));
+    let mut changed = control.clone();
+    changed.epoch += 1;
+    assert!(!released_local_fence(&changed, fence));
+    let mut changed = control.clone();
+    changed.incarnation = IncarnationId::from_bytes([6; 16]);
+    assert!(!released_local_fence(&changed, fence));
+}
