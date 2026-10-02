@@ -27,6 +27,39 @@ def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
+def audit_git_failure(row, report):
+    """Validate optional evidence without inventing details for older ledgers."""
+    details = row.get("git_failure")
+    if details is None:
+        return
+    keys = {"kind", "command", "exit_code", "timeout_seconds", "stderr_excerpt",
+            "redacted_stderr_sha256", "redacted_stderr_bytes", "stderr_truncated"}
+    require(isinstance(details, dict) and set(details) == keys, "Git failure fields differ")
+    commands = {"init", "clone", "fetch", "pull", "push", "ls-remote", "rev-parse", "fsck",
+                "show", "notes", "for-each-ref", "hash-object", "cat-file", "config", "add", "commit", "unknown"}
+    require(isinstance(details["command"], str) and details["command"] in commands, "invalid Git command stage")
+    if details["kind"] == "exit":
+        require(row["result"] == "git_error" and type(details["exit_code"]) is int
+                and details["exit_code"] != 0 and details["timeout_seconds"] is None, "invalid Git exit evidence")
+    else:
+        require(details["kind"] == "timeout" and row["result"] == "client_timeout"
+                and details["exit_code"] is None and finite(details["timeout_seconds"])
+                and details["timeout_seconds"] > 0
+                and details["timeout_seconds"] == report["git_timeout_seconds"], "invalid Git timeout evidence")
+    require(isinstance(details["stderr_excerpt"], str), "invalid Git stderr excerpt")
+    excerpt = details["stderr_excerpt"].encode("utf-8")
+    require(len(excerpt) <= 2048 and type(details["redacted_stderr_bytes"]) is int
+            and details["redacted_stderr_bytes"] >= len(excerpt)
+            and type(details["stderr_truncated"]) is bool
+            and isinstance(details["redacted_stderr_sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", details["redacted_stderr_sha256"]), "invalid Git stderr bounds/digest")
+    if details["stderr_truncated"]:
+        require(details["redacted_stderr_bytes"] > len(excerpt), "Git truncation flag differs")
+    else:
+        require(details["redacted_stderr_bytes"] == len(excerpt)
+                and hashlib.sha256(excerpt).hexdigest() == details["redacted_stderr_sha256"], "Git stderr digest differs")
+
+
 def quantiles(values):
     ordered = sorted(values)
     return {name: None if not ordered else round(ordered[math.ceil(q * len(ordered)) - 1], 3)
@@ -89,6 +122,7 @@ def audit_window(path, window, manifest_digest, driver_digest, repository_ids, e
             seen.add(sequence)
             require(type(row["ingress_index"]) is int and row["ingress_index"] == 0
                     and isinstance(row["result"], str), "unexpected ingress/outcome")
+            audit_git_failure(row, report)
             if expected_selection is not None:
                 require(row["repository_id"] == expected_selection[sequence], "deterministic active-set/distribution differs")
             if window["operation"] != "create":

@@ -6,8 +6,9 @@ or published roots**. The qualified executable uses Cellule `0dc04a6`; its
 selected release reached **Ready revision 9**. This closes the release-admission
 gate after [same-code maintenance recovery](2026-10-01-original-corpus-recovery.md).
 Activation alone does not establish remote Git/LFS content recovery, throughput
-or capacity. The subsequent remote verification passed; the completed load
-phases below include failed arrivals and do not establish capacity.
+or capacity. Pre-load remote verification passed. The complete load campaign
+failed its arrival gate, and post-load fresh-owner verification failed during
+an original-corpus Git v2 clone. Full recovery remains unproven.
 
 ## Activation sequence
 
@@ -27,8 +28,9 @@ Old Maintenance 5: all 10,003 Cells idle and unowned
                                        +-- preserve and reread closed evidence
                                        +-- three fresh gateways and proxy ready
                                        +-- remote Git/LFS verification passed
-                                       +-- full load running: failed arrivals retained
-                                       +-- fresh-owner/every-ACK recovery still open
+                                       +-- full load closed: failed arrivals retained
+                                       +-- post-loss original-corpus verification failed
+                                       +-- every-ACK recovery not reached
 ```
 
 The activation controller repeats two complete scans at each of Ready 6,
@@ -134,11 +136,11 @@ directory; the verified copy is
 
 ## Scheduled load results
 
-The unchanged **108-window / 114,960-arrival / 8,640-second** campaign remains
-running on the qualified `0dc04a6` executable and original RustFS provider.
-At October 2, 04:33 UTC (October 1 Pacific), its first four operation phases
-were complete: **40 sealed, audited and preserved windows**. Later clone
-windows had also begun; they are excluded from this completed-phase summary.
+The unchanged **108-window / 114,960-arrival / 8,640-scheduled-second** campaign
+closed October 2 at **07:04:46 UTC** on the qualified `0dc04a6` executable and
+original RustFS provider. All 108 arrival ledgers and resource boundaries were
+independently audited. It recorded **59,554 OK and 55,406 failed arrivals**;
+completing the schedule is not a capacity pass.
 
 | Completed phase | Windows | Scheduled | OK | Busy drops | HTTP 503 | Other failures |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -146,12 +148,30 @@ windows had also begun; they are excluded from this completed-phase summary.
 | Repository creation | 6 | 2,160 | 1,464 | 690 | 6 | 0 |
 | HTTP Git v2 discovery | 8 | 57,600 | 10,309 | 9,581 | 37,706 | 4 transport errors |
 | Stock Git ls-remote | 8 | 1,200 | 632 | 514 | Not separately classified | 54 Git errors |
+| Clone | 8 | 1,200 | 704 | 495 | Not separately classified | 1 Git error |
+| Fresh-client fetch | 8 | 1,200 | 814 | 386 | Not separately classified | 0 |
+| Incremental fetch | 8 | 1,200 | 771 | 418 | Not separately classified | 11 Git errors |
+| Incremental pull | 8 | 1,200 | 743 | 457 | Not separately classified | 0 |
+| Ref-only push | 4 | 1,200 | 1,023 | 85 | Not separately classified | 92 Git errors |
+| Fresh-object push, 256 KiB and 1 MiB | 16 | 2,400 | 467 | 1,591 | Not separately classified | 333 Git errors, 9 timeouts |
+| LFS download | 8 | 1,200 | 900 | 297 | 3 | 0 |
+| LFS upload | 8 | 1,200 | 242 | 626 | 157 | 174 transport errors, 1 HTTP 500 |
 
 These are failed arrival gates. The HTTP discovery probe checks the v2
 capability response, not the full stock-Git ref exchange; `ls-remote` runs the
 actual Git client and checks the expected main ref. Busy arrivals do not start
 requests and have no completed-request latency. Git errors remain client-level
 failures rather than being silently classified as HTTP 503s.
+Fresh-client fetch does not guarantee a cold server cache. The frozen driver
+did not retain Git stderr excerpts, so those errors cannot be assigned a cause
+from the arrival ledger alone. Failed writes are not assumed to have rolled back.
+
+The eight 1-MiB push windows recorded **150/1,200 OK**, 855 busy drops, 186 Git
+errors and nine timeouts. All positive ACKs and **157,286,400 declared payload
+bytes** were reconciled; these are not wire bytes. The two 16-client, 4-push/s
+windows delivered **0.117 / 0.050 successful in-window pushes/s**, with
+successful-only scheduled p95 latencies of **70.764 / 100.998 seconds**.
+Completion counts include drain; in-window rates exclude it.
 
 Fast refusal can make aggregate latency misleading. In the first uniform
 100-RPS discovery window, completed attempts had p50 **7.824 ms**, but successful
@@ -193,8 +213,8 @@ root cause is established.
 
 ### Earlier ten-window metadata snapshot
 
-The unchanged **108-window / 114,960-arrival / 8,640-second** campaign is running
-on the same qualified executable and original RustFS provider. This earlier snapshot
+The now-closed campaign used the same qualified executable and original
+RustFS provider. This earlier snapshot
 covers only its first **ten sealed, audited and preserved metadata windows**,
 observed October 2 at 03:36 UTC. All offer 20 requests/s for 120 seconds, with
 client concurrency 32 and node residency capped at 100. An active set of 500
@@ -258,6 +278,64 @@ deltas were balanced (85/85/84 and 106/106/105), with no proxy errors or
 rejections. This weakens timer scheduling and connection-count imbalance as
 dominant explanations; it does not prove a Directory or RustFS bottleneck.
 
+## Post-load owner loss and failed recovery
+
+The closed campaign's positive ACK inventory contains **1,464 creations,
+1,023 ref-only pushes, 467 fresh-object pushes, 242 LFS uploads and 19 critical
+workflows**. The original and acknowledged namespace has 11,504 distinct
+repository identities. Inventory integrity does not prove remote recovery.
+
+```text
+108 closed windows + every positive ACK inventoried
+  -> exact three original gateway owners removed
+  -> 32.008191 seconds of confirmed owner absence
+  -> first fresh launch: helper metrics/readiness race; normally drained
+  -> separate fresh launch: three new owners and proxy ready
+  -> original-corpus verification: Git v2 clone exited 128
+  -> remaining corpus, critical fixtures and every-ACK stages not completed
+```
+
+RustFS identity, start time, configuration and resource envelope were unchanged
+across owner loss. The first fresh launch's helper failure remains preserved.
+The separate launch waits for metrics from the same live child within the
+original startup deadline; nine guard tests passed. It neither respawns a child
+nor widens the deadline or runtime budgets.
+
+The actual read-only recovery attempt terminated at **08:13:33 UTC on October 2**
+during the original-corpus stage. Its 3,998 request rows contain 3,632 identity
+checks, 41 LFS downloads and 325 Git commands. One Git command failed:
+
+```sh
+git -c protocol.version=2 clone \
+  "$PROXY_URL/canopy/density-3a92b05e1d80-03629.git" \
+  "$NEW_WORK_DIR/density-3a92b05e1d80-03629-v2"
+```
+
+It exited **128 after 0.570 seconds**, not a client timeout. The frozen verifier
+retained stderr's SHA-256 but not its text; the root cause is unresolved. No
+complete stage was recorded, and the every-ACK verification stages were not
+reached. Partial successful requests do not establish full-corpus recovery.
+Any later diagnostic success must remain separate from this failed attempt.
+
+All **3,684 closed attempt files**, including the request ledger and all remaining
+cloned data, were copied and independently hash-checked on a
+different local filesystem. All **651 input bindings** were checked before and
+after copying. This is evidence preservation, not a provider or off-machine backup.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Full campaign audit | `23836f6a437826a58e5157b534a17346b939e9c4e7213168b1c872c19f387f59` |
+| Complete ACK inventory | `9853c5f32551980165d62e06281e163a26d435fde070984883fe8c388758a0de` |
+| Owner-loss receipt | `40cb5aa9068b8f32cffb51433682af6c8fa4ce36b4a2a856543c753018f0addb` |
+| Failed recovery receipt | `54c3e058871c7c57ef65f9b8f32f3f94cdd93151915d757af49cfcce333a3b54` |
+| Failed recovery request ledger | `a331fe7b71dcd546abee9fc46b623dcafaec0b4374e5de64941a9b8d0afa0348` |
+| Failed recovery preservation manifest | `c9b314798f1071dcb625f95e9cd4da8b9d64618051d8f7d61b100dfe85a601fc` |
+
+The failed attempt is at
+`/Volumes/Workspace/CrabData/canopy-full-post-owner-loss-5zhLBG`;
+its verified copy and manifest are at
+`/Users/haipingfu/.codex/canopy-full-recovery-failed-y871llh9`.
+
 ## Remaining verification
 
 Cellule upstream subsequently advanced by two commits to
@@ -273,8 +351,8 @@ remain open. See the
 [current dependency checkpoint](2026-10-01-cellule-main-qualification.md).
 No result from this activation or frozen campaign transfers to the new pin.
 
-The [full campaign](../performance-plan.md) still requires
-the complete schedule and audit, concurrent faults, fresh-owner verification
+The [performance plan](../performance-plan.md) still requires
+concurrent faults, fresh-owner verification
 of the original corpus and every newly acknowledged write, higher admission
 profiles, matched comparisons, large
 transfers and isolated Linux capacity. The earlier diagnostic lease-fencing

@@ -70,7 +70,8 @@ seed and successful recovery of every recorded ACK.
 | HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
 | Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
 | Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |
-| Current original-corpus load snapshot | Four completed phases / 40 windows: metadata 41,485/43,200 OK; creation 1,464/2,160; HTTP v2 discovery 10,309/57,600; stock-Git ls-remote 632/1,200. Failed arrivals retained. Concurrent critical schedule: 19/20 OK, 323 successful steps, 38 UUIDs. Sealed ledgers audited and copied; full schedule still running, not reference capacity |
+| Complete original-corpus load | All 108 windows / 114,960 arrivals / 8,640 scheduled seconds closed and independently audited: 59,554 OK, 55,406 failed arrivals. Concurrent critical schedule: 19/20 OK, 323 successful steps, 38 UUIDs. Every positive ACK inventoried; not reference capacity |
+| Post-load fresh-owner recovery | Exact original owners removed; 32.008191 seconds of confirmed absence, unchanged RustFS. Separate fresh fleet reached readiness after a preserved helper failure. Original-corpus verification then failed a Git v2 clone with exit 128; no complete stage or every-ACK recovery pass. All 3,684 attempt files copied and hash-checked |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
@@ -85,7 +86,7 @@ seed and successful recovery of every recorded ACK.
 | Post-load ACK recovery | Recorded three-owner loss and 32.249-s wait; critical fixtures passed. Fresh fleet then recorded ENOSPC and shut down; full corpus and every-ACK verification are incomplete |
 | Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. Original-corpus concurrent load closed at 19/20 OK with one busy drop; all 19 attempted receipts complete. Fresh-owner verification of all 38 UUIDs and concurrent fault coverage remain open; the small-fixture 20/20 recovery result is separate |
 | Evidence availability | Old benchmark directories and executable disappeared; old receipts remain unavailable. New closed artifacts, all build bindings and the completed seed have verified backups on a separate filesystem outside Cargo targets; changing outputs are excluded |
-| Performance qualification | Pre-load original-corpus remote verification passed. Complete scheduled load/audit, original-corpus and every-ACK recovery after owner loss, concurrent faults, higher admission profiles and matched comparisons remain open |
+| Performance qualification | Pre-load remote verification and complete schedule/ledger audit passed their integrity checks. Arrival gate failed. Original-corpus and every-ACK recovery after owner loss, concurrent faults, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
@@ -858,6 +859,20 @@ Its output binds the source report digests and counts only verified
 acknowledgements. It does not kill a server or establish that an owner restarted:
 record old/new node identities, process exit and fresh local-state evidence
 alongside it. Run the separate corpus `verify` for seeded identities and data.
+
+New benchmark arrival samples retain optional `git_failure` details: the Git
+command stage, nonzero exit or unchanged timeout, and up to **2,048 UTF-8 bytes**
+of redacted stderr. Configured tokens, authorization headers, URL userinfo and
+common secret query parameters are removed before truncation and hashing.
+`redacted_stderr_sha256` and `redacted_stderr_bytes` describe the full redacted
+text, not the original stderr. Review excerpts before sharing: this is not a
+general-purpose secret detector. Raw command arguments are not added to these
+details. Failures remain failed arrivals; no retry or timeout widening is added.
+
+The closed-ledger auditor validates the optional fields, their outcome/deadline
+consistency, excerpt bounds and non-truncated digest. It still accepts historical
+samples without these fields; their missing stderr cannot be reconstructed.
+For matched comparisons, use the same instrumented driver for both binaries.
 
 Regression fixtures cover SHA-1/SHA-256 pushes, wrong tips, exact-body
 differences, corrupt LFS, lost acknowledgements, tampered samples and inconsistent

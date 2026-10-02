@@ -132,10 +132,37 @@ def git_result(*args, cwd, token, timeout=120, request_id=None):
                           capture_output=True, timeout=timeout, check=False)
 
 
+def git_failure_details(args, token, stderr, *, kind, exit_code=None, timeout=None):
+    """Bound redacted stderr evidence; never retain command arguments or credentials."""
+    values = list(args)
+    while len(values) >= 2 and values[0] == "-c":
+        values = values[2:]
+    commands = {"init", "clone", "fetch", "pull", "push", "ls-remote", "rev-parse", "fsck",
+                "show", "notes", "for-each-ref", "hash-object", "cat-file", "config", "add", "commit"}
+    command = values[0] if values and values[0] in commands else "unknown"
+    text = (stderr or b"").decode("utf-8", errors="replace")
+    if token:
+        text = text.replace(token, "[redacted]")
+    text = re.sub(r"(?im)\b(?:proxy-)?authorization\s*:[^\r\n]*", "[redacted authorization]", text)
+    text = re.sub(r"(?i)((?:https?|ssh)://)[^\s/@]+@", r"\1[redacted]@", text)
+    text = re.sub(r"(?i)([?&](?:access_token|token|password|secret|signature)=)[^&#\s]+", r"\1[redacted]", text)
+    redacted = text.encode("utf-8")
+    excerpt = redacted[:2048].decode("utf-8", errors="ignore")
+    return {"kind": kind, "command": command, "exit_code": exit_code, "timeout_seconds": timeout,
+            "stderr_excerpt": excerpt, "redacted_stderr_sha256": hashlib.sha256(redacted).hexdigest(),
+            "redacted_stderr_bytes": len(redacted), "stderr_truncated": len(redacted) > len(excerpt.encode("utf-8"))}
+
+
 def git(*args, cwd, token, timeout=120, request_id=None):
-    result = git_result(*args, cwd=cwd, token=token, timeout=timeout, request_id=request_id)
+    try:
+        result = git_result(*args, cwd=cwd, token=token, timeout=timeout, request_id=request_id)
+    except subprocess.TimeoutExpired as error:
+        error.git_failure = git_failure_details(args, token, error.stderr, kind="timeout", timeout=error.timeout)
+        raise
     if result.returncode:
-        raise RuntimeError(f"Git {args[0]} failed (exit {result.returncode})")
+        error = RuntimeError(f"Git {args[0]} failed (exit {result.returncode})")
+        error.git_failure = git_failure_details(args, token, result.stderr, kind="exit", exit_code=result.returncode)
+        raise error
     return result.stdout.strip().decode()
 
 
@@ -828,6 +855,7 @@ def measure(args, client, token):
             uploaded_oid = None
             created_id = None
             push_receipt = {}
+            git_failure = None
             created_name = f"create-{create_run_id}-{sequence:07d}" if creation else None
             try:
                 if creation:
@@ -882,10 +910,12 @@ def measure(args, client, token):
                     raise ValueError("unsupported benchmark operation")
                 result = ("ok" if valid else
                           (f"http_{status}" if not git_operation and status != 200 else "invalid_response"))
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as error:
                 result = "client_timeout"
-            except RuntimeError:
+                git_failure = getattr(error, "git_failure", None)
+            except RuntimeError as error:
                 result = "git_error"
+                git_failure = getattr(error, "git_failure", None)
             except (OSError, ValueError, KeyError, http.client.HTTPException):
                 pass
             finally:
@@ -896,6 +926,7 @@ def measure(args, client, token):
                         "push_commit": push_receipt.get("push_commit"),
                         "git_push_command_ms": push_receipt.get("git_push_command_ms"),
                         "git_client_preparation_ms": push_receipt.get("git_client_preparation_ms"),
+                        "git_failure": git_failure,
                         "completion_offset_seconds": finished - started,
                         "elapsed_ms": (finished - scheduled) * 1000,
                         "service_ms": (finished - dispatched) * 1000,
