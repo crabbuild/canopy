@@ -24,6 +24,18 @@ import urllib.request
 import local_eval
 
 
+def source_tree_digest(root):
+    digest = hashlib.sha256()
+    sources = [root / "Cargo.toml", root / "Cargo.lock"]
+    sources.extend(path for path in (root / "crates").rglob("*")
+                   if path.is_file() and (path.suffix in (".rs", ".sql")
+                                          or path.name == "Cargo.toml"))
+    for source_file in sorted(sources):
+        digest.update(str(source_file.relative_to(root)).encode() + b"\0"
+                      + source_file.read_bytes())
+    return digest.hexdigest()
+
+
 def references(directory):
     output = local_eval.run("git", "-C", str(directory), "for-each-ref",
                             "--format=%(objectname) %(refname)", "refs/heads", "refs/tags")
@@ -72,14 +84,11 @@ def main():
                    GIT_CONFIG_VALUE_0="", GIT_CONFIG_KEY_1="http.extraHeader",
                    GIT_CONFIG_VALUE_1="Authorization: Basic " + auth,
                    GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
-    source_digest = hashlib.sha256()
-    for source_file in sorted([*Path("crates").rglob("*.rs"), *Path("crates").rglob("*.sql"), *Path("crates").glob("*/Cargo.toml"), Path("Cargo.toml"), Path("Cargo.lock")]):
-        source_digest.update(str(source_file).encode() + b"\0" + source_file.read_bytes())
     report = {
         "mode": args.mode, "name": args.name, "status": "running", "stages": [],
         "source": str(args.source.resolve()), "canopy_binary_sha256": metadata["binary_sha256"],
         "canopy_revision": local_eval.run("git", "rev-parse", "HEAD"),
-        "canopy_source_tree_sha256": source_digest.hexdigest(),
+        "canopy_source_tree_sha256": source_tree_digest(Path(__file__).resolve().parent.parent),
         "canopy_working_tree_dirty": bool(local_eval.run("git", "status", "--porcelain")),
         "provider_image": metadata["provider_image"], "git_version": local_eval.run("git", "--version"),
         "host_platform": platform.platform(), "host_cpu_count": os.cpu_count(),

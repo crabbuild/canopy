@@ -53,6 +53,12 @@ Durable pack compaction/garbage collection, preview schema migration, provider
 fault tests and bounded Linux concurrent-load qualification remain production
 work. See [the operational recipe](../deploy/local-evaluation.md).
 
+The directory retains the selected c51 release's credential code, but the
+repository pack schema does not support a rolling upgrade from that release.
+Compatibility tests assert that its repository code and whole-release upgrade
+are rejected. Existing deployments need a qualified migration; local evaluation
+uses a fresh provider prefix.
+
 Current evidence:
 
 ```text
