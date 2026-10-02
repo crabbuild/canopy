@@ -98,9 +98,10 @@ impl GitHttpBackend {
         budget: DiskBudget,
         head: &str,
         object_format: crate::ObjectFormat,
+        native: crate::native_resources::NativeScope,
     ) -> Result<Self, GitHttpError> {
         Ok(Self {
-            cache: GitCache::create(scratch_root, budget, head, object_format).await?,
+            cache: GitCache::create(scratch_root, budget, head, object_format, native).await?,
             nonce_seed: None,
             signers: None,
         })
@@ -248,6 +249,9 @@ impl GitHttpBackend {
             process,
             (keep_alive, Arc::clone(&self.cache), request.body),
             WORKER_DEADLINE,
+            self.cache
+                .native
+                .try_admit(crate::native_resources::NativeWork::Pack)?,
         )
         .await
     }
@@ -291,8 +295,9 @@ async fn start_stream<T: Send + 'static>(
     command: Command,
     keep_alive: T,
     deadline: Duration,
+    native: crate::native_resources::NativePermit,
 ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
-    let mut process = GitProcess::spawn(command, keep_alive)?;
+    let mut process = GitProcess::spawn(command, keep_alive, native)?;
     let stdout = process
         .child
         .stdout

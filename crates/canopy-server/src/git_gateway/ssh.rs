@@ -34,7 +34,15 @@ impl GitGateway {
         if protocol_v2 {
             command.env("GIT_PROTOCOL", "version=2");
         }
-        let mut process = GitProcess::spawn(command, (Arc::clone(&cached), admission))?;
+        let mut process = GitProcess::spawn(
+            command,
+            (Arc::clone(&cached), admission),
+            cached
+                .backend
+                .cache
+                .native
+                .try_admit(crate::native_resources::NativeWork::Pack)?,
+        )?;
         let mut stdin = process
             .child
             .stdin

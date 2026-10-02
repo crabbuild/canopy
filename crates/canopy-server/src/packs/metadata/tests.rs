@@ -99,7 +99,12 @@ pub(in crate::packs) async fn fixture(format: ObjectFormat, blobs: usize) -> Res
         object_count: index.len(),
     };
     let ids = index.ids().collect::<std::io::Result<Vec<_>>>()?;
-    let mut reader = GitObjects::packed(root.path(), ids)?;
+    let mut reader = GitObjects::packed(
+        root.path(),
+        ids,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let mut objects = BTreeMap::new();
     while let Some(oid) = reader.next().await? {
         let (kind, body) = reader.read(oid).await?.body().await?;

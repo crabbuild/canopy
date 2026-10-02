@@ -135,7 +135,12 @@ async fn ambient_duplicate_cannot_hide_an_unresolved_delta_in_isolated_verificat
         descriptor.verify_files(&path, &path.with_extension("idx"))?;
         let root = tempfile::TempDir::new()?;
         let budget = DiskBudget::new(128 << 20);
-        let mut ambient = CanonicalVerifier::new(prepared.fixture.root.path(), format)?;
+        let mut ambient = CanonicalVerifier::new(
+            prepared.fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         let decoded = ambient
             .inspect_to_disk(target, root.path(), budget.clone(), 0)
             .await?;
@@ -150,6 +155,8 @@ async fn ambient_duplicate_cannot_hide_an_unresolved_delta_in_isolated_verificat
             &prepared.store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await;
         match outcome {
@@ -224,6 +231,8 @@ async fn completed_thin_pack_verifies_every_entry_including_the_appended_externa
             &prepared.store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let segment = verifier.inspect_next_shard(2).await?;
@@ -270,6 +279,8 @@ async fn isolated_pack_can_have_graph_dependencies_in_other_packs_without_extern
             &prepared.store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let segment = verifier.inspect_next_shard(1).await?;

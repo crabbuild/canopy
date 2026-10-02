@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import re
@@ -128,7 +129,7 @@ def qualify(args):
                 "tenant_id": str(uuid.uuid4()), "application_id": str(uuid.uuid4()),
                 "node_id": str(uuid.uuid4()), "fleet_digest": "11" * 32, "image_digest": "22" * 32,
                 "owner": "canopy", "peer_endpoint": "https://cache.example.invalid",
-                "local_disk_limit_bytes": 512 * 1024**2, "max_active_repositories": 3}
+                "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 512 * 1024**2, "max_active_repositories": 3}
     report = {"binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "storage_url": settings["storage_url"], "cache_reuse_passed": False,
               "recovery_passed": False, "shutdown_passed": False,

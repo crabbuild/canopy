@@ -121,6 +121,8 @@ async fn physical_shards_close_and_bind_the_reused_directory_inventory() -> Resu
                 &prepared.store,
                 prepared.descriptor,
                 physical_limits(),
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
             )
             .await?;
             let mut segments = Vec::new();
@@ -224,6 +226,8 @@ async fn commit_in_a_separate_pack_requires_the_exact_certified_base_dependency(
                 &prepared.store,
                 descriptor,
                 physical_limits(),
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
             )
             .await?;
             let segment = physical.inspect_next_shard(1).await?;
@@ -282,6 +286,8 @@ async fn incomplete_mismatched_or_interrupted_physical_partitions_poison_closure
             &prepared.store,
             prepared.descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let first = physical.inspect_next_shard(1).await?;
@@ -351,6 +357,8 @@ async fn changed_sealed_metadata_bytes_cannot_enter_closure_or_be_retried() -> R
         &prepared.store,
         prepared.descriptor,
         physical_limits(),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let segment = physical
@@ -418,6 +426,8 @@ async fn separate_native_packs_merge_their_graphs_and_identical_canonical_overla
                 &prepared.store,
                 prepared.descriptor,
                 physical_limits(),
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
             )
             .await?;
             physical_count += prepared.descriptor.object_count as u64;

@@ -133,6 +133,7 @@ impl PhysicalVerifier {
         store: &ArtifactStore,
         descriptor: NativePackDescriptor,
         limits: PhysicalLimits,
+        native: crate::native_resources::NativeScope,
     ) -> Result<Self, PhysicalError> {
         descriptor.validate(store.repository(), descriptor.format)?;
         if limits.max_pack_bytes > MAX_ARTIFACT_BYTES
@@ -150,17 +151,22 @@ impl PhysicalVerifier {
             budget.clone(),
             "refs/heads/main",
             descriptor.format,
+            native,
         )
         .await?;
         cache.download_native(store, descriptor).await?;
         let pinned = Arc::clone(&cache);
+        let input_claim = cache
+            .native
+            .try_admit(crate::native_resources::NativeWork::Read)?;
         let binding = tokio::task::spawn_blocking(move || {
+            let _claim = input_claim;
             let path = pack_path(&pinned, descriptor);
             descriptor.verify_files(&path, &path.with_extension("idx"))
         })
         .await??;
         validate_native(Arc::clone(&cache), descriptor, limits.native_timeout).await?;
-        let native = CanonicalVerifier::new(&cache.git_dir(), descriptor.format)?;
+        let native = CanonicalVerifier::new(&cache.git_dir(), descriptor.format, &cache.native)?;
         Ok(Self {
             store: store.clone(),
             native: Some(native),
@@ -285,12 +291,15 @@ async fn validate_native(
 ) -> Result<(), GitHttpError> {
     let mut command = crate::native_git::command(&cache.git_dir())?;
     command
-        .args(["index-pack", "--verify"])
+        .args(["index-pack", "--threads=2", "--verify"])
         .arg(pack_path(&cache, descriptor))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut process = GitProcess::spawn(command, cache)?;
+    let native = cache
+        .native
+        .try_admit(crate::native_resources::NativeWork::Pack)?;
+    let mut process = GitProcess::spawn(command, cache, native)?;
     let run = async {
         let (_, stderr) = tokio::try_join!(
             read_bounded(

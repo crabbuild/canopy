@@ -41,10 +41,22 @@ pub(crate) struct GitProcess<T: Send + 'static> {
     group: Option<i32>,
     #[cfg(unix)]
     fence: Option<fence::CompletionFence>,
-    owner: Option<T>,
+    owner: Option<ProcessOwner<T>>,
+}
+struct ProcessOwner<T> {
+    _owner: T,
+    _native: crate::native_resources::NativePermit,
 }
 impl<T: Send + 'static> GitProcess<T> {
-    pub(crate) fn spawn(mut command: Command, owner: T) -> io::Result<Self> {
+    pub(crate) fn spawn(
+        mut command: Command,
+        owner: T,
+        native: crate::native_resources::NativePermit,
+    ) -> io::Result<Self> {
+        let owner = ProcessOwner {
+            _owner: owner,
+            _native: native,
+        };
         #[cfg(unix)]
         let fence = {
             command.process_group(0);

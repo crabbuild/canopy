@@ -588,6 +588,7 @@ fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> Server
         ssh: None,
         data_dir,
         store_prefix: StorePath::from("single-server-test"),
+        native_limits: canopy_server::native_resources::NativeLimits::default(),
         local_disk_limit_bytes: 1 << 30,
         max_active_repositories: 3,
     }

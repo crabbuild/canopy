@@ -87,6 +87,8 @@ pub(super) async fn physical(
         &prepared.store,
         prepared.descriptor,
         physical_limits(),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let halfway = prepared.descriptor.object_count / 2;
@@ -243,6 +245,8 @@ async fn complete_physical_partitions_build_exact_catalogs_and_reuse_the_certifi
             &prepared.store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let segment = physical.inspect_next_shard(1).await?;
@@ -351,6 +355,8 @@ async fn physical_validity_cannot_publish_missing_graph_dependencies() -> Result
             &prepared.store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let segment = physical.inspect_next_shard(1).await?;

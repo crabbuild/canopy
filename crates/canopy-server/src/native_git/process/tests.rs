@@ -43,7 +43,14 @@ async fn closed_stdio_does_not_complete_wait_before_descendant_drain() -> Result
         root.path(),
         "(touch ready; while [ ! -f release ]; do sleep 0.01; done) </dev/null >/dev/null 2>&1 & printf '%s\n' \"$!\"; exit 0",
     );
-    let mut process = GitProcess::spawn(command, (permit, Owner(Some(done))))?;
+    let resources = crate::native_resources::NativeResources::default();
+    let mut process = GitProcess::spawn(
+        command,
+        (permit, Owner(Some(done))),
+        resources
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    )?;
     let mut output = process.child.stdout.take().ok_or("stdout")?;
     let mut pid = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), output.read_to_end(&mut pid)).await??;
@@ -57,6 +64,10 @@ async fn closed_stdio_does_not_complete_wait_before_descendant_drain() -> Result
         })
         .await;
     }
+    assert_eq!(
+        resources.usage()?.foreground,
+        crate::native_resources::NativeWork::Read.claim()
+    );
     assert_eq!(permits.available_permits(), 0);
     std::fs::write(root.path().join("release"), b"drain")?;
     assert!(
@@ -68,6 +79,16 @@ async fn closed_stdio_does_not_complete_wait_before_descendant_drain() -> Result
     drop(process);
     tokio::time::timeout(Duration::from_secs(5), wait_done).await??;
     assert_eq!(permits.available_permits(), 1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while resources.usage().unwrap().foreground.processes != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
     Ok(())
 }
 
@@ -103,7 +124,14 @@ async fn canceled_owner_remains_charged_when_a_descendant_escapes_the_group() ->
     );
     let mut command = shell(root.path(), &script);
     command.env(HELPER_ROOT, root.path());
-    let mut process = GitProcess::spawn(command, (permit, Owner(Some(done))))?;
+    let resources = crate::native_resources::NativeResources::default();
+    let mut process = GitProcess::spawn(
+        command,
+        (permit, Owner(Some(done))),
+        resources
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    )?;
     let mut output = process.child.stdout.take().ok_or("stdout")?;
     let mut pid = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), output.read_to_end(&mut pid)).await??;
@@ -117,10 +145,24 @@ async fn canceled_owner_remains_charged_when_a_descendant_escapes_the_group() ->
             .await
             .is_err()
     );
+    assert_eq!(
+        resources.usage()?.foreground,
+        crate::native_resources::NativeWork::Read.claim()
+    );
     assert_eq!(permits.available_permits(), 0);
     std::fs::write(root.path().join("release"), b"drain")?;
     tokio::time::timeout(Duration::from_secs(5), wait_done).await??;
     assert_eq!(permits.available_permits(), 1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while resources.usage().unwrap().foreground.processes != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
     Ok(())
 }
 
@@ -165,7 +207,8 @@ async fn closed_daemon_standard_descriptors_cannot_replace_the_completion_end() 
         let root = std::path::PathBuf::from(root);
         let result = async {
             let command = shell(&root, "(touch ready; n=0; while [ ! -f release ] && [ \"$n\" -lt 500 ]; do n=$((n+1)); sleep 0.01; done) </dev/null >/dev/null 2>&1 & exit 0");
-            let mut process = GitProcess::spawn(command, ())?;
+            let resources = crate::native_resources::NativeResources::default();
+            let mut process = GitProcess::spawn(command, (), resources.scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?)?;
             let mut output = process.child.stdout.take().ok_or("stdout")?;
             let mut bytes = Vec::new();
             tokio::time::timeout(Duration::from_secs(5), output.read_to_end(&mut bytes)).await??;

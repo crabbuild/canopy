@@ -52,6 +52,7 @@ pub(crate) enum ReceiveHook {
 
 pub(crate) struct GitCache {
     object_format: crate::ObjectFormat,
+    pub(crate) native: crate::native_resources::NativeScope,
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
     objects: Option<Arc<GitCache>>,
@@ -74,8 +75,9 @@ impl GitCache {
         budget: DiskBudget,
         head: &str,
         object_format: crate::ObjectFormat,
+        native: crate::native_resources::NativeScope,
     ) -> Result<Arc<Self>, CacheError> {
-        Self::create_with_objects(root, budget, head, object_format, None).await
+        Self::create_with_objects(root, budget, head, object_format, None, native).await
     }
 
     pub(crate) async fn create_with_objects(
@@ -84,6 +86,7 @@ impl GitCache {
         head: &str,
         object_format: crate::ObjectFormat,
         objects: Option<Arc<GitCache>>,
+        native: crate::native_resources::NativeScope,
     ) -> Result<Arc<Self>, CacheError> {
         if !crate::default_branch::valid_default_branch(head) {
             return Err(CacheError::InvalidHead);
@@ -92,6 +95,7 @@ impl GitCache {
         tokio::task::spawn_blocking(move || {
             let cache = Arc::new(Self {
                 object_format,
+                native,
                 // Native workers change cwd to this cache; their paths must stay
                 // absolute even when the node's data directory is relative.
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,

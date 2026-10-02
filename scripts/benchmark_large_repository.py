@@ -73,7 +73,7 @@ def main():
                    GIT_CONFIG_VALUE_1="Authorization: Basic " + auth,
                    GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
     source_digest = hashlib.sha256()
-    for source_file in sorted([*Path("src").rglob("*.rs"), *Path("src").rglob("*.sql"), Path("Cargo.toml"), Path("Cargo.lock")]):
+    for source_file in sorted([*Path("crates").rglob("*.rs"), *Path("crates").rglob("*.sql"), *Path("crates").glob("*/Cargo.toml"), Path("Cargo.toml"), Path("Cargo.lock")]):
         source_digest.update(str(source_file).encode() + b"\0" + source_file.read_bytes())
     report = {
         "mode": args.mode, "name": args.name, "status": "running", "stages": [],
@@ -84,6 +84,7 @@ def main():
         "provider_image": metadata["provider_image"], "git_version": local_eval.run("git", "--version"),
         "host_platform": platform.platform(), "host_cpu_count": os.cpu_count(),
         "disk_limit_bytes": config["local_disk_limit_bytes"],
+        "native_limits": config["native_limits"],
         "active_repository_limit": config["max_active_repositories"],
         "node_process_tree_peak_rss_bytes": 0,
         "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -42,7 +42,13 @@ async fn collect(
     included: Vec<crate::ObjectId>,
     excluded: Vec<crate::ObjectId>,
 ) -> TestResult<BTreeMap<crate::ObjectId, (ObjectKind, Vec<u8>)>> {
-    let mut objects = GitObjects::start(&path.join(".git"), included, excluded)?;
+    let mut objects = GitObjects::start(
+        &path.join(".git"),
+        included,
+        excluded,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let mut result = BTreeMap::new();
     while let Some(oid) = objects.next().await? {
         let object = objects.read(oid).await?.body().await?;
@@ -119,6 +125,8 @@ async fn missing_walk_root_cannot_finish_successfully() -> TestResult {
         &directory.path().join(".git"),
         vec![crate::ObjectId::Sha1([42; 20])],
         vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )?;
     assert_eq!(objects.next().await?, None);
     assert!(matches!(
@@ -165,7 +173,13 @@ async fn malformed_and_oversized_batches_fail_before_publication() {
 async fn dropping_reader_kills_both_children() -> TestResult {
     let directory = fixture().await?;
     let tip = oid(directory.path(), "HEAD").await?;
-    let objects = GitObjects::start(&directory.path().join(".git"), vec![tip], vec![])?;
+    let objects = GitObjects::start(
+        &directory.path().join(".git"),
+        vec![tip],
+        vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let pids = [
         objects
             .walk
@@ -202,7 +216,13 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     tokio::fs::write(directory.path().join("large"), &body).await?;
     let output = git(directory.path(), &["hash-object", "-w", "large"]).await?;
     let oid = parse_oid(output.trim_ascii())?;
-    let mut objects = GitObjects::start(&directory.path().join(".git"), vec![oid], vec![])?;
+    let mut objects = GitObjects::start(
+        &directory.path().join(".git"),
+        vec![oid],
+        vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     assert_eq!(objects.next().await?, Some(oid));
     let mut object = objects.read(oid).await?;
     let store = crate::blob::LargeBlobStore::new(
@@ -233,6 +253,8 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     let mut verifier = crate::packs::verification::CanonicalVerifier::new(
         &directory.path().join(".git"),
         oid.format(),
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )?;
     let canonical = verifier.inspect(oid, &mut BlobSink).await?;
     assert_eq!(canonical.size, body.len() as u64);
@@ -261,7 +283,13 @@ async fn missing_walk_streams_requested_history_without_unrelated_blobs() -> Tes
         let hex = hex::encode(oid);
         tokio::fs::remove_file(path.join(".git/objects").join(&hex[..2]).join(&hex[2..])).await?;
     }
-    let mut walk = GitObjectWalk::missing(&path.join(".git"), vec![root], None)?;
+    let mut walk = GitObjectWalk::missing(
+        &path.join(".git"),
+        vec![root],
+        None,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let mut found = std::collections::BTreeSet::new();
     while let Some(oid) = walk.next().await? {
         assert!(found.insert(oid), "duplicate missing object");

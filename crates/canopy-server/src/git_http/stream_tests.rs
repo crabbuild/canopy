@@ -23,7 +23,15 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
         "printf 'Content-Type: application/octet-stream\r\n\r\n'; dd if=/dev/zero bs=65536 count=1088 2>/dev/null; touch completed",
     );
     command.current_dir(files.path());
-    let mut response = start_stream(command, files, Duration::from_secs(30)).await?;
+    let mut response = start_stream(
+        command,
+        files,
+        Duration::from_secs(30),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    )
+    .await?;
     tokio::time::timeout(Duration::from_secs(5), async {
         while response.body.receiver.len() < 4 {
             tokio::task::yield_now().await;
@@ -48,8 +56,7 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
 async fn exit_failure_after_headers_is_a_body_error() -> Result<(), Box<dyn std::error::Error>> {
     let mut response = start_stream(
         shell("printf 'Content-Type: application/octet-stream\r\n\r\npartial'; echo failed >&2; exit 7"),
-        (), Duration::from_secs(5),
-    ).await?;
+        (), Duration::from_secs(5), crate::native_resources::NativeResources::default().scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?).await?;
     let mut bytes = Vec::new();
     let error = loop {
         match chunk(&mut response.body).await {
@@ -72,6 +79,9 @@ async fn deadline_after_headers_is_a_body_error() -> Result<(), Box<dyn std::err
         shell("printf 'Content-Type: application/octet-stream\r\n\r\n'; sleep 30"),
         (),
         Duration::from_secs(1),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
     )
     .await?;
     assert!(matches!(
@@ -88,6 +98,9 @@ async fn malformed_headers_fail_before_exposing_a_stream() -> Result<(), Box<dyn
         shell("printf 'not-a-header\r\n\r\n'"),
         (),
         Duration::from_secs(5),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
     )
     .await;
     assert!(matches!(response, Err(GitHttpError::MalformedCgi)));
@@ -110,8 +123,7 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
     let (released, receiver) = oneshot::channel();
     let mut response = start_stream(
         shell("sleep 30 & child=$!; printf 'Content-Type: text/plain\r\n\r\n%s %s\n' \"$$\" \"$child\"; wait"),
-        (Cache(Some(released)), permit), Duration::from_secs(30),
-    ).await?;
+        (Cache(Some(released)), permit), Duration::from_secs(30), crate::native_resources::NativeResources::default().scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?).await?;
     let mut ids = Vec::new();
     while !ids.contains(&b'\n') {
         ids.extend_from_slice(
@@ -174,6 +186,8 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
@@ -191,7 +205,14 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
         cache: Some(cache),
         finished: Some(finished),
     };
-    let mut request = Box::pin(start_stream(command, owner, Duration::from_secs(5)));
+    let mut request = Box::pin(start_stream(
+        command,
+        owner,
+        Duration::from_secs(5),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    ));
     // On this single-thread executor the spawned worker cannot run before
     // the first header await. Leave the caller unpolled until worker cleanup.
     poll_fn(|cx| {
@@ -211,6 +232,7 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
 #[tokio::test]
 async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
+    let resources = crate::native_resources::NativeResources::default();
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
     let cache = GitCache::create(
@@ -218,12 +240,14 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
     command.current_dir(files.path().join("missing"));
     assert!(matches!(
-        GitProcess::spawn(command, cache),
+        GitProcess::spawn(command, cache, resources.scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     ));
     // Concurrent forks can briefly inherit the parent's queued-command fence
@@ -236,5 +260,9 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
     })
     .await?;
     assert_eq!(budget.used(), 0);
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
     Ok(())
 }

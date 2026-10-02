@@ -108,6 +108,7 @@ pub struct GitGateway {
     lfs: LfsService,
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
+    native: crate::native_resources::NativeScope,
     cache: Mutex<Option<Arc<CachedRepository>>>,
     objects: Mutex<Option<CachedObjects>>,
     push: Mutex<()>,
@@ -119,7 +120,9 @@ impl GitGateway {
         scratch_root: PathBuf,
         blob_store: Arc<dyn ObjectStore>,
         disk_budget: DiskBudget,
+        native: crate::native_resources::NativeResources,
     ) -> Self {
+        let native = native.scope(crate::native_resources::NativeClass::Foreground);
         let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
         // A reader belongs to this gateway's workspace and disk admission.
         // Another gateway may use a different root/budget for the same Cell.
@@ -129,6 +132,7 @@ impl GitGateway {
             scratch_root.clone(),
             disk_budget.clone(),
             repository.object_format(),
+            native.clone(),
         ));
         {
             let mut readers = repository
@@ -148,6 +152,7 @@ impl GitGateway {
             lfs,
             scratch_root,
             disk_budget,
+            native,
             cache: Mutex::new(None),
             objects: Mutex::new(None),
             push: Mutex::new(()),
@@ -251,6 +256,7 @@ impl GitGateway {
                 self.disk_budget.clone(),
                 &head.output.reference,
                 self.repository.object_format(),
+                self.native.clone(),
             )
             .await?
             .with_nonce(self.certificate_nonce().await?);
@@ -391,6 +397,7 @@ impl GitGateway {
                 &snapshot.head,
                 self.repository.object_format(),
                 Some(Arc::clone(&shared.cache)),
+                self.native.clone(),
             )
             .await?,
             nonce_seed: self.certificate_nonce().await?,
@@ -481,9 +488,14 @@ impl GitGateway {
             packed_ids = Some(ids);
         }
         let mut objects = if let Some(ids) = packed_ids {
-            GitObjects::packed(&backend.git_dir(), ids)?
+            GitObjects::packed(&backend.git_dir(), ids, &backend.cache.native)?
         } else {
-            GitObjects::start(&backend.git_dir(), included, excluded)?
+            GitObjects::start(
+                &backend.git_dir(),
+                included,
+                excluded,
+                &backend.cache.native,
+            )?
         };
 
         let mut batch = ObjectBatch::default();
@@ -694,7 +706,11 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
     response
 }
 
-async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
+async fn git_output(
+    git_dir: &Path,
+    args: &[&str],
+    native: &crate::native_resources::NativeScope,
+) -> Result<Vec<u8>, GatewayError> {
     use crate::git_http::{GitProcess, WORKER_DEADLINE, read_bounded};
     use tokio::io::AsyncReadExt;
     let mut command = crate::native_git::command(git_dir)?;
@@ -705,7 +721,11 @@ async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayErr
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut process = GitProcess::spawn(command, ())?;
+    let mut process = GitProcess::spawn(
+        command,
+        (),
+        native.try_admit(crate::native_resources::NativeWork::Read)?,
+    )?;
     let mut stdout = process
         .child
         .stdout
@@ -736,10 +756,14 @@ async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayErr
         .map_err(|_| GitHttpError::Timeout)?
 }
 
-async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
+async fn git_refs(
+    git_dir: &Path,
+    native: &crate::native_resources::NativeScope,
+) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
     let listing = git_output(
         git_dir,
         &["for-each-ref", "--format=%(refname)%00%(objectname)"],
+        native,
     )
     .await?;
     let mut refs = BTreeMap::new();

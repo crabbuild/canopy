@@ -61,6 +61,7 @@ impl GitGateway {
             self.disk_budget.clone(),
             &snapshot.head,
             self.repository.object_format(),
+            self.native.clone(),
         )
         .await?
         .with_nonce(self.certificate_nonce().await?);

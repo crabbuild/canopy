@@ -21,9 +21,13 @@ pub struct CanonicalVerifier {
     format: ObjectFormat,
 }
 impl CanonicalVerifier {
-    pub fn new(git_dir: &Path, format: ObjectFormat) -> Result<Self, ObjectReadError> {
+    pub fn new(
+        git_dir: &Path,
+        format: ObjectFormat,
+        native: &crate::native_resources::NativeScope,
+    ) -> Result<Self, ObjectReadError> {
         Ok(Self {
-            native: GitObjects::batch(git_dir)?,
+            native: GitObjects::batch(git_dir, native)?,
             format,
         })
     }

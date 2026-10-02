@@ -33,6 +33,7 @@ struct FileConfig {
     ssh: Option<FileSshConfig>,
     data_dir: PathBuf,
     local_disk_limit_bytes: u64,
+    native_limits: canopy_server::native_resources::NativeLimits,
     max_active_repositories: usize,
 }
 
@@ -195,6 +196,7 @@ async fn run() -> Result<(), StartupError> {
         data_dir: file.data_dir,
         store_prefix: provider.prefix().clone(),
         local_disk_limit_bytes: file.local_disk_limit_bytes,
+        native_limits: file.native_limits,
         max_active_repositories: file.max_active_repositories,
     };
     let server = CanopyServer::start(config, provider.store_arc()).await?;
@@ -389,6 +391,24 @@ mod tests {
         let output = std::fs::read_to_string(log.path())?;
         assert!(output.starts_with("first record\n"));
         assert!(output.contains("logging workload"));
+        Ok(())
+    }
+    #[test]
+    fn native_configuration_is_required_and_rejects_unknown_profile_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let example: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config.example.json"))?;
+        let config: FileConfig = serde_json::from_value(example.clone())?;
+        canopy_server::native_resources::NativeResources::new(config.native_limits)?;
+        let mut old = example.clone();
+        old.as_object_mut().unwrap().remove("native_limits");
+        assert!(serde_json::from_value::<FileConfig>(old).is_err());
+        let mut unknown = example.clone();
+        unknown["native_limits"]["read"]["unexpected"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<FileConfig>(unknown).is_err());
+        let mut negative = example;
+        negative["native_limits"]["total"]["memory_bytes"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<FileConfig>(negative).is_err());
         Ok(())
     }
 }

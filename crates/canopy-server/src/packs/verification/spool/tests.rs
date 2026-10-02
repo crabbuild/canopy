@@ -84,7 +84,12 @@ async fn late_scratch_corruption_rolls_back_entire_witness_batch_and_poison_seal
             .ok_or("commit")?
             .0
             .oid;
-        let mut verifier = super::super::CanonicalVerifier::new(fixture.root.path(), format)?;
+        let mut verifier = super::super::CanonicalVerifier::new(
+            fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         let spool = EdgeSpool::new(root.path(), budget.clone());
         let first = verifier.inspect_to_spool(tree, &spool, 1 << 20).await?;
         let corrupt = verifier.inspect_to_spool(commit, &spool, 1 << 20).await?;
@@ -199,7 +204,12 @@ async fn native_structural_page_uses_one_file_with_exact_independent_ranges() ->
         let root = tempfile::TempDir::new()?;
         let budget = DiskBudget::new(64 << 10);
         let spool = EdgeSpool::new(root.path(), budget.clone());
-        let mut verifier = super::super::CanonicalVerifier::new(fixture.root.path(), format)?;
+        let mut verifier = super::super::CanonicalVerifier::new(
+            fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         let mut witnesses: Vec<VerifiedObject> = Vec::with_capacity(PAGE_OBJECTS);
         for (n, oid) in ids.iter().copied().enumerate() {
             // Replaying an earlier range moves the shared file cursor. A later

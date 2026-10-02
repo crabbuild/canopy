@@ -44,6 +44,7 @@ pub mod blob {
 }
 pub mod lfs;
 mod native_git;
+pub mod native_resources;
 mod object_batch;
 mod object_chunks;
 mod object_reads;
@@ -199,6 +200,10 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads/mod.rs"));
                 source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
+                source.update(include_bytes!("native_resources.rs"));
+                source.update(include_bytes!("native_git.rs"));
+                source.update(include_bytes!("native_git/process.rs"));
+                source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
                 source.update(include_bytes!(
                     "../../canopy-object-storage/src/blob/mod.rs"

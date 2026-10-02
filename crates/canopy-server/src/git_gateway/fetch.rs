@@ -188,6 +188,7 @@ impl GitGateway {
             &cached.backend.git_dir(),
             roots,
             request.filter.as_deref(),
+            &cached.backend.cache.native,
         )?;
         let mut stats = Hydration::default();
         loop {

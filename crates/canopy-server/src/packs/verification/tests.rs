@@ -21,7 +21,12 @@ async fn admitted_native_witnesses_assemble_exact_metadata_and_release_scratch()
         let mut builder =
             MetadataBuilder::new(scratch.path(), budget.clone(), fixture.identity, limits())?;
         let baseline = budget.used();
-        let mut verifier = CanonicalVerifier::new(fixture.root.path(), format)?;
+        let mut verifier = CanonicalVerifier::new(
+            fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         let mut witnesses = Vec::with_capacity(PAGE_OBJECTS);
         let mut spool = spool::EdgeSpool::new(scratch.path(), budget.clone());
         for oid in fixture.index.ids() {
@@ -117,7 +122,12 @@ async fn canonical_and_typed_overlap_conflicts_poison_verified_assembly() -> Res
                     }],
                 )?;
             }
-            let mut verifier = CanonicalVerifier::new(fixture.root.path(), format)?;
+            let mut verifier = CanonicalVerifier::new(
+                fixture.root.path(),
+                format,
+                &crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
+            )?;
             let witness = verifier
                 .inspect_to_disk(tree.oid, scratch.path(), budget.clone(), 1 << 20)
                 .await?;
@@ -174,7 +184,12 @@ async fn edge_spool_quota_failure_prevents_witness_and_actor_reuse() -> Result {
     for (capacity, limit) in [(512 * 33, 1 << 20), (1 << 20, 512 * 33)] {
         let scratch = tempfile::TempDir::new()?;
         let budget = DiskBudget::new(capacity);
-        let mut verifier = CanonicalVerifier::new(fixture.root.path(), ObjectFormat::Sha256)?;
+        let mut verifier = CanonicalVerifier::new(
+            fixture.root.path(),
+            ObjectFormat::Sha256,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         assert!(
             verifier
                 .inspect_to_disk(tree, scratch.path(), budget.clone(), limit)
@@ -217,7 +232,12 @@ impl EdgeSink for Collector {
 async fn native_streamed_witnesses_match_headers_and_typed_edges_with_bounded_batches() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = fixture(format, 700).await?;
-        let mut verifier = CanonicalVerifier::new(fixture.root.path(), format)?;
+        let mut verifier = CanonicalVerifier::new(
+            fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         // File-backed index iteration replaces a heap inventory for this path.
         for oid in fixture.index.ids() {
             let oid = oid?;
@@ -270,7 +290,12 @@ async fn large_native_commit_messages_are_hashed_without_entering_the_edge_inven
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(ObjectId::from_hex(output.stdout.trim_ascii())?, expected);
-        let mut verifier = CanonicalVerifier::new(fixture.root.path(), format)?;
+        let mut verifier = CanonicalVerifier::new(
+            fixture.root.path(),
+            format,
+            &crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )?;
         let mut sink = Collector::default();
         let canonical = verifier.inspect(expected, &mut sink).await?;
         assert_eq!(canonical.size, body.len() as u64);
@@ -306,7 +331,12 @@ async fn sink_failure_poisoning_prevents_another_inspection_or_successful_finish
         .ok_or("tree")?
         .0
         .oid;
-    let mut verifier = CanonicalVerifier::new(fixture.root.path(), ObjectFormat::Sha256)?;
+    let mut verifier = CanonicalVerifier::new(
+        fixture.root.path(),
+        ObjectFormat::Sha256,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     assert!(matches!(
         verifier.inspect(tree, &mut FailedSink).await,
         Err(ObjectReadError::Io(_))
@@ -344,7 +374,12 @@ async fn canceling_a_confirmed_pending_sink_write_poisons_native_frame_reuse() -
         .ok_or("tree")?
         .0
         .oid;
-    let mut verifier = CanonicalVerifier::new(fixture.root.path(), ObjectFormat::Sha256)?;
+    let mut verifier = CanonicalVerifier::new(
+        fixture.root.path(),
+        ObjectFormat::Sha256,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let entered = Arc::new(tokio::sync::Notify::new());
     let mut sink = PausedSink {
         entered: Arc::clone(&entered),

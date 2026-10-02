@@ -371,6 +371,8 @@ async fn reconciliation_preserves_external_dependencies_and_rejects_their_remova
             &store,
             descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let segment = physical.inspect_next_shard(1).await?;

@@ -40,7 +40,11 @@ struct Process {
 }
 
 impl Process {
-    fn start(git_dir: &Path, args: &[&str]) -> Result<(Self, ChildStdin), ObjectReadError> {
+    fn start(
+        git_dir: &Path,
+        args: &[&str],
+        native: &crate::native_resources::NativeScope,
+    ) -> Result<(Self, ChildStdin), ObjectReadError> {
         let mut command = crate::native_git::command(git_dir)?;
         command
             .arg("--git-dir")
@@ -49,7 +53,11 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = crate::native_git::process::GitProcess::spawn(command, ())?;
+        let mut child = crate::native_git::process::GitProcess::spawn(
+            command,
+            (),
+            native.try_admit(crate::native_resources::NativeWork::Read)?,
+        )?;
         let input = child.child.stdin.take().ok_or(ObjectReadError::Malformed)?;
         let output = child
             .child
@@ -108,8 +116,9 @@ impl GitObjectWalk {
         git_dir: &Path,
         included: Vec<crate::ObjectId>,
         filter: Option<&str>,
+        native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
-        Self::start(git_dir, included, Vec::new(), true, filter)
+        Self::start(git_dir, included, Vec::new(), true, filter, native)
     }
 
     fn start(
@@ -118,6 +127,7 @@ impl GitObjectWalk {
         excluded: Vec<crate::ObjectId>,
         missing_only: bool,
         filter: Option<&str>,
+        native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
         let filter = filter.map(|value| format!("--filter={value}"));
         let mut args = vec!["rev-list", "--objects", "--no-object-names", "--stdin"];
@@ -127,7 +137,7 @@ impl GitObjectWalk {
         if let Some(filter) = &filter {
             args.push(filter);
         }
-        let (process, mut input) = Process::start(git_dir, &args)?;
+        let (process, mut input) = Process::start(git_dir, &args, native)?;
         // Ref lists can exceed argv limits; feed stdin concurrently with stdout consumption.
         let revisions = AbortOnDropHandle::new(tokio::spawn(async move {
             for (prefix, roots) in [("", included), ("^", excluded)] {
@@ -197,9 +207,10 @@ impl GitObjects {
         git_dir: &Path,
         included: Vec<crate::ObjectId>,
         excluded: Vec<crate::ObjectId>,
+        native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
-        let walk = GitObjectWalk::start(git_dir, included, excluded, false, None)?;
-        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
+        let walk = GitObjectWalk::start(git_dir, included, excluded, false, None, native)?;
+        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"], native)?;
         Ok(Self {
             walk: Some(walk),
             inventory: None,
@@ -212,16 +223,20 @@ impl GitObjects {
     pub(crate) fn packed(
         git_dir: &Path,
         ids: Vec<crate::ObjectId>,
+        native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
-        let mut objects = Self::batch(git_dir)?;
+        let mut objects = Self::batch(git_dir, native)?;
         objects.inventory = Some(ids.into_iter());
         Ok(objects)
     }
 
     /// Persistent native reader with caller-owned bounded index iteration.
     /// Verification uses an isolated admitted object directory without alternates.
-    pub(crate) fn batch(git_dir: &Path) -> Result<Self, ObjectReadError> {
-        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
+    pub(crate) fn batch(
+        git_dir: &Path,
+        native: &crate::native_resources::NativeScope,
+    ) -> Result<Self, ObjectReadError> {
+        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"], native)?;
         Ok(Self {
             walk: None,
             inventory: None,

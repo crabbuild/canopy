@@ -122,6 +122,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             scratch.path().to_path_buf(),
             Arc::clone(&blob_store),
             disk_budget.clone(),
+            canopy_server::native_resources::NativeResources::default(),
         ));
         let invalid_oid = [0; 32];
         assert!(matches!(
@@ -456,6 +457,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             scratch.path().to_path_buf(),
             blob_store,
             DiskBudget::new(1 << 30),
+            canopy_server::native_resources::NativeResources::default(),
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;

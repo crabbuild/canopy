@@ -323,7 +323,14 @@ impl GitCache {
         root: PathBuf,
         budget: DiskBudget,
     ) -> Result<Arc<Self>, CacheError> {
-        let next = Self::create(root, budget, "refs/heads/main", self.object_format).await?;
+        let next = Self::create(
+            root,
+            budget,
+            "refs/heads/main",
+            self.object_format,
+            self.native.clone(),
+        )
+        .await?;
         // Native writes bypass CacheWriter. Reserve conservative scratch room
         // before starting, then reconcile the completed generation. This is
         // admission, not a hard OS disk quota (the deployment owns that quota).
@@ -345,6 +352,9 @@ impl GitCache {
             .read()
             .map_err(|_| io::Error::other("durable inventory poisoned"))?
             .clone();
+        let maintenance = self
+            .native
+            .for_class(crate::native_resources::NativeClass::Maintenance);
         let run = async {
             let mut listing_command = crate::native_git::command(&self.git_dir())?;
             listing_command
@@ -355,7 +365,11 @@ impl GitCache {
                 ])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut listing = GitProcess::spawn(listing_command, Arc::clone(self))?;
+            let mut listing = GitProcess::spawn(
+                listing_command,
+                Arc::clone(self),
+                maintenance.try_admit(crate::native_resources::NativeWork::Read)?,
+            )?;
             let mut pack_command = crate::native_git::command(&self.git_dir())?;
             pack_command
                 .args([
@@ -368,8 +382,11 @@ impl GitCache {
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut packing =
-                GitProcess::spawn(pack_command, (Arc::clone(self), Arc::clone(&next)))?;
+            let mut packing = GitProcess::spawn(
+                pack_command,
+                (Arc::clone(self), Arc::clone(&next)),
+                maintenance.try_admit(crate::native_resources::NativeWork::Pack)?,
+            )?;
             let mut input = packing
                 .child
                 .stdin
@@ -414,6 +431,9 @@ impl GitCache {
             )?;
             finish(&mut listing, listing_stderr).await?;
             finish(&mut packing, packing_stderr).await?;
+            // Both native workers drained; return their claims before validation.
+            drop(listing);
+            drop(packing);
             let hash = std::str::from_utf8(&hash)
                 .map_err(|_| GitHttpError::MalformedCgi)?
                 .trim();
@@ -426,11 +446,15 @@ impl GitCache {
                 .join(format!("objects/pack/pack-{hash}.pack"));
             let mut command = crate::native_git::command(&next.git_dir())?;
             command
-                .args(["index-pack", "--verify"])
+                .args(["index-pack", "--threads=2", "--verify"])
                 .arg(&pack)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut verify = GitProcess::spawn(command, Arc::clone(&next))?;
+            let mut verify = GitProcess::spawn(
+                command,
+                Arc::clone(&next),
+                maintenance.try_admit(crate::native_resources::NativeWork::Pack)?,
+            )?;
             let (_, stderr) = tokio::try_join!(
                 read_bounded(
                     verify

@@ -122,6 +122,8 @@ async fn isolated_physical_verification_covers_exact_shards_and_binds_uploaded_s
             &prepared.store,
             prepared.descriptor,
             physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let mut segments = Vec::new();
@@ -224,6 +226,8 @@ async fn incomplete_or_failed_physical_inspection_cannot_finish_or_resume() -> R
             &prepared.store,
             prepared.descriptor,
             limits,
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         if fail {
@@ -293,7 +297,9 @@ async fn native_index_verification_rejects_forged_crc_despite_valid_artifact_and
                 budget.clone(),
                 &prepared.store,
                 descriptor,
-                physical_limits()
+                physical_limits(),
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground)
             )
             .await,
             Err(PhysicalError::Native(GitHttpError::GitExit { .. }))
@@ -316,7 +322,9 @@ async fn artifact_corruption_and_admission_limits_never_return_a_physical_verifi
             budget.clone(),
             &prepared.store,
             prepared.descriptor,
-            limits
+            limits,
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground)
         )
         .await,
         Err(PhysicalError::Limit)
@@ -330,7 +338,9 @@ async fn artifact_corruption_and_admission_limits_never_return_a_physical_verifi
             budget.clone(),
             &prepared.store,
             foreign,
-            physical_limits()
+            physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground)
         )
         .await,
         Err(PhysicalError::Binding(_))
@@ -344,7 +354,9 @@ async fn artifact_corruption_and_admission_limits_never_return_a_physical_verifi
             small_budget.clone(),
             &prepared.store,
             prepared.descriptor,
-            physical_limits()
+            physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground)
         )
         .await,
         Err(PhysicalError::Metadata(MetadataError::Budget(_)))
@@ -367,7 +379,9 @@ async fn artifact_corruption_and_admission_limits_never_return_a_physical_verifi
             budget.clone(),
             &prepared.store,
             prepared.descriptor,
-            physical_limits()
+            physical_limits(),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground)
         )
         .await,
         Err(PhysicalError::Metadata(MetadataError::Artifact(_)))
@@ -392,6 +406,8 @@ fn canceling_confirmed_queued_shard_assembly_poisons_the_complete_pack() -> Resu
         &prepared.store,
         prepared.descriptor,
         physical_limits(),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     ))?;
     let entered = Arc::new(tokio::sync::Notify::new());
     let worker_entered = entered.clone();

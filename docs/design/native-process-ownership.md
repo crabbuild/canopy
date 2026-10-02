@@ -2,7 +2,7 @@
 
 The shared GitProcess guard now lives in native_git::process and serves HTTP/SSH transport, isolated pack validation, cache maintenance, native blob extraction, candidate preparation, ref listing and decoded-object batch/history workers. The decoded-object path previously used direct-child kill-on-drop; transport guards previously released owners after sending a process-group kill signal. Signaling a process is not evidence that its work has stopped.
 
-The guard reuses its existing generic owner: cache generations, input files and account/transfer permits stay together. It does not create another object inventory, compatibility store or publication certificate. Node-wide CPU/RSS/file/process admission and the production packed-catalog cutover remain separate deliverables.
+The guard reuses its existing generic owner: cache generations, input files and account/transfer permits stay together. It does not create another object inventory, compatibility store or publication certificate. The guard now also requires a private permit from the [shared native resource pool](native-resource-admission.md). Actual CPU/RSS/file/process containment and the production packed-catalog cutover remain separate deliverables.
 
 ## Spawn and supported fence
 
@@ -43,7 +43,7 @@ This descriptor fence covers descendants that preserve the inherited completion 
 
 On non-Unix platforms the guard retains owners through direct-child reaping, but has no Unix process-group or inherited-descriptor proof. Equivalent job containment and descendant drain remain unimplemented; the packed-storage release cannot claim that platform's process-tree safety from these checks. No production format marker or registry is selected by this change.
 
-Decoded-object actors use the shared process guard and the existing cache workspace fence. They and ref-list helpers still need explicit native-resource permits from the production preparation profile. Merely retaining a () owner is not CPU/RSS admission. Physical input, metadata, closure, edge spools and detached SQL/I/O jobs keep their own admitted ownership.
+Decoded-object actors use the shared process guard and the existing cache workspace fence. They and ref-list helpers now require explicit native-resource permits from the owning node scope. A () generic owner still supplies no account admission; the native permit independently retains the node claims through drain. Profile qualification, fair preparation admission and hard OS limits remain required. Physical input, metadata, closure, edge spools and detached SQL/I/O jobs keep their own admitted ownership.
 
 ## Evidence and remaining gates
 

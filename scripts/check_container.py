@@ -58,6 +58,27 @@ def verify(container):
         raise ValueError("container data directory or listener differs from the profile")
     if not 0 < config["local_disk_limit_bytes"] <= scratch:
         raise ValueError("application disk admission exceeds the filesystem capacity")
+    native = config["native_limits"]
+    total = native["total"]
+    reserved = native["maintenance_reserved"]
+    read, pack = native["read"], native["pack"]
+    keys = {"processes", "cpu_units", "memory_bytes", "descriptors"}
+    for profile in (total, reserved, read, pack):
+        if set(profile) != keys or any(type(value) is not int or value <= 0 for value in profile.values()):
+            raise ValueError("native admission vectors must contain positive integer dimensions")
+    if read["processes"] != 1 or pack["processes"] != 1:
+        raise ValueError("native profiles must charge one process slot per guard")
+    if (read["cpu_units"] < 1 or read["memory_bytes"] < 128 * 1024**2 or read["descriptors"] < 32
+            or pack["cpu_units"] < 4 or pack["memory_bytes"] < 512 * 1024**2 or pack["descriptors"] < 64):
+        raise ValueError("native profiles fall below minimum admission estimates")
+    for key in keys:
+        pipeline = read[key] + pack[key]
+        if pipeline > reserved[key] or pipeline > total[key] - reserved[key]:
+            raise ValueError("each native resource share must fit its read/pack pipeline")
+    # tmpfs consumes this same cgroup's memory. Leave at least 256 MiB for the
+    # server/runtime; these estimates still require measured headroom.
+    if total["memory_bytes"] + config["local_disk_limit_bytes"] + 256 * 1024**2 > int(memory):
+        raise ValueError("native claims and admitted tmpfs leave insufficient server memory headroom")
     descriptor_line = next(line for line in output("docker", "exec", container, "cat", "/proc/1/limits").splitlines()
                            if line.startswith("Max open files"))
     soft, hard = descriptor_line.split()[3:5]
@@ -65,13 +86,13 @@ def verify(container):
         raise ValueError("soft and hard open-file limits must both be 16384")
     # The pinned runtime reserves eight descriptors per active Cell. Directory
     # also consumes one slot; keep 1024 descriptors for sockets, Git and I/O.
-    required_descriptors = 8 * (config["max_active_repositories"] + 1) + 1024
+    required_descriptors = 8 * (config["max_active_repositories"] + 1) + total["descriptors"] + 1024
     if required_descriptors > int(soft):
         raise ValueError("active Cell admission leaves insufficient descriptor headroom")
     return {"memory_bytes": int(memory), "swap_bytes": 0,
             "cpu_quota": int(quota), "cpu_period": int(period),
             "processes_and_threads": int(tasks), "scratch_bytes": scratch,
-            "file_descriptors_per_process": int(soft)}
+            "file_descriptors_per_process": int(soft), "native_admission": native}
 
 
 def main():

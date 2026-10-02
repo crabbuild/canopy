@@ -29,6 +29,7 @@ pub(crate) struct PackReader {
     root: PathBuf,
     budget: DiskBudget,
     format: crate::ObjectFormat,
+    native: crate::native_resources::NativeScope,
     cache: Mutex<Option<Arc<GitCache>>>,
     installation: Mutex<()>,
     private: Mutex<Option<([u8; 32], Arc<GitCache>)>>,
@@ -40,12 +41,14 @@ impl PackReader {
         root: PathBuf,
         budget: DiskBudget,
         format: crate::ObjectFormat,
+        native: crate::native_resources::NativeScope,
     ) -> Self {
         Self {
             store: LargeBlobStore::new(store, repository),
             root,
             budget,
             format,
+            native,
             cache: Mutex::new(None),
             installation: Mutex::new(()),
             private: Mutex::new(None),
@@ -60,6 +63,7 @@ impl PackReader {
                     self.budget.clone(),
                     "refs/heads/main",
                     self.format,
+                    self.native.clone(),
                 )
                 .await?,
             );
@@ -119,6 +123,7 @@ impl PackReader {
                         self.budget.clone(),
                         "refs/heads/main",
                         self.format,
+                        self.native.clone(),
                     )
                     .await?,
                 ));
@@ -134,7 +139,13 @@ impl PackReader {
             .args(["cat-file", "blob", &hex::encode(oid)])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
-        let mut process = GitProcess::spawn(command, Arc::clone(&cache))?;
+        let mut process = GitProcess::spawn(
+            command,
+            Arc::clone(&cache),
+            cache
+                .native
+                .try_admit(crate::native_resources::NativeWork::Read)?,
+        )?;
         let output = process
             .child
             .stdout

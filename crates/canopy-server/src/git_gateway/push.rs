@@ -33,7 +33,7 @@ impl GitGateway {
             // Git may accept some refs and reject others unless atomic was requested.
             // Publish its actual changes before returning any successful per-ref report.
             let plan = if response.status == 200 {
-                let after = git_refs(&cached.backend.git_dir()).await?;
+                let after = git_refs(&cached.backend.git_dir(), &cached.backend.cache.native).await?;
                 let plan = diff_refs(&before, &after, actor);
                 if plan.updates.is_empty() {
                     None
