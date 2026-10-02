@@ -44,37 +44,34 @@ impl Bound {
             return Err("bound source".into());
         };
         assert!(staging.close_and_drain().await.is_empty());
-        let claimed = fixture
-            .client()
-            .command::<ClaimPreparation>(
-                &fixture.target,
-                identity()?,
-                LeaseRequest {
-                    check: LeaseCheck {
-                        token: bound.lease.token,
-                        actor: "owner".into(),
-                    },
-                    lease_ms: DEFAULT_LEASE_MS,
-                },
-            )
-            .await?;
-        let next = lease(claimed.output)?;
-        let session = Arc::new(
-            PreparationSession::open(
-                fixture.client(),
-                fixture.target.clone(),
-                LeaseCheck {
-                    token: next.token,
-                    actor: "owner".into(),
-                },
-                Some(claimed.receipt),
-            )
-            .await?,
-        );
-        let proof = session.adopt_native_inputs(store.clone(), &prior).await?;
-        assert_eq!(proof.root()?, prior.root()?);
         let coordinator =
             PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let claimed = coordinator
+            .submit(
+                ReadyPreparation::claim(
+                    fixture.client(),
+                    fixture.target.clone(),
+                    LeaseRequest {
+                        check: LeaseCheck {
+                            token: bound.lease.token,
+                            actor: "owner".into(),
+                        },
+                        lease_ms: DEFAULT_LEASE_MS,
+                    },
+                    identity()?,
+                )
+                .await?,
+            )
+            .await?;
+        let PublicationState::Finished(Ok(PublicationOutcome::Preparation(outcome))) =
+            timeout(Duration::from_secs(10), claimed.wait()).await?
+        else {
+            return Err("supervised bound Claim".into());
+        };
+        assert_eq!(outcome.kind, PreparationCommandKind::Claim);
+        let session = outcome.session.map_err(|e| e.to_string())?;
+        let proof = session.adopt_native_inputs(store.clone(), &prior).await?;
+        assert_eq!(proof.root()?, prior.root()?);
         Ok(Self {
             fixture,
             store,

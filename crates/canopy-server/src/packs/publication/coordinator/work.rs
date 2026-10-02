@@ -70,6 +70,7 @@ pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
+    Preparation(ReadyPreparation),
 }
 impl From<ReadyCatalogPush> for ReadyPublication {
     fn from(ready: ReadyCatalogPush) -> Self {
@@ -86,15 +87,22 @@ impl From<ReadyNativeInputs> for ReadyPublication {
         Self::Inputs(ready)
     }
 }
+impl From<ReadyPreparation> for ReadyPublication {
+    fn from(ready: ReadyPreparation) -> Self {
+        Self::Preparation(ready)
+    }
+}
 impl ReadyPublication {
     pub(super) fn reservation(&self) -> u64 {
         match self {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
+            Self::Preparation(_) => preparation::RESERVATION,
             _ => self.class().reservation(),
         }
     }
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
+            Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
                 owner: ready.owner.clone(),
                 command: ready.command.clone(),
@@ -112,7 +120,7 @@ impl ReadyPublication {
     }
     pub(super) fn class(&self) -> PublicationClass {
         match self {
-            Self::Push(_) | Self::Inputs(_) => PublicationClass::Foreground,
+            Self::Push(_) | Self::Inputs(_) | Self::Preparation(_) => PublicationClass::Foreground,
             Self::Compaction(_) => PublicationClass::Maintenance,
         }
     }
@@ -120,11 +128,13 @@ impl ReadyPublication {
         match self {
             Self::Push(ready) => ready.owner.capability(),
             Self::Inputs(ready) => ready.session.capability(),
+            Self::Preparation(ready) => ready.capability(),
             Self::Compaction(ready) => ready.prepared.preparation_base().capability(),
         }
     }
     pub(super) fn pending(&self) -> PublicationError {
         match self {
+            Self::Preparation(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
                 ready.command.evidence().clone(),
             ))),
@@ -140,6 +150,7 @@ impl ReadyPublication {
         let client = self.capability().0.clone();
         match self {
             Self::Inputs(ready) => ready.dispatch(recover, fault).await,
+            Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => {
                 super::super::exact::invoke(&client, ready.command, recover, 128, fault)
                     .await
@@ -161,9 +172,12 @@ pub enum PublicationOutcome {
     Push(Committed<CatalogCompletionReply>),
     Compaction(Committed<CompactionReply>),
     Inputs(RegisteredNativeInputs),
+    Preparation(PreparationCommandOutcome),
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("bound preparation command: {0}")]
+    Preparation(#[source] InvocationError<PreparationReply>),
     #[error("bound input checkpoint: {0}")]
     Inputs(#[source] InvocationError<StagingReply>),
     #[error("push publication: {0}")]
@@ -183,6 +197,7 @@ impl PublicationError {
         }
         match self {
             Self::Push(error) => kind(error),
+            Self::Preparation(error) => kind(error),
             Self::Inputs(error) => kind(error),
             Self::Compaction(error) => kind(error),
         }
@@ -196,6 +211,7 @@ impl PublicationError {
         }
         match self {
             Self::Push(error) => unknown(error),
+            Self::Preparation(error) => unknown(error),
             Self::Inputs(error) => unknown(error),
             Self::Compaction(error) => unknown(error),
         }

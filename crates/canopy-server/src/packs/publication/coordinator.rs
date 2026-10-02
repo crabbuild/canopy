@@ -24,6 +24,10 @@ const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
 mod inputs;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
+mod preparation;
+pub use preparation::{
+    PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,
+};
 mod work;
 use work::MAINTENANCE_RESERVATION;
 pub use work::{

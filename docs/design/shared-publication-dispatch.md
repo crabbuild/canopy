@@ -1,6 +1,6 @@
 # Shared foreground and maintenance publication dispatch
 
-`PublicationCoordinator` now dispatches privately prepared push completions, catalog compactions and bound native input checkpoints through the same bounded admission, fair queues, durability waits and uncertainty recovery. It reuses Cellule's exact `PreparedCommand`, preparation leases, purpose-bound certificates, catalog CAS and immutable outcomes. Production HTTP/SSH integration, continuous maintenance preparation, durable service reconstruction and capacity qualification remain open.
+`PublicationCoordinator` now dispatches privately prepared push completions, catalog compactions, bound native input checkpoints and bound Claim/Renew commands through the same bounded admission, fair queues, durability waits and uncertainty recovery. It reuses Cellule's exact `PreparedCommand`, preparation leases, purpose-bound certificates, catalog CAS and immutable outcomes. Production HTTP/SSH integration, continuous maintenance preparation, durable service reconstruction and capacity qualification remain open.
 
 ## Typed factories and outcomes
 
@@ -8,9 +8,11 @@
 
 PreparationSession::ready_inputs retains the existing command 29 and shared bound session for an adopted native input checkpoint. It checks exact scope/format/adoption context and bounded encoding before SDK preparation; the final command still checks MAC, source custody, current permission, owner, pin and expiry. These checkpoints use the foreground queue. See the [checkpoint contract](native-input-checkpoint.md). They establish descriptor retention rather than physical, canonical or ref authority.
 
+ReadyPreparation::claim and PreparationSession::ready_renew retain exact commands 12/13 with bounded requests and fresh post-commit session observations; see the [bound preparation contract](bound-preparation-dispatch.md). They share foreground admission with an 8 KiB reservation. Automatic renewal scheduling and durable takeover reconstruction remain required.
+
 `ReadyPublication` wraps those private factory outputs. `submit` accepts any factory output and returns the same `PublicationTicket`. Admission failure returns the original typed ready value, preserving its mutation identity and wire bytes. Logical IDs are unique across both classes in one coordinator.
 
-`PublicationOutcome` distinguishes committed push, compaction and input checkpoint results. RegisteredNativeInputs preserves the original registration outcome and separately reports fresh checkpoint/bound-session custody; a failed observation fences the shared session without erasing a commit. `PublicationError` preserves the corresponding typed Cellule invocation error, evidence and rejected receipt. `PublicationState` retains the common queued/running/uncertain/finished lifecycle. `ticket.class()` identifies the class. `ticket.response()` accepts only a completed push outcome; compactions and input checkpoints never become HTTP push responses. These APIs replace the previous push-only outcome shape; there is no compatibility adapter.
+`PublicationOutcome` distinguishes committed push, compaction, input checkpoint and bound preparation results. RegisteredNativeInputs preserves the original registration outcome and separately reports fresh checkpoint/bound-session custody; a failed observation fences the shared session without erasing a commit. `PublicationError` preserves the corresponding typed Cellule invocation error, evidence and rejected receipt. `PublicationState` retains the common queued/running/uncertain/finished lifecycle. `ticket.class()` identifies the class. `ticket.response()` accepts only a completed push outcome; compactions, input checkpoints and bound preparation commands never become HTTP push responses. These APIs replace the previous push-only outcome shape; there is no compatibility adapter.
 
 ## Bounded class and account admission
 
@@ -20,7 +22,7 @@ PreparationSession::ready_inputs retains the existing command 29 and shared boun
 | Maintenance operations | Four reserved slots |
 | Foreground operations | Remaining 28 slots |
 | Per actor | Eight operations per class |
-| Encoded command reservation | 8 MiB per push; 8 KiB per compaction or input checkpoint |
+| Encoded command reservation | 8 MiB per push; 8 KiB per compaction, input checkpoint or bound Claim/Renew command |
 | Total command-byte budget | 256 MiB |
 | Concurrent durability waits | Eight |
 | Maintenance durability waits | At most two |
@@ -38,9 +40,9 @@ The shared queue contains two instances of the existing account-fair queue. With
 
 Catalog/ref CAS and current policy/ACL checks remain in the authoritative command. Two preparations against one old catalog can conflict even when both dispatch fairly. Uploads, native decoding, canonical verification and reconciliation never run inside this queue. A known durable catalog conflict may reenter only with a newly prepared command identity and a properly reconciled certificate.
 
-Dropping an observer does not cancel admitted execution. Pending, malformed published and panicked-task outcomes retain the original ready value and reservation. `pending`, `recover` and `close_and_drain` handle both classes. Recovery joins the same class/account queues. Staging Begin/Renew/Bind now reuse this same exact invocation/resolution implementation with a 4 KiB decoded-result bound; push and compaction results retain their 128-byte bound. Bound input checkpoints share this foreground dispatcher with a 4 KiB decoded-result bound and fresh post-registration input-pin/bound-session queries. Staging has its own long-input admission/lifecycle rather than entering the final-command fair queues; see the [service contract](staging-service-lifecycle.md). Resolve authoritative absence before executing the retained exact command; decode a committed result with its original receipt without rerunning its handler. Unknown, expired, unreachable or changed-incarnation evidence remains uncertain. Never replace its proof or mutation identity while acceptance is unknown.
+Dropping an observer does not cancel admitted execution. Pending, malformed published and panicked-task outcomes retain the original ready value and reservation. `pending`, `recover` and `close_and_drain` handle both classes. Recovery joins the same class/account queues. Staging Begin/Renew/Bind now reuse this same exact invocation/resolution implementation with a 4 KiB decoded-result bound; push and compaction results retain their 128-byte bound. Bound input checkpoints and Claim/Renew commands share this foreground dispatcher with a 4 KiB decoded-result bound and fresh post-commit custody queries. Staging has its own long-input admission/lifecycle rather than entering the final-command fair queues; see the [service contract](staging-service-lifecycle.md). Resolve authoritative absence before executing the retained exact command; decode a committed result with its original receipt without rerunning its handler. Unknown, expired, unreachable or changed-incarnation evidence remains uncertain. Never replace its proof or mutation identity while acceptance is unknown.
 
-A terminal result drops dispatch/retained proof ownership before releasing class/account/byte credits. Resolved tickets retain only bounded result/read context. Recovery remains possible after closing admission. Long bound-preparation renewal and service-owned bound Claim orchestration remain required; accepted input registration does not renew a lease or extend the original generation floor. The coordinator is service-owned local state, not a durable outbox or permission to delete remote inputs.
+A terminal result drops dispatch/retained proof ownership before releasing class/account/byte credits. Resolved tickets retain only bounded result/read context. Recovery remains possible after closing admission. Automatic long bound-preparation renewal scheduling and complete Claim lifecycle ownership remain required; accepted input registration does not renew a lease or extend the original generation floor. The coordinator is service-owned local state, not a durable outbox or permission to delete remote inputs.
 
 ## Integration and evidence
 
