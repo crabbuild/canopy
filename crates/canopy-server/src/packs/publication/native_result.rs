@@ -93,6 +93,8 @@ struct ResultRecord {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum NativeResultError {
+    #[error("native result metadata transport failed")]
+    InputRoot(#[from] crate::packs::InputRootError),
     #[error("native result codec failed")]
     Codec(#[from] CodecError),
     #[error("native result artifact failed")]

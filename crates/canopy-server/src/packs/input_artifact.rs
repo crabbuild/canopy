@@ -6,6 +6,14 @@ use canopy_object_storage::artifact::{
 use cellule_runtime::codec::{BoundedDecoder, BoundedEncoder, CodecError, WireValue};
 
 pub(crate) const INPUT_ROOT_BYTES: u32 = 128 << 10;
+pub(crate) const MAX_INPUT_ROOT_BYTES: u32 = 256 << 10;
+#[derive(Debug, thiserror::Error)]
+pub enum InputRootError {
+    #[error("retained input root codec failed")]
+    Codec(#[from] CodecError),
+    #[error("retained input root artifact failed")]
+    Artifact(#[from] canopy_object_storage::artifact::ArtifactError),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StoredInputRoot {
     pub operation: [u8; 16],
@@ -15,7 +23,7 @@ impl StoredInputRoot {
     pub fn validate(self, limit: u32) -> Result<(), CodecError> {
         super::publication::codec::artifact_valid(self.operation)?;
         if limit == 0
-            || limit > INPUT_ROOT_BYTES
+            || limit > MAX_INPUT_ROOT_BYTES
             || self.artifact.size == 0
             || self.artifact.size > u64::from(limit)
             || self.artifact.manifest_digest == [0; 32]
@@ -36,9 +44,9 @@ impl StoredInputRoot {
         operation: [u8; 16],
         value: &T,
         limit: u32,
-    ) -> Result<Self, super::wire_request::WireRequestError> {
+    ) -> Result<Self, InputRootError> {
         super::publication::codec::artifact_valid(operation)?;
-        if limit == 0 || limit > INPUT_ROOT_BYTES {
+        if limit == 0 || limit > MAX_INPUT_ROOT_BYTES {
             return Err(CodecError::Limit.into());
         }
         let mut e = BoundedEncoder::new(limit)?;
@@ -62,7 +70,7 @@ impl StoredInputRoot {
         self,
         store: &ArtifactStore,
         limit: u32,
-    ) -> Result<T, super::wire_request::WireRequestError> {
+    ) -> Result<T, InputRootError> {
         self.validate(limit)?;
         let mut reader = store.read(self.key(), self.artifact).await?;
         let mut bytes = Vec::with_capacity(self.artifact.size as usize);
@@ -77,7 +85,7 @@ impl StoredInputRoot {
 }
 impl WireValue for StoredInputRoot {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
-        self.validate(INPUT_ROOT_BYTES)?;
+        self.validate(MAX_INPUT_ROOT_BYTES)?;
         e.write_bytes(&self.operation)?;
         artifact(e, self.artifact)
     }
@@ -86,7 +94,7 @@ impl WireValue for StoredInputRoot {
             operation: fixed(d)?,
             artifact: read_artifact(d)?,
         };
-        value.validate(INPUT_ROOT_BYTES)?;
+        value.validate(MAX_INPUT_ROOT_BYTES)?;
         Ok(value)
     }
 }

@@ -109,15 +109,22 @@ pub(in crate::packs) fn read_run(
     })
 }
 impl<R: IndexRecord> Node<R> {
-    pub(super) fn encode(&self) -> Result<Vec<u8>, IndexError> {
-        self.validate()?;
-        let mut encoder = BoundedEncoder::new(NODE_BYTES)?;
+    fn prefix(&self) -> Result<BoundedEncoder, IndexError> {
+        let mut encoder = BoundedEncoder::new(R::NODE_BYTES)?;
         encoder.write_bytes(R::DOMAIN)?;
         encoder.write_bytes(&self.repository)?;
         encoder.write_bytes(&self.operation)?;
         encoder.write_u8(self.format.bytes() as u8)?;
         encoder.write_u8(self.height)?;
         encoder.write_count(self.contents.len())?;
+        Ok(encoder)
+    }
+    pub(super) fn header_size(&self) -> Result<usize, IndexError> {
+        Ok(self.prefix()?.finish().len())
+    }
+    pub(super) fn encode(&self) -> Result<Vec<u8>, IndexError> {
+        self.validate()?;
+        let mut encoder = self.prefix()?;
         match &self.contents {
             Contents::Runs(runs) => {
                 for stored in runs {
@@ -126,14 +133,14 @@ impl<R: IndexRecord> Node<R> {
             }
             Contents::Children(children) => {
                 for child in children {
-                    reference(&mut encoder, *child)?;
+                    reference(&mut encoder, child.clone())?;
                 }
             }
         }
         Ok(encoder.finish())
     }
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, IndexError> {
-        let mut decoder = BoundedDecoder::new(bytes, NODE_BYTES)?;
+        let mut decoder = BoundedDecoder::new(bytes, R::NODE_BYTES)?;
         if decoder.read_bytes()? != R::DOMAIN {
             return Err(IndexError::Integrity);
         }
@@ -146,7 +153,7 @@ impl<R: IndexRecord> Node<R> {
         };
         let height = decoder.read_u8()?;
         let count = decoder.read_count()?;
-        if !(1..=R::FANOUT).contains(&count) || height > MAX_HEIGHT {
+        if !(1..=R::FANOUT).contains(&count) || height > R::MAX_HEIGHT {
             return Err(IndexError::Limit);
         }
         let contents = if height == 0 {

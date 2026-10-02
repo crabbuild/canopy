@@ -213,6 +213,18 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("git_http/capture.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
                 source.update(include_bytes!("packs/input_artifact.rs"));
+                source.update(include_bytes!("packs/directory/index/mod.rs"));
+                source.update(include_bytes!("packs/directory/index/record.rs"));
+                source.update(include_bytes!("packs/directory/index/codec.rs"));
+                source.update(include_bytes!("packs/directory/index/cursor.rs"));
+                source.update(include_bytes!("packs/directory/index/update.rs"));
+                source.update(include_bytes!("packs/directory/index/bulk.rs"));
+                source.update(include_bytes!("packs/sources/codec.rs"));
+                source.update(include_bytes!("packs/sources/inputs.rs"));
+                source.update(include_bytes!("packs/ref_state/mod.rs"));
+                source.update(include_bytes!("packs/ref_state/record.rs"));
+                source.update(include_bytes!("packs/ref_state/transition.rs"));
+                source.update(include_bytes!("packs/ref_state/snapshot.rs"));
                 source.update(include_bytes!("packs/publication/native_result.rs"));
                 source.update(include_bytes!("packs/publication/native_result/codec.rs"));
                 source.update(include_bytes!("packs/publication/native_result/plan.rs"));

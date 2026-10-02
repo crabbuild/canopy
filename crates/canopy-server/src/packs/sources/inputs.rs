@@ -12,26 +12,30 @@ impl IndexRecord for NativePackDescriptor {
     type Key = SegmentKey;
     const FANOUT: usize = SOURCE_FANOUT;
     const DOMAIN: &'static [u8] = b"canopy.native-input-index.v1\0";
-    fn first_key(self) -> SegmentKey {
+    fn first_key(&self) -> SegmentKey {
         SegmentKey {
             operation: self.operation,
             digest: self.pack.digest,
         }
     }
-    fn last_key(self) -> SegmentKey {
+    fn last_key(&self) -> SegmentKey {
         self.first_key()
     }
-    fn object_count(self) -> u64 {
+    fn object_count(&self) -> u64 {
         u64::from(self.object_count)
     }
-    fn validate_record(self, repository: [u8; 16], format: ObjectFormat) -> Result<(), IndexError> {
+    fn validate_record(
+        &self,
+        repository: [u8; 16],
+        format: ObjectFormat,
+    ) -> Result<(), IndexError> {
         self.validate(repository, format)?;
         if self.pack.manifest_digest == [0; 32] || self.index.manifest_digest == [0; 32] {
             return Err(IndexError::Integrity);
         }
         Ok(())
     }
-    fn encode_record(self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+    fn encode_record(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         e.write_bytes(&self.operation)?;
         self.git_checksum.encode(e)?;
         e.write_u32(self.object_count)?;

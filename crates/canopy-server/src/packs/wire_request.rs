@@ -172,6 +172,8 @@ impl WireValue for WireRequest {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum WireRequestError {
+    #[error("original request metadata transport failed")]
+    Root(#[from] super::InputRootError),
     #[error("wire request artifact failed")]
     Artifact(#[from] canopy_object_storage::artifact::ArtifactError),
     #[error("wire request codec failed")]

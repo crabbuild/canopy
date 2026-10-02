@@ -27,7 +27,7 @@ mod attestation;
 pub use attestation::{CatalogAttestationError, RegisterCatalogAttestation};
 mod prepare;
 pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
-mod ref_proof;
+pub(in crate::packs) mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
 mod publish;
 pub use publish::{PublicationReply, PublishCatalogRefs, PublishedRefs};

@@ -1,0 +1,39 @@
+# Immutable versioned ref state
+
+Large atomic ref plans need an immutable data plane so publication can commit a root rather than one SQL mutation per ref. `packs::ref_state` now reuses the authenticated `RangeIndex`, `NodeRef`, artifact transport, `RefExpectation`, `RefUpdate` and canonical `PushPlan` digest. It provides conditional preparation and reads. The serving path still uses SQL refs; selecting this tree requires the coordinated fresh-data hard cutover and final authority protocol described below.
+
+## Stored records and ordering
+
+A leaf stores an exact UTF-8 Git ref name and the existing optional OID plus positive version. A deleted ref remains as a tombstone with its version. Recreating a deleted name must match that tombstone; a missing expectation cannot erase an intervening delete and recreate. Every accepted update advances the version, including an identical tip. An expectation at `i64::MAX` rejects before arithmetic or uploads.
+
+Names use shared `Arc<str>` keys in byte order. Ref-name coordinates may represent slash prefixes; leaf validation separately requires valid Git ref syntax. The new representation limits names to 65,535 encoded UTF-8 bytes. Preparation rejects longer names before artifact creation. This is an explicit new-format limit, rather than an assertion that native Git accepts every name up to that length on every filesystem.
+
+Ref nodes use the `canopy.ref-state-index.v1` purpose domain, fanout 128, maximum encoded node size 512 KiB and maximum height 16. Splitting considers encoded bytes as well as member count, including both full fence names in each child reference. Existing fixed-width object and source indexes retain their original domains, fanout, byte and height bounds. The generic tree now requires Clone rather than Copy; fixed-width references remain Copy.
+
+`record_count` includes tombstones. The shared weighted count (`object_count` in the existing reference structure) counts live refs for this record type. Authenticated node decoding recomputes both counts and binds exact child height and fence ranges. The ordinary ordered cursor exposes tombstones; a live cursor skips zero-weight child subtrees. Point reads and seeks use a bounded-height path and the existing 64-node cache. Root and parent authentication are prerequisites for trusting a skipped child's summary. A raw caller-supplied root remains untrusted publication input.
+
+## Conditional preparation
+
+`RefStateIndex::prepare` accepts the exact selected base root, creating operation and existing PushPlan. It checks canonical operation identity, actor and update shape, unique names, server-owned ref refusal, OID format, versions and every exact expected state before uploading changes. Namespace checks consider the resulting plan as a whole: deleting a parent while creating its child and deleting a child while recreating its parent are allowed. Two resulting live names in a parent/descendant relationship are refused. Tombstones do not occupy a live namespace.
+
+Ancestor checks use point reads. Descendant checks seek directly to the slash-prefix interval and skip authenticated zero-live subtrees. Planned deletions remove conflicts, while planned live descendants create conflicts. An exhausted seek branch must advance to later live siblings; otherwise namespace validation could miss a live descendant after many deletions.
+
+An empty base uses the shared streaming sorted builder. It holds one bounded leaf plus a bounded reference group per level, validates strict input ordering and persists groups by fanout and encoded bytes. Large initial inventories therefore write tree nodes instead of copying a path for every member. It consumes a sorted iterator over the borrowed plan map and does not materialize another complete inventory of encoded records.
+
+An existing base currently copies one changed path per update, preserving untouched subtrees and all old roots. Large batches against an existing root still require coalesced subtree rewriting before the capacity gate; passing an initial-import check does not prove that case. Failed preparation may leave immutable unpublished artifacts. It returns no publication authority or deletion permission.
+
+The private `RefTransition` binds the exact base root, proposed root and existing canonical plan digest. It proves only the conditional structural result. Catalog membership, ancestry, current access, branch rules, required checks, root CAS and exact outcome durability remain separate final-publication obligations.
+
+## Snapshot metadata
+
+`RefStateSnapshot` reuses the existing repository ID, ObjectFormat, generation, default-branch string and optional shared tree root. `RefStateSnapshotRoot` stores this metadata through the existing create-only InputRoot transport using the separate `canopy.ref-state-snapshot.v1` purpose domain. The snapshot metadata bound is 256 KiB, enough for the longest default branch and both longest root fence names. The command-facing descriptor remains below 128 bytes.
+
+The shared transport allows metadata up to 256 KiB, but each typed wrapper keeps its own bound: original wire requests remain 64 KiB and native results remain 128 KiB. Decoding a larger snapshot descriptor as either narrower root refuses it. Reading checks authenticated manifest/body bytes, full framing, purpose domain, canonical creating operation and repository. Generation zero cannot contain a nonempty tree. A snapshot descriptor validates the described root's shape; it does not establish descendant existence or current Cell authority.
+
+## Final publication and cutover requirements
+
+The final factory must derive the base from a certified query of the current Cell ref snapshot, authenticate the complete conditional transition and bind it to exact catalog/ref intent and outcome descriptors. Preparation must bind every relevant policy and check fact, with final current-authority checks and CAS against the state those facts describe. A concurrent policy, check or ref change must refuse or trigger safe re-preparation. Recovery must reuse the same retained intent and recorded outcome without authorizing a stale worker.
+
+The admitted final transaction must atomically switch catalog and ref roots, record the exact response root and advance the durable operation outcome. It must neither carry the full plan in the 4 MiB envelope nor execute an O(update-count) SQL loop inside that transaction. Root transport alone would leave the latter bottleneck intact.
+
+All HTTP, SSH, mirrors and generated-write producers, ref listing and point readers, default-branch behavior, policies, reviews/checks, recovery and backup paths must switch together under the new schema marker. Retention and collection must traverse these snapshots, tree nodes, tombstones and borrowed creating namespaces. Raw roots and unpublished artifacts cannot authorize remote deletion. Hot-root fairness and large existing-base batches remain qualification work alongside the full-history Linux, Kubernetes and Chromium mixed-load gates.

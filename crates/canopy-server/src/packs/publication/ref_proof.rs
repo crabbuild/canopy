@@ -100,7 +100,7 @@ pub(super) fn binding(plan: &PushPlan, bits: &[u8]) -> Result<[u8; 32], CodecErr
     hash.update(bits);
     Ok(*hash.finalize().as_bytes())
 }
-pub(super) fn plan_digest(plan: &PushPlan) -> Result<[u8; 32], CodecError> {
+pub(in crate::packs) fn plan_digest(plan: &PushPlan) -> Result<[u8; 32], CodecError> {
     let mut hash = blake3::Hasher::new();
     hash.update(b"canopy.ref-plan.v1\0");
     let mut prefix = BoundedEncoder::new(128)?;
@@ -117,7 +117,7 @@ pub(super) fn plan_digest(plan: &PushPlan) -> Result<[u8; 32], CodecError> {
     }
     Ok(*hash.finalize().as_bytes())
 }
-pub(super) fn shape(plan: &PushPlan, format: ObjectFormat) -> Result<(), RefProofError> {
+pub(in crate::packs) fn shape(plan: &PushPlan, format: ObjectFormat) -> Result<(), RefProofError> {
     let mut prefix = BoundedEncoder::new(128)?;
     plan.encode_prefix(&mut prefix)?;
     let mut names = BTreeSet::new();

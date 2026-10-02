@@ -16,7 +16,7 @@ impl<R: IndexRecord> RangeIndex<R> {
                     let at = children
                         .partition_point(|child| child.last_key < oid)
                         .min(children.len() - 1);
-                    reference = children[at];
+                    reference = children[at].clone();
                     path.push((node, at));
                 }
             }
@@ -26,15 +26,85 @@ impl<R: IndexRecord> RangeIndex<R> {
         &self,
         operation: [u8; 16],
         height: u8,
-        mut contents: Contents<R>,
+        contents: Contents<R>,
     ) -> Result<Vec<NodeRef<R>>, IndexError> {
-        let second = contents.split();
-        let first = self.persist(operation, height, contents).await?;
-        let mut references = vec![first];
-        if let Some(second) = second {
-            references.push(self.persist(operation, height, second).await?);
+        let mut pending = vec![contents];
+        let mut references = Vec::new();
+        while let Some(mut contents) = pending.pop() {
+            if let Some(second) = contents.split() {
+                pending.push(second);
+                pending.push(contents);
+                continue;
+            }
+            let node = Arc::new(Node {
+                repository: self.repository(),
+                operation,
+                format: self.format,
+                height,
+                contents,
+            });
+            match node.encode() {
+                Ok(bytes) => references.push(self.persist_encoded(node, bytes).await?),
+                Err(IndexError::Codec(CodecError::Limit)) => {
+                    let header = node.header_size()?;
+                    let node = Arc::try_unwrap(node).map_err(|_| IndexError::Integrity)?;
+                    pending.extend(node.contents.byte_parts(header)?.into_iter().rev());
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(references)
+    }
+    /// Replace one exact same-key incarnation in one path copy. This is a
+    /// structural CAS; current authority and root publication are separate.
+    pub async fn replace(
+        &self,
+        root: NodeRef<R>,
+        operation: [u8; 16],
+        expected: R,
+        replacement: R,
+    ) -> Result<NodeRef<R>, IndexError> {
+        expected.validate_record(self.repository(), self.format)?;
+        replacement.validate_record(self.repository(), self.format)?;
+        if expected.first_key() != replacement.first_key()
+            || expected.last_key() != replacement.last_key()
+        {
+            return Err(IndexError::RangeOverlap);
+        }
+        let (path, leaf) = self.path(root.clone(), expected.first_key()).await?;
+        let Contents::Runs(mut runs) = leaf.contents.clone() else {
+            return Err(IndexError::Integrity);
+        };
+        let at = runs.partition_point(|run| run.first_key() < expected.first_key());
+        if runs.get(at) != Some(&expected) {
+            return Err(IndexError::Stale);
+        }
+        if expected == replacement {
+            return Ok(root);
+        }
+        runs[at] = replacement;
+        let mut changed = self
+            .persist_split(operation, 0, Contents::Runs(runs))
+            .await?;
+        for (parent, at) in path.into_iter().rev() {
+            let Contents::Children(mut children) = parent.contents.clone() else {
+                return Err(IndexError::Integrity);
+            };
+            children.splice(at..=at, changed);
+            changed = self
+                .persist_split(operation, parent.height, Contents::Children(children))
+                .await?;
+        }
+        if changed.len() == 1 {
+            return Ok(changed.remove(0));
+        }
+        let height = root
+            .height
+            .checked_add(1)
+            .filter(|height| *height <= R::MAX_HEIGHT)
+            .ok_or(IndexError::Limit)?;
+        self.persist(operation, height, Contents::Children(changed))
+            .await
     }
     /// Structural path-copy insertion. A trusted compaction/publication verifier
     /// still certifies the run's headers, dependencies and artifact existence.
@@ -45,7 +115,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         run: R,
     ) -> Result<NodeRef<R>, IndexError> {
         run.validate_record(self.store.repository(), self.format)?;
-        if let Some(existing) = self.successor(root, run.first_key()).await? {
+        if let Some(existing) = self.successor(root.clone(), run.first_key()).await? {
             if existing == run {
                 return root.ok_or(IndexError::Integrity);
             }
@@ -56,7 +126,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         let Some(root) = root else {
             return self.persist(operation, 0, Contents::Runs(vec![run])).await;
         };
-        let (path, leaf) = self.path(root, run.first_key()).await?;
+        let (path, leaf) = self.path(root.clone(), run.first_key()).await?;
         let Contents::Runs(mut runs) = leaf.contents.clone() else {
             return Err(IndexError::Integrity);
         };
@@ -75,12 +145,12 @@ impl<R: IndexRecord> RangeIndex<R> {
                 .await?;
         }
         if changed.len() == 1 {
-            return Ok(changed[0]);
+            return Ok(changed[0].clone());
         }
         let height = root
             .height
             .checked_add(1)
-            .filter(|height| *height <= MAX_HEIGHT)
+            .filter(|height| *height <= R::MAX_HEIGHT)
             .ok_or(IndexError::Limit)?;
         self.persist(operation, height, Contents::Children(changed))
             .await
@@ -118,7 +188,7 @@ impl<R: IndexRecord> RangeIndex<R> {
             changed = if children.is_empty() {
                 None
             } else if n + 1 == depth && children.len() == 1 {
-                Some(children[0])
+                Some(children[0].clone())
             } else {
                 Some(
                     self.persist(operation, parent.height, Contents::Children(children))
@@ -128,7 +198,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         }
         // A retained unary subtree may become the root after removal. Collapse
         // it without changing any run or rewriting all remaining descriptors.
-        while let Some(reference) = changed {
+        while let Some(reference) = changed.clone() {
             if reference.height == 0 {
                 break;
             }
@@ -139,7 +209,7 @@ impl<R: IndexRecord> RangeIndex<R> {
             if children.len() != 1 {
                 break;
             }
-            changed = Some(children[0]);
+            changed = Some(children[0].clone());
         }
         Ok(changed)
     }

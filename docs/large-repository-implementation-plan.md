@@ -285,6 +285,16 @@ Each cell below is a test family, with SHA-1/SHA-256 coverage on a representativ
 | Collection | Remote reader, incomplete root inventory, lost drain fence, partial delete | No deletion until proven safe; resumable maintenance |
 | Product | Parent reordering, hidden candidate object, large-history budget exhaustion | Policy/reachability preserved; resource error distinguished |
 
+## Ref root publication implementation sequence
+
+The [immutable ref state](design/immutable-ref-state.md) supplies conditional versioned roots and streaming initial construction. Complete the final publication change in this order:
+
+1. Coalesce existing-base batches by changed subtree; measure ordinary and bulk preparation separately, including long-name byte splits and retained tombstones.
+2. Add the authoritative ref snapshot to the fresh schema and query-derived preparation base. Bind exact policy/check facts and their current-state CAS semantics to the privately issued transition certificate.
+3. Retain the final catalog/ref/response descriptors and publish them atomically with a bounded command. Keep current authorization, owner/lease fencing and exact recorded replay; remove full-plan transport and per-ref final SQL mutation.
+4. Convert every producer, reader, default-branch, policy/check, review and recovery path together. Delete the old ref/body schema and adapters for the fresh-data cutover.
+5. Include snapshots and their transitive immutable nodes in complete retention, collection and isolated restore. Qualify hot-root fairness and full-history mixed workloads against the mandatory large-team gates.
+
 ## Release completion checklist
 
 - [ ] One new-format schema/codec set; old Git body structures and callers removed.

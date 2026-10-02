@@ -11,5 +11,7 @@ pub mod sources;
 pub mod verification;
 
 pub(crate) mod input_artifact;
+pub use input_artifact::InputRootError;
 pub mod publication;
+pub mod ref_state;
 pub mod wire_request;

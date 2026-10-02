@@ -13,6 +13,7 @@ use std::{
 pub(in crate::packs) mod codec;
 pub(in crate::packs) mod record;
 pub use record::{IndexKey, IndexRecord};
+mod bulk;
 mod cursor;
 mod update;
 pub use cursor::RangeCursor;
@@ -41,7 +42,7 @@ pub enum IndexError {
     Limit,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeRef<R: IndexRecord = StoredRun> {
     pub operation: [u8; 16],
     pub artifact: ArtifactDescriptor,
@@ -49,27 +50,28 @@ pub struct NodeRef<R: IndexRecord = StoredRun> {
     pub first_key: R::Key,
     pub last_key: R::Key,
     pub record_count: u64,
-    /// Represented leaf inventory, including overlaps between metadata shards or
-    /// logical run projections in other roots. Never a unique canonical-object coverage proof.
+    /// Sum of record weights: represented objects for object/source records,
+    /// live refs for ref-state records. Object counts include overlaps between
+    /// shards or logical projections; never a unique-object coverage proof.
     pub object_count: u64,
 }
+impl<R: IndexRecord> Copy for NodeRef<R> where R::Key: Copy {}
 impl<R: IndexRecord> NodeRef<R> {
-    pub fn validate(self, format: ObjectFormat) -> Result<(), IndexError> {
-        if self.height > MAX_HEIGHT
+    pub fn validate(&self, format: ObjectFormat) -> Result<(), IndexError> {
+        if self.height > R::MAX_HEIGHT
             || !self.first_key.valid(format)
             || !self.last_key.valid(format)
             || self.first_key > self.last_key
             || self.record_count == 0
-            || self.object_count < self.record_count
-            || self.object_count > i64::MAX as u64
+            || !R::valid_counts(self.record_count, self.object_count)
             || self.artifact.size == 0
-            || self.artifact.size > u64::from(NODE_BYTES)
+            || self.artifact.size > u64::from(R::NODE_BYTES)
         {
             return Err(IndexError::Integrity);
         }
         Ok(())
     }
-    fn key(self) -> ArtifactKey {
+    fn key(&self) -> ArtifactKey {
         ArtifactKey {
             operation: self.operation,
             binding_digest: self.artifact.digest,
@@ -96,13 +98,13 @@ impl<R: IndexRecord> Contents<R> {
     fn first(&self) -> Option<R::Key> {
         match self {
             Self::Runs(v) => v.first().map(|r| r.first_key()),
-            Self::Children(v) => v.first().map(|r| r.first_key),
+            Self::Children(v) => v.first().map(|r| r.first_key.clone()),
         }
     }
     fn last(&self) -> Option<R::Key> {
         match self {
             Self::Runs(v) => v.last().map(|r| r.last_key()),
-            Self::Children(v) => v.last().map(|r| r.last_key),
+            Self::Children(v) => v.last().map(|r| r.last_key.clone()),
         }
     }
     fn split(&mut self) -> Option<Self> {
@@ -115,6 +117,57 @@ impl<R: IndexRecord> Contents<R> {
             Self::Children(v) => Self::Children(v.split_off(at)),
         })
     }
+    fn byte_parts(self, header: usize) -> Result<Vec<Self>, IndexError> {
+        fn chunks<T>(
+            items: Vec<T>,
+            header: usize,
+            limit: u32,
+            fanout: usize,
+            encode: impl Fn(&T, &mut BoundedEncoder) -> Result<(), CodecError>,
+        ) -> Result<Vec<Vec<T>>, IndexError> {
+            let capacity = (limit as usize)
+                .checked_sub(header)
+                .ok_or(IndexError::Limit)?;
+            let mut groups = Vec::new();
+            let mut group = Vec::new();
+            let mut used = 0;
+            for item in items {
+                let mut e = BoundedEncoder::new(limit)?;
+                encode(&item, &mut e)?;
+                let size = e.finish().len();
+                if size > capacity {
+                    return Err(IndexError::Limit);
+                }
+                if !group.is_empty() && (used + size > capacity || group.len() == fanout) {
+                    groups.push(std::mem::take(&mut group));
+                    used = 0;
+                }
+                group.push(item);
+                used += size;
+            }
+            if !group.is_empty() {
+                groups.push(group);
+            }
+            if groups.len() < 2 {
+                return Err(IndexError::Limit);
+            }
+            Ok(groups)
+        }
+        match self {
+            Self::Runs(v) => Ok(chunks(v, header, R::NODE_BYTES, R::FANOUT, |r, e| {
+                r.encode_record(e)
+            })?
+            .into_iter()
+            .map(Self::Runs)
+            .collect()),
+            Self::Children(v) => Ok(chunks(v, header, R::NODE_BYTES, R::FANOUT, |r, e| {
+                codec::reference(e, r.clone())
+            })?
+            .into_iter()
+            .map(Self::Children)
+            .collect()),
+        }
+    }
 }
 #[derive(Clone)]
 struct Node<R: IndexRecord = StoredRun> {
@@ -126,7 +179,10 @@ struct Node<R: IndexRecord = StoredRun> {
 }
 impl<R: IndexRecord> Node<R> {
     fn validate(&self) -> Result<(), IndexError> {
-        if self.contents.is_empty() || self.contents.len() > R::FANOUT || self.height > MAX_HEIGHT {
+        if self.contents.is_empty()
+            || self.contents.len() > R::FANOUT
+            || self.height > R::MAX_HEIGHT
+        {
             return Err(IndexError::Limit);
         }
         let mut previous = None;
@@ -137,7 +193,10 @@ impl<R: IndexRecord> Node<R> {
                 }
                 for stored in runs {
                     stored.validate_record(self.repository, self.format)?;
-                    if previous.is_some_and(|last| last >= stored.first_key()) {
+                    if previous
+                        .as_ref()
+                        .is_some_and(|last| *last >= stored.first_key())
+                    {
                         return Err(IndexError::Integrity);
                     }
                     previous = Some(stored.last_key());
@@ -150,15 +209,20 @@ impl<R: IndexRecord> Node<R> {
                 for child in children {
                     child.validate(self.format)?;
                     if child.height + 1 != self.height
-                        || previous.is_some_and(|last| last >= child.first_key)
+                        || previous
+                            .as_ref()
+                            .is_some_and(|last| *last >= child.first_key)
                     {
                         return Err(IndexError::Integrity);
                     }
-                    previous = Some(child.last_key);
+                    previous = Some(child.last_key.clone());
                 }
             }
         }
-        self.counts()?;
+        let (records, weight) = self.counts()?;
+        if !R::valid_counts(records, weight) {
+            return Err(IndexError::Limit);
+        }
         Ok(())
     }
     fn counts(&self) -> Result<(u64, u64), IndexError> {
@@ -253,7 +317,7 @@ impl<R: IndexRecord> RangeIndex<R> {
     }
     fn cache(&self, reference: NodeRef<R>, node: Arc<Node<R>>) -> Result<(), IndexError> {
         let mut cache = self.cache.lock().map_err(|_| IndexError::Integrity)?;
-        if let Some(at) = cache.iter().position(|(cached, _)| *cached == reference) {
+        if let Some(at) = cache.iter().position(|(cached, _)| cached == &reference) {
             cache.remove(at);
         }
         if cache.len() == CACHE_NODES {
@@ -266,7 +330,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         reference.validate(self.format)?;
         {
             let mut cache = self.cache.lock().map_err(|_| IndexError::Integrity)?;
-            if let Some(at) = cache.iter().position(|(cached, _)| *cached == reference) {
+            if let Some(at) = cache.iter().position(|(cached, _)| cached == &reference) {
                 let value = cache.remove(at).ok_or(IndexError::Integrity)?;
                 let node = Arc::clone(&value.1);
                 cache.push_back(value);
@@ -304,9 +368,16 @@ impl<R: IndexRecord> RangeIndex<R> {
             contents,
         });
         let bytes = node.encode()?;
+        self.persist_encoded(node, bytes).await
+    }
+    async fn persist_encoded(
+        &self,
+        node: Arc<Node<R>>,
+        bytes: Vec<u8>,
+    ) -> Result<NodeRef<R>, IndexError> {
         let digest = *blake3::hash(&bytes).as_bytes();
         let key = ArtifactKey {
-            operation,
+            operation: node.operation,
             binding_digest: digest,
             kind: ArtifactKind::CatalogNode,
         };
@@ -315,7 +386,7 @@ impl<R: IndexRecord> RangeIndex<R> {
             .put(key, bytes.len() as u64, digest, &mut bytes.as_slice())
             .await?;
         let reference = node.reference(artifact)?;
-        self.cache(reference, node)?;
+        self.cache(reference.clone(), node)?;
         Ok(reference)
     }
     /// First run whose last OID is at least `oid`. It may start after `oid`, so
@@ -341,11 +412,11 @@ impl<R: IndexRecord> RangeIndex<R> {
                 Contents::Runs(runs) => {
                     return Ok(runs
                         .get(runs.partition_point(|run| run.last_key() < oid))
-                        .copied());
+                        .cloned());
                 }
                 Contents::Children(children) => {
                     let at = children.partition_point(|child| child.last_key < oid);
-                    reference = *children.get(at).ok_or(IndexError::Integrity)?;
+                    reference = children.get(at).ok_or(IndexError::Integrity)?.clone();
                 }
             }
         }
@@ -369,7 +440,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         }
         let mut selected = Vec::new();
         let Some(start) = self
-            .successor(root, first)
+            .successor(root.clone(), first)
             .await?
             .filter(|run| run.first_key() <= last)
         else {
@@ -378,8 +449,9 @@ impl<R: IndexRecord> RangeIndex<R> {
         if limit == 0 {
             return Err(IndexError::Limit);
         }
+        let after = start.first_key();
         selected.push(start);
-        let mut cursor = self.cursor(root, Some(start.first_key()))?;
+        let mut cursor = self.cursor(root, Some(after))?;
         while let Some(run) = cursor.next().await? {
             if run.first_key() > last {
                 break;
@@ -397,7 +469,7 @@ impl<R: IndexRecord> RangeIndex<R> {
         oid: R::Key,
     ) -> Result<Option<R>, IndexError> {
         Ok(self
-            .successor(root, oid)
+            .successor(root, oid.clone())
             .await?
             .filter(|run| run.first_key() <= oid))
     }
