@@ -15,10 +15,12 @@ use cellule_runtime::{CellClient, CellTarget, InvocationError, primitives::sql::
 use std::sync::Arc;
 
 mod custody;
+#[cfg(test)]
+mod limits_tests;
 pub(in crate::packs) use custody::RetainedNativeInput;
 pub(super) use custody::verify_digest;
 
-const DOMAIN: &[u8] = b"canopy.staged-native-inputs.v2\0";
+const DOMAIN: &[u8] = b"canopy.staged-native-inputs.v3\0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeInputCertificate(CertificateEnvelope);
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +32,7 @@ struct Inputs {
     format: ObjectFormat,
     root: Option<NativeInputRoot>,
     wire_request: Option<WireRequestRoot>,
+    native_result: Option<NativeResultRoot>,
     source: Option<(PreparationToken, [u8; 32])>,
     previous: Option<[u8; 32]>,
 }
@@ -48,6 +51,14 @@ impl Inputs {
             wire.validate()?;
             if self.source.is_none() && wire.operation() != self.token.artifact_operation {
                 return Err(CodecError::Invalid("wire request namespace"));
+            }
+        }
+        if let Some(native) = self.native_result {
+            native.validate()?;
+            if self.wire_request.is_none()
+                || self.source.is_none() && native.operation() != self.token.artifact_operation
+            {
+                return Err(CodecError::Invalid("native result namespace"));
             }
         }
         if self.source.is_some_and(|(source, _)| {
@@ -78,6 +89,10 @@ impl WireValue for Inputs {
         }
         e.write_bool(self.wire_request.is_some())?;
         if let Some(root) = self.wire_request {
+            root.encode(e)?;
+        }
+        e.write_bool(self.native_result.is_some())?;
+        if let Some(root) = self.native_result {
             root.encode(e)?;
         }
         e.write_bool(self.source.is_some())?;
@@ -114,6 +129,11 @@ impl WireValue for Inputs {
         } else {
             None
         };
+        let native_result = if d.read_bool()? {
+            Some(NativeResultRoot::decode(d)?)
+        } else {
+            None
+        };
         let source = if d.read_bool()? {
             Some((PreparationToken::decode(d)?, wire_fixed(d)?))
         } else {
@@ -132,6 +152,7 @@ impl WireValue for Inputs {
             format,
             root,
             wire_request,
+            native_result,
             source,
             previous,
         };
@@ -180,6 +201,9 @@ impl NativeInputCertificate {
     }
     pub fn wire_request(&self) -> Result<Option<WireRequestRoot>, CodecError> {
         Ok(self.0.data::<Inputs>()?.wire_request)
+    }
+    pub fn native_result(&self) -> Result<Option<NativeResultRoot>, CodecError> {
+        Ok(self.0.data::<Inputs>()?.native_result)
     }
     pub(super) fn checkpoint_lineage(&self) -> Result<([u8; 32], Option<[u8; 32]>), CodecError> {
         Ok((
@@ -342,7 +366,7 @@ impl StagingContext {
             codec::artifact_valid(native.operation)?;
             root = Some(index.insert(root, token.artifact_operation, native).await?);
         }
-        self.sign_inputs(root, wire_request, None, None).await
+        self.sign_inputs(root, wire_request, None, None, None).await
     }
     /// Retains an exact immutable input root under the successor pin. Adoption
     /// does not copy an input inventory or recertify native bodies.
@@ -353,9 +377,9 @@ impl StagingContext {
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
         self.ensure_live()?;
         let (client, target, check) = self.capability();
-        let (root, wire_request, source) =
+        let (root, wire_request, native_result, source) =
             adoption(client, target, &check, self.format(), store, prior).await?;
-        self.sign_inputs(root, wire_request, Some(source), None)
+        self.sign_inputs(root, wire_request, native_result, Some(source), None)
             .await
     }
     /// Path-copy the registered input tree, preserving its request and every
@@ -370,11 +394,51 @@ impl StagingContext {
         I: IntoIterator<Item = NativePackDescriptor>,
         I::IntoIter: Send,
     {
+        self.append_inputs(store, prior, inputs, None).await
+    }
+    pub async fn append_native_result<I>(
+        &self,
+        store: Arc<ArtifactStore>,
+        prior: &NativeInputCertificate,
+        inputs: I,
+        result: SavedNativeResult,
+    ) -> Result<NativeInputCertificate, InputCheckpointError>
+    where
+        I: IntoIterator<Item = NativePackDescriptor>,
+        I::IntoIter: Send,
+    {
+        self.append_inputs(store, prior, inputs, Some(result)).await
+    }
+    async fn append_inputs<I>(
+        &self,
+        store: Arc<ArtifactStore>,
+        prior: &NativeInputCertificate,
+        inputs: I,
+        result: Option<SavedNativeResult>,
+    ) -> Result<NativeInputCertificate, InputCheckpointError>
+    where
+        I: IntoIterator<Item = NativePackDescriptor>,
+        I::IntoIter: Send,
+    {
         let (current, target, check, format) = self.push_checkpoint().await?;
         if &current != prior || store.repository() != check.token.repository {
             return Err(StagingError::Context.into());
         }
         let data: Inputs = prior.0.data()?;
+        let native_result = if let Some(result) = result {
+            if data.native_result.is_some() {
+                return Err(StagingError::Context.into());
+            }
+            Some(result.scoped_root(
+                &target,
+                &check,
+                format,
+                data.wire_request.ok_or(StagingError::Context)?,
+                prior.checkpoint_lineage()?.0,
+            )?)
+        } else {
+            data.native_result
+        };
         let index = NativeInputIndex::new(store, format);
         let mut root = data.root;
         for native in inputs {
@@ -392,12 +456,16 @@ impl StagingContext {
         if &current != prior || prior.scoped_check(&target)? != check {
             return Err(StagingError::Context.into());
         }
-        if root == data.root {
+        if data.native_result.is_some() && root != data.root {
+            return Err(StagingError::Context.into());
+        }
+        if root == data.root && native_result == data.native_result {
             return Ok(prior.clone());
         }
         self.sign_inputs(
             root,
             data.wire_request,
+            native_result,
             data.source,
             Some(*blake3::hash(&prior.bytes()?).as_bytes()),
         )
@@ -407,6 +475,7 @@ impl StagingContext {
         &self,
         root: Option<NativeInputRoot>,
         wire_request: Option<WireRequestRoot>,
+        native_result: Option<NativeResultRoot>,
         source: Option<(PreparationToken, [u8; 32])>,
         previous: Option<[u8; 32]>,
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
@@ -432,6 +501,7 @@ impl StagingContext {
                 format: self.format(),
                 root,
                 wire_request,
+                native_result,
                 source,
                 previous,
             },
@@ -469,7 +539,7 @@ impl PreparationSession {
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
         let (lease, _) = self.live_lease()?;
         let (client, target, check) = self.capability();
-        let (root, wire_request, source) =
+        let (root, wire_request, native_result, source) =
             adoption(client, target, check, lease.format, store, prior).await?;
         let current = client
             .query::<CheckPreparation>(target, None, check.clone())
@@ -494,6 +564,7 @@ impl PreparationSession {
                 format: lease.format,
                 root,
                 wire_request,
+                native_result,
                 source: Some(source),
                 previous: None,
             },
@@ -514,6 +585,7 @@ async fn adoption(
     (
         Option<NativeInputRoot>,
         Option<WireRequestRoot>,
+        Option<NativeResultRoot>,
         (PreparationToken, [u8; 32]),
     ),
     InputCheckpointError,
@@ -559,12 +631,24 @@ async fn adoption(
             return Err(StagingError::Context.into());
         }
     }
+    if let Some(root) = data.native_result {
+        root.check_request(
+            &store,
+            data.wire_request.ok_or(StagingError::Context)?,
+            target,
+            check,
+            format,
+        )
+        .await
+        .map_err(|error| StagingError::Input(Box::new(error)))?;
+    }
     // The checkpoint's exact immutable root is retained by the source pin and
     // checked again in the destination write. No historical leaf scan/copy is
     // needed to transfer custody. Physical reconstruction must exhaust it.
     Ok((
         data.root,
         data.wire_request,
+        data.native_result,
         (data.token, *blake3::hash(&prior.bytes()?).as_bytes()),
     ))
 }
@@ -677,6 +761,7 @@ impl Command for RegisterStagedInputs {
                         || previous.application != data.application
                         || previous.root != data.root
                         || previous.wire_request != data.wire_request
+                        || previous.native_result != data.native_result
                     {
                         return Ok(denied(PreparationDenial::Conflict));
                     }
@@ -703,8 +788,13 @@ impl Command for RegisterStagedInputs {
                     || prior_data.format != data.format
                     || prior_data.source != data.source
                     || prior_data.wire_request != data.wire_request
-                    || data.root == prior_data.root
-                    || data.root.is_none()
+                    || prior_data.native_result.is_some()
+                    || (data.root == prior_data.root
+                        && data.native_result == prior_data.native_result)
+                    || (data.root.is_none() && prior_data.root.is_some())
+                    || data
+                        .native_result
+                        .is_some_and(|root| root.operation() != data.token.artifact_operation)
                     || prior_data.root.is_some_and(|old| {
                         data.root.is_none_or(|new| {
                             new.record_count < old.record_count

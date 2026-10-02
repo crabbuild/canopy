@@ -2,6 +2,7 @@ use super::*;
 use crate::{git_gateway::preflight::EncodedPush, git_http::GitHttpRequest, git_input::GitInput};
 use cellule_ltx::DiskBudget;
 use std::io::Write;
+mod results;
 
 struct Request {
     fixture: Fixture,
@@ -49,7 +50,35 @@ impl Request {
         large: bool,
         operation: [u8; 16],
     ) -> Result<Self> {
+        Self::new_for_actor(format, gzip, large, operation, "owner").await
+    }
+    async fn new_for_actor(
+        format: ObjectFormat,
+        gzip: bool,
+        large: bool,
+        operation: [u8; 16],
+        actor: &str,
+    ) -> Result<Self> {
         let fixture = Fixture::new(format).await?;
+        if actor != "owner" {
+            let actor = actor.to_owned();
+            fixture
+                .handle
+                .execute(
+                    identity()?,
+                    Digest::from_bytes([218; 32]),
+                    sql::now(0)?,
+                    64,
+                    0,
+                    move |tx| {
+                        tx.execute("UPDATE repository_identity SET owner=?1", [actor])?;
+                        Ok(cellule_runtime::cell::executor::HandlerOutcome::Success(
+                            Vec::new(),
+                        ))
+                    },
+                )
+                .await?;
+        }
         let directory = tempfile::TempDir::new()?;
         let disk = DiskBudget::new(32 << 20);
         let raw = raw_request(format, large);
@@ -83,7 +112,7 @@ impl Request {
             &fixture.target,
             fixture.repository,
             format,
-            "owner",
+            actor,
             operation,
         )
         .await?;
@@ -304,6 +333,11 @@ async fn request_checkpoint_recovers_large_plain_and_gzip_intent_and_appends_nat
 async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin_expiry() -> Result
 {
     let request = Request::new(ObjectFormat::Sha256, true, false, [202; 16]).await?;
+    let native = results::completion("owner", ObjectFormat::Sha256, 65, false);
+    let expected_plan = native.plan.clone();
+    let expected_response = native.response.clone();
+    let expected_options = native.options.clone();
+    let retained = results::retain(&request, native).await?;
     request.ticket.stop();
     assert!(request.coordinator.close_and_drain().await.is_empty());
     request.fixture.handle.drain().await?;
@@ -339,7 +373,7 @@ async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin
     let client = CellClient::local(request.fixture.registry.clone(), handle.clone());
     let coordinator =
         StagingCoordinator::new(request.fixture.target.clone(), StagingLimits::default())?;
-    let old = request.proof.token()?;
+    let old = retained.token()?;
     let ticket = coordinator
         .submit(
             ReadyStaging::claim(
@@ -363,7 +397,7 @@ async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin
     };
     assert_ne!(current.token.owner, old.owner);
     let store = request.store.clone();
-    let prior = request.proof.clone();
+    let prior = retained.clone();
     let proof = ticket
         .spawn(move |context| async move {
             context
@@ -375,6 +409,8 @@ async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin
         .await
         .map_err(|error| error.to_string())?;
     assert_eq!(proof.wire_request()?, request.proof.wire_request()?);
+    assert_eq!(proof.native_result()?, retained.native_result()?);
+    assert_eq!(proof.root()?, retained.root()?);
     ticket
         .register_inputs(proof, identity()?)
         .map_err(|(error, _)| error)?
@@ -413,6 +449,15 @@ async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin
                     .map_err(|error| StagingError::Input(Box::new(error)))?,
                 expected
             );
+            drop(native);
+            let recovered = context
+                .reopen_native_result(&store, &restored_path, &work_disk, None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            assert_eq!(recovered.plan, expected_plan);
+            assert_eq!(recovered.response, expected_response);
+            assert_eq!(recovered.options, expected_options);
+            assert!(recovered.certificate.is_none());
             Ok(())
         })?
         .wait()

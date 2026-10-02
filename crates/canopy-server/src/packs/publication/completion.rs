@@ -50,8 +50,8 @@ impl CompletionCatalogProof {
 /// Transport annotation only. Raw bytes cannot be converted into a trusted
 /// native witness; edits invalidate the completion certificate.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SignedPushAnnotation {
-    pub body: Vec<u8>,
+pub struct SignedPushAnnotation<B = Vec<u8>> {
+    pub body: B,
     pub signer: String,
     pub key: String,
 }
@@ -151,6 +151,13 @@ pub(super) fn signed_annotation(
     certificate: Option<VerifiedPushCertificate>,
 ) -> Result<Option<SignedPushAnnotation>, CodecError> {
     let (_, target, check) = session.capability();
+    scoped_signed_annotation(target, check, certificate)
+}
+pub(super) fn scoped_signed_annotation(
+    target: &CellTarget,
+    check: &LeaseCheck,
+    certificate: Option<VerifiedPushCertificate>,
+) -> Result<Option<SignedPushAnnotation>, CodecError> {
     if certificate.as_ref().is_some_and(|certificate| {
         certificate.target != *target
             || certificate.request_digest != check.token.request_digest
@@ -294,7 +301,7 @@ fn json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     }
     Ok(bytes)
 }
-fn validate_payload(
+pub(super) fn validate_payload(
     response: &GitHttpResponse,
     options: &[String],
     signed: Option<&SignedPushAnnotation>,

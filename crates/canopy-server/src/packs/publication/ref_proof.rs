@@ -117,7 +117,7 @@ pub(super) fn plan_digest(plan: &PushPlan) -> Result<[u8; 32], CodecError> {
     }
     Ok(*hash.finalize().as_bytes())
 }
-fn shape(plan: &PushPlan, format: ObjectFormat) -> Result<(), RefProofError> {
+pub(super) fn shape(plan: &PushPlan, format: ObjectFormat) -> Result<(), RefProofError> {
     let mut prefix = BoundedEncoder::new(128)?;
     plan.encode_prefix(&mut prefix)?;
     let mut names = BTreeSet::new();

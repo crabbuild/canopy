@@ -250,18 +250,40 @@ impl WireValue for PushPlan {
     }
 }
 impl PushPlan {
+    pub(crate) fn encode_range(
+        &self,
+        range: std::ops::Range<usize>,
+        encoder: &mut BoundedEncoder,
+    ) -> Result<(), CodecError> {
+        let updates = self
+            .updates
+            .get(range)
+            .ok_or(CodecError::Invalid("push plan range"))?;
+        encode_plan_prefix(&self.actor, updates.len(), encoder)?;
+        for update in updates {
+            encode_update(update, encoder)?;
+        }
+        Ok(())
+    }
     /// Shared wire prefix and update encoding allow bounded incremental hashing
     /// without allocating a second full copy of a large mirror plan.
     pub(crate) fn encode_prefix(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
-        if validate_component(&self.actor).is_err() {
-            return Err(CodecError::Invalid("invalid push actor"));
-        }
-        if self.updates.is_empty() || self.updates.len() > MAX_UPDATES {
-            return Err(CodecError::Invalid("push update count is outside bounds"));
-        }
-        encoder.write_text(&self.actor)?;
-        encoder.write_count(self.updates.len())
+        encode_plan_prefix(&self.actor, self.updates.len(), encoder)
     }
+}
+fn encode_plan_prefix(
+    actor: &str,
+    count: usize,
+    encoder: &mut BoundedEncoder,
+) -> Result<(), CodecError> {
+    if validate_component(actor).is_err() {
+        return Err(CodecError::Invalid("invalid push actor"));
+    }
+    if count == 0 || count > MAX_UPDATES {
+        return Err(CodecError::Invalid("push update count is outside bounds"));
+    }
+    encoder.write_text(actor)?;
+    encoder.write_count(count)
 }
 pub(crate) fn encode_update(
     update: &RefUpdate,

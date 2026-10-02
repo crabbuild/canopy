@@ -150,11 +150,32 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 .stage_native_packs(&context, &upload_store, physical_limits())
                 .await
                 .map_err(|error| StagingError::Input(Box::new(error)))?;
-            let certificate = context
-                .append_native_inputs(upload_store, &request_checkpoint, inputs.iter().copied())
+            let expected = response.clone();
+            let result = context
+                .retain_native_result(
+                    &upload_store,
+                    &request_checkpoint,
+                    PushCompletionRequest {
+                        plan: Some(plan(vec![update("refs/heads/main", None, Some(tip))])),
+                        response,
+                        options: Vec::new(),
+                        certificate: None,
+                    },
+                    &request_root,
+                    &request_disk,
+                )
                 .await
                 .map_err(|error| StagingError::Input(Box::new(error)))?;
-            Ok((inputs, certificate, response))
+            let certificate = context
+                .append_native_result(
+                    upload_store,
+                    &request_checkpoint,
+                    inputs.iter().copied(),
+                    result,
+                )
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            Ok((inputs, certificate, expected))
         })?;
         let (inputs, input_certificate, response) = task
             .wait()
@@ -173,6 +194,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             2
         );
         assert!(input_certificate.wire_request()?.is_some());
+        assert!(input_certificate.native_result()?.is_some());
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].operation, initial.token.artifact_operation);
         assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
@@ -222,9 +244,14 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                     .windows(b"refs/heads/main".len())
                     .any(|part| part == b"refs/heads/main")
             );
-            Ok(())
+            context
+                .reopen_native_result(&recover_store, &recover_root, &recover_disk, None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))
         })?;
-        recovered.wait().await.map_err(|error| error.to_string())?;
+        let recovered = recovered.wait().await.map_err(|error| error.to_string())?;
+        assert_eq!(recovered.response, response);
+        drop(response);
         cleaned(work_root.path(), &disk).await?;
         let physical_root = Arc::new(tempfile::TempDir::new()?);
         let physical_disk = DiskBudget::new(256 << 20);
@@ -253,7 +280,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             CatalogFileLimits::default(),
         )?);
         let base = Arc::new(ticket.open_base(indexes, files).await?);
-        let expected = response.clone();
+        let expected = recovered.response.clone();
         let producer_root = Arc::clone(&physical_root);
         let producer_disk = physical_disk.clone();
         let publication_identity = identity()?;
@@ -272,12 +299,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 let prepared = Arc::new(builder.finish().await?);
                 let ready = Box::pin(prepared.ready_push(
                     publication_identity,
-                    PushCompletionRequest {
-                        plan: Some(plan(vec![update("refs/heads/main", None, Some(tip))])),
-                        response,
-                        options: Vec::new(),
-                        certificate: None,
-                    },
+                    recovered,
                     producer_root.path(),
                     producer_disk.clone(),
                     limits(),

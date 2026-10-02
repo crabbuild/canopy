@@ -63,7 +63,9 @@ pub use staging_service::{
     StagingStats, StagingTask, StagingTicket,
 };
 mod inputs;
+mod native_result;
 pub(in crate::packs) use inputs::RetainedNativeInput;
+pub use native_result::{NativeResultError, NativeResultRoot, SavedNativeResult};
 mod staging;
 pub use inputs::{
     CheckStagedInputs, InputCheckpointError, NativeInputCertificate, RegisterStagedInputs,

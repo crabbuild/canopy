@@ -20,8 +20,8 @@ async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnation
     for kind in [
         ArtifactKind::DirectoryRun,
         ArtifactKind::CatalogNode,
-        ArtifactKind::Request,
-        ArtifactKind::RequestRoot,
+        ArtifactKind::InputBody,
+        ArtifactKind::InputRoot,
     ] {
         let old = ArtifactKey {
             operation: [2; 16],
@@ -46,7 +46,7 @@ async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnation
             .await?;
         let path = artifacts.path(old, digest)?;
         assert!(path.as_ref().contains(match kind {
-            ArtifactKind::Request | ArtifactKind::RequestRoot => "/git-inputs/",
+            ArtifactKind::InputBody | ArtifactKind::InputRoot => "/git-inputs/",
             _ => "/git-catalogs/",
         }));
         assert_eq!(

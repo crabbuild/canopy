@@ -14,34 +14,16 @@ const DOMAIN: &[u8] = b"canopy.wire-request.v1\0";
 pub const REQUEST_ROOT_BYTES: u32 = 64 << 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WireRequestRoot {
-    operation: [u8; 16],
-    artifact: ArtifactDescriptor,
-}
+pub struct WireRequestRoot(super::input_artifact::StoredInputRoot);
 impl WireRequestRoot {
     pub fn operation(self) -> [u8; 16] {
-        self.operation
+        self.0.operation
     }
     pub fn artifact(self) -> ArtifactDescriptor {
-        self.artifact
+        self.0.artifact
     }
     pub(crate) fn validate(self) -> Result<(), CodecError> {
-        super::publication::codec::artifact_valid(self.operation)?;
-        if self.operation == [0; 16]
-            || self.artifact.size == 0
-            || self.artifact.size > u64::from(REQUEST_ROOT_BYTES)
-            || self.artifact.manifest_digest == [0; 32]
-        {
-            return Err(CodecError::Invalid("wire request root"));
-        }
-        Ok(())
-    }
-    fn key(self) -> ArtifactKey {
-        ArtifactKey {
-            operation: self.operation,
-            binding_digest: self.artifact.digest,
-            kind: ArtifactKind::RequestRoot,
-        }
+        self.0.validate(REQUEST_ROOT_BYTES)
     }
     pub(crate) async fn upload(
         store: &ArtifactStore,
@@ -51,38 +33,20 @@ impl WireRequestRoot {
         if record.identity.repository != store.repository() {
             return Err(WireRequestError::Context);
         }
-        let mut e = BoundedEncoder::new(REQUEST_ROOT_BYTES)?;
-        record.encode(&mut e)?;
-        let bytes = e.finish();
-        let digest = *blake3::hash(&bytes).as_bytes();
-        let descriptor = store
-            .put(
-                ArtifactKey {
-                    operation: record.operation,
-                    binding_digest: digest,
-                    kind: ArtifactKind::RequestRoot,
-                },
-                bytes.len() as u64,
-                digest,
-                &mut bytes.as_slice(),
+        Ok(Self(
+            super::input_artifact::StoredInputRoot::upload(
+                store,
+                record.operation,
+                &record,
+                REQUEST_ROOT_BYTES,
             )
-            .await?;
-        Ok(Self {
-            operation: record.operation,
-            artifact: descriptor,
-        })
+            .await?,
+        ))
     }
     pub(crate) async fn read(self, store: &ArtifactStore) -> Result<WireRequest, WireRequestError> {
-        self.validate()?;
-        let mut reader = store.read(self.key(), self.artifact).await?;
-        let mut bytes = Vec::with_capacity(self.artifact.size as usize);
-        while let Some(part) = reader.next().await? {
-            bytes.extend_from_slice(&part);
-        }
-        let mut d = BoundedDecoder::new(&bytes, REQUEST_ROOT_BYTES)?;
-        let record = WireRequest::decode(&mut d)?;
-        d.finish()?;
-        if record.operation != self.operation || record.identity.repository != store.repository() {
+        let record: WireRequest = self.0.read(store, REQUEST_ROOT_BYTES).await?;
+        if record.operation != self.operation() || record.identity.repository != store.repository()
+        {
             return Err(WireRequestError::Context);
         }
         Ok(record)
@@ -91,14 +55,10 @@ impl WireRequestRoot {
 impl WireValue for WireRequestRoot {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         self.validate()?;
-        e.write_bytes(&self.operation)?;
-        artifact(e, self.artifact)
+        self.0.encode(e)
     }
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
-        let value = Self {
-            operation: fixed(d)?,
-            artifact: read_artifact(d)?,
-        };
+        let value = Self(super::input_artifact::StoredInputRoot::decode(d)?);
         value.validate()?;
         Ok(value)
     }
@@ -147,7 +107,7 @@ impl WireRequest {
         ArtifactKey {
             operation: self.operation,
             binding_digest: self.request.body.digest,
-            kind: ArtifactKind::Request,
+            kind: ArtifactKind::InputBody,
         }
     }
 }

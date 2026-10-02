@@ -259,6 +259,16 @@ impl GitInput {
         // Preserve the canonical length-prefixed HTTP digest without keeping the
         // body in memory. Only this pre-execution pass shares the file cursor.
         hash.update(&self.size.to_le_bytes());
+        let (content, scoped) = self.hashes(Some(hash)).await?;
+        Ok((scoped.expect("scoped digest requested"), content))
+    }
+    pub(crate) async fn content_digest(&self) -> Result<[u8; 32], InputError> {
+        Ok(self.hashes(None).await?.0)
+    }
+    async fn hashes(
+        &self,
+        mut hash: Option<blake3::Hasher>,
+    ) -> Result<([u8; 32], Option<[u8; 32]>), InputError> {
         let spool = Arc::clone(&self.spool);
         Ok(tokio::task::spawn_blocking(move || {
             // The raw artifact digest shares this scan with the scoped request
@@ -272,11 +282,31 @@ impl GitInput {
                 if count == 0 {
                     break;
                 }
-                hash.update(&buffer[..count]);
+                if let Some(hash) = &mut hash {
+                    hash.update(&buffer[..count]);
+                }
                 content.update(&buffer[..count]);
             }
             file.rewind()?;
-            Ok::<_, std::io::Error>((*hash.finalize().as_bytes(), *content.finalize().as_bytes()))
+            Ok::<_, std::io::Error>((
+                *content.finalize().as_bytes(),
+                hash.map(|hash| *hash.finalize().as_bytes()),
+            ))
+        })
+        .await??)
+    }
+    /// Consume the spool so cancellation cannot race its queued file cursor.
+    pub(crate) async fn read_owned<T: Send + 'static>(
+        self,
+        read: impl FnOnce(&mut File) -> io::Result<T> + Send + 'static,
+    ) -> Result<T, InputError> {
+        Ok(tokio::task::spawn_blocking(move || {
+            let mut file = self.spool.file.try_clone()?;
+            file.rewind()?;
+            let result = read(&mut file);
+            drop(file);
+            drop(self);
+            result
         })
         .await??)
     }
@@ -295,7 +325,7 @@ impl GitInput {
             ArtifactKey {
                 operation,
                 binding_digest: digest,
-                kind: ArtifactKind::Request,
+                kind: ArtifactKind::InputBody,
             },
             self.size,
             digest,

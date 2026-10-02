@@ -10,5 +10,6 @@ pub mod metadata;
 pub mod sources;
 pub mod verification;
 
+pub(crate) mod input_artifact;
 pub mod publication;
 pub mod wire_request;

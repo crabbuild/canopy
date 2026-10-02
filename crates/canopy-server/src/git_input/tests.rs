@@ -439,14 +439,14 @@ async fn progressing_upload_outlives_the_idle_deadline() -> Result<()> {
 }
 
 #[test]
-fn cancelling_queued_request_hash_or_retention_keeps_spool_and_admission() -> Result<()> {
+fn cancelling_queued_request_hash_retention_or_read_keeps_spool_and_admission() -> Result<()> {
     use std::future::Future;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
         .build()?;
     runtime.block_on(async {
-        for hashing in [true, false] {
+        for operation in 0..3 {
             let directory = tempfile::TempDir::new()?;
             let budget = DiskBudget::new(1024);
             let transfers = crate::admission::AccountAdmission::new(2, "total", "account");
@@ -471,11 +471,19 @@ fn cancelling_queued_request_hash_or_retention_keeps_spool_and_admission() -> Re
             let store =
                 ArtifactStore::new(Arc::new(object_store::memory::InMemory::new()), [1; 16]);
             let mut work = Box::pin(async move {
-                if hashing {
+                if operation == 0 {
                     input.digest(blake3::Hasher::new()).await?;
-                } else {
+                } else if operation == 1 {
                     input
                         .retain(&store, [2; 16], *blake3::hash(raw).as_bytes())
+                        .await?;
+                } else {
+                    input
+                        .read_owned(|file| {
+                            let mut body = Vec::new();
+                            std::io::Read::read_to_end(file, &mut body)?;
+                            Ok(body)
+                        })
                         .await?;
                 }
                 Ok::<_, InputError>(())

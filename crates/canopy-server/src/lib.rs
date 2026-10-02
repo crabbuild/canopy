@@ -212,6 +212,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("git_input/mod.rs"));
                 source.update(include_bytes!("git_http/capture.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
+                source.update(include_bytes!("packs/input_artifact.rs"));
+                source.update(include_bytes!("packs/publication/native_result.rs"));
+                source.update(include_bytes!("packs/publication/native_result/codec.rs"));
+                source.update(include_bytes!("packs/publication/native_result/plan.rs"));
+                source.update(include_bytes!("packs/publication/completion.rs"));
+                source.update(include_bytes!("packs/publication/ref_proof.rs"));
                 source.update(include_bytes!("packs/metadata/transport.rs"));
                 source.update(include_bytes!("packs/publication/inputs.rs"));
                 source.update(include_bytes!(

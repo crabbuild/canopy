@@ -16,8 +16,8 @@ pub enum ArtifactKind {
     Metadata,
     DirectoryRun,
     CatalogNode,
-    Request,
-    RequestRoot,
+    InputBody,
+    InputRoot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,12 +90,12 @@ impl ArtifactStore {
             hex::encode(key.binding_digest)
         );
         match key.kind {
-            ArtifactKind::Request | ArtifactKind::RequestRoot if key.binding_digest != digest => {
+            ArtifactKind::InputBody | ArtifactKind::InputRoot if key.binding_digest != digest => {
                 Err(ArtifactError::Corrupt)
             }
-            ArtifactKind::Request | ArtifactKind::RequestRoot => {
-                let kind = if key.kind == ArtifactKind::Request {
-                    "requests"
+            ArtifactKind::InputBody | ArtifactKind::InputRoot => {
+                let kind = if key.kind == ArtifactKind::InputBody {
+                    "bodies"
                 } else {
                     "roots"
                 };
@@ -148,7 +148,7 @@ impl ArtifactStore {
         }
         let path = self.path(key, digest)?;
         let family = match key.kind {
-            ArtifactKind::Request | ArtifactKind::RequestRoot => "git-inputs",
+            ArtifactKind::InputBody | ArtifactKind::InputRoot => "git-inputs",
             ArtifactKind::DirectoryRun | ArtifactKind::CatalogNode => "git-catalogs",
             _ => "git-packs",
         };
