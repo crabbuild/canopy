@@ -126,9 +126,14 @@ pub async fn verify(
             Err(InvocationError::Rejected(_))
         ));
         assert!(
-            !certificates(sql)
+            certificates(sql)
                 .await?
                 .contains(&SqlValue::Blob(blob.to_vec()))
+        );
+        assert!(
+            !certificates(sql)
+                .await?
+                .contains(&SqlValue::Blob(tree.to_vec()))
         );
     }
     // A rejected batch must roll back edges as well as closure certificates;
@@ -327,7 +332,7 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
             .iter()
             .filter(|(oid, _)| persisted.contains(&SqlValue::Blob(oid.to_vec())))
             .count(),
-        256
+        leaves.len()
     );
     assert!(!persisted.contains(&SqlValue::Blob(root.to_vec())));
     assert_eq!(
@@ -389,7 +394,7 @@ struct CertificateCommand;
 impl cellule_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = CertificateInput;
     type Output = bool;
     fn execute(

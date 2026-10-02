@@ -15,7 +15,7 @@ CREATE TABLE objects (
     kind TEXT NOT NULL CHECK(kind IN ('blob', 'tree', 'commit', 'tag')),
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32),
-    storage TEXT NOT NULL CHECK(storage IN ('inline', 'external', 'chunked')),
+    storage TEXT NOT NULL CHECK(storage IN ('inline', 'external', 'chunked', 'packed')),
     body BLOB,
     external_sha256 BLOB,
     chunk_id BLOB UNIQUE REFERENCES object_uploads(id) CHECK(chunk_id IS NULL OR length(chunk_id) = 16),
@@ -23,6 +23,8 @@ CREATE TABLE objects (
         (storage = 'inline' AND body IS NOT NULL AND external_sha256 IS NULL AND chunk_id IS NULL AND size = length(body))
         OR
         (storage = 'external' AND kind = 'blob' AND body IS NULL AND chunk_id IS NULL AND length(external_sha256) = 32)
+        OR
+        (storage = 'packed' AND kind = 'blob' AND body IS NULL AND chunk_id IS NULL AND length(external_sha256) = 32 )
         OR
         (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size > 786432)
     )
@@ -321,3 +323,14 @@ CREATE TABLE pull_thread_comments (
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
 );
 CREATE INDEX comments_by_thread ON pull_thread_comments(thread_number, number);
+
+-- Immutable uploaded pack/index pairs. Approval follows canonical verification
+-- of every native index member, including pre-existing objects and thin bases.
+CREATE TABLE git_packs (
+    sha256 BLOB PRIMARY KEY CHECK(length(sha256) = 32),
+    pack_hash BLOB NOT NULL UNIQUE CHECK(length(pack_hash) IN (20, 32)),
+    pack_oid BLOB NOT NULL, pack_size INTEGER NOT NULL CHECK(pack_size > 0), pack_digest BLOB NOT NULL CHECK(length(pack_digest) = 32),
+    index_oid BLOB NOT NULL, index_size INTEGER NOT NULL CHECK(index_size > 0), index_digest BLOB NOT NULL CHECK(length(index_digest) = 32), index_sha256 BLOB NOT NULL CHECK(length(index_sha256) = 32),
+    approved INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0, 1)),
+    covered_through INTEGER NOT NULL DEFAULT 0 CHECK(covered_through >= 0)
+) WITHOUT ROWID;

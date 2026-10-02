@@ -15,6 +15,8 @@ use crate::{
 };
 
 pub(crate) const MAX_OBJECTS: usize = 128;
+// Publication amortizes durable commits independently of bounded read pages.
+pub(crate) const MAX_BATCH_OBJECTS: usize = 2048;
 pub(crate) const VERIFY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const INPUT_LIMIT: u32 = 4 * 1024 * 1024;
 // Leave room for record metadata inside Cellule's bounded command wire format.
@@ -33,14 +35,16 @@ impl ObjectBatch {
     pub fn try_push(&mut self, object: StoredObject) -> Result<(), StoredObject> {
         let bytes = match &object.storage {
             ObjectStorage::Inline(body) => body.len(),
-            ObjectStorage::External { .. } | ObjectStorage::Chunked { .. } => 0,
+            ObjectStorage::Packed { .. }
+            | ObjectStorage::External { .. }
+            | ObjectStorage::Chunked { .. } => 0,
         };
         let verified = match &object.storage {
             ObjectStorage::Inline(body) => body.len() as u64,
             ObjectStorage::Chunked { size, .. } => *size,
-            ObjectStorage::External { .. } => 0,
+            ObjectStorage::External { .. } | ObjectStorage::Packed { .. } => 0,
         };
-        if self.objects.len() == MAX_OBJECTS
+        if self.objects.len() == MAX_BATCH_OBJECTS
             || bytes > INLINE_OBJECT_LIMIT
             || bytes > INLINE_BATCH_BYTES - self.inline_bytes
             || i64::try_from(verified).is_err()
@@ -90,6 +94,12 @@ impl WireValue for ObjectBatch {
                     encoder.write_u64(*size)?;
                     encoder.write_bytes(blake3)?;
                 }
+                ObjectStorage::Packed { size, blake3, pack } => {
+                    encoder.write_u8(3)?;
+                    encoder.write_u64(*size)?;
+                    encoder.write_bytes(blake3)?;
+                    encoder.write_bytes(pack)?;
+                }
                 ObjectStorage::External {
                     size,
                     blake3,
@@ -107,7 +117,7 @@ impl WireValue for ObjectBatch {
 
     fn decode(decoder: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
         let count = decoder.read_count()?;
-        if !(1..=MAX_OBJECTS).contains(&count) {
+        if !(1..=MAX_BATCH_OBJECTS).contains(&count) {
             return Err(CodecError::Invalid("object count is outside batch bounds"));
         }
         let mut batch = Self::default();
@@ -138,6 +148,11 @@ impl WireValue for ObjectBatch {
                     blake3: fixed(decoder)?,
                     sha256: fixed(decoder)?,
                 },
+                3 => ObjectStorage::Packed {
+                    size: decoder.read_u64()?,
+                    blake3: fixed(decoder)?,
+                    pack: fixed(decoder)?,
+                },
                 2 => ObjectStorage::Chunked {
                     upload: fixed(decoder)?,
                     size: decoder.read_u64()?,
@@ -165,7 +180,7 @@ pub(crate) struct PutObjects;
 impl Command for PutObjects {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 5;
-    const CODEC_VERSION: u32 = 3;
+    const CODEC_VERSION: u32 = 5;
     type Input = ObjectBatch;
     type Output = ();
 
@@ -207,6 +222,28 @@ impl Command for PutObjects {
                         "inline",
                         SqlValue::Blob(body),
                         SqlValue::Null,
+                        SqlValue::Null,
+                    )
+                }
+                ObjectStorage::Packed { size, blake3, pack } => {
+                    if object.kind != ObjectKind::Blob || i64::try_from(size).is_err() {
+                        return Ok(CommandResult::Rejected(()));
+                    }
+                    let result = context.sql(&SqlBatch {
+                        statements: vec![SqlStatement {
+                            sql: "SELECT 1 FROM git_packs WHERE sha256 = ?1".into(),
+                            parameters: vec![SqlValue::Blob(pack.to_vec())],
+                        }],
+                    })?;
+                    if result.first().is_none_or(|set| set.rows.is_empty()) {
+                        return Ok(CommandResult::Rejected(()));
+                    }
+                    (
+                        size as i64,
+                        blake3.to_vec(),
+                        "packed",
+                        SqlValue::Null,
+                        SqlValue::Blob(pack.to_vec()),
                         SqlValue::Null,
                     )
                 }
@@ -279,6 +316,17 @@ impl Command for PutObjects {
             // savepoint. No earlier record in this batch may survive that rejection.
             if result.get(1).and_then(|set| set.rows.first()) != Some(&expected) {
                 return Ok(CommandResult::Rejected(()));
+            }
+            // Verified blobs are leaves. Certify them in this same savepoint,
+            // avoiding another full read/hash of every historical blob later.
+            if object.kind == ObjectKind::Blob {
+                context.sql(&SqlBatch {
+                    statements: vec![SqlStatement {
+                        sql: "INSERT INTO object_closure (oid) VALUES (?1) ON CONFLICT DO NOTHING"
+                            .into(),
+                        parameters: vec![SqlValue::Blob(object.oid.to_vec())],
+                    }],
+                })?;
             }
         }
         Ok(CommandResult::Success(()))

@@ -43,6 +43,7 @@ async fn clear(sql: &SqlCell<RepositoryModule>) -> Result {
         identity()?,
         SqlBatch {
             statements: [
+                "DELETE FROM object_closure",
                 "DELETE FROM objects",
                 "DELETE FROM object_chunks",
                 "DELETE FROM object_uploads",

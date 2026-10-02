@@ -162,6 +162,7 @@ struct RunningServer {
     stop: CancellationToken,
     renewal: AbortOnDropHandle<Result<(), ServerError>>,
     ingress_stop: CancellationToken,
+    maintenance_stop: CancellationToken,
     release_stop: CancellationToken,
     serving: JoinHandle<std::io::Result<()>>,
     ssh_serving: Option<JoinHandle<std::io::Result<()>>>,
@@ -191,6 +192,7 @@ pub(crate) struct RepositoryManager {
     residency_admission: AccountAdmission,
     transfers: AccountAdmission,
     tasks: TaskTracker,
+    maintenance_stop: CancellationToken,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -506,6 +508,7 @@ impl RunningServer {
                 .build()?,
         );
         let stop = CancellationToken::new();
+        let maintenance_stop = CancellationToken::new();
         node.install_task_group(CancellationToken::new(), release_stop.clone())?;
         // Preflight may outlast a lease. Start its lifetime only when enrollment
         // begins, so slow probing cannot publish an already-expired advertisement.
@@ -611,6 +614,7 @@ impl RunningServer {
                     "account repository activations",
                 ),
                 tasks: tasks.clone(),
+                maintenance_stop: maintenance_stop.clone(),
             });
             let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;
@@ -673,6 +677,7 @@ impl RunningServer {
             stop,
             renewal,
             ingress_stop,
+            maintenance_stop,
             release_stop,
             serving,
             tasks,

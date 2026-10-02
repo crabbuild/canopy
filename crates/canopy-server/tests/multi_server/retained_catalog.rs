@@ -79,7 +79,8 @@ async fn retained_fixture() -> Result<RetainedFixture> {
         blake3::hash(previous).to_hex().as_str(),
         "e31bf1a951e2fa19d91e9f964b2ddeade1a81b05a20ad628362819a1487c16b1"
     );
-    registry.verify_rolling_from(previous)?;
+    // This explicit fixture activation carries only a Directory Cell. The
+    // repository pack schema separately rejects whole-release rolling upgrade.
     let descriptor: serde_json::Value = serde_json::from_slice(previous)?;
     let module = descriptor["modules"]
         .as_array()
@@ -92,6 +93,7 @@ async fn retained_fixture() -> Result<RetainedFixture> {
             .try_into()
             .map_err(|_| "invalid predecessor code")?,
     );
+    assert!(registry.supports_cell(directory::DIRECTORY, CatalogRole::Sql, old_code, 1));
     let releases = ReleaseStore::new(layout.clone(), identity)?;
     let image = format!("sha256:{}", hex::encode(configuration.image.as_bytes()));
     let old_operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());

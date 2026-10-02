@@ -17,7 +17,8 @@ fn bounded_authentication_retains_the_exact_selected_predecessor()
         "directory-compatibility-test",
     ))?;
     let registry = application.registry();
-    registry.verify_rolling_from(previous)?;
+    // Directory compatibility remains independent of the repository pack
+    // schema. Whole-release rolling compatibility is fenced separately below.
     let predecessor: serde_json::Value = serde_json::from_slice(previous)?;
     let old_directory = predecessor["modules"]
         .as_array()
@@ -57,5 +58,37 @@ fn bounded_authentication_retains_the_exact_selected_predecessor()
     );
     assert_eq!(queries[2]["input_limit"], 36);
     assert_eq!(queries[2]["output_limit"], 256);
+    Ok(())
+}
+
+#[test]
+fn packed_repository_rejects_an_unqualified_predecessor_upgrade()
+-> Result<(), Box<dyn std::error::Error>> {
+    let previous = include_bytes!("fixtures/c51-selected-release.json").trim_ascii_end();
+    let application = CanopyApplication::compile(build_descriptor(
+        include_bytes!("../../../../Cargo.lock"),
+        "repository-upgrade-fence-test",
+    ))?;
+    let registry = application.registry();
+    let predecessor: serde_json::Value = serde_json::from_slice(previous)?;
+    let old_repository = predecessor["modules"]
+        .as_array()
+        .ok_or("modules missing")?
+        .iter()
+        .find(|module| module["name"] == "repository")
+        .ok_or("repository missing")?;
+    let bytes: [u8; 32] = hex::decode(old_repository["code"].as_str().ok_or("code missing")?)?
+        .try_into()
+        .map_err(|_| "invalid predecessor code length")?;
+    assert!(!registry.supports_cell(
+        canopy_server::REPOSITORIES,
+        CatalogRole::Sql,
+        Digest::from_bytes(bytes),
+        1,
+    ));
+    assert!(
+        registry.verify_rolling_from(previous).is_err(),
+        "pack storage requires a qualified repository migration before rolling upgrade"
+    );
     Ok(())
 }

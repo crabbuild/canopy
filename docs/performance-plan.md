@@ -150,6 +150,11 @@ flowchart LR
 
 ## Read the result before the target
 
+The [Kubernetes evaluation](kubernetes-qualification.md) records the original
+large-import failures and the new passing tree/recovery and maintenance gates.
+Complete upstream history qualification is still running. A passing tree fixture
+does not establish full-history capacity.
+
 | Question | Current answer | Where to verify it |
 | --- | --- | --- |
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |

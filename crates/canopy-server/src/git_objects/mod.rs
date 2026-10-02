@@ -167,7 +167,8 @@ impl GitObjectWalk {
 }
 
 pub(crate) struct GitObjects {
-    walk: GitObjectWalk,
+    walk: Option<GitObjectWalk>,
+    inventory: Option<std::vec::IntoIter<crate::ObjectId>>,
     batch: Process,
     requests: ChildStdin,
 }
@@ -181,14 +182,35 @@ impl GitObjects {
         let walk = GitObjectWalk::start(git_dir, included, excluded, false, None)?;
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
         Ok(Self {
-            walk,
+            walk: Some(walk),
+            inventory: None,
+            batch,
+            requests,
+        })
+    }
+
+    pub(crate) fn packed(
+        git_dir: &Path,
+        ids: Vec<crate::ObjectId>,
+    ) -> Result<Self, ObjectReadError> {
+        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"])?;
+        Ok(Self {
+            walk: None,
+            inventory: Some(ids.into_iter()),
             batch,
             requests,
         })
     }
 
     pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
-        self.walk.next().await
+        if let Some(inventory) = &mut self.inventory {
+            return Ok(inventory.next());
+        }
+        self.walk
+            .as_mut()
+            .ok_or(ObjectReadError::Malformed)?
+            .next()
+            .await
     }
 
     pub(crate) async fn read(
@@ -207,7 +229,9 @@ impl GitObjects {
 
     pub(crate) async fn finish(self) -> Result<(), ObjectReadError> {
         timeout(IO_TIMEOUT, async move {
-            self.walk.finish().await?;
+            if let Some(walk) = self.walk {
+                walk.finish().await?;
+            }
             drop(self.requests);
             let mut batch = self.batch;
             if header(&mut batch.output).await?.is_some() {
@@ -247,6 +271,60 @@ pub(crate) struct GitObject<'a, R> {
 }
 
 impl<R: AsyncRead + Unpin> GitObject<'_, R> {
+    /// Verify a packed body with constant memory, including oversized blobs.
+    pub(crate) async fn fingerprint(mut self) -> Result<[u8; 32], ObjectReadError> {
+        let expected = self.oid;
+        let mut canonical =
+            crate::git_format::ObjectHasher::new(expected.format(), self.kind, self.size);
+        let mut hash = blake3::Hasher::new();
+        let mut buffer = vec![0; 64 << 10];
+        loop {
+            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+            if count == 0 {
+                break;
+            }
+            canonical.update(&buffer[..count]);
+            hash.update(&buffer[..count]);
+        }
+        self.finish().await?;
+        if canonical.finalize() != expected {
+            return Err(ObjectReadError::Malformed);
+        }
+        Ok(*hash.finalize().as_bytes())
+    }
+
+    pub(crate) async fn verify(
+        mut self,
+        kind: ObjectKind,
+        size: u64,
+        digest: [u8; 32],
+    ) -> Result<(), ObjectReadError> {
+        if self.kind != kind || self.size != size {
+            return Err(ObjectReadError::Malformed);
+        }
+        let expected = self.oid;
+        let mut canonical = crate::git_format::ObjectHasher::new(expected.format(), kind, size);
+        let mut hash = blake3::Hasher::new();
+        let mut buffer = vec![0; 64 << 10];
+        loop {
+            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+            if count == 0 {
+                break;
+            }
+            canonical.update(&buffer[..count]);
+            hash.update(&buffer[..count]);
+        }
+        self.finish().await?;
+        if canonical.finalize() != expected || hash.finalize().as_bytes() != &digest {
+            return Err(ObjectReadError::Malformed);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn body(mut self) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
         let limit = if self.kind == ObjectKind::Blob {
             INLINE_OBJECT_LIMIT

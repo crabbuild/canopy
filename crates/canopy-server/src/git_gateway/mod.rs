@@ -3,7 +3,7 @@
 use crate::ReadIdentity;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     error::Error as StdError,
     path::{Path, PathBuf},
     sync::Arc,
@@ -37,6 +37,7 @@ mod candidates;
 mod discovery;
 mod fetch;
 mod hydration;
+mod maintenance;
 mod push;
 mod ssh;
 
@@ -103,6 +104,7 @@ pub struct GitGateway {
     signer_directory: Option<Arc<crate::directory::DirectoryCell>>,
     certificate_seed: OnceCell<[u8; 32]>,
     large_blobs: LargeBlobStore,
+    pack_reader: Arc<crate::pack_store::PackReader>,
     lfs: LfsService,
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
@@ -119,12 +121,22 @@ impl GitGateway {
         disk_budget: DiskBudget,
     ) -> Self {
         let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
+        let pack_reader = Arc::clone(repository.pack_reader.get_or_init(|| {
+            Arc::new(crate::pack_store::PackReader::new(
+                Arc::clone(&blob_store),
+                repository.repository_id(),
+                scratch_root.clone(),
+                disk_budget.clone(),
+                repository.object_format(),
+            ))
+        }));
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
         Self {
             repository,
             signer_directory: None,
             certificate_seed: OnceCell::new(),
             large_blobs,
+            pack_reader,
             lfs,
             scratch_root,
             disk_budget,
@@ -343,17 +355,12 @@ impl GitGateway {
         let mut objects = self.objects.lock().await;
         if objects.is_none() {
             *objects = Some(CachedObjects {
-                cache: GitCache::create(
-                    self.scratch_root.clone(),
-                    self.disk_budget.clone(),
-                    &snapshot.head,
-                    self.repository.object_format(),
-                )
-                .await?,
+                cache: self.pack_reader.cache().await?,
                 through: 0,
             });
         }
         let shared = objects.as_mut().ok_or(GatewayError::MalformedCache)?;
+        self.restore_packs(shared).await?;
         if include_blobs {
             self.hydrate(shared).await?;
         } else {
@@ -439,11 +446,44 @@ impl GitGateway {
         // Published refs already have durable graph closure. Excluding them avoids
         // re-reading old history; the final Cell transaction still verifies every new tip.
         let excluded = before.values().filter_map(|state| state.oid).collect();
-        let mut objects = GitObjects::start(&backend.git_dir(), included, excluded)?;
+        let started = std::time::Instant::now();
+        let initial_high_water = self
+            .repository
+            .object_high_water()
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            .output;
+        let mut sources = backend.cache.pack_sources().await?;
+        let mut archive = None;
+        let mut packed_ids = None;
+        if sources.len() == 1 {
+            let (hash, pack, index, ids) = sources.pop().ok_or(GatewayError::MalformedCache)?;
+            let record = crate::pack_store::PackRecord {
+                hash,
+                pack: self.pack_reader.upload(pack).await?,
+                index: self.pack_reader.upload(index).await?,
+                approved: false,
+                covered_through: 0,
+            };
+            self.repository
+                .register_pack(new_identity()?, &record)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            archive = Some(record);
+            packed_ids = Some(ids);
+        }
+        let mut objects = if let Some(ids) = packed_ids {
+            GitObjects::packed(&backend.git_dir(), ids)?
+        } else {
+            GitObjects::start(&backend.git_dir(), included, excluded)?
+        };
+
         let mut batch = ObjectBatch::default();
+        let mut verified = HashSet::new();
+        let mut logged = std::time::Instant::now();
         loop {
-            let mut candidates = Vec::with_capacity(MAX_OBJECTS);
-            for _ in 0..MAX_OBJECTS {
+            let mut candidates = Vec::with_capacity(crate::object_batch::MAX_BATCH_OBJECTS);
+            for _ in 0..crate::object_batch::MAX_BATCH_OBJECTS {
                 let Some(oid) = objects.next().await? else {
                     break;
                 };
@@ -454,43 +494,81 @@ impl GitGateway {
             }
             let present = self
                 .repository
-                .existing_objects(&candidates)
+                .canonical_headers(&candidates)
                 .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                .output;
-            for oid in candidates.into_iter().filter(|oid| !present.contains(oid)) {
-                let mut input = objects.read(oid).await?;
-                let object =
-                    if input.kind == ObjectKind::Blob && input.size > INLINE_OBJECT_LIMIT as u64 {
-                        let uploaded = self
-                            .large_blobs
-                            .put(oid, input.size, &mut input.reader)
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+            for oid in candidates {
+                if let Some((kind, size, digest)) = present.get(&oid) {
+                    if archive.is_some() {
+                        objects
+                            .read(oid)
+                            .await?
+                            .verify(*kind, *size, *digest)
                             .await?;
-                        input.finish().await?;
+                        verified.insert(oid);
+                    }
+                    continue;
+                }
+                let mut input = objects.read(oid).await?;
+                let object = if input.kind == ObjectKind::Blob && archive.is_some() {
+                    let size = input.size;
+                    let digest = input.fingerprint().await?;
+                    StoredObject {
+                        oid,
+                        kind: ObjectKind::Blob,
+                        storage: ObjectStorage::Packed {
+                            size,
+                            blake3: digest,
+                            pack: archive
+                                .as_ref()
+                                .ok_or(GatewayError::MalformedCache)?
+                                .pack
+                                .sha256,
+                        },
+                    }
+                } else if input.kind == ObjectKind::Blob && input.size > INLINE_OBJECT_LIMIT as u64
+                {
+                    let uploaded = self
+                        .large_blobs
+                        .put(oid, input.size, &mut input.reader)
+                        .await?;
+                    input.finish().await?;
+                    StoredObject {
+                        oid,
+                        kind: ObjectKind::Blob,
+                        storage: ObjectStorage::External {
+                            size: uploaded.size,
+                            blake3: uploaded.blake3,
+                            sha256: uploaded.sha256,
+                        },
+                    }
+                } else {
+                    let (kind, body) = input.body().await?;
+                    if body.len() > INLINE_OBJECT_LIMIT {
+                        self.repository
+                            .stage_object(new_identity()?, kind, &body)
+                            .await
+                            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+                    } else if let Some(record) =
+                        archive.as_ref().filter(|_| kind == ObjectKind::Blob)
+                    {
                         StoredObject {
                             oid,
-                            kind: ObjectKind::Blob,
-                            storage: ObjectStorage::External {
-                                size: uploaded.size,
-                                blake3: uploaded.blake3,
-                                sha256: uploaded.sha256,
+                            kind,
+                            storage: ObjectStorage::Packed {
+                                size: body.len() as u64,
+                                blake3: *blake3::hash(&body).as_bytes(),
+                                pack: record.pack.sha256,
                             },
                         }
                     } else {
-                        let (kind, body) = input.body().await?;
-                        if body.len() > INLINE_OBJECT_LIMIT {
-                            self.repository
-                                .stage_object(new_identity()?, kind, &body)
-                                .await
-                                .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                        } else {
-                            StoredObject {
-                                oid,
-                                kind,
-                                storage: ObjectStorage::Inline(body),
-                            }
+                        StoredObject {
+                            oid,
+                            kind,
+                            storage: ObjectStorage::Inline(body),
                         }
-                    };
+                    }
+                };
                 if let Err(object) = batch.try_push(object) {
                     self.repository
                         .put_objects(new_identity()?, std::mem::take(&mut batch))
@@ -500,6 +578,15 @@ impl GitGateway {
                         .try_push(object)
                         .map_err(|_| GatewayError::MalformedCache)?;
                 }
+                verified.insert(oid);
+            }
+            if logged.elapsed().as_secs() >= 10 {
+                tracing::info!(
+                    objects = verified.len(),
+                    elapsed_seconds = started.elapsed().as_secs_f64(),
+                    "persisting Git objects"
+                );
+                logged = std::time::Instant::now();
             }
         }
         objects.finish().await?;
@@ -509,6 +596,52 @@ impl GitGateway {
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?;
         }
+        if let Some(record) = &archive {
+            self.repository
+                .approve_pack(new_identity()?, record.pack.sha256, verified.len())
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+        }
+        let mut shared = self.objects.lock().await;
+        if let Some(shared) = shared.as_mut() {
+            let count = verified.len();
+            match shared
+                .cache
+                .retain_verified_packs(Arc::clone(&backend.cache), verified)
+                .await
+            {
+                Ok(retained) if retained == count && shared.through == initial_high_water => {
+                    if let Some(record) = &archive {
+                        shared.cache.mark_durable_pack(record.pack.sha256);
+                    }
+                    shared.through = self
+                        .repository
+                        .object_high_water()
+                        .await
+                        .map_err(|error| GatewayError::Cell(Box::new(error)))?
+                        .output;
+                    tracing::info!(
+                        objects = retained,
+                        through = shared.through,
+                        "retained verified receive pack for immediate fetch"
+                    );
+                }
+                Ok(retained) => {
+                    if retained == count
+                        && let Some(record) = &archive
+                    {
+                        shared.cache.mark_durable_pack(record.pack.sha256);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, "receive pack cache reuse skipped; durable hydration remains available")
+                }
+            }
+        }
+        tracing::info!(
+            elapsed_seconds = started.elapsed().as_secs_f64(),
+            "persisted Git objects"
+        );
         Ok(())
     }
 }

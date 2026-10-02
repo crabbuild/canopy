@@ -109,6 +109,7 @@ impl CanopyServer {
 
 impl RunningServer {
     async fn shutdown(self) -> Result<(), ServerError> {
+        self.maintenance_stop.cancel();
         self.ingress_stop.cancel();
         let serving = self.serving.await;
         let ssh_serving = if let Some(task) = self.ssh_serving {
