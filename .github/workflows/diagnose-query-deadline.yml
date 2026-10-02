@@ -1,0 +1,126 @@
+name: Diagnose metadata after a started SQL query deadline
+
+on:
+  push:
+    branches:
+      - 'codex/cellule-release-ci-query-deadline-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  query-deadline-reproduction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Initialize evidence
+        run: |
+          mkdir diagnostic
+          git rev-parse HEAD > diagnostic/head.txt
+          cp .github/workflows/diagnose-query-deadline.yml diagnostic/workflow.yml
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs openssh-client
+          git lfs install
+      - name: Bind unchanged production and exact regression inputs
+        run: |
+          git fetch --depth=1 origin 7497fc720e68a440e27614a83a1442576511cfd2
+          cargo fmt --all -- --check
+          cargo metadata --locked --format-version 1 > diagnostic/metadata.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          baseline = '7497fc720e68a440e27614a83a1442576511cfd2'
+          changed = subprocess.check_output(['git', 'diff', '--name-only', baseline, '--', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
+          assert changed == ['crates/canopy-server/src/server/residency/tests.rs'], changed
+          files = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts', '.github/workflows'], text=True).splitlines()
+          metadata = json.loads(Path('diagnostic/metadata.json').read_text())
+          revision = '0f4ca0919b0dfe20a3dcd964d21da03135e42eed'
+          packages = {row['name']: row['source'] for row in metadata['packages'] if row['name'].startswith('cellule-')}
+          assert set(packages) == {'cellule-app', 'cellule-host', 'cellule-ltx', 'cellule-runtime', 'cellule-store', 'cellule-types'}
+          assert all(source == f'git+https://github.com/crabbuild/cellule.git?rev={revision}#{revision}' for source in packages.values())
+          record = {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'baseline_head': baseline, 'diagnostic_changes': changed, 'cellule_revision': revision,
+                    'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
+                    'scope': 'Started-query deadline and next HTTP metadata request on an owned in-memory fixture. '
+                             'Unchanged production, deadline, permits and release rules; not original-corpus recovery or performance.'}
+          Path('diagnostic/inputs.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - name: Compile and retain exact release test executable
+        run: |
+          cargo test --release --locked -p canopy-server --lib --no-run --message-format=json > diagnostic/build.jsonl 2> diagnostic/build.log
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          rows = [json.loads(line) for line in Path('diagnostic/build.jsonl').read_text().splitlines()]
+          paths = [row['executable'] for row in rows if row.get('reason') == 'compiler-artifact'
+                   and row['target']['name'] == 'canopy_server' and row.get('executable')]
+          assert len(paths) == 1
+          executable = Path(paths[0])
+          record = {'executable': str(executable), 'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
+                    'bytes': executable.stat().st_size}
+          Path('diagnostic/test-executable.json').write_text(json.dumps(record, indent=2) + '\n')
+          subprocess.run(['tar', '-czf', 'diagnostic/canopy-server-lib-release.tar.gz', '-C', str(executable.parent), executable.name], check=True)
+          PY
+      - name: Record every declared case without retry-until-green
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import time
+
+          root = Path('diagnostic')
+          executable = json.loads((root / 'test-executable.json').read_text())['executable']
+          target = 'server::residency::tests::metadata_after_started_query_deadline_reacquires_released_cell'
+          schedule = [('isolated-regression', [target, '--exact', '--nocapture'], 3),
+                      ('full-library', ['--test-threads=4', '--nocapture'], 1)]
+          runs = []
+          for phase, arguments, count in schedule:
+              for index in range(count):
+                  log = root / f'{phase}-{index:03d}.log'
+                  started = time.monotonic()
+                  with log.open('xb') as output:
+                      try:
+                          result = subprocess.run([executable, *arguments], env={**os.environ, 'RUST_LOG': 'warn'},
+                                                  stdout=output, stderr=subprocess.STDOUT, timeout=180)
+                          code, timed_out = result.returncode, False
+                      except subprocess.TimeoutExpired:
+                          code, timed_out = None, True
+                  row = {'phase': phase, 'repetition': index, 'arguments': arguments, 'exit_code': code,
+                         'timeout': timed_out, 'seconds': time.monotonic() - started,
+                         'log': str(log), 'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest()}
+                  runs.append(row)
+                  (root / 'repetitions.json').write_text(json.dumps({'completed': False, 'runs': runs}, indent=2) + '\n')
+                  print(json.dumps(row), flush=True)
+          inputs = json.loads((root / 'inputs.json').read_text())
+          assert all(hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
+                     for name, digest in inputs['source_sha256'].items())
+          record = {'completed': True, 'bound_source_unchanged': True, 'runs': runs,
+                    'failed_repetitions': sum(row['exit_code'] != 0 for row in runs), 'scope': inputs['scope']}
+          (root / 'repetitions.json').write_text(json.dumps(record, indent=2) + '\n')
+          raise SystemExit(1 if record['failed_repetitions'] else 0)
+          PY
+      - name: Retain negative and positive evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: query-deadline-${{ github.sha }}-${{ github.run_attempt }}
+          path: diagnostic/
+          if-no-files-found: error
+          retention-days: 30
