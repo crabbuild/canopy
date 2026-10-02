@@ -6,6 +6,9 @@ use object_store::{ObjectStore, memory::InMemory};
 use std::{future::poll_fn, pin::Pin};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+fn send<T: Send>(value: T) -> T {
+    value
+}
 fn operation(n: u64) -> [u8; 16] {
     let mut op = *b"CANOPY0100000000";
     op[8..].copy_from_slice(&n.to_be_bytes());
@@ -328,9 +331,55 @@ async fn initial_twenty_thousand_ref_plan_builds_by_nodes_and_seeks_one_path() -
             Some(state(Some(1), 1, format))
         );
         assert_eq!(
-            index.read(Some(changed), &names[17_123]).await?,
+            index.read(Some(changed.clone()), &names[17_123]).await?,
             Some(state(Some(2), 2, format))
         );
+        let bulk = plan(
+            names
+                .iter()
+                .enumerate()
+                .map(|(n, name)| {
+                    update(
+                        name,
+                        Some(state(
+                            Some(if n == 17_123 { 2 } else { 1 }),
+                            if n == 17_123 { 2 } else { 1 },
+                            format,
+                        )),
+                        Some(oid(3, format)),
+                    )
+                })
+                .collect(),
+        );
+        index.clear_cache()?;
+        let reads = index.stats().loaded_nodes;
+        let writes = object_count(&*objects).await?;
+        let bulk_root = index
+            .prepare(Some(changed), operation(3), &bulk)
+            .await?
+            .root();
+        assert_eq!(
+            (bulk_root.record_count, bulk_root.object_count),
+            (20_000, 20_000)
+        );
+        assert!(
+            index.stats().loaded_nodes - reads <= 600,
+            "validate and rewrite by nodes, not by update paths"
+        );
+        assert!(
+            object_count(&*objects).await? - writes <= 500,
+            "rewrite the complete existing large plan in bounded groups"
+        );
+        let mut cursor = index.cursor(Some(bulk_root), None, false)?;
+        for (n, name) in names.iter().enumerate() {
+            let actual = cursor.next().await?.ok_or("bulk ref")?;
+            assert_eq!(actual.name(), name);
+            assert_eq!(
+                actual.state(),
+                &state(Some(3), if n == 17_123 { 3 } else { 2 }, format)
+            );
+        }
+        assert!(cursor.next().await?.is_none());
     }
     Ok(())
 }
@@ -582,5 +631,400 @@ async fn snapshot_purpose_and_tree_format_are_authenticated() -> Result {
     let wrong_purpose = crate::packs::wire_request::WireRequestRoot::decode(&mut d)?;
     d.finish()?;
     assert!(wrong_purpose.read(&store).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn existing_batch_copies_changed_subtrees_once_and_preserves_all_versions() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (index, _, objects) = index(format);
+        let name = |n| format!("refs/heads/{n:05}");
+        let original = index
+            .tree
+            .build_sorted(
+                operation(1),
+                (0..20_000)
+                    .map(|n| RefStateRecord::new(&name(n), state(Some(1), 1, format), format)),
+            )
+            .await?
+            .ok_or("original")?;
+        index.clear_cache()?;
+        let reads = index.stats().loaded_nodes;
+        let writes = object_count(&*objects).await?;
+        // Reversed intent exercises sorting without changing the canonical digest.
+        let changes = plan(
+            (10_000..10_512)
+                .rev()
+                .map(|n| {
+                    update(
+                        &name(n),
+                        Some(state(Some(1), 1, format)),
+                        if n % 2 == 0 {
+                            None
+                        } else {
+                            Some(oid(2, format))
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let transition = index
+            .prepare(Some(original.clone()), operation(2), &changes)
+            .await?;
+        assert_eq!(transition.base(), Some(original.clone()));
+        assert_eq!(
+            transition.plan_digest(),
+            crate::packs::publication::ref_proof::plan_digest(&changes)?
+        );
+        let current = transition.root();
+        assert_eq!(
+            (current.record_count, current.object_count),
+            (20_000, 19_744)
+        );
+        assert!(
+            object_count(&*objects).await? - writes <= 40,
+            "one node group per changed subtree, not one path per update"
+        );
+        assert!(
+            index.stats().loaded_nodes - reads <= 40,
+            "sorted validation and rewriting must not reload history"
+        );
+        for root in [original, current] {
+            let current = root.operation == operation(2);
+            let mut cursor = index.cursor(Some(root), None, false)?;
+            for n in 0..20_000 {
+                let actual = cursor.next().await?.ok_or("missing ref")?;
+                assert_eq!(actual.name(), name(n));
+                let changed = current && (10_000..10_512).contains(&n);
+                assert_eq!(
+                    actual.state(),
+                    &state(
+                        if changed && n % 2 == 0 {
+                            None
+                        } else if changed {
+                            Some(2)
+                        } else {
+                            Some(1)
+                        },
+                        if changed { 2 } else { 1 },
+                        format
+                    )
+                );
+            }
+            assert!(cursor.next().await?.is_none());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sparse_batch_reuses_higher_subtrees_and_inserts_before_between_and_after() -> Result {
+    let format = ObjectFormat::Sha256;
+    let (index, _, objects) = index(format);
+    let name = |n| format!("refs/heads/m/{n:06}");
+    let old = index
+        .tree
+        .build_sorted(
+            operation(1),
+            (0..100_000).map(|n| RefStateRecord::new(&name(n), state(Some(1), 1, format), format)),
+        )
+        .await?
+        .ok_or("old")?;
+    index.clear_cache()?;
+    let reads = index.stats().loaded_nodes;
+    let writes = object_count(&*objects).await?;
+    let changes = plan(vec![
+        update("refs/heads/z", None, Some(oid(3, format))),
+        update(&name(40_000), Some(state(Some(1), 1, format)), None),
+        update("refs/heads/m/040000/topic", None, Some(oid(4, format))),
+        update(
+            &name(50_000),
+            Some(state(Some(1), 1, format)),
+            Some(oid(2, format)),
+        ),
+        update("refs/heads/m/050000x", None, Some(oid(5, format))),
+        update("refs/heads/a", None, Some(oid(6, format))),
+    ]);
+    let current = send(index.prepare(Some(old.clone()), operation(2), &changes))
+        .await?
+        .root();
+    assert_eq!(
+        (current.record_count, current.object_count),
+        (100_004, 100_003)
+    );
+    assert!(
+        index.stats().loaded_nodes - reads <= 64,
+        "sparse preparation must not read 100,000 records"
+    );
+    assert!(
+        object_count(&*objects).await? - writes <= 100,
+        "reuse unchanged higher subtrees"
+    );
+    let mut expected: std::collections::BTreeMap<_, _> = (0..100_000)
+        .map(|n| (name(n), state(Some(1), 1, format)))
+        .collect();
+    for update in &changes.updates {
+        expected.insert(
+            update.name.clone(),
+            RefExpectation {
+                oid: update.new_oid,
+                version: if update.expected.is_some() { 2 } else { 1 },
+            },
+        );
+    }
+    let mut cursor = index.cursor(Some(current), None, false)?;
+    for (name, expected) in expected {
+        let actual = cursor.next().await?.ok_or("actual inventory exhausted")?;
+        assert_eq!(actual.name(), name);
+        assert_eq!(actual.state(), &expected);
+    }
+    assert!(cursor.next().await?.is_none());
+    assert_eq!(
+        index.read(Some(old), &name(40_000)).await?,
+        Some(state(Some(1), 1, format))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sorted_rewrite_rejects_late_input_errors_and_retries_immutable_artifacts() -> Result {
+    let format = ObjectFormat::Sha1;
+    let (index, _, objects) = index(format);
+    let name = |n| format!("refs/heads/{n:05}");
+    let old = index
+        .tree
+        .build_sorted(
+            operation(1),
+            (0..1_000)
+                .map(|n| RefStateRecord::new(&name(2 * n), state(Some(1), 1, format), format)),
+        )
+        .await?
+        .ok_or("old")?;
+    let record = |n| RefStateRecord::new(&name(2 * n + 1), state(Some(2), 1, format), format);
+    let before = object_count(&*objects).await?;
+    let broken = (0..500)
+        .map(record)
+        .chain(std::iter::once(Err(IndexError::Integrity)));
+    assert!(matches!(
+        index
+            .tree
+            .upsert_sorted(Some(old.clone()), operation(2), broken)
+            .await,
+        Err(IndexError::Integrity)
+    ));
+    assert!(
+        object_count(&*objects).await? > before,
+        "late failure exercises already emitted immutable nodes"
+    );
+    let root = index
+        .tree
+        .upsert_sorted(Some(old.clone()), operation(2), (0..1_000).map(record))
+        .await?
+        .ok_or("merged")?;
+    let complete = object_count(&*objects).await?;
+    assert_eq!(
+        index
+            .tree
+            .upsert_sorted(Some(old.clone()), operation(2), (0..1_000).map(record))
+            .await?,
+        Some(root.clone())
+    );
+    assert_eq!(object_count(&*objects).await?, complete);
+    let mut cursor = index.cursor(Some(root), None, false)?;
+    for n in 0..2_000 {
+        let actual = cursor.next().await?.ok_or("merged ref")?;
+        assert_eq!(actual.name(), name(n));
+        assert_eq!(
+            actual.state(),
+            &state(Some(if n % 2 == 0 { 1 } else { 2 }), 1, format)
+        );
+    }
+    assert!(cursor.next().await?.is_none());
+    assert_eq!(
+        index
+            .tree
+            .upsert_sorted(Some(old.clone()), operation(3), std::iter::empty())
+            .await?,
+        Some(old.clone())
+    );
+    let unsorted = [record(900), record(1)];
+    assert!(matches!(
+        index
+            .tree
+            .upsert_sorted(Some(old), operation(4), unsorted)
+            .await,
+        Err(IndexError::RangeOverlap)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn long_name_batch_preserves_byte_bounds_for_changed_and_reused_levels() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (index, _, objects) = index(format);
+        let name = |n| {
+            let prefix = format!("refs/heads/{n:03}/");
+            format!("{prefix}{}", "x".repeat(MAX_NAME_BYTES - prefix.len()))
+        };
+        let old = index
+            .tree
+            .build_sorted(
+                operation(1),
+                (0..64)
+                    .map(|n| RefStateRecord::new(&name(2 * n), state(Some(1), 1, format), format)),
+            )
+            .await?
+            .ok_or("old")?;
+        let mut updates: Vec<_> = (0..64)
+            .step_by(3)
+            .map(|n| {
+                update(
+                    &name(2 * n),
+                    Some(state(Some(1), 1, format)),
+                    if n % 2 == 0 {
+                        None
+                    } else {
+                        Some(oid(2, format))
+                    },
+                )
+            })
+            .collect();
+        updates.extend(
+            (0..64)
+                .step_by(5)
+                .map(|n| update(&name(2 * n + 1), None, Some(oid(3, format)))),
+        );
+        updates.reverse();
+        let changed = plan(updates);
+        let current = index
+            .prepare(Some(old.clone()), operation(2), &changed)
+            .await?
+            .root();
+        for meta in listed(&*objects).await? {
+            assert!(meta.size <= 512 << 10);
+        }
+        let mut expected: std::collections::BTreeMap<_, _> = (0..64)
+            .map(|n| (name(2 * n), state(Some(1), 1, format)))
+            .collect();
+        for update in &changed.updates {
+            expected.insert(
+                update.name.clone(),
+                RefExpectation {
+                    oid: update.new_oid,
+                    version: if update.expected.is_some() { 2 } else { 1 },
+                },
+            );
+        }
+        assert_eq!(expected.len(), 77);
+        let mut cursor = index.cursor(Some(current), None, false)?;
+        for (name, expected) in expected {
+            let actual = cursor.next().await?.ok_or("long-name inventory")?;
+            assert_eq!(actual.name(), name);
+            assert_eq!(actual.state(), &expected);
+        }
+        assert!(cursor.next().await?.is_none());
+        assert_eq!(
+            index.read(Some(old), &name(0)).await?,
+            Some(state(Some(1), 1, format))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_left_edge_inserts_keep_the_tree_dense() -> Result {
+    let format = ObjectFormat::Sha1;
+    let (index, _, _) = index(format);
+    let mut root = index
+        .tree
+        .build_sorted(
+            operation(1),
+            (0..512).map(|n| {
+                RefStateRecord::new(
+                    &format!("refs/heads/m/{n:05}"),
+                    state(Some(1), 1, format),
+                    format,
+                )
+            }),
+        )
+        .await?
+        .ok_or("base")?;
+    for (step, n) in (0..32).rev().enumerate() {
+        root = index
+            .prepare(
+                Some(root),
+                operation(2 + step as u64),
+                &plan(vec![update(
+                    &format!("refs/heads/a/{n:05}"),
+                    None,
+                    Some(oid(2, format)),
+                )]),
+            )
+            .await?
+            .root();
+    }
+    assert_eq!((root.record_count, root.object_count), (544, 544));
+    index.clear_cache()?;
+    let before = index.stats().loaded_nodes;
+    let mut cursor = index.cursor(Some(root), None, false)?;
+    let mut count = 0;
+    while cursor.next().await?.is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 544);
+    let reads = index.stats().loaded_nodes - before;
+    assert!(
+        reads <= 11,
+        "repeated prefix insertions left too many underfilled nodes: {reads}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_prefix_inserts_balance_internal_tail_groups() -> Result {
+    let format = ObjectFormat::Sha1;
+    let (index, _, _) = index(format);
+    let mut root = index
+        .tree
+        .build_sorted(
+            operation(1),
+            (0..16_384).map(|n| {
+                RefStateRecord::new(
+                    &format!("refs/heads/m/{n:05}"),
+                    state(Some(1), 1, format),
+                    format,
+                )
+            }),
+        )
+        .await?
+        .ok_or("base")?;
+    for (step, n) in (0..640).rev().enumerate() {
+        root = index
+            .prepare(
+                Some(root),
+                operation(2 + step as u64),
+                &plan(vec![update(
+                    &format!("refs/heads/a/{n:05}"),
+                    None,
+                    Some(oid(2, format)),
+                )]),
+            )
+            .await?
+            .root();
+    }
+    assert_eq!((root.record_count, root.height), (17_024, 2));
+    index.clear_cache()?;
+    let before = index.stats().loaded_nodes;
+    let mut cursor = index.cursor(Some(root), None, false)?;
+    let mut count = 0;
+    while cursor.next().await?.is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 17_024);
+    let reads = index.stats().loaded_nodes - before;
+    assert!(
+        reads <= 145,
+        "internal split tails fragmented the tree: {reads}"
+    );
     Ok(())
 }

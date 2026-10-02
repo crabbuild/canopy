@@ -289,7 +289,7 @@ Each cell below is a test family, with SHA-1/SHA-256 coverage on a representativ
 
 The [immutable ref state](design/immutable-ref-state.md) supplies conditional versioned roots and streaming initial construction. Complete the final publication change in this order:
 
-1. Coalesce existing-base batches by changed subtree; measure ordinary and bulk preparation separately, including long-name byte splits and retained tombstones.
+1. The shared streaming rewrite now coalesces existing-base batches by affected subtree and preserves untouched roots. Qualify sustained ordinary and bulk preparation separately, including long-name byte splits, retained tombstones, provider budgets and hot-root fairness.
 2. Add the authoritative ref snapshot to the fresh schema and query-derived preparation base. Bind exact policy/check facts and their current-state CAS semantics to the privately issued transition certificate.
 3. Retain the final catalog/ref/response descriptors and publish them atomically with a bounded command. Keep current authorization, owner/lease fencing and exact recorded replay; remove full-plan transport and per-ref final SQL mutation.
 4. Convert every producer, reader, default-branch, policy/check, review and recovery path together. Delete the old ref/body schema and adapters for the fresh-data cutover.

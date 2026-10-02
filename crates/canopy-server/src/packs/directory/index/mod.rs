@@ -15,6 +15,7 @@ pub(in crate::packs) mod record;
 pub use record::{IndexKey, IndexRecord};
 mod bulk;
 mod cursor;
+mod rewrite;
 mod update;
 pub use cursor::RangeCursor;
 

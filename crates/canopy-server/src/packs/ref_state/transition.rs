@@ -1,5 +1,26 @@
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::IntoValues};
+
+// A named streaming adapter keeps borrowed update lifetimes explicit across
+// recursive await boundaries; no second plan/record inventory is allocated.
+struct Records<'a> {
+    updates: IntoValues<&'a str, &'a crate::RefUpdate>,
+    format: ObjectFormat,
+}
+impl Iterator for Records<'_> {
+    type Item = Result<RefStateRecord, IndexError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let update = self.updates.next()?;
+        Some(RefStateRecord::new(
+            &update.name,
+            RefExpectation {
+                oid: update.new_oid,
+                version: update.expected.as_ref().map_or(1, |old| old.version + 1),
+            },
+            self.format,
+        ))
+    }
+}
 
 impl RefStateIndex {
     /// Validate the whole plan before writing any tree nodes. The selected
@@ -20,17 +41,13 @@ impl RefStateIndex {
             .iter()
             .map(|update| (update.name.as_str(), update))
             .collect();
-        for update in &plan.updates {
+        for update in updates.values() {
             RefNameKey::new(&update.name)?;
             if self.read(base.clone(), &update.name).await? != update.expected {
                 return Err(RefStateError::Changed);
             }
         }
-        for update in plan
-            .updates
-            .iter()
-            .filter(|update| update.new_oid.is_some())
-        {
+        for update in updates.values().filter(|update| update.new_oid.is_some()) {
             let name = update.name.as_str();
             for (at, _) in name.match_indices('/').filter(|(at, _)| *at > 4) {
                 let ancestor = &name[..at];
@@ -75,51 +92,18 @@ impl RefStateIndex {
             }
         }
         let plan_digest = super::super::publication::ref_proof::plan_digest(plan)?;
-        if base.is_none() {
-            let records = updates.values().map(|update| {
-                RefStateRecord::new(
-                    &update.name,
-                    RefExpectation {
-                        oid: update.new_oid,
-                        version: 1,
-                    },
-                    self.format(),
-                )
-            });
-            let root = self
-                .tree
-                .build_sorted(operation, records)
-                .await?
-                .ok_or(RefStateError::Changed)?;
-            return Ok(RefTransition {
-                base,
-                root,
-                plan_digest,
-            });
-        }
-        let mut root = base.clone();
-        for update in &plan.updates {
-            let state = RefExpectation {
-                oid: update.new_oid,
-                version: update.expected.as_ref().map_or(1, |old| old.version + 1),
-            };
-            let replacement = RefStateRecord::new(&update.name, state, self.format())?;
-            root = Some(if let Some(old) = &update.expected {
-                self.tree
-                    .replace(
-                        root.ok_or(RefStateError::Changed)?,
-                        operation,
-                        RefStateRecord::new(&update.name, old.clone(), self.format())?,
-                        replacement,
-                    )
-                    .await?
-            } else {
-                self.tree.insert(root, operation, replacement).await?
-            });
-        }
+        let records = Records {
+            updates: updates.into_values(),
+            format: self.format(),
+        };
+        let root = self
+            .tree
+            .upsert_sorted(base.clone(), operation, records)
+            .await?
+            .ok_or(RefStateError::Changed)?;
         Ok(RefTransition {
             base,
-            root: root.ok_or(RefStateError::Changed)?,
+            root,
             plan_digest,
         })
     }

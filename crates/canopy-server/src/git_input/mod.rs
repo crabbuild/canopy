@@ -51,8 +51,10 @@ struct Spool {
     // Close the file before releasing disk and transfer admission. Blocking I/O
     // jobs retain this owner through cancellation until their work exits.
     file: File,
-    reservation: DiskReservation,
     admission: Option<Arc<AdmissionPermit>>,
+    // Release disk credit last: zero spool usage must not become visible
+    // before this owner's transfer admission has finished releasing.
+    reservation: DiskReservation,
 }
 
 /// An immutable request spool, deleted when its last file handle closes.

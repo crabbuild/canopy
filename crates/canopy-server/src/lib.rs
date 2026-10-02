@@ -219,6 +219,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/directory/index/cursor.rs"));
                 source.update(include_bytes!("packs/directory/index/update.rs"));
                 source.update(include_bytes!("packs/directory/index/bulk.rs"));
+                source.update(include_bytes!("packs/directory/index/rewrite.rs"));
                 source.update(include_bytes!("packs/sources/codec.rs"));
                 source.update(include_bytes!("packs/sources/inputs.rs"));
                 source.update(include_bytes!("packs/ref_state/mod.rs"));
