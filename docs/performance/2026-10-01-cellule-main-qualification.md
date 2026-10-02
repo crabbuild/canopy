@@ -1,10 +1,6 @@
 # Cellule main revision qualification
 
-PR #18 pins all six Cellule packages to
-`0f4ca0919b0dfe20a3dcd964d21da03135e42eed`, checked against upstream main on
-October 2. Locked metadata resolves the new revision; its debug, release and
-fresh RustFS checks are pending. Passing checks for the previous `1914096`
-pin do not qualify this update.
+PR #18 pins all six Cellule packages to `0f4ca0919b0dfe20a3dcd964d21da03135e42eed`, checked against upstream main on October 2. Linux debug, release and all eight fresh RustFS gates passed at `7497fc7`. Native qualification, retained-store recovery and performance remain separate, open gates.
 
 The original-corpus campaign still uses the frozen, release-qualified
 `0dc04a6` executable. Its results do not transfer to either newer revision.
@@ -24,9 +20,38 @@ no native compilation or running-fleet upgrade was performed for publication.
 
 The upstream delta adds admitted-owner fences for application handlers and
 node-log rotation after member expiry. These changes are not evidence of a
-Canopy performance improvement. The existing release workflow will check the
+Canopy performance improvement. The release workflow checked the
 new pin against an isolated fresh RustFS fixture; retained-store upgrade,
 full-corpus recovery and matched performance require separate verification.
+
+## Closed verification for the current pin
+
+All five PR and push checks passed at `7497fc720e68a440e27614a83a1442576511cfd2`. These results qualify that source and lockfile, not later diagnostic branches or the running original-corpus fleet.
+
+| Check | Result | Boundary |
+| --- | --- | --- |
+| [Linux release correctness](https://github.com/crabbuild/canopy/actions/runs/37029875331) | 244 top-level Rust tests passed, zero failed, nine ignored; 91 Python tests passed; all eight fresh RustFS gates passed | Release lints and executable retention also passed; nested subprocess tests counted once |
+| [PR debug verification](https://github.com/crabbuild/canopy/actions/runs/37029883642) and [push debug verification](https://github.com/crabbuild/canopy/actions/runs/37029875188) | Rust and harness jobs passed in both workflows | Separate from native retained-store or performance qualification |
+| Independent release audit | Archive digest, 268 source/workflow inputs, six locked Cellule packages and ELF checksum verified | Nineteen evidence files copied and reread on another local filesystem; not an off-machine backup |
+
+Release verification closed October 2 at 16:07:54 UTC. No runtime budget changed, and the frozen native fleet was not upgraded or restarted.
+
+| Audited artifact | SHA-256 |
+| --- | --- |
+| Release archive | `d2cb4060a1f6dc68dc122a53a833f2be04e0e3f812df21b88147cde48008329b` |
+| Linux executable | `381ec918026d7d6421a86b0ed916ff40b847c83dccdc881f82624c104c88b33b` |
+| Independent audit | `7c28852384d53d5265721af4daa58b37b898b08e5525ff49a61dbce29642abc6` |
+| Verified local copy manifest | `16c7775c6525aa3fa7cd42b177a9ff7dba98d4f4118ffafb68f58d2994ac5276` |
+
+The audited evidence is retained at `/Volumes/Workspace/CrabData/canopy-latest-pin-release-0f4ca09-a9l7xj07`. Passing fresh-fixture checks does not resolve the earlier disconnected-admission failure or the original-corpus recovery failures.
+
+## Separate query deadline regression
+
+A [test-only diagnostic at `d1a0f1e`](https://github.com/crabbuild/canopy/actions/runs/37034626141), excluded from PR #18, reproduces a metadata recovery failure with the same Cellule pin. All three isolated release cases failed, as did the four-thread full-library run: 119 passed and one failed. The [debug suite](https://github.com/crabbuild/canopy/actions/runs/37034626111) failed the same assertion.
+
+The test triggers the existing SQL deadline, verifies that the old handle is fenced, and waits for Control to become idle with no owner. It verifies that the published root is unchanged and another repository remains readable. One subsequent metadata request then returns HTTP 503, not the required HTTP 200. The test drains its owned node before asserting that failure; it adds no HTTP retry or production change.
+
+This establishes a reproducible recovery defect on an owned in-memory fixture. It does not establish the cause of the retained RustFS failures or provide a qualified correction. The first diagnostic attempt failed compilation before any test ran; moving the test into lifecycle scope corrected that harness issue without changing production visibility.
 
 ## Previous pin: 1914096
 

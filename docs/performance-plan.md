@@ -1,18 +1,17 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results.
-It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `191409685b001a82bd02780def45102b4fc2f164`, rechecked against
-upstream main at publication. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
-records 244 Linux debug Rust tests, 84 Python tests, lints and all eight fresh
-RustFS gates. The release candidate passed, but PR-head release CI failed a
-disconnected-admission test. All 100 isolated and two full-target diagnostic
-runs passed without changing the source; the original failure remains unresolved.
-The frozen `0dc04a6` executable
-retains its separate release evidence and original-corpus campaign. Remote
-verification passed; scheduled load includes failed arrivals, and post-load
-owner-loss recovery and reference capacity remain open. Neither that campaign
-nor earlier release evidence qualifies `1914096` performance or recovery.
+Use this plan to design capacity work and interpret Canopy benchmark results. Fresh-fixture correctness passes, but the complete original-corpus load failed its arrival gates and post-load recovery remains incomplete. No reference capacity or matched performance improvement is established.
+
+## Current verification status
+
+The current PR pins Cellule to `0f4ca0919b0dfe20a3dcd964d21da03135e42eed`. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md) records five passing Linux CI checks at `7497fc7`: 244 top-level release Rust tests, 91 Python tests, release lints and all eight fresh RustFS gates. An independent audit binds the executable, dependencies and 268 source/workflow inputs. These results do not qualify native retained-store recovery or performance.
+
+The original-corpus campaign uses the separate, frozen `0dc04a6` executable. Its [full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md) records pre-load remote verification and all 108 scheduled windows. Of 114,960 arrivals, 59,554 succeeded and 55,406 failed. Concurrent critical load completed 19/20 workflows, retaining one busy drop. Two subsequent full recovery attempts failed; neither completed original-corpus and every-ACK verification.
+
+The earlier disconnected-admission failure and the diagnostic fleet's terminal lease-fencing failure remain unresolved despite later passing checks. Results do not transfer between dependency revisions or binaries.
+
+## Historical qualification checkpoints
+
 The preceding `c51dd121` build is historical evidence.
 Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
@@ -58,7 +57,7 @@ The first four completed load phases recorded 41,485/43,200 metadata OK,
 stock-Git ls-remote OK across 40 windows. Busy drops and protocol/client errors
 remain in the result tables. Concurrent critical load recorded 19/20 OK,
 one busy drop and 323 successful steps. These are failed arrival gates, not
-capacity passes; the full schedule continues unchanged.
+capacity passes. The full schedule subsequently closed with the totals above.
 None of these checkpoints replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
@@ -66,12 +65,12 @@ seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
-| Current Cellule pin and historical runtime | PR pins `1914096`: debug and candidate release correctness passed. PR-head release CI failed HTTP 503 in the disconnected-admission test; 100 isolated and two full-target diagnostic passes do not resolve it. Frozen `0dc04a6`: release qualification and original-corpus activation passed. No recovery or performance result transfers between revisions |
+| Current Cellule pin and historical runtime | PR pins `0f4ca09`: all five Linux CI checks passed at `7497fc7`, including 244 release Rust tests, 91 Python tests and eight fresh RustFS gates. Frozen `0dc04a6`: release qualification and original-corpus activation passed. Earlier failures remain unresolved; recovery and performance results do not transfer between revisions |
 | HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
 | Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
 | Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |
 | Complete original-corpus load | All 108 windows / 114,960 arrivals / 8,640 scheduled seconds closed and independently audited: 59,554 OK, 55,406 failed arrivals. Concurrent critical schedule: 19/20 OK, 323 successful steps, 38 UUIDs. Every positive ACK inventoried; not reference capacity |
-| Post-load fresh-owner recovery | Exact original owners removed; 32.008191 seconds of confirmed absence, unchanged RustFS. Separate fresh fleet reached readiness after a preserved helper failure. Original-corpus verification then failed a Git v2 clone with exit 128; no complete stage or every-ACK recovery pass. All 3,684 attempt files copied and hash-checked |
+| Post-load fresh-owner recovery | Exact original owners removed; 32.008191 seconds of confirmed absence, unchanged RustFS. First full recovery attempt failed a Git v2 clone with exit 128; 3,684 attempt files preserved. A second attempt recorded nine metadata timeouts, one metadata 503 and one LFS 500; all 64 Git commands passed. All 1,454 attempt/input files and 653 bound inputs preserved. Neither attempt completed a stage or every-ACK recovery |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
