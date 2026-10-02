@@ -88,7 +88,8 @@ pub(super) fn generation(
     repository: [u8; 16],
     format: ObjectFormat,
 ) -> cellule_runtime::Result<GenerationFact> {
-    let Some([generation, catalog, certificate]) = rows(sets)?.first().map(Vec::as_slice) else {
+    let Some([generation, catalog, certificate, refs]) = rows(sets)?.first().map(Vec::as_slice)
+    else {
         return Err(Error::Command("missing catalog generation fact"));
     };
     let generation = unsigned(generation)?;
@@ -109,9 +110,20 @@ pub(super) fn generation(
         SqlValue::Null => None,
         value => Some(fixed(value)?),
     };
+    let refs = match refs {
+        SqlValue::Null => None,
+        SqlValue::Blob(bytes) => {
+            let mut decoder = BoundedDecoder::new(bytes, 128)?;
+            let refs = RefStateSnapshotRoot::decode(&mut decoder)?;
+            decoder.finish()?;
+            Some(refs)
+        }
+        _ => return Err(Error::Command("invalid generation ref snapshot")),
+    };
     let fact = GenerationFact {
         generation,
         catalog,
+        refs,
         certificate,
     };
     fact.validate()?;
@@ -186,9 +198,9 @@ pub(super) fn grant(
 }
 pub(super) const IDENTITY: &str =
     "SELECT repository_id,object_format FROM repository_identity WHERE singleton=1";
-pub(super) const CURRENT: &str = "SELECT g.generation,g.catalog,g.certificate FROM catalog_state s JOIN catalog_generations g ON g.generation=s.generation WHERE s.singleton=1";
+pub(super) const CURRENT: &str = "SELECT g.generation,g.catalog,g.certificate,g.refs FROM catalog_state s JOIN catalog_generations g ON g.generation=s.generation WHERE s.singleton=1";
 pub(super) const GENERATION: &str =
-    "SELECT generation,catalog,certificate FROM catalog_generations WHERE generation=?1";
+    "SELECT generation,catalog,certificate,refs FROM catalog_generations WHERE generation=?1";
 pub(super) fn quota(
     context: &CommandContext<'_, '_>,
     new_operation: bool,

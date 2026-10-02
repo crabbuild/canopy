@@ -17,6 +17,98 @@ mod range;
 mod recovery;
 mod schedule;
 
+#[tokio::test]
+async fn compaction_carries_the_same_authenticated_ref_snapshot_into_the_next_joint_generation()
+-> Result {
+    use crate::packs::ref_state::{RefStateIndex, RefStateSnapshot, RefStateSnapshotRoot};
+    use crate::{ObjectId, RefUpdate};
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let inventory = seed(&fixture, 2).await?;
+        let bytes = refs(&fixture.handle).await?;
+        type Rows = Vec<(String, Option<Vec<u8>>, i64)>;
+        let (rows, generation): (Rows, u64) = serde_json::from_slice(&bytes)?;
+        let changes = plan(
+            rows.into_iter()
+                .map(|(name, oid, version)| {
+                    assert_eq!(version, 1);
+                    Ok(RefUpdate {
+                        name,
+                        expected: None,
+                        new_oid: oid
+                            .map(|bytes| ObjectId::try_from(bytes.as_slice()))
+                            .transpose()?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        let index = RefStateIndex::new(Arc::clone(&inventory.store), format);
+        let refs = index.prepare(None, artifact_number(900), &changes).await?;
+        let snapshot = RefStateSnapshotRoot::upload(
+            &inventory.store,
+            artifact_number(900),
+            RefStateSnapshot {
+                repository: fixture.repository,
+                format,
+                generation,
+                default_branch: "refs/heads/main".into(),
+                root: Some(refs.root()),
+            },
+        )
+        .await?;
+        let first = prepare_compaction(&fixture, &inventory, 210, &[0, 1]).await?;
+        fixture
+            .install_generation(
+                3,
+                first.compact.base().catalog.ok_or("catalog")?,
+                Some(snapshot),
+            )
+            .await?;
+        let prepared = prepare_compaction(&fixture, &inventory, 211, &[0, 1]).await?;
+        assert_eq!(prepared.compact.base().refs, Some(snapshot));
+        let certificate = prepared.compact.certificate().await?;
+        assert_eq!(certificate.data()?.base.refs, Some(snapshot));
+        assert!(certificate.bytes()?.len() <= CERTIFICATE_BYTES as usize);
+        let committed = fixture
+            .client()
+            .command::<PublishCatalogCompaction>(&fixture.target, identity()?, certificate.clone())
+            .await?;
+        assert!(
+            matches!(committed.output, CompactionReply::Published(value) if value.generation==4)
+        );
+        let observed = fixture
+            .client()
+            .command::<BeginPreparation>(&fixture.target, identity()?, fixture.begin([212; 16]))
+            .await?;
+        assert_eq!(lease(observed.output)?.base.refs, Some(snapshot));
+        assert_eq!(
+            snapshot.read(&inventory.store).await?.generation,
+            generation
+        );
+        assert_eq!(
+            index
+                .read(Some(refs.root()), &changes.updates[0].name)
+                .await?
+                .and_then(|r| r.oid),
+            changes.updates[0].new_oid
+        );
+        assert_eq!(
+            fixture
+                .client()
+                .command::<PublishCatalogCompaction>(&fixture.target, identity()?, certificate)
+                .await?
+                .output,
+            committed.output
+        );
+        drop(first.compact);
+        drop(prepared.compact);
+        cleaned(first.root.path(), &first.budget).await?;
+        cleaned(prepared.root.path(), &prepared.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
 struct Inventory {
     provider: Arc<dyn object_store::ObjectStore>,
     store: Arc<ArtifactStore>,

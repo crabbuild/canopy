@@ -186,9 +186,16 @@ impl Command for PublishCatalogCompaction {
         let generation = data.base.generation + 1;
         let mut encoded = BoundedEncoder::new(256)?;
         data.catalog.encode(&mut encoded)?;
+        let mut refs = BoundedEncoder::new(128)?;
+        if let Some(root) = data.base.refs {
+            root.encode(&mut refs)?;
+        }
         changed(context.sql(&statement(
-            "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,?2,?3)",
-            vec![number(generation)?, blob(encoded.finish()), blob(digest)],
+            "INSERT INTO catalog_generations(generation,catalog,certificate,refs) VALUES(?1,?2,?3,?4)",
+            vec![
+                number(generation)?, blob(encoded.finish()), blob(digest),
+                data.base.refs.map_or(SqlValue::Null, |_| blob(refs.finish())),
+            ],
         ))?)?;
         changed(context.sql(&statement(
             "UPDATE catalog_state SET generation=?1 WHERE singleton=1 AND generation=?2",

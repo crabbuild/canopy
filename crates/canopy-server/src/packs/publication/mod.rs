@@ -1,7 +1,7 @@
 //! Fenced preparation and retained generation facts in the Repository Cell.
 //! The fresh schema is selected with the final producer/reader hard cutover;
 //! these commands are not registered on the legacy repository serving path.
-use super::catalog::StoredCatalog;
+use super::{catalog::StoredCatalog, ref_state::RefStateSnapshotRoot};
 use crate::{
     ObjectFormat, RepositoryModule,
     access::{access_statement, decode_access},
@@ -29,6 +29,8 @@ mod prepare;
 pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
 pub(in crate::packs) mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
+mod ref_snapshot;
+pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
 mod publish;
 pub use publish::{PublicationReply, PublishCatalogRefs, PublishedRefs};
 mod outcome;
@@ -105,6 +107,8 @@ pub struct PreparationToken {
 pub struct GenerationFact {
     pub generation: u64,
     pub catalog: Option<StoredCatalog>,
+    /// Ref metadata retained under this same immutable catalog generation.
+    pub refs: Option<RefStateSnapshotRoot>,
     pub certificate: Option<[u8; 32]>,
 }
 impl GenerationFact {
@@ -113,7 +117,7 @@ impl GenerationFact {
             return Err(CodecError::Invalid("invalid catalog generation"));
         }
         match (self.generation, self.catalog, self.certificate) {
-            (0, None, None) => Ok(()),
+            (0, None, None) if self.refs.is_none() => Ok(()),
             (1.., Some(catalog), Some(_)) => catalog
                 .validate()
                 .map_err(|_| CodecError::Invalid("invalid generation catalog")),

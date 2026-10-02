@@ -80,17 +80,20 @@ impl WireValue for GenerationFact {
         self.validate()?;
         e.write_u64(self.generation)?;
         self.catalog.encode(e)?;
+        self.refs.encode(e)?;
         self.certificate.as_ref().map(|v| v.to_vec()).encode(e)
     }
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
         let generation = d.read_u64()?;
         let catalog = Option::<StoredCatalog>::decode(d)?;
+        let refs = Option::<RefStateSnapshotRoot>::decode(d)?;
         let certificate = Option::<Vec<u8>>::decode(d)?
             .map(|v| v.try_into().map_err(|_| invalid()))
             .transpose()?;
         let value = Self {
             generation,
             catalog,
+            refs,
             certificate,
         };
         value.validate()?;

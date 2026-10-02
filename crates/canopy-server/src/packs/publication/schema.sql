@@ -311,10 +311,11 @@ CREATE TABLE catalog_generations (
     generation INTEGER PRIMARY KEY CHECK(typeof(generation) = 'integer' AND generation >= 0),
     catalog BLOB,
     certificate BLOB,
-    CHECK((generation = 0 AND catalog IS NULL AND certificate IS NULL)
+    refs BLOB CHECK(refs IS NULL OR (typeof(refs) = 'blob' AND length(refs) BETWEEN 1 AND 128)),
+    CHECK((generation = 0 AND catalog IS NULL AND certificate IS NULL AND refs IS NULL)
        OR (generation > 0 AND catalog IS NOT NULL AND certificate IS NOT NULL AND length(catalog) BETWEEN 1 AND 256 AND length(certificate) = 32))
 ) WITHOUT ROWID;
-INSERT INTO catalog_generations VALUES(0, NULL, NULL);
+INSERT INTO catalog_generations VALUES(0, NULL, NULL, NULL);
 CREATE TRIGGER catalog_generations_immutable BEFORE UPDATE ON catalog_generations
 BEGIN SELECT RAISE(ABORT, 'catalog generations are immutable'); END;
 CREATE TRIGGER catalog_generations_not_replaced BEFORE INSERT ON catalog_generations

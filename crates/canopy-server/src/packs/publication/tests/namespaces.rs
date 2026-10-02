@@ -21,7 +21,7 @@ fn namespace_watermark_and_pin_identity_cannot_be_reset_or_rebound() -> Result {
     // A valid alternate generation ensures the mutation fails because the
     // pin binding is immutable, rather than because its target is absent.
     connection.execute(
-        "INSERT INTO catalog_generations VALUES(1,x'01',zeroblob(32))",
+        "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(1,x'01',zeroblob(32))",
         [],
     )?;
     connection.execute("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(zeroblob(16),1,zeroblob(16),x'0000000000000001',?1,0,100)", [artifact_number(1).as_slice()])?;

@@ -10,6 +10,7 @@ mod native_capture;
 mod prepare;
 mod publishing;
 mod reconcile;
+mod ref_snapshot;
 mod refs;
 mod staging;
 mod staging_service;
@@ -205,9 +206,24 @@ impl Fixture {
     // Trusted fixture injection only. Production generation facts require the
     // complete catalog verifier and fenced publisher; a digest is not a proof.
     async fn install_catalog(&self, generation: u64, catalog: StoredCatalog) -> Result<()> {
+        self.install_generation(generation, catalog, None).await
+    }
+    async fn install_generation(
+        &self,
+        generation: u64,
+        catalog: StoredCatalog,
+        refs: Option<RefStateSnapshotRoot>,
+    ) -> Result<()> {
         let mut encoder = BoundedEncoder::new(256)?;
         catalog.encode(&mut encoder)?;
         let bytes = encoder.finish();
+        let refs = refs
+            .map(|refs| {
+                let mut e = BoundedEncoder::new(128)?;
+                refs.encode(&mut e)?;
+                Ok::<_, CodecError>(e.finish())
+            })
+            .transpose()?;
         self.handle
             .execute(
                 identity()?,
@@ -217,8 +233,8 @@ impl Fixture {
                 0,
                 move |tx| {
                     tx.execute(
-                        "INSERT INTO catalog_generations VALUES(?1,?2,?3)",
-                        rusqlite::params![generation as i64, bytes, [42u8; 32].as_slice()],
+                        "INSERT INTO catalog_generations(generation,catalog,certificate,refs) VALUES(?1,?2,?3,?4)",
+                        rusqlite::params![generation as i64, bytes, [42u8; 32].as_slice(), refs],
                     )?;
                     tx.execute(
                         "UPDATE catalog_state SET generation=?1 WHERE singleton=1",
@@ -803,7 +819,7 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
     assert!(
         connection
             .execute(
-                "INSERT INTO catalog_generations VALUES(1,NULL,zeroblob(32))",
+                "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(1,NULL,zeroblob(32))",
                 []
             )
             .is_err()
@@ -811,7 +827,7 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
     assert!(
         connection
             .execute(
-                "INSERT INTO catalog_generations VALUES(1,zeroblob(1),NULL)",
+                "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(1,zeroblob(1),NULL)",
                 []
             )
             .is_err()
@@ -824,8 +840,20 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
             )
             .is_err()
     );
+    for refs in [
+        SqlValue::Text("x".into()),
+        SqlValue::Blob(Vec::new()),
+        SqlValue::Blob(vec![0; 129]),
+    ] {
+        let value = match refs {
+            SqlValue::Text(value) => rusqlite::types::Value::Text(value),
+            SqlValue::Blob(value) => rusqlite::types::Value::Blob(value),
+            _ => unreachable!(),
+        };
+        assert!(connection.execute("INSERT INTO catalog_generations(generation,catalog,certificate,refs) VALUES(1,zeroblob(1),zeroblob(32),?1)", [value]).is_err());
+    }
     connection.execute(
-        "INSERT INTO catalog_generations VALUES(1,zeroblob(1),zeroblob(32))",
+        "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(1,zeroblob(1),zeroblob(32))",
         [],
     )?;
     connection.execute(
@@ -840,7 +868,7 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
     let roots = connection.transaction()?;
     for generation in 2..MAX_RETAINED_GENERATIONS {
         roots.execute(
-            "INSERT INTO catalog_generations VALUES(?1,zeroblob(1),zeroblob(32))",
+            "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,zeroblob(1),zeroblob(32))",
             [generation as i64],
         )?;
     }
@@ -848,7 +876,7 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
     assert!(
         connection
             .execute(
-                "INSERT INTO catalog_generations VALUES(?1,zeroblob(1),zeroblob(32))",
+                "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,zeroblob(1),zeroblob(32))",
                 [MAX_RETAINED_GENERATIONS as i64],
             )
             .is_err()
@@ -868,7 +896,7 @@ fn fresh_schema_and_codecs_reject_incomplete_facts_and_support_full_owner_epochs
     connection.execute("DELETE FROM catalog_leases", [])?;
     connection.execute("DELETE FROM catalog_generations WHERE generation=2", [])?;
     connection.execute(
-        "INSERT INTO catalog_generations VALUES(?1,zeroblob(1),zeroblob(32))",
+        "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,zeroblob(1),zeroblob(32))",
         [MAX_RETAINED_GENERATIONS as i64],
     )?;
     let token = PreparationToken {

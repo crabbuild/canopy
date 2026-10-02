@@ -455,14 +455,14 @@ async fn retained_input_custody_final_certificate_digest_is_checked_and_old_doma
         matches!(recovered.fixture.client().command::<PublishCatalogRefs>(&recovered.fixture.target,identity()?,wrong_proof).await,Err(InvocationError::Rejected(outcome)) if outcome.output==PublicationReply::Denied(PreparationDenial::Conflict))
     );
     let mut old = proof.certificate.clone();
-    let domain = b"canopy.catalog-attestation.v3\0";
+    let domain = b"canopy.catalog-attestation.v4\0";
     let at = old
         .0
         .body
         .windows(domain.len())
         .position(|b| b == domain)
         .ok_or("catalog domain")?;
-    old.0.body[at + domain.len() - 2] = b'2';
+    old.0.body[at + domain.len() - 2] = b'3';
     assert!(old.bytes().is_err());
     let mut e = BoundedEncoder::new(CERTIFICATE_BYTES)?;
     old.0.encode(&mut e)?;

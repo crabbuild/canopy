@@ -181,8 +181,8 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
     Ok(handle.query(0, 64 << 10, |connection| {
         let mut refs = connection.prepare("SELECT name,oid,version FROM refs ORDER BY name")?;
         let refs = refs.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut catalog = connection.prepare("SELECT generation,catalog,certificate FROM catalog_generations ORDER BY generation")?;
-        let catalog = catalog.query_map([], |row| Ok((row.get::<_,u64>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,Option<Vec<u8>>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut catalog = connection.prepare("SELECT generation,catalog,certificate,refs FROM catalog_generations ORDER BY generation")?;
+        let catalog = catalog.query_map([], |row| Ok((row.get::<_,u64>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,Option<Vec<u8>>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let generations = connection.query_row("SELECT (SELECT generation FROM catalog_state),(SELECT generation FROM ref_generation)", [], |row| Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?)))?;
         let pushes = connection.query_row("SELECT count(*) FROM pushes WHERE publication IS NOT NULL", [], |row|row.get::<_,u64>(0))?;
         let mut checkpoints=connection.prepare("SELECT artifact_operation,attestation,attestation_digest FROM catalog_leases ORDER BY artifact_operation")?;

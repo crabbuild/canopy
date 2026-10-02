@@ -1,11 +1,11 @@
 //! Bounded conditional catalog certificate. Only the prepared catalog factory
 //! supplies signing facts; decoded bytes remain untrusted until MAC verification.
 use super::*;
-use crate::packs::directory::index::codec::fixed;
+use crate::packs::directory::index::codec::{artifact, fixed, read_artifact};
 
 pub const CERTIFICATE_BYTES: u32 = 1024;
 const PAYLOAD_BYTES: u32 = 960;
-const DOMAIN: &[u8] = b"canopy.catalog-attestation.v3\0";
+const DOMAIN: &[u8] = b"canopy.catalog-attestation.v4\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogCertificate(pub(super) CertificateEnvelope);
@@ -102,8 +102,23 @@ impl WireValue for CertificateData {
         if let Some(certificate) = self.retention_certificate {
             e.write_bytes(&certificate)?;
         }
-        self.base.encode(e)?;
-        self.catalog.encode(e)?;
+        // The token already binds repository and proposed creating namespace.
+        // Encode that context once; reconstruct the existing typed structures
+        // on decode instead of repeating full catalog descriptor domains.
+        e.write_u8(self.catalog.format.bytes() as u8)?;
+        e.write_u64(self.base.generation)?;
+        e.write_bool(self.base.catalog.is_some())?;
+        if let Some(catalog) = self.base.catalog {
+            e.write_bytes(&catalog.operation)?;
+            artifact(e, catalog.artifact)?;
+        }
+        self.base.refs.encode(e)?;
+        self.base
+            .certificate
+            .as_ref()
+            .map(|v| v.to_vec())
+            .encode(e)?;
+        artifact(e, self.catalog.artifact)?;
         e.write_u64(self.object_count)?;
         e.write_u64(self.edge_count)?;
         e.write_u64(self.input_count)?;
@@ -127,20 +142,62 @@ impl WireValue for CertificateData {
         if d.read_bytes()? != DOMAIN {
             return Err(CodecError::Invalid("invalid catalog attestation domain"));
         }
+        let compaction = d.read_bool()?;
+        let tenant = fixed(d)?;
+        let application = fixed(d)?;
+        let token = PreparationToken::decode(d)?;
+        let actor = d.read_text()?.into();
+        let retention_floor = d.read_u64()?;
+        let retention_certificate = if d.read_bool()? {
+            Some(fixed(d)?)
+        } else {
+            None
+        };
+        let format = match d.read_u8()? {
+            20 => ObjectFormat::Sha1,
+            32 => ObjectFormat::Sha256,
+            _ => return Err(CodecError::Invalid("invalid attested catalog format")),
+        };
+        let generation = d.read_u64()?;
+        let catalog = if d.read_bool()? {
+            Some(StoredCatalog {
+                repository: token.repository,
+                operation: fixed(d)?,
+                format,
+                artifact: read_artifact(d)?,
+            })
+        } else {
+            None
+        };
+        let refs = Option::<RefStateSnapshotRoot>::decode(d)?;
+        let certificate = Option::<Vec<u8>>::decode(d)?
+            .map(|v| {
+                v.try_into()
+                    .map_err(|_| CodecError::Invalid("invalid generation certificate"))
+            })
+            .transpose()?;
+        let base = GenerationFact {
+            generation,
+            catalog,
+            refs,
+            certificate,
+        };
+        let catalog = StoredCatalog {
+            repository: token.repository,
+            operation: token.artifact_operation,
+            format,
+            artifact: read_artifact(d)?,
+        };
         let value = Self {
-            compaction: d.read_bool()?,
-            tenant: fixed(d)?,
-            application: fixed(d)?,
-            token: PreparationToken::decode(d)?,
-            actor: d.read_text()?.into(),
-            retention_floor: d.read_u64()?,
-            retention_certificate: if d.read_bool()? {
-                Some(fixed(d)?)
-            } else {
-                None
-            },
-            base: GenerationFact::decode(d)?,
-            catalog: StoredCatalog::decode(d)?,
+            compaction,
+            tenant,
+            application,
+            token,
+            actor,
+            retention_floor,
+            retention_certificate,
+            base,
+            catalog,
             object_count: d.read_u64()?,
             edge_count: d.read_u64()?,
             input_count: d.read_u64()?,

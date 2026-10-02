@@ -33,7 +33,7 @@ fn staged_pin_normalized_binding_has_no_nullable_foreign_key_escape() -> Result 
     connection.execute_batch("PRAGMA foreign_keys=ON")?;
     connection.execute_batch(SCHEMA)?;
     connection.execute(
-        "INSERT INTO catalog_generations VALUES(1,x'01',zeroblob(32))",
+        "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(1,x'01',zeroblob(32))",
         [],
     )?;
     connection.execute("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(zeroblob(16),1,zeroblob(16),x'0000000000000001',?1,NULL,100)", [artifact_number(1).as_slice()])?;
@@ -235,7 +235,7 @@ async fn staged_input_does_not_accumulate_generation_history_beyond_fact_capacit
                 0,
                 move |tx| {
                     let mut insert =
-                        tx.prepare("INSERT INTO catalog_generations VALUES(?1,?2,?3)")?;
+                        tx.prepare("INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,?2,?3)")?;
                     for n in first..first + 512 {
                         insert.execute(rusqlite::params![n, bytes, [42u8; 32].as_slice()])?;
                     }

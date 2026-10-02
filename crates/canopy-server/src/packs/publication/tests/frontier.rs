@@ -316,7 +316,7 @@ fn floor_reaping_is_indexed_bounded_and_cannot_remove_intervening_roots() -> Res
     let tx = connection.transaction()?;
     for generation in 1..=1200 {
         tx.execute(
-            "INSERT INTO catalog_generations VALUES(?1,x'01',zeroblob(32))",
+            "INSERT INTO catalog_generations(generation,catalog,certificate) VALUES(?1,x'01',zeroblob(32))",
             [generation],
         )?;
     }
@@ -399,6 +399,7 @@ fn frontier_codec_rejects_rollback_foreign_catalog_and_changed_same_generation()
     let empty = GenerationFact {
         generation: 0,
         catalog: None,
+        refs: None,
         certificate: None,
     };
     let mut value = PreparationFrontier {
@@ -430,6 +431,7 @@ fn frontier_codec_rejects_rollback_foreign_catalog_and_changed_same_generation()
     value.lease.base = GenerationFact {
         generation: 1,
         catalog: Some(catalog),
+        refs: None,
         certificate: Some([1; 32]),
     };
     assert!(value.validate().is_err()); // current zero is below the floor
@@ -443,6 +445,7 @@ fn frontier_codec_rejects_rollback_foreign_catalog_and_changed_same_generation()
             repository: *uuid::Uuid::new_v4().as_bytes(),
             ..catalog
         }),
+        refs: None,
         certificate: Some([3; 32]),
     };
     assert!(value.validate().is_err());

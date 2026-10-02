@@ -226,6 +226,11 @@ pub(super) fn publish_authenticated(
     {
         return Ok(denied(PreparationDenial::Conflict));
     }
+    // A selected immutable ref snapshot cannot be mutated by the inline SQL
+    // publisher. The root publisher and all readers must cut over together.
+    if data.base.refs.is_some() {
+        return Ok(denied(PreparationDenial::Conflict));
+    }
     let Some(validated) = crate::refs::validate_refs(context, &input.plan)? else {
         return Ok(denied(PreparationDenial::Conflict));
     };
