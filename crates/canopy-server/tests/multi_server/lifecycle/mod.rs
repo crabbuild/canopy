@@ -203,6 +203,41 @@ async fn wait_for_cleanup(data: &Path) -> Result {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cancelled_prebound_startup_keeps_listener_and_workspace_until_cleanup() -> Result {
+    let files = tempfile::TempDir::new()?;
+    let data = files.path().join("node");
+    let store = Arc::new(PausedStore::default());
+    store.arm(ControlState::Serving);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let start = tokio::spawn(CanopyServer::start_with_listener(
+        config(address, data.clone()),
+        store.clone(),
+        listener,
+    ));
+    store.wait().await?;
+    start.abort();
+    assert!(start.await.is_err_and(|error| error.is_cancelled()));
+    assert!(matches!(
+        workspace_lock(&data)?.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    assert_eq!(
+        TcpListener::bind(address).await.unwrap_err().kind(),
+        std::io::ErrorKind::AddrInUse
+    );
+    store.proceed.notify_one();
+    wait_for_cleanup(&data).await?;
+    let listener = TcpListener::bind(address).await?;
+    let server = CanopyServer::start_with_listener(config(address, data), store, listener).await?;
+    create_repository(address, "after-cancellation").await?;
+    server.shutdown().await?;
+    let rebound = TcpListener::bind(address).await?;
+    assert_eq!(rebound.local_addr()?, address);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelled_startup_keeps_workspace_until_publication_and_cleanup_settle() -> Result {
     let files = tempfile::TempDir::new()?;
     let data = files.path().join("node");
@@ -564,17 +599,29 @@ mod lease;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn startup_rejects_ignored_conditional_writes_before_enrollment() -> Result {
-    let store = Arc::new(PausedStore::default());
-    store.ignore_conditions.store(true, Ordering::SeqCst);
-    let files = tempfile::TempDir::new()?;
-    let settings = config(available_address().await?, files.path().join("server"));
-    assert!(matches!(
-        CanopyServer::start(settings, store.clone()).await,
-        Err(canopy_server::server::ServerError::Repository(
-            "storage conditional create failed"
-        ))
-    ));
-    let remaining = store.list_with_delimiter(None).await?;
-    assert!(remaining.objects.is_empty() && remaining.common_prefixes.is_empty());
+    for prebound in [false, true] {
+        let store = Arc::new(PausedStore::default());
+        store.ignore_conditions.store(true, Ordering::SeqCst);
+        let files = tempfile::TempDir::new()?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let settings = config(address, files.path().join("server"));
+        let result = if prebound {
+            CanopyServer::start_with_listener(settings, store.clone(), listener).await
+        } else {
+            drop(listener);
+            CanopyServer::start(settings, store.clone()).await
+        };
+        assert!(matches!(
+            result,
+            Err(canopy_server::server::ServerError::Repository(
+                "storage conditional create failed"
+            ))
+        ));
+        let remaining = store.list_with_delimiter(None).await?;
+        assert!(remaining.objects.is_empty() && remaining.common_prefixes.is_empty());
+        let rebound = TcpListener::bind(address).await?;
+        assert_eq!(rebound.local_addr()?, address);
+    }
     Ok(())
 }

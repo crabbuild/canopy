@@ -1,4 +1,6 @@
 mod accounts;
+mod capacity;
+mod compatibility;
 mod expiry;
 #[path = "../support/objects.rs"]
 mod objects;

@@ -14,6 +14,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | Find the right Rust crate | [Rust workspace](workspace.md) | Crate ownership, dependencies and build commands |
 | Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
 | Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
+| Inspect the original RustFS corpus upgrade | [Full-corpus activation and remote verification](performance/2026-10-01-original-corpus-activation.md) | Admission of 10,003 Cells, full Git/LFS verification, failed diagnostic load windows and open owner-loss gates |
 | Track three nodes behind a proxy and the latest dependency candidate | [Three-node proxy qualification](performance/2026-09-30-three-node-proxy.md) | Baseline/candidate pins, complete-corpus recovery, failing load windows and open gates |
 | Inspect the merged workspace and RustFS verification | [Workspace and RustFS verification](performance/2026-09-30-workspace-rustfs.md) | The `70bd25f` revision, conflict resolution and end-to-end gates |
 | Inspect the earlier Cellule dependency update | [Initial September 30 requalification](performance/2026-09-30-cellule-main.md) | Earlier revision, passing checks, failed suites and storage-blocked performance gates |
