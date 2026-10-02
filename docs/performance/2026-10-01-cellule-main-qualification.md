@@ -1,18 +1,46 @@
 # Cellule main revision qualification
 
-Canopy now pins all six Cellule packages to
-`0dc04a658bd99668936f7ec58032d054f6fbc141`, verified against upstream main on
-October 1. Release correctness, fresh RustFS compatibility and repeated
-regressions passed. This does not establish a retained-store upgrade, recovery
-of the existing corpus, reference capacity or a performance improvement.
+PR #18 now pins all six Cellule packages to
+`191409685b001a82bd02780def45102b4fc2f164`, rechecked against upstream main
+when publishing this update. Linux debug correctness and fresh RustFS gates
+passed; release verification is running. The original-corpus campaign still
+uses the frozen, release-qualified `0dc04a6` executable. Results from that
+executable do not transfer to the new dependency revision.
 
 This follows the [retained catalog admission checkpoint](2026-10-01-retained-catalog-admission.md).
 That checkpoint and the [authentication and residency results](2026-10-01-bounded-authentication-and-residency.md)
 retain their original Cellule revision and artifacts.
 
-Upstream later advanced to `191409685b001a82bd02780def45102b4fc2f164`.
-The PR still pins the independently qualified `0dc04a6`; this checkpoint does
-not qualify the newer runtime or peer HTTP CI changes.
+## Current dependency update
+
+The pin-only candidate is `63c93b0f3fadf12893c9c45832f7367ace04ff24`.
+Its [Linux debug CI](https://github.com/crabbuild/canopy/actions/runs/36965371936)
+passed 244 top-level Rust tests (zero failed, nine ignored), all 84 Python
+tests, formatting, all-target lints, the debug server build and all eight
+fresh RustFS compatibility gates. Only five direct pins and six lockfile
+source entries changed; other dependency versions and runtime budgets did not.
+
+The new [release workflow](../../.github/workflows/qualify-release.yml) repeats
+release workspace tests, all-target release lints, the Python harness and the
+eight provider gates, then retains the Linux executable, source/dependency
+provenance and logs. Its first attempt failed during tool setup because the
+runner's package index had no `awscli` candidate; no tests ran. The corrected
+workflow checks the existing runner CLI and initializes evidence before setup.
+The [corrected release run](https://github.com/crabbuild/canopy/actions/runs/36968478780)
+has passed setup, source binding, formatting, release lints, workspace tests
+and the Python harness. RustFS gates and executable retention were still
+running at publication. PR-head CI is a separate check.
+
+Native release qualification, retained-store recovery, every-ACK verification,
+matched performance and reference capacity remain open for `1914096`.
+Upstream peer HTTP CI changes are not evidence of Canopy latency equivalence.
+
+## Historical release qualification for 0dc04a6
+
+The following results bind `0dc04a658bd99668936f7ec58032d054f6fbc141`,
+not the current PR pin. Release correctness, fresh RustFS compatibility and
+repeated regressions passed on that revision. These checks alone did not
+establish retained-store recovery, reference capacity or a performance gain.
 
 ## Dependency change and source equivalence
 
@@ -55,7 +83,8 @@ clones and stock Git LFS over SSH. The existing 10,000-repository RustFS provide
 had identical provider snapshots before and after these gates. Neither its
 corpus nor the UI preview was upgraded.
 
-Reproduce the checks from a checkout with this lockfile:
+Reproduce these historical checks from the frozen `bbd784a4` checkout and its
+lockfile (the current PR lockfile instead tests `1914096`):
 
 ```sh
 cargo build --release --locked --workspace

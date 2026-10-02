@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'codex/cellule-release-ci-*'
+      - 'codex/three-node-recovery-evidence'
 
 permissions:
   contents: read

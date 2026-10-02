@@ -2,14 +2,15 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `0dc04a658bd99668936f7ec58032d054f6fbc141`, verified against
-upstream main on October 1. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
-records 239 release Rust tests, 84 Python tests, lints and all eight fresh RustFS
-gates, with separately retained artifacts. Subsequent original-corpus remote
+dependency pin is `191409685b001a82bd02780def45102b4fc2f164`, rechecked against
+upstream main at publication. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
+records 244 Linux debug Rust tests, 84 Python tests, lints and all eight fresh
+RustFS gates; release verification is running. The frozen `0dc04a6` executable
+retains its separate release evidence and original-corpus campaign. Remote
 verification passed; scheduled load includes failed arrivals, and post-load
-owner-loss recovery and reference capacity remain open. Upstream later advanced to
-`191409685b001a82bd02780def45102b4fc2f164`; that revision is not yet qualified
-by this PR. The preceding `c51dd121` build is historical evidence.
+owner-loss recovery and reference capacity remain open. Neither that campaign
+nor earlier release evidence qualifies `1914096` performance or recovery.
+The preceding `c51dd121` build is historical evidence.
 Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
 metadata resolves all six packages; the lockfile changes only their sources.
@@ -62,7 +63,7 @@ seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
-| Qualified Cellule revision | `0dc04a6`: release correctness, lints, Python harness, eight fresh RustFS gates and subsequent original-corpus activation passed. Upstream `1914096` remains unqualified; no measured improvement is claimed |
+| Current Cellule pin and historical runtime | PR pins `1914096`: Linux debug tests, lints, Python harness and eight fresh RustFS gates passed; release verification is running. Frozen `0dc04a6`: release qualification and original-corpus activation passed. No recovery or performance result transfers between revisions |
 | HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
 | Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
 | Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |

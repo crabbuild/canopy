@@ -263,9 +263,12 @@ dominant explanations; it does not prove a Directory or RustFS bottleneck.
 Cellule upstream subsequently advanced by two commits to
 `191409685b001a82bd02780def45102b4fc2f164`, observed when publishing this checkpoint.
 Those commits change runtime forwarding/compaction and peer HTTP CI gates.
-They are **not** the dependency revision tested here. An isolated candidate
-passed locked metadata and formatting checks only; release and RustFS
-qualification remain open, and no performance result transfers to it.
+They are **not** the dependency revision tested here. PR #18 now pins that
+revision: its Linux debug CI passed 244 Rust tests, 84 Python tests and all eight
+fresh RustFS gates. Release verification is running; native qualification,
+retained-store recovery and performance remain open. See the
+[current dependency checkpoint](2026-10-01-cellule-main-qualification.md).
+No result from this activation or frozen campaign transfers to the new pin.
 
 PR #18 remains draft. The [full campaign](../performance-plan.md) still requires
 the complete schedule and audit, concurrent faults, fresh-owner verification
