@@ -11,12 +11,39 @@ import time
 import urllib.request
 import uuid
 
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 from smoke_s3_process import create_repository, git, start
 
 AUTH = "http.extraHeader=Authorization: Bearer local-test-token"
 
 
-def warm_ref_pages(source, url, work_dir, log, report):
+def receive_cursor_probe(source, url):
+    # A reachable clone does not enumerate all published headers. A ref-only
+    # receive does, without adding objects; remove its temporary ref immediately.
+    probe = "refs/tags/canopy-cache-cursor-probe"
+    git("-c", AUTH, "push", url, f"HEAD:{probe}", cwd=source)
+    git("-c", AUTH, "push", url, f":{probe}", cwd=source)
+
+
+def cursor_diagnostics(log, offset, through):
+    # Wait for the asynchronous logger, not a storage retry. Choosing a boundary
+    # before setup is logged can incorrectly charge its scan to the increment.
+    deadline = time.monotonic() + 5
+    while True:
+        text = log.read_text()
+        events = []
+        for line in text[offset:].splitlines():
+            if "hydrated Git cache" in line:
+                events.append({key: int(value) for key, value in re.findall(
+                    r"\b(objects|scanned|from_sequence|through_sequence|reused|bytes)=([0-9]+)", line)})
+        if any(event.get("through_sequence") == through for event in events):
+            return events, len(text)
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"missing cache cursor {through} diagnostics: {events}")
+        time.sleep(0.01)
+
+
+def warm_ref_pages(source, url, work_dir, log, report, *, extra_tombstones=0):
     # Cross the 256-row pagination boundary using supported 60-ref pushes.
     names = [f"refs/tags/warm-{index:03}" for index in range(300)]
     for offset in range(0, len(names), 60):
@@ -31,16 +58,18 @@ def warm_ref_pages(source, url, work_dir, log, report):
         git("fsck", "--strict", "--full", cwd=destination)
 
     clone("many-refs-seed", 2)
+    snapshot_rows = 301 + extra_tombstones
     # The logger is asynchronous. Observe the setup scan before choosing the
     # measured boundary, so a delayed setup event cannot contaminate this check.
     deadline = time.monotonic() + 5
     while True:
         prefix = log.read_text()
-        if any("read Git ref snapshot" in line and "refs=301" in line
+        if any("read Git ref snapshot" in line
+               and re.search(rf"\brefs={snapshot_rows}\b", line)
                for line in prefix.splitlines()):
             break
         if time.monotonic() >= deadline:
-            raise AssertionError("missing 301-ref snapshot diagnostics")
+            raise AssertionError(f"missing {snapshot_rows}-row ref snapshot diagnostics")
         time.sleep(0.01)
     offset = len(prefix)
     times = {}
@@ -51,9 +80,13 @@ def warm_ref_pages(source, url, work_dir, log, report):
                           "ls-remote", url)
             for name in names:
                 assert expected + b"\t" + name.encode() in listing
+            assert sum(line.split(b"\t", 1)[-1].startswith(b"refs/")
+                       for line in listing.splitlines()) == 301
+            assert b"refs/tags/canopy-cache-cursor-probe" not in listing
         times[str(protocol)] = (time.monotonic() - started) / 3
         clone(f"many-refs-warm-v{protocol}", protocol)
-    report.update(warm_ref_count=301, warm_ls_remote_mean_seconds=times)
+    report.update(warm_ref_count=301, warm_snapshot_row_count=snapshot_rows,
+                  warm_ls_remote_mean_seconds=times)
     # Read through the response-completed operations before any mutation; every
     # scan logs before native Git starts producing the response.
     events = log.read_text()[offset:].splitlines()
@@ -123,7 +156,11 @@ def qualify(args):
         before = cached_objects(args.work_dir / "first")
         assert len(before) == 260
         first_log = args.work_dir / "first.log"
-        log_offset = len(first_log.read_text())
+        receive_cursor_probe(source, url)
+        setup, log_offset = cursor_diagnostics(first_log, 0, 260)
+        assert sum(event["scanned"] for event in setup) == 260, setup
+        assert cached_objects(args.work_dir / "first") == before
+        report["setup_scanned_objects"] = 260
         (source / "increment.txt").write_text("Incremental bytes\n")
         git("add", "increment.txt", cwd=source)
         git("commit", "-m", "Small incremental push", cwd=source)
@@ -145,22 +182,24 @@ def qualify(args):
         after = cached_objects(args.work_dir / "first")
         assert len(after) == len(before) + 3
         assert all(after.get(path) == metadata for path, metadata in before.items())
-        refreshes = []
-        for line in first_log.read_text()[log_offset:].splitlines():
-            if "hydrated Git cache" in line:
-                refreshes.append({key: int(value) for key, value in re.findall(
-                    r"\b(objects|scanned|from_sequence|through_sequence|bytes)=([0-9]+)", line)})
+        # Clones hydrate reachable bodies separately. Verify the receive cursor
+        # advances only over the three new headers and reuses those same files.
+        receive_cursor_probe(source, url)
+        refreshes, _ = cursor_diagnostics(first_log, log_offset, 263)
         assert refreshes, "hydration diagnostics required: enable canopy_server::git_gateway=debug"
         assert sum(event["scanned"] for event in refreshes) == 3, refreshes
-        assert sum(event["objects"] for event in refreshes) == 3, refreshes
+        assert sum(event["objects"] for event in refreshes) == 0, refreshes
+        assert sum(event["reused"] for event in refreshes) == 3, refreshes
         assert all(event["from_sequence"] > 0 for event in refreshes), refreshes
+        assert cached_objects(args.work_dir / "first") == after
         report.update(incremental_refreshes=refreshes, incremental_scanned_objects=3,
+                      incremental_cursor_hydrated_objects=0, incremental_new_cached_objects=3,
                       cache_reuse_passed=True, initial_cached_objects=len(before),
                       final_cached_objects=len(after), reused_compressed_bytes=sum(item[0] for item in before.values()))
         print("PASS: stock pushes/clones reuse 260 object files and scan/hydrate only three new objects", flush=True)
         process.kill()
         process.wait(timeout=10)
-        time.sleep(11)
+        time.sleep(NODE_LEASE_WAIT_SECONDS)
         process, restored = start(args.binary, args.work_dir, settings, "restored")
         processes.append(process)
         restored_url = url.replace(base, restored, 1)
@@ -212,7 +251,9 @@ def qualify(args):
         report["capability_discovery_passed"] = True
         print("PASS: cold Git v2 capabilities hydrate no objects and match warm discovery", flush=True)
         report["recovery_passed"] = True
-        warm_ref_pages(source, restored_url, args.work_dir, restored_log, report)
+        # Deleting the cursor probe leaves one SQL ref tombstone, not a live ref.
+        warm_ref_pages(source, restored_url, args.work_dir, restored_log, report,
+                       extra_tombstones=1)
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=60)
         assert process.returncode == 0

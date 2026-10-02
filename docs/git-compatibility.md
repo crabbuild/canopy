@@ -120,8 +120,8 @@ python3 scripts/qualify_size.py --docker-volume --release
 ```
 
 `python3 scripts/qualify_size.py` starts an isolated RustFS container and runs
-`tests/multi_server/size.rs` plus the ignored SHA-256, signed-push, bulk-ref and
-filtered-clone provider tests in `tests/multi_server/`. It requires Docker, the
+`crates/canopy-server/tests/multi_server/size.rs` plus the ignored SHA-256, signed-push, bulk-ref and
+filtered-clone provider tests in `crates/canopy-server/tests/multi_server/`. It requires Docker, the
 AWS CLI, Git, and a temporary directory with at least 40 GiB free. Set `TMPDIR`
 to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
@@ -153,15 +153,15 @@ proof of unlimited capacity.
 
 ## Permanent gates and remaining work
 
-`tests/multi_server/compatibility.rs` exercises the working transport matrix
+`crates/canopy-server/tests/multi_server/compatibility.rs` exercises the working transport matrix
 above through real Git processes, HTTP and Cell persistence. The existing
-default-branch test now uses a Unicode branch. `src/refs.rs` compares the shared
+default-branch test now uses a Unicode branch. `crates/canopy-server/src/refs.rs` compares the shared
 name validator against `git check-ref-format` for ASCII restrictions and Unicode.
 The existing `Verify` workflow runs these tests through `cargo test --locked`.
 Bulk tests additionally cover 1,001 distinct graph roots, namespace conflicts
 beyond several SQL pages, long plans exceeding the command wire ceiling, mixed
 and atomic rejection, bulk deletion and command-limit rejection/replay.
-`tests/multi_server/partial_clone.rs` verifies actual client omissions, on-demand
+`crates/canopy-server/tests/multi_server/partial_clone.rs` verifies actual client omissions, on-demand
 bytes, fresh-disk blob omission and rejected unreachable wants before and after
 full cache hydration. SQL work-bound tests cover indexed structural reads and
 reachability short-circuiting with 10,000 stored objects.
@@ -176,14 +176,14 @@ fresh-disk recovery. The fragmented-report unit test covers 4,096
 Unicode refs and preserves existing native rejections.
 Hosted CI has not been run for these changes.
 
-`tests/multi_server/lfs_locks.rs` uses stock Git LFS to create/list locks,
+`crates/canopy-server/tests/multi_server/lfs_locks.rs` uses stock Git LFS to create/list locks,
 reject a conflicting push before refs change, force-unlock and retry, then clone
 and verify the resulting bytes. API coverage includes concurrent lock creation,
 repository isolation, branch-independent exclusivity, list/verify pagination,
 owner partitions, token scope, ACL downgrade, public reads and fresh-disk restore.
 These locks are advisory: clients can bypass pre-push verification.
 
-`tests/multi_server/ssh.rs` exercises stock Git SSH mirror push, protocol v0/v2
+`crates/canopy-server/tests/multi_server/ssh/mod.rs` exercises stock Git SSH mirror push, protocol v0/v2
 clone (v1 requests fall back to v0), shallow/unshallow, filtered lazy fetch,
 incremental pull, deletion and fresh-disk mirror recovery. Wire-level probes
 check unreachable commit/tree/blob wants, command and environment restrictions,
@@ -200,20 +200,20 @@ including a SHA-256 repository. They reject a modified signature, a revoked key
 and replay of the original signed request after ref deletion. The HTTP audit
 receipt and SSH repository survive fresh-disk recovery.
 
-`tests/multi_server/filtered_preparation.rs` covers cold HTTP/SSH v0/v2 with
+`crates/canopy-server/tests/multi_server/ssh/filtered_preparation.rs` covers cold HTTP/SSH v0/v2 with
 tree depths, object types, blobless and escaped/nested combined filters. It checks
 client object inventory and server cache presence separately, then exercises lazy
 fetch and strict fsck. Size filters still hydrate unknown-size missing blobs;
 Git's native filter needs their headers before it can exclude them.
 
-`tests/multi_server/ssh_fetch.rs` verifies cold v0/v2 blobless clones, explicit
+`crates/canopy-server/tests/multi_server/ssh/fetch.rs` verifies cold v0/v2 blobless clones, explicit
 lazy blob hydration, blob-tag advertisements and subsequent full clones. Its
 full-fetch regression covers HTTP and SSH v0/v2: a cold single-branch clone
 omits unrelated/deleted branch blobs; a later fetch of another branch loads
 that branch's bytes without loading the deleted branch. A fresh server also
 handles negotiation from a client with unrelated history without hydrating its
 blobs. Strict fsck verifies the resulting clones.
-`tests/multi_server/ssh_publication.rs` pauses external ingestion after native
+`crates/canopy-server/tests/multi_server/ssh/publication.rs` pauses external ingestion after native
 acceptance: late ACL/policy refusals preserve both refs and generation, while an
 accepted push survives client disconnect and completes before shutdown releases
 Cells. Fresh-disk clones and strict fsck verify both outcomes.

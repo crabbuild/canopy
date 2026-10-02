@@ -1,6 +1,59 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a3fbfb0115a1ae2519ee8f8e0cf6b8e72fdaa303`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results.
+It separates demonstrated behavior from proposed targets. The current Cellule
+dependency pin is `0573f48998c4e5343cd8b463d79b7bc1820c923c`, a docs-only
+upstream advance from `e07670e` with identical Rust workspace/crates. Both full
+hosted workflows passed; that does not establish three-node capacity.
+The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
+retains the earlier fixture race and its regression, plus the candidate's failed
+seed and successful recovery of every recorded ACK.
+
+| Current gate | Evidence / status |
+| --- | --- |
+| Candidate Git behavior | Bound `e07670e` production artifact passed all 17 critical stock-Git steps through three nodes/proxy against RustFS |
+| Mac-backed candidate seed | Failed: 3,561/10,000 identities and 39 Git/LFS fixtures; incomplete manifest retained |
+| Every candidate seed ACK | All 3,561 identities and 39 populated fixtures passed fresh-owner recovery; independent ledger/binding and 78-clone audit passed |
+| Native-volume comparison | Same runtime/provider limits; all 10,000 identities and 100 Git/LFS fixtures seeded in 3,179.240 s; full owner-loss recovery running |
+| Full recovery and scheduled load | Still unqualified; no incomplete seed or narrow functional test closes these gates |
+
+The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
+records the storage hypothesis, graceful diagnostic drain and new bindings.
+No Cellule bottleneck or matched performance improvement is proven.
+The [workspace/RustFS verification](performance/2026-09-30-workspace-rustfs.md)
+and the retained three-node baseline use `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`.
+That baseline stopped after 20 fully bound windows and one interrupted creation
+window when all three owners fenced. All 136 acknowledged creations and both
+critical Git fixtures passed fresh-state recovery. The full original corpus
+recheck failed with a 30-second identity-read timeout; separate successful read
+probes do not turn that attempt into a pass. Failed results stay in the record.
+Earlier results do not establish the new candidate's density or latency.
+
+The [chunk-count follow-up](performance/2026-09-30-chunk-count.md) removes
+quadratic upload scans from command verification and records its verification
+state separately. This transaction optimization is not a 10,000-repository
+throughput qualification.
+
+The [earlier `30671d5` complete-corpus diagnostics](performance/2026-09-30-full-corpus.md)
+record all 10,000 identities and 100 seeded Git/LFS fixtures passing verification.
+The single-gateway matrix dropped eight scheduled arrivals, and matched warm
+metadata windows missed latency targets. All 29 acknowledged generated Git refs
+and 60 acknowledged LFS uploads survived owner kill and fresh-state recovery.
+A separate full seeded-corpus recovery attempt through fresh gateways failed
+with a cold-transition HTTP 503. The two-ingress matrix also failed five arrivals;
+it is diagnostic while that gate remains open. These shared-Mac results do not
+qualify the Linux reference target.
+
+The [cold-owner race follow-up](performance/2026-09-30-cold-owner-race.md)
+adds a synchronized regression and live-owner routing fix. Its debug and release
+suites passed, and 59 acknowledged refs plus 120 LFS uploads survived fresh-state
+recovery after both old gateways were killed. Its separate complete-corpus
+replay still failed on a cold transition at index 4,757; the peer subsequently
+restored the exact UUID. Its own matrix also failed: 2,104 of 3,880 arrivals
+succeeded on the heavily loaded shared host. After another two-owner kill,
+all 73 acknowledged refs and 149 LFS uploads across three matrices survived
+fresh-state recovery. Neither passing suites nor acknowledged-write recovery
+close the full-recovery, load or latency gates.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -25,8 +78,8 @@ does not establish full-history capacity.
 | Can large Git and LFS bodies survive fresh-disk recovery? | Yes, in a release-mode local RustFS run on an earlier Cellule pin with a Git blob and LFS object above 5 GiB | [Recorded large-transfer qualification](#recorded-large-transfer-qualification) |
 | Can a bounded Linux node recover 1,000 repository identities? | Yes, in a mostly empty SQL-only corpus; 997 repositories were empty | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
 | Did that run meet every warm metadata latency target? | No; some p95 and p99 targets were missed | [Bounded Linux density qualification](#bounded-linux-density-qualification) |
-| Is 10,000 repositories per node a measured capacity? | No; local 100-slot RustFS seeding and clean-shutdown recovery passed, but the reference Linux throughput and mixed workload remain unqualified | [Real-store diagnostic](#local-real-store-10000-identity-diagnostic) and [qualification rules](#performance-qualification-rules) |
-| Is idle ownership proven at 1,000 active Cells? | In a local SQL-only RustFS fixture, yes: the merged pin passed 10- and 30-second renewal-coverage windows. The reference Linux node and foreground load remain unqualified | [Merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) |
+| Is 10,000 repositories per node a measured capacity? | No; the earlier `30671d5` reconciled corpus passed full verification, but its single-gateway load matrix had dropped arrivals. Current-pin capacity and the reference Linux workload remain unqualified | [Earlier corpus and load](performance/2026-09-30-full-corpus.md), [latest verification](performance/2026-09-30-workspace-rustfs.md) and [qualification rules](#performance-qualification-rules) |
+| Is idle ownership proven at 1,000 active Cells? | An earlier `a3fbfb0` pin passed local SQL-only RustFS renewal-coverage windows. Repetition on the current final artifact, the reference Linux node and foreground load remains unqualified | [Historical merged-pin real-store idle qualification](#merged-pin-real-store-idle-qualification) and [latest artifact's open gates](performance/2026-09-30-workspace-rustfs.md#verification-gates) |
 
 The [implementation order](#implementation-order-and-acceptance) defines work still needed. The [measurement history](#measurement-history) records the revision, hardware, provider and workload for individual runs. Compare those four inputs before combining numbers from different sections.
 
@@ -35,8 +88,9 @@ the bounded 32-task renewal window when I/O completes. A 100-ms scan rebuilds
 pending candidates, removing stale generations and departed Cells. This removes
 the earlier 320-starts/s *scheduler* ceiling; it does not lower the one-control-
 update-per-active-Cell cost or prove that a provider can sustain the required
-update rate. The local SQL-only RustFS gate now covers 1,000 active Cells, but
-repeat it on the reference Linux node under foreground load before raising the
+update rate. Historical local SQL-only RustFS proof covers 1,000 active Cells
+on `a3fbfb0`, not this final artifact. Repeat it on the current artifact and
+the reference Linux node under foreground load before raising the
 active Cell limit or claiming 1,000- or 10,000-Cell production residency. This
 dependency and lockfile change also changes Canopy's compiled release digest;
 test against a fresh store prefix or use the documented maintenance upgrade
@@ -249,8 +303,8 @@ permits it.
   requires eight per admitted Repository/Directory Cell plus 1,024 headroom;
   this is a reservation check, not measured aggregate process capacity.
 
-These facts come from `src/server.rs`, `src/server/residency.rs`,
-`src/git_gateway.rs`, `src/git_cache.rs`, `src/repository_http.rs`,
+These facts come from `crates/canopy-server/src/server/mod.rs` and its residency
+module, the server crate's Git gateway, Git cache and repository HTTP modules,
 `deploy/compose.yaml`, and the pinned Cellule runtime/worker and LTX/db sources.
 
 ## Idle ownership cost
@@ -447,6 +501,25 @@ and disposable storage prefix. It creates private repositories; it does not
 remove them. Keep generated client checkouts on the mounted qualification volume.
 The provider fixture owns storage cleanup, separately from the benchmark.
 
+Choose the operation by the work you intend to measure:
+
+| Operation | Actual work | Validation / eligible corpus |
+| --- | --- | --- |
+| `metadata` | Authenticated repository API read | Exact UUID; all identities |
+| `refs` | Git v2 capability-only HTTP discovery; legacy operation name | Version-2 advertisement; all identities, **not** a ref-listing measurement |
+| `ls_remote` | Stock Git v2 `ls-refs`, with client-side `main` output filtering | Exact advertised `main` tip; populated repositories |
+| `clone`, `cold_fetch` | Stock Git full clone or empty-client fetch | Seeded tip; populated repositories |
+| `incremental_fetch`, `incremental_pull` | Stock Git transfer from a prepared base-only client | Incremental tip/content; two-commit repositories |
+| `push_branch` | Stock Git durable push to a unique ref | Native success; all identities |
+| `lfs_download`, `lfs_upload` | Direct-basic verified LFS body transfer | Size/hash for downloads; unique IDs for uploads |
+
+New reports distinguish the two discovery operations with `git_discovery_kind`.
+Historical `refs` rows below retain their recorded numbers but describe
+capability-only discovery, even where their old label says "Git v2 refs".
+`ls_remote` verifies a real reference advertisement. Its output pattern does
+not promise a server-side prefix filter; the observed Git client requests the
+ref advertisement and filters its output locally.
+
 ```sh
 python3 -B scripts/benchmark_repositories.py --base-url http://127.0.0.1:8080 \
   --manifest "$HOME/Workspace/crabbuild-target/canopy-density/corpus.json" \
@@ -482,6 +555,27 @@ commit and `main` one commit ahead. `verify` accepts both versions.
 
 For a multi-gateway read run, seed the documented 10,000-repository corpus,
 start two nodes against the same deployment, and pass each ingress to `run`:
+
+`serve_two_gateways.py` can start those nodes from an existing deployment
+configuration and complete manifest. It creates distinct node identities and
+signing keys, fronts each node with a trusted local HTTPS peer endpoint, and
+prints both HTTP ingress URLs as JSON. Set the same object-store credentials and
+Git token used by the seed, choose a new local work directory, and keep the
+process running while benchmarking:
+
+```bash
+CANOPY_GIT_TOKEN=... python3 -B scripts/serve_two_gateways.py \
+  --binary target/debug/canopy \
+  --config-template /path/to/deployment-config.json \
+  --manifest /path/to/canopy-corpus.json \
+  --work-dir /path/to/new-two-gateway-workspace \
+  --max-active-repositories 500
+```
+
+The launcher preserves node logs and local state after Ctrl-C and never deletes
+objects from the configured store. Its active-Cell override is per node; choose
+it within the node's memory, descriptor, and local-disk budget. A successful
+startup proves neither throughput nor correctness of a mixed workload.
 
 ```bash
 python3 -B scripts/benchmark_repositories.py \
@@ -612,6 +706,21 @@ working-set selection and offered arrivals. The driver never calls a working set
 warm automatically: its count is not the server's resident count. Prewarm a set
 that fits the node before claiming warm latency, or label the run as cold/mixed.
 
+For actual stock-Git ref listing through both gateways, use a populated working
+set and a fresh client directory. This example uses all 100 populated fixtures
+in the declared 10,000-identity corpus; it does not visit every identity:
+
+```sh
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8080 \
+  --additional-base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  run --active-repositories 100 --operation ls_remote \
+  --distribution uniform --rate 5 --duration 60 --concurrency 8 \
+  --work-dir /path/to/new-ls-remote-clients \
+  --output /path/to/canopy-two-gateway-ls-remote.json
+```
+
 Each HTTP worker reuses a connection; stock-Git attempts use fresh client
 repositories. Arrivals follow a fixed clock schedule;
 end-to-end latency starts at the scheduled instant and includes driver dispatch
@@ -621,7 +730,7 @@ client queue. HTTP and Git failures are recorded without retries. `--timeout`
 bounds individual HTTP socket operations; `--git-timeout` bounds each Git process.
 All outcomes go to a sibling `.samples.jsonl`; the JSON summary includes counts,
 error totals, scheduled/service/dispatch latency percentiles and the manifest
-SHA-256. `started_at_utc` anchors the run to server logs; each sample's
+and sample-file SHA-256. `started_at_utc` anchors the run to server logs; each sample's
 scheduled offset is `sequence / offered_rps`, while latency continues to use the
 monotonic clock. Dropped arrivals have no fabricated zero latency. Any failure yields
 exit status 1 after reports are written. Latency percentiles include completed
@@ -637,6 +746,46 @@ python3 -B -m unittest discover -s scripts -p test_benchmark_repositories.py -v
 They verify concurrency bounds, complete scheduled-outcome accounting, absence
 of retries, queue-delay inclusion, version-1/version-2 corpus and Git
 tip/content checks, and credential exclusion from the report.
+The ref-listing fixture also runs unmodified Git against an HTTP v2 server,
+asserts an actual `ls-refs` POST and request correlation, rejects a wrong tip,
+and distinguishes that exchange from capability-only GET discovery.
+
+### Verify writes acknowledged during load
+
+Checking only the seed after a crash can miss lost load-test writes. Keep the
+write reports and their sibling sample files, establish the owner restart or
+takeover separately, then run this read-only check against the recovered node:
+
+```sh
+python3 -B scripts/benchmark_repositories.py \
+  --base-url http://127.0.0.1:8081 \
+  --manifest /path/to/canopy-corpus.json \
+  verify-writes \
+  --report /path/to/canopy-two-gateway-pushes.json \
+  --report /path/to/canopy-lfs-upload.json \
+  --work-dir /path/to/new-acknowledged-write-checks \
+  --output /path/to/canopy-acknowledged-write-checks.json
+```
+
+| Evidence | Required check |
+| --- | --- |
+| Corpus and write samples | Matching SHA-256 digests, complete sequence/outcome accounting and unique run IDs |
+| Acknowledged push | Every generated ref has the exact commit; Git v0/v2 fetches reproduce the exact README object ID and pass strict fsck |
+| Acknowledged LFS upload | Streamed body matches its declared size and SHA-256 |
+| Failed, dropped or timed-out arrival | Counted separately; neither success nor rollback is inferred |
+
+All reports are validated before creating scratch or issuing requests. The
+check refuses old reports without `samples_sha256`, an empty acknowledgement
+set, existing output/scratch paths and more than one million total arrivals.
+Its output binds the source report digests and counts only verified
+acknowledgements. It does not kill a server or establish that an owner restarted:
+record old/new node identities, process exit and fresh local-state evidence
+alongside it. Run the separate corpus `verify` for seeded identities and data.
+
+Regression fixtures cover SHA-1/SHA-256 pushes, wrong tips, exact-body
+differences, corrupt LFS, lost acknowledgements, tampered samples and inconsistent
+accounting. These driver checks do not themselves qualify production recovery
+or the 10,000-repository target.
 
 ## Measurement history
 
@@ -824,6 +973,41 @@ on this local provider, not unclean takeover or multiple-node routing.
 The successful Git/LFS windows are short and use small fixtures; they do not
 establish the 8-vCPU Linux reference target, larger transfers, multiple
 gateways, or availability under a mixed workload.
+
+#### Two-gateway diagnostic on the same corpus
+
+Two local Canopy nodes, each with its own signed session and HTTPS peer
+endpoint, reused the complete 10,000-identity RustFS corpus. Requests alternated
+between their HTTP ingresses. These were debug builds on a shared macOS arm64
+host, not the reference Linux node. A bounded 16-client driver scheduled the
+uniform metadata workload at 10 requests/s for 60 seconds against 1,000
+identities; `driver_busy` is an unsent arrival, not a successful request.
+
+| Per-node active limit; RustFS CPU cap | Metadata outcomes / 600 | Scheduled p95 |
+| --- | --- | ---: |
+| 100; 2 CPUs, first window | 489 OK, 110 `driver_busy`, 1 HTTP 503 | 3,580 ms |
+| 100; 2 CPUs, separate repeat | 257 OK, 343 `driver_busy` | 7,730 ms |
+| 100; 4 CPUs | 191 OK, 408 `driver_busy`, 1 HTTP 503 | 17,060 ms |
+| 500; 4 CPUs, first window | 439 OK, 161 `driver_busy` | 5,840 ms |
+| 500; 4 CPUs, same-node repeat | 497 OK, 102 `driver_busy`, 1 HTTP 503 | 5,288 ms |
+
+Increasing only the provider CPU allowance from two to four did not restore
+capacity. The runs were not otherwise isolated, so the table is diagnostic,
+not a controlled A/B performance comparison. In the 500-slot repeat, the
+Directory-owning node had 31-ms median completed-request latency versus 540 ms
+on the other node. Stage logs showed remote Directory authentication and lookup
+p95 near 1.5–1.6 seconds while those stages were much shorter on the owner.
+Cold Cell acquisition and transition tails were also several seconds.
+Repeated canonical reads during live-owner resolution are one identifiable
+piece of remote routing cost; removing one read alone is not expected to solve
+cold activation or the shared Directory Cell bottleneck.
+
+The two-gateway Git/LFS diagnostic also failed the offered-load gate at a
+100-slot limit and two provider CPUs: Git v2 refs completed 243/300,
+full clones 22/30, incremental fetches 14/20, and unique-branch pushes 15/30;
+the remaining scheduled arrivals were predominantly `driver_busy`. These small
+fixtures and short windows do not measure sustained mixed Git/LFS capacity.
+The 10,000-repository two-gateway target remains **unqualified**.
 
 ### Diagnosing metadata latency
 
@@ -1734,7 +1918,7 @@ full-primitive thousand-repository density remain unqualified.
 
 ### Reproducing idle ownership measurements
 
-`examples/benchmark_idle.rs` runs the actual `CanopyServer` with a measured
+`crates/canopy-server/examples/benchmark.rs` runs the actual `CanopyServer` with a measured
 object-store client. It seeds empty SQL repository Cells through authenticated
 HTTP, observes idle windows at increasing active counts, drains the node, then
 starts a fresh local node with the same durable identities and measures them
@@ -1743,15 +1927,17 @@ This tool intentionally makes no Git-throughput or full-primitive capacity claim
 
 Use a caller-owned disposable S3 bucket/prefix and credentials already provided
 through the normal provider environment. Each invocation adds a unique storage
-prefix. The output directory must be new and belong on the mounted workspace
-volume. For this checkout:
+prefix. The output directory must be new and use a local filesystem
+representative of the intended deployment. Build artifacts may use a separate
+volume; do not move live SQLite state there without checking synchronous-write
+performance. For example:
 
 ```bash
 CARGO_INCREMENTAL=0 \
 CARGO_TARGET_DIR="$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f" \
-cargo run --release --locked --example benchmark_idle -- \
+cargo run --release --locked --example benchmark -- \
   s3://disposable-bucket/idle-qualification \
-  "$HOME/Workspace/crabbuild-target/canopy-ae0d6c9f/idle-qualification" \
+  /tmp/canopy-idle-real-store-qualification \
   0,100,500,1000 30
 ```
 
@@ -1760,7 +1946,7 @@ directory. The report labels this provider as in-memory; a passing result
 cannot replace the S3-compatible gate or establish provider throughput.
 
 ```bash
-cargo run --locked --example benchmark_idle -- \
+cargo run --locked --example benchmark -- \
   memory:/// /tmp/canopy-idle-memory-diagnostic 100,500,1000 30
 ```
 
@@ -1874,7 +2060,7 @@ production server code was changed for this measurement.
 
 #### Merged-pin real-store idle qualification
 
-Canopy `ca87eb7` with Cellule `a3fbfb0` ran the unchanged `benchmark_idle`
+Canopy `ca87eb7` with Cellule `a3fbfb0` ran the unchanged `benchmark`
 example against a fresh prefix on local RustFS `1.0.0-beta.8-glibc`. The shared
 macOS arm64 client/server host was not isolated; the RustFS container was capped
 at two CPUs and 4 GiB. The debug example binary SHA-256 was
