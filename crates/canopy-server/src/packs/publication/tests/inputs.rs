@@ -1,6 +1,7 @@
 use super::*;
 mod bound;
 mod custody;
+mod requests;
 use crate::packs::sources::{NativeInputIndex, NativePackDescriptor};
 use canopy_object_storage::artifact::{ArtifactDescriptor, ArtifactStore};
 use tokio::time::{Duration, timeout};
@@ -343,6 +344,52 @@ fn input_checkpoint_sql_pairs_and_immutability_reject_partial_or_replaced_facts(
         "UPDATE catalog_leases SET input_checkpoint=x'01',input_checkpoint_digest=zeroblob(32)",
         [],
     )?;
+    Ok(())
+}
+
+#[test]
+fn input_checkpoint_sql_append_requires_exact_predecessor_unbound_phase_and_revision_capacity()
+-> Result {
+    let connection = rusqlite::Connection::open_in_memory()?;
+    connection.execute_batch(SCHEMA)?;
+    connection.execute("INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,generation,expires_at_ms) VALUES(zeroblob(16),1,zeroblob(16),x'0000000000000001',x'43414e4f505930310000000000000001',NULL,100)", [])?;
+    connection.execute(
+        "UPDATE catalog_leases SET input_checkpoint=x'01',input_checkpoint_digest=zeroblob(32)",
+        [],
+    )?;
+    for invalid in [
+        "UPDATE catalog_leases SET input_checkpoint=x'02',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=1,input_checkpoint_previous_digest=randomblob(32)",
+        "UPDATE catalog_leases SET input_checkpoint=x'02',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=2,input_checkpoint_previous_digest=input_checkpoint_digest",
+        "UPDATE catalog_leases SET input_checkpoint=x'02',input_checkpoint_revision=1,input_checkpoint_previous_digest=input_checkpoint_digest",
+        "UPDATE catalog_leases SET generation=0,input_checkpoint=x'02',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=1,input_checkpoint_previous_digest=input_checkpoint_digest",
+    ] {
+        assert!(connection.execute(invalid, []).is_err(), "{invalid}");
+    }
+    connection.execute_batch("SAVEPOINT bound; UPDATE catalog_leases SET generation=0;")?;
+    assert!(connection.execute("UPDATE catalog_leases SET input_checkpoint=x'02',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=1,input_checkpoint_previous_digest=input_checkpoint_digest", []).is_err());
+    connection.execute_batch("ROLLBACK TO bound; RELEASE bound;")?;
+    for revision in 1i64..=256 {
+        let prior: Vec<u8> = connection.query_row(
+            "SELECT input_checkpoint_digest FROM catalog_leases",
+            [],
+            |row| row.get(0),
+        )?;
+        let bytes = revision.to_be_bytes();
+        let digest = *blake3::hash(&bytes).as_bytes();
+        assert_eq!(connection.execute("UPDATE catalog_leases SET input_checkpoint=?1,input_checkpoint_digest=?2,input_checkpoint_previous_digest=?3,input_checkpoint_revision=?4 WHERE input_checkpoint_digest=?3",rusqlite::params![bytes.as_slice(),digest.as_slice(),prior,revision])?, 1);
+        assert_eq!(connection.execute("UPDATE catalog_leases SET input_checkpoint=input_checkpoint,input_checkpoint_digest=input_checkpoint_digest,input_checkpoint_previous_digest=input_checkpoint_previous_digest,input_checkpoint_revision=input_checkpoint_revision", [])?, 1);
+    }
+    assert!(connection.execute("UPDATE catalog_leases SET input_checkpoint=x'03',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=257,input_checkpoint_previous_digest=input_checkpoint_digest", []).is_err());
+    connection.execute("UPDATE catalog_leases SET generation=0", [])?;
+    assert!(connection.execute("UPDATE catalog_leases SET input_checkpoint=x'04',input_checkpoint_digest=randomblob(32),input_checkpoint_revision=257,input_checkpoint_previous_digest=input_checkpoint_digest", []).is_err());
+    assert_eq!(
+        connection.query_row(
+            "SELECT input_checkpoint_revision FROM catalog_leases",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        256
+    );
     Ok(())
 }
 

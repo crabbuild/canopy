@@ -363,7 +363,11 @@ CREATE TABLE catalog_leases (
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
     input_checkpoint BLOB CHECK(input_checkpoint IS NULL OR length(input_checkpoint) BETWEEN 1 AND 1024),
     input_checkpoint_digest BLOB CHECK(input_checkpoint_digest IS NULL OR length(input_checkpoint_digest) = 32),
+    input_checkpoint_previous_digest BLOB CHECK(input_checkpoint_previous_digest IS NULL OR length(input_checkpoint_previous_digest) = 32),
+    input_checkpoint_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(input_checkpoint_revision)='integer' AND input_checkpoint_revision BETWEEN 0 AND 256),
     CHECK((input_checkpoint IS NULL) = (input_checkpoint_digest IS NULL)),
+    CHECK(input_checkpoint IS NOT NULL OR (input_checkpoint_revision=0 AND input_checkpoint_previous_digest IS NULL)),
+    CHECK((input_checkpoint_revision=0) = (input_checkpoint_previous_digest IS NULL)),
     CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
     CHECK(generation IS NOT NULL OR attestation IS NULL),
     PRIMARY KEY(incarnation, admission_sequence)
@@ -389,9 +393,14 @@ BEGIN SELECT RAISE(ABORT, 'catalog attempt identity is immutable'); END;
 CREATE TRIGGER catalog_lease_attestation_immutable BEFORE UPDATE OF attestation, attestation_digest ON catalog_leases
 WHEN OLD.attestation IS NOT NULL AND (NEW.attestation IS NOT OLD.attestation OR NEW.attestation_digest IS NOT OLD.attestation_digest)
 BEGIN SELECT RAISE(ABORT, 'catalog attempt attestation is immutable'); END;
-CREATE TRIGGER catalog_lease_inputs_immutable BEFORE UPDATE OF input_checkpoint, input_checkpoint_digest ON catalog_leases
-WHEN OLD.input_checkpoint IS NOT NULL AND (NEW.input_checkpoint IS NOT OLD.input_checkpoint OR NEW.input_checkpoint_digest IS NOT OLD.input_checkpoint_digest)
-BEGIN SELECT RAISE(ABORT, 'creating input checkpoint is immutable'); END;
+CREATE TRIGGER catalog_lease_inputs_immutable BEFORE UPDATE OF input_checkpoint, input_checkpoint_digest, input_checkpoint_revision, input_checkpoint_previous_digest ON catalog_leases
+WHEN (OLD.input_checkpoint IS NULL AND (NEW.input_checkpoint_revision!=0 OR NEW.input_checkpoint_previous_digest IS NOT NULL))
+  OR (OLD.input_checkpoint IS NOT NULL AND NOT (
+    (NEW.input_checkpoint IS OLD.input_checkpoint AND NEW.input_checkpoint_digest IS OLD.input_checkpoint_digest AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_previous_digest)
+    OR (OLD.generation IS NULL AND NEW.generation IS NULL AND NEW.input_checkpoint IS NOT NULL AND NEW.input_checkpoint_digest IS NOT NULL
+      AND NEW.input_checkpoint IS NOT OLD.input_checkpoint AND NEW.input_checkpoint_digest IS NOT OLD.input_checkpoint_digest
+      AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision+1 AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_digest)))
+BEGIN SELECT RAISE(ABORT, 'creating input checkpoint requires exact append'); END;
 
 CREATE TABLE catalog_operations (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),

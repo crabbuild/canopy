@@ -109,11 +109,11 @@ impl MetadataSegment {
 }
 
 pub(crate) trait PinnedFile: Send + Sync + 'static {
-    fn path(&self) -> &Path;
+    fn open(&self) -> io::Result<File>;
 }
 impl PinnedFile for MetadataSegment {
-    fn path(&self) -> &Path {
-        MetadataSegment::path(self)
+    fn open(&self) -> io::Result<File> {
+        File::open(MetadataSegment::path(self))
     }
 }
 
@@ -125,7 +125,7 @@ pub(crate) async fn upload_file<T: PinnedFile>(
     digest: [u8; 32],
 ) -> Result<ArtifactDescriptor, MetadataError> {
     let source = tokio::task::spawn_blocking(move || {
-        let file = File::open(owner.path())?;
+        let file = owner.open()?;
         if file.metadata()?.len() != size {
             return Err(MetadataError::Integrity);
         }
@@ -208,7 +208,7 @@ struct DownloadSpool {
 }
 
 // Unlike a bare tokio::fs::File, each pending blocking task owns its admission
-// pin. Read handles have independent offsets, including concurrent uploads.
+// pin. Each stream serializes its reads; its owner defines how handles open.
 struct ReadPin<T: PinnedFile> {
     file: Mutex<File>,
     _owner: Arc<T>,

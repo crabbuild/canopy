@@ -9,6 +9,7 @@ use crate::packs::{
     },
     sources::{NativeInputIndex, NativeInputRoot, NativePackDescriptor},
 };
+use crate::{git_gateway::preflight::SavedPushRequest, packs::wire_request::WireRequestRoot};
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_runtime::{CellClient, CellTarget, InvocationError, primitives::sql::SqlCell};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ mod custody;
 pub(in crate::packs) use custody::RetainedNativeInput;
 pub(super) use custody::verify_digest;
 
-const DOMAIN: &[u8] = b"canopy.staged-native-inputs.v1\0";
+const DOMAIN: &[u8] = b"canopy.staged-native-inputs.v2\0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeInputCertificate(CertificateEnvelope);
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,7 +29,9 @@ struct Inputs {
     actor: String,
     format: ObjectFormat,
     root: Option<NativeInputRoot>,
+    wire_request: Option<WireRequestRoot>,
     source: Option<(PreparationToken, [u8; 32])>,
+    previous: Option<[u8; 32]>,
 }
 impl Inputs {
     fn validate(&self) -> Result<(), CodecError> {
@@ -41,12 +44,21 @@ impl Inputs {
                 return Err(CodecError::Invalid("input root namespace"));
             }
         }
+        if let Some(wire) = self.wire_request {
+            wire.validate()?;
+            if self.source.is_none() && wire.operation() != self.token.artifact_operation {
+                return Err(CodecError::Invalid("wire request namespace"));
+            }
+        }
         if self.source.is_some_and(|(source, _)| {
             source.repository != self.token.repository
                 || source.operation != self.token.operation
                 || source.request_digest != self.token.request_digest
         }) {
             return Err(CodecError::Invalid("input adoption source"));
+        }
+        if self.previous == Some([0; 32]) {
+            return Err(CodecError::Invalid("input predecessor"));
         }
         Ok(())
     }
@@ -64,10 +76,18 @@ impl WireValue for Inputs {
         if let Some(root) = self.root {
             reference(e, root)?;
         }
+        e.write_bool(self.wire_request.is_some())?;
+        if let Some(root) = self.wire_request {
+            root.encode(e)?;
+        }
         e.write_bool(self.source.is_some())?;
         if let Some((token, digest)) = self.source {
             token.encode(e)?;
             e.write_bytes(&digest)?;
+        }
+        e.write_bool(self.previous.is_some())?;
+        if let Some(previous) = self.previous {
+            e.write_bytes(&previous)?;
         }
         Ok(())
     }
@@ -89,8 +109,18 @@ impl WireValue for Inputs {
         } else {
             None
         };
+        let wire_request = if d.read_bool()? {
+            Some(WireRequestRoot::decode(d)?)
+        } else {
+            None
+        };
         let source = if d.read_bool()? {
             Some((PreparationToken::decode(d)?, wire_fixed(d)?))
+        } else {
+            None
+        };
+        let previous = if d.read_bool()? {
+            Some(wire_fixed(d)?)
         } else {
             None
         };
@@ -101,7 +131,9 @@ impl WireValue for Inputs {
             actor,
             format,
             root,
+            wire_request,
             source,
+            previous,
         };
         value.validate()?;
         Ok(value)
@@ -145,6 +177,15 @@ impl NativeInputCertificate {
     }
     pub fn root(&self) -> Result<Option<NativeInputRoot>, CodecError> {
         Ok(self.0.data::<Inputs>()?.root)
+    }
+    pub fn wire_request(&self) -> Result<Option<WireRequestRoot>, CodecError> {
+        Ok(self.0.data::<Inputs>()?.wire_request)
+    }
+    pub(super) fn checkpoint_lineage(&self) -> Result<([u8; 32], Option<[u8; 32]>), CodecError> {
+        Ok((
+            *blake3::hash(&self.bytes()?).as_bytes(),
+            self.0.data::<Inputs>()?.previous,
+        ))
     }
     fn bytes(&self) -> Result<Vec<u8>, CodecError> {
         let mut e = BoundedEncoder::new(CERTIFICATE_BYTES)?;
@@ -191,6 +232,62 @@ pub enum InputCheckpointError {
     Retained(#[source] Box<InvocationError<Option<NativeInputCertificate>>>),
 }
 impl StagingContext {
+    pub(crate) async fn check_push_identity(
+        &self,
+        expected: &CellTarget,
+        input: &BeginRequest,
+        format: ObjectFormat,
+    ) -> Result<(), InputCheckpointError> {
+        self.ensure_live()?;
+        let (client, target, check) = self.capability();
+        if expected != target
+            || input.repository != check.token.repository
+            || input.operation != check.token.operation
+            || input.request_digest != check.token.request_digest
+            || input.actor != check.actor
+            || format != self.format()
+        {
+            return Err(StagingError::Context.into());
+        }
+        let live = client
+            .query::<CheckStaging>(target, None, check.clone())
+            .await
+            .map_err(|e| InputCheckpointError::Custody(Box::new(e)))?
+            .output
+            .ok_or(StagingError::Inactive)?;
+        if live.token != check.token || live.format != format {
+            return Err(StagingError::Context.into());
+        }
+        self.ensure_live()?;
+        Ok(())
+    }
+    pub(crate) async fn push_checkpoint(
+        &self,
+    ) -> Result<(NativeInputCertificate, CellTarget, LeaseCheck, ObjectFormat), InputCheckpointError>
+    {
+        self.ensure_live()?;
+        let (client, target, check) = self.capability();
+        let proof = client
+            .query::<CheckStagedInputs>(target, None, check.clone())
+            .await
+            .map_err(|e| InputCheckpointError::Retained(Box::new(e)))?;
+        let value = proof.output.ok_or(StagingError::Inactive)?;
+        let inputs: Inputs = value.0.data()?;
+        if value.scoped_check(target)? != check || inputs.format != self.format() {
+            return Err(StagingError::Context.into());
+        }
+        let live = client
+            .query::<CheckStaging>(target, Some(proof.receipt), check.clone())
+            .await
+            .map_err(|e| InputCheckpointError::Custody(Box::new(e)))?
+            .output
+            .ok_or(StagingError::Inactive)?;
+        if live.token != check.token || live.format != self.format() {
+            return Err(StagingError::Context.into());
+        }
+        self.ensure_live()?;
+        Ok((value, target.clone(), check, self.format()))
+    }
     /// Seals an authenticated descriptor inventory in the creating namespace.
     /// The iterator is consumed incrementally; it need not own a complete list.
     /// Pair existence/decoding is independently established by PhysicalVerifier.
@@ -198,6 +295,34 @@ impl StagingContext {
         &self,
         store: Arc<ArtifactStore>,
         inputs: I,
+    ) -> Result<NativeInputCertificate, InputCheckpointError>
+    where
+        I: IntoIterator<Item = NativePackDescriptor>,
+        I::IntoIter: Send,
+    {
+        self.seal_inputs(store, inputs, None).await
+    }
+    /// Retains the original encoded push alongside the native inventory in the
+    /// same immutable checkpoint. Neither input establishes publication proof.
+    pub async fn seal_push_inputs<I>(
+        &self,
+        store: Arc<ArtifactStore>,
+        inputs: I,
+        request: SavedPushRequest,
+    ) -> Result<NativeInputCertificate, InputCheckpointError>
+    where
+        I: IntoIterator<Item = NativePackDescriptor>,
+        I::IntoIter: Send,
+    {
+        let (_, target, check) = self.capability();
+        let wire = request.scoped_root(target, &check, self.format())?;
+        self.seal_inputs(store, inputs, Some(wire)).await
+    }
+    async fn seal_inputs<I>(
+        &self,
+        store: Arc<ArtifactStore>,
+        inputs: I,
+        wire_request: Option<WireRequestRoot>,
     ) -> Result<NativeInputCertificate, InputCheckpointError>
     where
         I: IntoIterator<Item = NativePackDescriptor>,
@@ -217,7 +342,7 @@ impl StagingContext {
             codec::artifact_valid(native.operation)?;
             root = Some(index.insert(root, token.artifact_operation, native).await?);
         }
-        self.sign_inputs(root, None).await
+        self.sign_inputs(root, wire_request, None, None).await
     }
     /// Retains an exact immutable input root under the successor pin. Adoption
     /// does not copy an input inventory or recertify native bodies.
@@ -228,13 +353,62 @@ impl StagingContext {
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
         self.ensure_live()?;
         let (client, target, check) = self.capability();
-        let (root, source) = adoption(client, target, &check, self.format(), store, prior).await?;
-        self.sign_inputs(root, Some(source)).await
+        let (root, wire_request, source) =
+            adoption(client, target, &check, self.format(), store, prior).await?;
+        self.sign_inputs(root, wire_request, Some(source), None)
+            .await
+    }
+    /// Path-copy the registered input tree, preserving its request and every
+    /// old descriptor. Command 29 compares the exact prior checkpoint digest.
+    pub async fn append_native_inputs<I>(
+        &self,
+        store: Arc<ArtifactStore>,
+        prior: &NativeInputCertificate,
+        inputs: I,
+    ) -> Result<NativeInputCertificate, InputCheckpointError>
+    where
+        I: IntoIterator<Item = NativePackDescriptor>,
+        I::IntoIter: Send,
+    {
+        let (current, target, check, format) = self.push_checkpoint().await?;
+        if &current != prior || store.repository() != check.token.repository {
+            return Err(StagingError::Context.into());
+        }
+        let data: Inputs = prior.0.data()?;
+        let index = NativeInputIndex::new(store, format);
+        let mut root = data.root;
+        for native in inputs {
+            self.ensure_live()?;
+            if native.operation != check.token.artifact_operation {
+                return Err(StagingError::Context.into());
+            }
+            root = Some(
+                index
+                    .insert(root, check.token.artifact_operation, native)
+                    .await?,
+            );
+        }
+        let (current, _, _, _) = self.push_checkpoint().await?;
+        if &current != prior || prior.scoped_check(&target)? != check {
+            return Err(StagingError::Context.into());
+        }
+        if root == data.root {
+            return Ok(prior.clone());
+        }
+        self.sign_inputs(
+            root,
+            data.wire_request,
+            data.source,
+            Some(*blake3::hash(&prior.bytes()?).as_bytes()),
+        )
+        .await
     }
     async fn sign_inputs(
         &self,
         root: Option<NativeInputRoot>,
+        wire_request: Option<WireRequestRoot>,
         source: Option<(PreparationToken, [u8; 32])>,
+        previous: Option<[u8; 32]>,
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
         let token = self.token()?;
         let (client, target, check) = self.capability();
@@ -247,12 +421,45 @@ impl StagingContext {
         if live.token != token || live.format != self.format() {
             return Err(StagingError::Context.into());
         }
-        let proof = issue_inputs(client, target, check, self.format(), root, source).await?;
+        let proof = issue_inputs(
+            client,
+            target,
+            Inputs {
+                tenant: *target.tenant().as_bytes(),
+                application: *target.application().as_bytes(),
+                token: check.token,
+                actor: check.actor,
+                format: self.format(),
+                root,
+                wire_request,
+                source,
+                previous,
+            },
+        )
+        .await?;
         self.ensure_live()?;
         Ok(proof)
     }
 }
 impl PreparationSession {
+    pub(crate) async fn push_checkpoint(
+        &self,
+    ) -> Result<(NativeInputCertificate, CellTarget, LeaseCheck, ObjectFormat), InputCheckpointError>
+    {
+        let (lease, _) = self.live_lease()?;
+        let (client, target, check) = self.capability();
+        let proof = client
+            .query::<CheckStagedInputs>(target, None, check.clone())
+            .await
+            .map_err(|e| InputCheckpointError::Retained(Box::new(e)))?;
+        let value = proof.output.ok_or(PreparationBaseError::Inactive)?;
+        let inputs: Inputs = value.0.data()?;
+        if value.scoped_check(target)? != *check || inputs.format != lease.format {
+            return Err(PreparationBaseError::Context.into());
+        }
+        self.refresh(proof.receipt).await?;
+        Ok((value, target.clone(), check.clone(), lease.format))
+    }
     /// Recover registered native inputs after a bound preparation Claim. Its
     /// immutable generation floor and input custody are independent facts.
     pub async fn adopt_native_inputs(
@@ -262,7 +469,8 @@ impl PreparationSession {
     ) -> Result<NativeInputCertificate, InputCheckpointError> {
         let (lease, _) = self.live_lease()?;
         let (client, target, check) = self.capability();
-        let (root, source) = adoption(client, target, check, lease.format, store, prior).await?;
+        let (root, wire_request, source) =
+            adoption(client, target, check, lease.format, store, prior).await?;
         let current = client
             .query::<CheckPreparation>(target, None, check.clone())
             .await
@@ -278,10 +486,17 @@ impl PreparationSession {
         let proof = issue_inputs(
             client,
             target,
-            check.clone(),
-            lease.format,
-            root,
-            Some(source),
+            Inputs {
+                tenant: *target.tenant().as_bytes(),
+                application: *target.application().as_bytes(),
+                token: check.token,
+                actor: check.actor.clone(),
+                format: lease.format,
+                root,
+                wire_request,
+                source: Some(source),
+                previous: None,
+            },
         )
         .await?;
         self.live_lease()?;
@@ -295,7 +510,14 @@ async fn adoption(
     format: ObjectFormat,
     store: Arc<ArtifactStore>,
     prior: &NativeInputCertificate,
-) -> Result<(Option<NativeInputRoot>, (PreparationToken, [u8; 32])), InputCheckpointError> {
+) -> Result<
+    (
+        Option<NativeInputRoot>,
+        Option<WireRequestRoot>,
+        (PreparationToken, [u8; 32]),
+    ),
+    InputCheckpointError,
+> {
     let data: Inputs = prior.0.data()?;
     if store.repository() != check.token.repository
         || data.token.repository != check.token.repository
@@ -324,39 +546,37 @@ async fn adoption(
         return Err(StagingError::Inactive.into());
     }
     if let Some(root) = data.root {
-        NativeInputIndex::new(store, format)
+        NativeInputIndex::new(Arc::clone(&store), format)
             .validate_root(root)
             .await?;
+    }
+    if let Some(root) = data.wire_request {
+        let record = root
+            .read(&store)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        if !record.matches(target, check, format) {
+            return Err(StagingError::Context.into());
+        }
     }
     // The checkpoint's exact immutable root is retained by the source pin and
     // checked again in the destination write. No historical leaf scan/copy is
     // needed to transfer custody. Physical reconstruction must exhaust it.
     Ok((
         data.root,
+        data.wire_request,
         (data.token, *blake3::hash(&prior.bytes()?).as_bytes()),
     ))
 }
 async fn issue_inputs(
     client: &CellClient,
     target: &CellTarget,
-    check: LeaseCheck,
-    format: ObjectFormat,
-    root: Option<NativeInputRoot>,
-    source: Option<(PreparationToken, [u8; 32])>,
+    data: Inputs,
 ) -> Result<NativeInputCertificate, InputCheckpointError> {
-    let result = SqlCell::<RepositoryModule>::new(client.clone(),target.clone())?.query(None,statement("SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2",vec![blob(check.token.repository),SqlValue::Text(format.as_str().into())])).await.map_err(|e|InputCheckpointError::Query(Box::new(e)))?;
+    let result=SqlCell::<RepositoryModule>::new(client.clone(),target.clone())?.query(None,statement("SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2",vec![blob(data.token.repository),SqlValue::Text(data.format.as_str().into())])).await.map_err(|e|InputCheckpointError::Query(Box::new(e)))?;
     let seed = attestation::seed(&result.output)?;
     Ok(NativeInputCertificate(CertificateEnvelope::seal(
-        &Inputs {
-            tenant: *target.tenant().as_bytes(),
-            application: *target.application().as_bytes(),
-            token: check.token,
-            actor: check.actor,
-            format,
-            root,
-            source,
-        },
-        &seed,
+        &data, &seed,
     )?))
 }
 fn denied(reason: PreparationDenial) -> CommandResult<StagingReply> {
@@ -424,6 +644,9 @@ impl Command for RegisterStagedInputs {
         };
         match (old, digest) {
             (SqlValue::Null, SqlValue::Null) => {
+                if data.previous.is_some() {
+                    return Ok(denied(PreparationDenial::Conflict));
+                }
                 if let Some((source, expected)) = data.source {
                     let retained = context.sql(&checkpoint(source)?)?;
                     let Some(
@@ -453,6 +676,7 @@ impl Command for RegisterStagedInputs {
                         || previous.tenant != data.tenant
                         || previous.application != data.application
                         || previous.root != data.root
+                        || previous.wire_request != data.wire_request
                     {
                         return Ok(denied(PreparationDenial::Conflict));
                     }
@@ -461,6 +685,40 @@ impl Command for RegisterStagedInputs {
             }
             (SqlValue::Blob(old), SqlValue::Blob(digest))
                 if old == &bytes && digest.as_slice() == blake3::hash(&bytes).as_bytes() => {}
+            (SqlValue::Blob(old), SqlValue::Blob(digest))
+                if data.previous == Some(*blake3::hash(old).as_bytes())
+                    && digest.as_slice() == blake3::hash(old).as_bytes() =>
+            {
+                // Only the private append issuer can attest complete preservation
+                // of the old tree. SQL still compares the exact predecessor and
+                // rejects updates after Bind or beyond the bounded revision cap.
+                let prior = NativeInputCertificate::from_bytes(old)?;
+                let prior_data: Inputs = prior.0.data()?;
+                if row.generation.is_some()
+                    || !prior.0.authenticated(&seed)
+                    || prior_data.token != data.token
+                    || prior_data.actor != row.actor
+                    || prior_data.tenant != data.tenant
+                    || prior_data.application != data.application
+                    || prior_data.format != data.format
+                    || prior_data.source != data.source
+                    || prior_data.wire_request != data.wire_request
+                    || data.root == prior_data.root
+                    || data.root.is_none()
+                    || prior_data.root.is_some_and(|old| {
+                        data.root.is_none_or(|new| {
+                            new.record_count < old.record_count
+                                || new.object_count < old.object_count
+                        })
+                    })
+                {
+                    return Ok(denied(PreparationDenial::Conflict));
+                }
+                let changed=context.sql(&statement("UPDATE catalog_leases SET input_checkpoint=?1,input_checkpoint_digest=?2,input_checkpoint_previous_digest=?3,input_checkpoint_revision=input_checkpoint_revision+1 WHERE incarnation=?4 AND admission_sequence=?5 AND input_checkpoint_digest=?3 AND input_checkpoint_revision<256",vec![blob(&bytes),blob(blake3::hash(&bytes).as_bytes()),blob(digest),blob(data.token.owner.incarnation.as_bytes()),number(data.token.attempt)?]))?;
+                if changed.first().is_none_or(|set| set.rows_affected != 1) {
+                    return Ok(denied(PreparationDenial::Capacity));
+                }
+            }
             _ => return Ok(denied(PreparationDenial::Conflict)),
         }
         Ok(CommandResult::Success(StagingReply::Granted(Box::new(

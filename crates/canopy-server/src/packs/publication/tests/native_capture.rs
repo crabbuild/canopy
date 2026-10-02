@@ -53,20 +53,6 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         )
         .await?;
         let cache_weak = Arc::downgrade(&backend.cache);
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
-        let ready = ReadyStaging::new(
-            fixture.client(),
-            fixture.target.clone(),
-            fixture.begin([160; 16]),
-            identity()?,
-        )
-        .await?;
-        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
-        let StagingState::Active(initial) = timeout(Duration::from_secs(10), ticket.wait()).await?
-        else {
-            return Err("staging not active".into());
-        };
         let mut body = Vec::new();
         packet(
             &mut body,
@@ -80,8 +66,8 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         );
         body.extend_from_slice(b"0000");
         body.extend_from_slice(&std::fs::read(pack_path)?);
-        let response = backend
-            .run_native_receive(GitHttpRequest {
+        let encoded = crate::git_gateway::preflight::EncodedPush::new(
+            GitHttpRequest {
                 method: "POST".into(),
                 path_info: "/repo.git/git-receive-pack".into(),
                 query: String::new(),
@@ -97,8 +83,83 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 )
                 .await?,
                 authenticated: true,
-            })
-            .await?;
+            },
+            &fixture.target,
+            fixture.repository,
+            format,
+            "owner",
+            [160; 16],
+        )
+        .await?;
+        let request_digest = encoded.identity().request_digest;
+        let coordinator =
+            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let ready = ReadyStaging::new(
+            fixture.client(),
+            fixture.target.clone(),
+            encoded.identity().clone(),
+            identity()?,
+        )
+        .await?;
+        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+        let StagingState::Active(initial) = timeout(Duration::from_secs(10), ticket.wait()).await?
+        else {
+            return Err("staging not active".into());
+        };
+        assert_eq!(initial.token.request_digest, request_digest);
+        let store = Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        ));
+        let upload_store = Arc::clone(&store);
+        let retained = ticket.spawn(move |context| async move {
+            let (encoded, saved) = encoded
+                .retain(&context, &upload_store)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let request = context
+                .seal_push_inputs(upload_store, std::iter::empty(), saved)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            Ok((encoded, request))
+        })?;
+        let (encoded, request_checkpoint) =
+            retained.wait().await.map_err(|error| error.to_string())?;
+        ticket
+            .register_inputs(request_checkpoint.clone(), identity()?)
+            .map_err(|(error, _)| error)?
+            .wait()
+            .await
+            .map_err(|error| error.to_string())?;
+        assert!(request_checkpoint.root()?.is_none());
+        assert!(request_checkpoint.wire_request()?.is_some());
+        let producer = backend.clone();
+        let upload_store = Arc::clone(&store);
+        let request_root = work_root.path().to_owned();
+        let request_disk = disk.clone();
+        let task = ticket.spawn(move |context| async move {
+            let preflight = encoded
+                .decode(&request_root, &request_disk, None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let response = producer
+                .run_native_receive(preflight.into_native_request())
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let inputs = producer
+                .stage_native_packs(&context, &upload_store, physical_limits())
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let certificate = context
+                .append_native_inputs(upload_store, &request_checkpoint, inputs.iter().copied())
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            Ok((inputs, certificate, response))
+        })?;
+        let (inputs, input_certificate, response) = task
+            .wait()
+            .await
+            .map_err(|error| format!("capture: {error:?}"))?;
         assert_eq!(response.status, 200);
         assert!(
             response
@@ -111,27 +172,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             std::fs::read_dir(backend.git_dir().join("objects"))?.count(),
             2
         );
-        let store = Arc::new(ArtifactStore::new(
-            Arc::new(InMemory::new()),
-            fixture.repository,
-        ));
-        let producer = backend.clone();
-        let upload_store = Arc::clone(&store);
-        let task = ticket.spawn(move |context| async move {
-            let inputs = producer
-                .stage_native_packs(&context, &upload_store, physical_limits())
-                .await
-                .map_err(|error| StagingError::Input(Box::new(error)))?;
-            let certificate = context
-                .seal_native_inputs(upload_store, inputs.iter().copied())
-                .await
-                .map_err(|error| StagingError::Input(Box::new(error)))?;
-            Ok((inputs, certificate))
-        })?;
-        let (inputs, input_certificate) = task
-            .wait()
-            .await
-            .map_err(|error| format!("capture: {error:?}"))?;
+        assert!(input_certificate.wire_request()?.is_some());
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].operation, initial.token.artifact_operation);
         assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
@@ -157,6 +198,33 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         );
         drop((backend, source));
         assert!(cache_weak.upgrade().is_none());
+        cleaned(work_root.path(), &disk).await?;
+        let recover_store = store.clone();
+        let recover_root = work_root.path().to_owned();
+        let recover_disk = disk.clone();
+        let recovered = ticket.spawn(move |context| async move {
+            let encoded = context
+                .reopen_push_request(&recover_store, &recover_root, &recover_disk, None, None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            assert_eq!(encoded.identity().request_digest, request_digest);
+            let request = encoded
+                .decode(&recover_root, &recover_disk, None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?
+                .into_native_request();
+            assert!(
+                request
+                    .body
+                    .packet_prefix(4096)
+                    .await
+                    .map_err(|error| StagingError::Input(Box::new(error)))?
+                    .windows(b"refs/heads/main".len())
+                    .any(|part| part == b"refs/heads/main")
+            );
+            Ok(())
+        })?;
+        recovered.wait().await.map_err(|error| error.to_string())?;
         cleaned(work_root.path(), &disk).await?;
         let physical_root = Arc::new(tempfile::TempDir::new()?);
         let physical_disk = DiskBudget::new(256 << 20);

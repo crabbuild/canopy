@@ -13,6 +13,9 @@ use std::{
 
 use crate::AdmissionPermit;
 use axum::body::Body;
+use canopy_object_storage::artifact::{
+    ArtifactDescriptor, ArtifactError, ArtifactKey, ArtifactKind, ArtifactRead, ArtifactStore,
+};
 use cellule_ltx::{DiskBudget, DiskReservation};
 use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +43,8 @@ pub enum InputError {
     Budget(#[from] cellule_ltx::LtxError),
     #[error("Git request spool task failed")]
     Task(#[from] tokio::task::JoinError),
+    #[error("Git request artifact failed")]
+    Artifact(#[from] crate::packs::metadata::MetadataError),
 }
 
 struct Spool {
@@ -247,12 +252,18 @@ impl GitInput {
         Ok(Stdio::from(self.spool.file.try_clone()?))
     }
 
-    pub(crate) async fn digest(&self, mut hash: blake3::Hasher) -> Result<[u8; 32], InputError> {
+    pub(crate) async fn digest(
+        &self,
+        mut hash: blake3::Hasher,
+    ) -> Result<([u8; 32], [u8; 32]), InputError> {
         // Preserve the canonical length-prefixed HTTP digest without keeping the
         // body in memory. Only this pre-execution pass shares the file cursor.
         hash.update(&self.size.to_le_bytes());
         let spool = Arc::clone(&self.spool);
         Ok(tokio::task::spawn_blocking(move || {
+            // The raw artifact digest shares this scan with the scoped request
+            // digest. Upload still independently verifies the immutable bytes.
+            let mut content = blake3::Hasher::new();
             let mut file = &spool.file;
             file.rewind()?;
             let mut buffer = [0; CHUNK_BYTES];
@@ -262,11 +273,103 @@ impl GitInput {
                     break;
                 }
                 hash.update(&buffer[..count]);
+                content.update(&buffer[..count]);
             }
             file.rewind()?;
-            Ok::<_, std::io::Error>(*hash.finalize().as_bytes())
+            Ok::<_, std::io::Error>((*hash.finalize().as_bytes(), *content.finalize().as_bytes()))
         })
         .await??)
+    }
+
+    /// Consume the observer while uploading: canceled blocking reads keep the
+    /// spool/account pin, and no remaining caller can race its shared cursor.
+    pub(crate) async fn retain(
+        self,
+        store: &ArtifactStore,
+        operation: [u8; 16],
+        digest: [u8; 32],
+    ) -> Result<(Self, ArtifactDescriptor), InputError> {
+        let descriptor = crate::packs::metadata::transport::upload_file(
+            Arc::new(SpoolPin(Arc::clone(&self.spool))),
+            store,
+            ArtifactKey {
+                operation,
+                binding_digest: digest,
+                kind: ArtifactKind::Request,
+            },
+            self.size,
+            digest,
+        )
+        .await?;
+        (&self.spool.file).rewind()?;
+        Ok((self, descriptor))
+    }
+    pub(crate) async fn reopen(
+        reader: ArtifactRead,
+        root: &Path,
+        budget: &DiskBudget,
+        limit: Option<u64>,
+        admission: Option<Arc<AdmissionPermit>>,
+    ) -> Result<Self, InputError> {
+        Self::receive(
+            Body::from_stream(ArtifactStream {
+                reader: Some(reader),
+                job: None,
+            }),
+            root,
+            budget,
+            limit,
+            admission,
+        )
+        .await
+    }
+}
+
+struct SpoolPin(Arc<Spool>);
+impl crate::packs::metadata::transport::PinnedFile for SpoolPin {
+    fn open(&self) -> io::Result<File> {
+        self.0.file.try_clone()
+    }
+}
+type ArtifactJob = Pin<
+    Box<
+        dyn std::future::Future<
+                Output = (ArtifactRead, Result<Option<bytes::Bytes>, ArtifactError>),
+            > + Send,
+    >,
+>;
+struct ArtifactStream {
+    reader: Option<ArtifactRead>,
+    job: Option<ArtifactJob>,
+}
+impl Stream for ArtifactStream {
+    type Item = Result<bytes::Bytes, ArtifactError>;
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.job.is_none() {
+            let Some(mut reader) = self.reader.take() else {
+                return std::task::Poll::Ready(None);
+            };
+            self.job = Some(Box::pin(async move {
+                let result = reader.next().await;
+                (reader, result)
+            }));
+        }
+        let std::task::Poll::Ready((reader, result)) = self.job.as_mut().unwrap().as_mut().poll(cx)
+        else {
+            return std::task::Poll::Pending;
+        };
+        self.job = None;
+        match result {
+            Ok(Some(bytes)) => {
+                self.reader = Some(reader);
+                std::task::Poll::Ready(Some(Ok(bytes)))
+            }
+            Ok(None) => std::task::Poll::Ready(None),
+            Err(error) => std::task::Poll::Ready(Some(Err(error))),
+        }
     }
 }
 

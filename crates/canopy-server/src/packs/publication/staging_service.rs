@@ -633,6 +633,7 @@ struct InputRegistration {
     request: Mutex<Option<(NativeInputCertificate, MutationIdentity)>>,
     result: watch::Sender<Option<Result<Receipt, Arc<StagingError>>>>,
     bound_digest: Option<[u8; 32]>,
+    checkpoint_digest: [u8; 32],
 }
 impl InputRegistration {
     fn finish(&self, result: Result<Receipt, Arc<StagingError>>) {
@@ -690,6 +691,10 @@ impl StagingTicket {
             Ok(check) => check,
             Err(_) => return Err((StagingError::Context, Box::new(proof))),
         };
+        let (checkpoint_digest, predecessor) = match proof.checkpoint_lineage() {
+            Ok(value) => value,
+            Err(_) => return Err((StagingError::Context, Box::new(proof))),
+        };
         let local = self.job.local.lock().expect("staging local");
         let bound = local.bound.is_some();
         if local.fenced
@@ -722,13 +727,18 @@ impl StagingTicket {
             None
         };
         let mut checkpoint = self.job.checkpoint.lock().expect("staging checkpoint");
-        if checkpoint.is_some() {
+        if let Some(old) = checkpoint.as_ref()
+            && (bound
+                || predecessor != Some(old.checkpoint_digest)
+                || !old.result.borrow().as_ref().is_some_and(Result::is_ok))
+        {
             return Err((StagingError::Duplicate, Box::new(proof)));
         }
         let registration = Arc::new(InputRegistration {
             request: Mutex::new(Some((proof, identity))),
             result: watch::channel(None).0,
             bound_digest: digest,
+            checkpoint_digest,
         });
         *checkpoint = Some(Arc::clone(&registration));
         self.job.changed.notify_one();

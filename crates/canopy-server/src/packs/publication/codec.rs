@@ -4,7 +4,7 @@ use crate::packs::directory::index::codec::fixed;
 fn invalid() -> CodecError {
     CodecError::Invalid("invalid preparation context")
 }
-pub(super) fn artifact_valid(operation: [u8; 16]) -> Result<(), CodecError> {
+pub(in crate::packs) fn artifact_valid(operation: [u8; 16]) -> Result<(), CodecError> {
     let sequence = u64::from_be_bytes(operation[8..].try_into().map_err(|_| invalid())?);
     if &operation[..8] != b"CANOPY01" || sequence == 0 || sequence > i64::MAX as u64 {
         return Err(invalid());

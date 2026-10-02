@@ -129,8 +129,8 @@ pub struct DirectoryRun {
     descriptor: RunDescriptor,
 }
 impl PinnedFile for DirectoryRun {
-    fn path(&self) -> &Path {
-        self.admitted.file().path()
+    fn open(&self) -> std::io::Result<std::fs::File> {
+        std::fs::File::open(self.path())
     }
 }
 impl DirectoryRun {
@@ -194,7 +194,7 @@ impl DirectoryRun {
         self.descriptor
     }
     pub fn path(&self) -> &Path {
-        PinnedFile::path(self)
+        self.admitted.file().path()
     }
     fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MetadataError> {
         self.connection.lock().map_err(|_| MetadataError::Integrity)

@@ -90,7 +90,13 @@ async fn chunked_input_preserves_digest_and_rewinds_for_git() -> Result<()> {
     let mut expected = prefix.clone();
     expected.update(&6u64.to_le_bytes());
     expected.update(b"abcdef");
-    assert_eq!(input.digest(prefix).await?, *expected.finalize().as_bytes());
+    assert_eq!(
+        input.digest(prefix).await?,
+        (
+            *expected.finalize().as_bytes(),
+            *blake3::hash(b"abcdef").as_bytes()
+        )
+    );
     let mut bytes = Vec::new();
     (&input.spool.file).read_to_end(&mut bytes)?;
     assert_eq!(bytes, b"abcdef");
@@ -223,7 +229,7 @@ async fn gzip_members_preserve_wire_digest_and_release_encoded_admission() -> Re
     )
     .await?;
     assert_eq!(
-        input.digest(blake3::Hasher::new()).await?,
+        input.digest(blake3::Hasher::new()).await?.0,
         *expected.finalize().as_bytes()
     );
     let decoded = input
@@ -430,4 +436,80 @@ async fn progressing_upload_outlives_the_idle_deadline() -> Result<()> {
     drop(sender);
     assert_eq!(upload.await??.size(), 3);
     Ok(())
+}
+
+#[test]
+fn cancelling_queued_request_hash_or_retention_keeps_spool_and_admission() -> Result<()> {
+    use std::future::Future;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    runtime.block_on(async {
+        for hashing in [true, false] {
+            let directory = tempfile::TempDir::new()?;
+            let budget = DiskBudget::new(1024);
+            let transfers = crate::admission::AccountAdmission::new(2, "total", "account");
+            let permit = Arc::new(transfers.acquire(crate::ReadIdentity::Anonymous).await?);
+            let raw = b"anonymous retained request";
+            let input = GitInput::receive(
+                Body::from(raw.as_slice()),
+                directory.path(),
+                &budget,
+                None,
+                Some(permit),
+            )
+            .await?;
+            let weak = Arc::downgrade(&input.spool);
+            let (entered, ready) = tokio::sync::oneshot::channel();
+            let (release, held) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = entered.send(());
+                held.recv()
+            });
+            ready.await?;
+            let store =
+                ArtifactStore::new(Arc::new(object_store::memory::InMemory::new()), [1; 16]);
+            let mut work = Box::pin(async move {
+                if hashing {
+                    input.digest(blake3::Hasher::new()).await?;
+                } else {
+                    input
+                        .retain(&store, [2; 16], *blake3::hash(raw).as_bytes())
+                        .await?;
+                }
+                Ok::<_, InputError>(())
+            });
+            let pending = poll_fn(|cx| Poll::Ready(work.as_mut().poll(cx).is_pending())).await;
+            drop(work);
+            let charged = budget.used();
+            let retained = weak.upgrade().is_some();
+            let available = transfers
+                .acquire(crate::ReadIdentity::Anonymous)
+                .await
+                .is_ok();
+            // Release before assertions so a failed assertion cannot strand the
+            // only blocking thread during runtime shutdown.
+            release.send(())?;
+            blocker.await??;
+            assert!(pending);
+            assert_eq!(charged, raw.len() as u64);
+            assert!(retained);
+            assert!(!available);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while budget.used() != 0 || weak.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            assert!(
+                transfers
+                    .acquire(crate::ReadIdentity::Anonymous)
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+        }
+        Ok(())
+    })
 }

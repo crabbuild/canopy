@@ -17,7 +17,12 @@ async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnation
     let artifacts = ArtifactStore::new(Arc::clone(&store), [1; 16]);
     let body = b"immutable catalog fixture";
     let digest = *blake3::hash(body).as_bytes();
-    for kind in [ArtifactKind::DirectoryRun, ArtifactKind::CatalogNode] {
+    for kind in [
+        ArtifactKind::DirectoryRun,
+        ArtifactKind::CatalogNode,
+        ArtifactKind::Request,
+        ArtifactKind::RequestRoot,
+    ] {
         let old = ArtifactKey {
             operation: [2; 16],
             binding_digest: digest,
@@ -40,7 +45,16 @@ async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnation
             .put(new, body.len() as u64, digest, &mut body.as_slice())
             .await?;
         let path = artifacts.path(old, digest)?;
-        assert!(path.as_ref().contains("/git-catalogs/"));
+        assert!(path.as_ref().contains(match kind {
+            ArtifactKind::Request | ArtifactKind::RequestRoot => "/git-inputs/",
+            _ => "/git-catalogs/",
+        }));
+        assert_eq!(
+            descriptor,
+            artifacts
+                .put(old, body.len() as u64, digest, &mut body.as_slice())
+                .await?
+        );
         store.delete(&external::part(&path, 0)).await?;
         store.delete(&path).await?;
         assert!(artifacts.read(old, descriptor).await.is_err());

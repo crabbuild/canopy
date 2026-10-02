@@ -19,7 +19,7 @@ pub use session::PreparationSession;
 mod base;
 pub use base::{PreparationBaseError, PreparationBaseResolver};
 mod certificate;
-mod codec;
+pub(in crate::packs) mod codec;
 pub use certificate::{
     AttestationOutcome, CERTIFICATE_BYTES, CatalogCertificate, RegisteredCatalog,
 };

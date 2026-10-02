@@ -38,7 +38,7 @@ mod discovery;
 mod fetch;
 mod hydration;
 mod maintenance;
-mod preflight;
+pub mod preflight;
 mod push;
 mod ssh;
 

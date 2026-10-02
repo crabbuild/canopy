@@ -8,6 +8,8 @@ Implement the [packed repository design](large-repository-storage-design.md) as 
 
 Track actual primitive integration and remaining full scope in [implementation status](large-repository-implementation-status.md). The [final publication lifecycle](design/final-publication-lifecycle.md) now connects private final factories, staging worker/result drain, exact renewal/checkpoint recovery and account-fair dispatch without another command payload layout. It remains a process-local composition requiring production wiring and durable takeover. The earlier schema fixture is superseded for the large-team release; its passing checks do not validate the new catalog architecture.
 
+The [durable original-request checkpoint](design/durable-push-request.md) now reuses the authenticated artifact transport and native input index: register encoded bytes before receive, then append captured native descriptors under exact predecessor CAS. Staging/bound reconstruction recomputes the scoped request identity, and restored-owner adoption preserves the original roots without copying. Final ref-CAS plan roots, durable native response/signature recovery and every production producer/reader conversion remain required in F/G/J; this API does not complete those packages.
+
 ## Implementation sequence
 
 Each package has one reviewable outcome. The schema cutover and all producer/consumer changes land together in the release; intermediate development commits are allowed to be unreleasable. Avoid temporary production fallbacks merely to make an intermediate commit deployable.

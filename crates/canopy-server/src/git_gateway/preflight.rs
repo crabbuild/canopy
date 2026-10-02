@@ -7,20 +7,22 @@ use cellule_runtime::CellTarget;
 /// Construct only after the gateway's account/access authentication. Ownership
 /// keeps hashing, gzip expansion and packet parsing on one request spool.
 #[must_use]
-pub(super) struct EncodedPush {
+pub struct EncodedPush {
     request: GitHttpRequest,
     identity: BeginRequest,
     format: crate::ObjectFormat,
+    target: CellTarget,
+    content_digest: [u8; 32],
 }
 #[must_use]
-pub(super) struct PushPreflight(PushParts);
+pub struct PushPreflight(PushParts);
 pub(super) struct PushParts {
     pub request: GitHttpRequest,
     pub commands: branch_policy::PushCommands,
     pub identity: BeginRequest,
 }
 impl EncodedPush {
-    pub(super) async fn new(
+    pub async fn new(
         request: GitHttpRequest,
         target: &CellTarget,
         repository: [u8; 16],
@@ -73,10 +75,12 @@ impl EncodedPush {
         ] {
             field(&mut hash, bytes);
         }
-        let request_digest = request.body.digest(hash).await?;
+        let (request_digest, content_digest) = request.body.digest(hash).await?;
         Ok(Self {
             request,
             format,
+            target: target.clone(),
+            content_digest,
             identity: BeginRequest {
                 repository,
                 operation,
@@ -86,12 +90,12 @@ impl EncodedPush {
             },
         })
     }
-    pub(super) fn identity(&self) -> &BeginRequest {
+    pub fn identity(&self) -> &BeginRequest {
         &self.identity
     }
     /// Completed-request replay uses identity before this step. Consume the
     /// encoded owner once, then keep normalized input and parsed intent together.
-    pub(super) async fn decode(
+    pub async fn decode(
         self,
         root: &Path,
         budget: &DiskBudget,
@@ -111,6 +115,12 @@ impl EncodedPush {
     }
 }
 impl PushPreflight {
+    pub fn identity(&self) -> &BeginRequest {
+        &self.0.identity
+    }
+    pub fn into_native_request(self) -> GitHttpRequest {
+        self.0.request
+    }
     pub(super) fn into_parts(self) -> PushParts {
         self.0
     }
@@ -120,5 +130,7 @@ fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(bytes);
 }
 
+mod retention;
 #[cfg(test)]
 mod tests;
+pub use retention::{RequestRetentionError, SavedPushRequest};

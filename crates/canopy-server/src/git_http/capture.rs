@@ -14,7 +14,7 @@ use canopy_object_storage::{
     artifact::{ArtifactKind, ArtifactStore},
     external::MAX_ARTIFACT_BYTES,
 };
-use std::{fs::File, path::Path};
+use std::fs::File;
 
 const MAX_CAPTURE_PACKS: usize = 32;
 #[derive(Debug, thiserror::Error)]
@@ -61,8 +61,8 @@ struct InputFile {
     _pin: Arc<CapturePin>,
 }
 impl PinnedFile for InputFile {
-    fn path(&self) -> &Path {
-        &self.path
+    fn open(&self) -> std::io::Result<File> {
+        File::open(&self.path)
     }
 }
 struct Pair {

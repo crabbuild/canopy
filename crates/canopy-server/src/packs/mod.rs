@@ -11,3 +11,4 @@ pub mod sources;
 pub mod verification;
 
 pub mod publication;
+pub mod wire_request;
