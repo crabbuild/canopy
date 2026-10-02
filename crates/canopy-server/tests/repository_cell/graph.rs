@@ -394,7 +394,7 @@ struct CertificateCommand;
 impl cellule_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = CertificateInput;
     type Output = bool;
     fn execute(
