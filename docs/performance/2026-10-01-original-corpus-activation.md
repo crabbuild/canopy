@@ -336,20 +336,42 @@ The failed attempt is at
 its verified copy and manifest are at
 `/Users/haipingfu/.codex/canopy-full-recovery-failed-y871llh9`.
 
+## Read-only retained-corpus inspection
+
+Two complete catalog and Control scans matched on October 2 after all recorded gateway owners had exited. Control stores each Cell's ownership and lifecycle state. The inspector refused writes; it performed no enrollment, recovery, maintenance transition or activation.
+
+| Observation | Count | Meaning |
+| --- | --- | --- |
+| Actual catalog Cells | 11,509 | Includes every required identity and four additional Cells |
+| Required Cells | 11,505 | 11,504 original/every-ACK repository identities plus Directory |
+| Idle Cells | 10,993 | Catalog inspection only, not Git/LFS content verification |
+| Serving Cells | 516 | Unsettled despite the owners' absence |
+| Recorded owners | Six retired, zero live | No advertised writers |
+| Provider write attempts | Zero | Read-only transport guard |
+
+The inspector rejected Directory's catalog and Control metadata because its previous-release predicate accepted only the current module code. Directory uses the declared retained code `f7254eda9d5d339566f45457502618ad13cbbf6e5a74595f5b3ce46653ea12f1`, schema 1. A separate read fetched the selected stored release descriptor and verified its BLAKE3 digest, `9a8df7ae5feba1f1760a843bc88d7870af4ebf515b8bc48e45bb7433569cd5d0`. That descriptor explicitly supports this retained code and schema.
+
+Source inspection found the same restriction in the frozen maintenance worker: `recover_maintenance` calls `Registry::is_current_cell` before restoring an unsettled Cell. This rejects the retained Directory code even though the descriptor declares it supported. The worker was not executed against this corpus, so this is a confirmed source-level compatibility defect, not a maintenance-run result.
+
+```text
+Stored descriptor: current Directory code + retained code, schema 1
+  -> retained catalog and Control both reference the retained code
+  -> inspector's current-code-only check rejects Directory
+  -> frozen maintenance worker has the same current-code-only check
+  -> maintenance and activation remain unattempted
+```
+
+Changing only the inspector would not qualify the frozen maintenance executable. A correction still needs regression coverage, a qualified executable and a supported release transition. Unknown codes, roles, namespaces and schema versions must continue to fail admission. No Control root, ownership, lease bound or deadline changed.
+
+The closed negative attempt and all bound inputs were preserved as 938 files, totaling 333,374,129 bytes. The verified copy is `/Users/haipingfu/.codex/canopy-retained-inspection-negative-ujryo2ur`; its manifest SHA-256 is `f22500a28ec405a7d3bc42390afbbdfb5e61e1c58d950c4d8a66a1ba277440e2`. Inspection outputs remain at `/Volumes/Workspace/CrabData/canopy-retained-upgrade-inspection-7pyhs2gd`. These are local evidence copies, not provider-data backups or complete remote recovery proof.
+
 ## Remaining verification
 
 Cellule upstream subsequently advanced by two commits to
 `191409685b001a82bd02780def45102b4fc2f164`, observed when publishing this checkpoint.
-Those commits change runtime forwarding/compaction and peer HTTP CI gates.
-They are **not** the dependency revision tested here. PR #18 now pins that
-revision: its Linux debug CI passed 244 Rust tests, 84 Python tests and all eight
-fresh RustFS gates. Its release candidate passed, but later PR-head release CI
-failed the disconnected-admission test with HTTP 503. All 100 isolated and two
-full-target diagnostic runs passed on unchanged source; that does not resolve
-the failure. Native qualification, retained-store recovery and performance
-remain open. See the
-[current dependency checkpoint](2026-10-01-cellule-main-qualification.md).
-No result from this activation or frozen campaign transfers to the new pin.
+Those commits change runtime forwarding/compaction and peer HTTP CI gates. They are **not** the dependency revision tested here. PR #18 subsequently advanced to upstream `0f4ca0919b0dfe20a3dcd964d21da03135e42eed`; its Linux qualification passed 244 top-level Rust tests, 91 Python tests and all eight fresh RustFS gates. The separate active-owner candidate passed native tests but remains excluded. See the [current dependency checkpoint](2026-10-01-cellule-main-qualification.md) for exact source and artifact boundaries.
+
+The earlier disconnected-admission release failure remains unexplained. Passing diagnostics and newer suites do not resolve it. Complete retained-store recovery and performance remain open; no result from this frozen activation or campaign transfers to either newer dependency revision.
 
 The [performance plan](../performance-plan.md) still requires
 concurrent faults, fresh-owner verification

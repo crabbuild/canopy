@@ -45,6 +45,37 @@ Release verification closed October 2 at 16:07:54 UTC. No runtime budget changed
 
 The audited evidence is retained at `/Volumes/Workspace/CrabData/canopy-latest-pin-release-0f4ca09-a9l7xj07`. Passing fresh-fixture checks does not resolve the earlier disconnected-admission failure or the original-corpus recovery failures.
 
+## Native checks for the separate active-owner candidate
+
+Candidate `d1f9250026bd517576793af44bdb4fc849cedce7` remains excluded from PR #18. It depends on `49921181f1dfe78cc9442931ce6dfb36349c0525` from draft [Cellule #44](https://github.com/crabbuild/cellule/pull/44), not upstream main. Upstream main still points to `0f4ca0919b0dfe20a3dcd964d21da03135e42eed` at this checkpoint.
+
+Cellule #44's [follower-proof capacity check](https://github.com/crabbuild/cellule/actions/runs/37041888146/job/110953738398) failed. Passing Canopy checks do not clear that dependency failure.
+
+Native Mac checks closed on October 2. Independent audits verified all 270 source/workflow bindings and six Cellule package revisions:
+
+| Check | Result | Qualification boundary |
+| --- | --- | --- |
+| Formatting and release all-target lints | Passed with warnings denied | Exact candidate source and lockfile |
+| Release workspace tests | 247 top-level tests passed, zero failed, nine ignored | Nested subprocess tests counted once |
+| Python harness | 91 tests passed | Unchanged deadlines, retries and runtime budgets |
+| Standalone release CLI build | Passed; executable retained outside Cargo targets | Not deployed against the retained corpus |
+| Eight fresh RustFS gates | All eight passed | Test executable, not the standalone CLI; disposable fresh fixture |
+
+The provider gates cover SHA-256 round trips, SHA-256 merge candidates, signed push options, signed SHA-256 SSH, stock SSH, 4,096 mirror refs, filtered clones and Git LFS over SSH. The helper removed its disposable RustFS fixture after testing. The original retained provider remained unchanged.
+
+Two evidence collectors failed after their underlying checks passed. The native collector combined Cargo diagnostics with metadata JSON. The provider collector expected Cargo's mutable CLI path to retain the standalone build, but Cargo selected another cached dependency graph. Both original failures remain preserved. Separate collectors and independent audits verified the artifacts without rerunning the tests or builds.
+
+| Audited artifact | SHA-256 |
+| --- | --- |
+| Retained native standalone CLI | `a6e827989d850e34101276d7ddbf3698b1a2171e73183c298f5d21b8620111ef` |
+| Fresh-provider test executable | `99640caa91b0eeb198f6498d0dc8ea26ba680b5a6a467465caa6399b63aa67be` |
+| Independent native audit | `7f6c7b90fa0d04c48b83ad0771365c7e5f3f7a25842f42e332c35c3d0cf6529a` |
+| Independent fresh-provider audit | `178064b07b05c31d4082499ccca8231834119ad7515703d3cb3343d103a7dd73` |
+
+Native evidence is retained at `/Volumes/Workspace/CrabData/canopy-active-owner-native-pp8ks07t`. Fresh-provider evidence is retained at `/Volumes/Workspace/CrabData/canopy-active-owner-native-rustfs-an77ivv2`. Verified copies reside on another local filesystem; they are not off-machine backups.
+
+The [retained-corpus inspection](2026-10-01-original-corpus-activation.md#read-only-retained-corpus-inspection) found a maintenance compatibility defect. These passing suites do not establish complete recovery, explain historical failures or demonstrate a performance improvement. No retained-store upgrade or activation occurred.
+
 ## Separate query deadline regression
 
 A [test-only diagnostic at `d1a0f1e`](https://github.com/crabbuild/canopy/actions/runs/37034626141), excluded from PR #18, reproduces a metadata recovery failure with the same Cellule pin. All three isolated release cases failed, as did the four-thread full-library run: 119 passed and one failed. The [debug suite](https://github.com/crabbuild/canopy/actions/runs/37034626111) failed the same assertion.
