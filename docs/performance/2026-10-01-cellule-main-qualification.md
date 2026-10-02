@@ -1,19 +1,34 @@
 # Cellule main revision qualification
 
-PR #18 now pins all six Cellule packages to
-`191409685b001a82bd02780def45102b4fc2f164`, rechecked against upstream main
-when publishing the dependency update. Linux debug correctness and fresh RustFS
-gates passed. The release candidate passed, but PR-head release CI subsequently
-failed a disconnected-admission test. An unchanged-source diagnostic did not
-reproduce that failure; its cause and resolution remain open. The original-corpus campaign still
-uses the frozen, release-qualified `0dc04a6` executable. Results from that
-executable do not transfer to the new dependency revision.
+PR #18 pins all six Cellule packages to
+`0f4ca0919b0dfe20a3dcd964d21da03135e42eed`, checked against upstream main on
+October 2. Locked metadata resolves the new revision; its debug, release and
+fresh RustFS checks are pending. Passing checks for the previous `1914096`
+pin do not qualify this update.
+
+The original-corpus campaign still uses the frozen, release-qualified
+`0dc04a6` executable. Its results do not transfer to either newer revision.
+An earlier disconnected-admission failure also remains unexplained despite
+subsequent passing checks.
 
 This follows the [retained catalog admission checkpoint](2026-10-01-retained-catalog-admission.md).
 That checkpoint and the [authentication and residency results](2026-10-01-bounded-authentication-and-residency.md)
 retain their original Cellule revision and artifacts.
 
 ## Current dependency update
+
+Only five direct manifest pins and six lockfile source revisions changed from
+`1914096` to `0f4ca09`. Other dependency versions, features, Canopy implementation
+and runtime budgets are unchanged. Local `cargo metadata --locked` passed;
+no native compilation or running-fleet upgrade was performed for publication.
+
+The upstream delta adds admitted-owner fences for application handlers and
+node-log rotation after member expiry. These changes are not evidence of a
+Canopy performance improvement. The existing release workflow will check the
+new pin against an isolated fresh RustFS fixture; retained-store upgrade,
+full-corpus recovery and matched performance require separate verification.
+
+## Previous pin: 1914096
 
 The pin-only candidate is `63c93b0f3fadf12893c9c45832f7367ace04ff24`.
 Its [Linux debug CI](https://github.com/crabbuild/canopy/actions/runs/36965371936)
@@ -33,6 +48,14 @@ passed 244 top-level Rust tests (zero failed, nine ignored), all 84 Python tests
 the eight release RustFS gates, formatting, release lints and executable retention.
 Its archive, 267 source/workflow hashes, locked metadata and executable checksum
 were independently audited. PR-head CI is a separate check.
+
+The later [PR-head release run at `cb78793`](https://github.com/crabbuild/canopy/actions/runs/37023329269)
+passed 244 top-level Rust tests (zero failed, nine ignored), 91 Python tests,
+all eight fresh RustFS gates, release lints and executable retention. Both
+PR and push debug verification also passed. The release archive, 268 exact
+source/workflow inputs, locked metadata and retained executable were independently
+audited. These results apply to `1914096`, not the new `0f4ca09` pin, and do
+not establish the cause or resolution of the earlier failure below.
 
 ## PR-head failure and unchanged-source diagnostic
 
@@ -121,7 +144,7 @@ had identical provider snapshots before and after these gates. Neither its
 corpus nor the UI preview was upgraded.
 
 Reproduce these historical checks from the frozen `bbd784a4` checkout and its
-lockfile (the current PR lockfile instead tests `1914096`):
+lockfile (the current PR lockfile instead tests `0f4ca09`):
 
 ```sh
 cargo build --release --locked --workspace
@@ -170,10 +193,12 @@ full remote Git/LFS verification passed with an independent audit and verified
 critical schedule include failed arrivals; see that checkpoint's result tables
 for metadata, creation, HTTP v2 discovery and stock-Git ls-remote.
 
-The [full performance plan](../performance-plan.md) still requires three nodes
-behind a proxy, 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows,
-114,960 arrivals and 8,640 scheduled seconds. Complete scheduled load/audit,
-concurrent faults, original-corpus fresh-owner recovery,
+The [full performance plan](../performance-plan.md) uses three nodes behind a
+proxy, 10,000 identities and 100 populated Git/LFS fixtures. All 108 windows,
+114,960 arrivals and 8,640 scheduled seconds completed and were audited on the
+frozen `0dc04a6` runtime, with failed arrivals retained. The subsequent full-corpus
+recovery attempt failed; see the [complete campaign and recovery evidence](2026-10-01-original-corpus-activation.md).
+Concurrent faults, complete original-corpus fresh-owner recovery,
 every acknowledged write after owner loss, higher admission profiles, matched
 comparisons, non-sparse five-GiB transfers and isolated Linux capacity remain open.
 The separate diagnostic fleet's terminal lease-fencing failure is also unresolved.
