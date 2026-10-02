@@ -265,8 +265,11 @@ Cellule upstream subsequently advanced by two commits to
 Those commits change runtime forwarding/compaction and peer HTTP CI gates.
 They are **not** the dependency revision tested here. PR #18 now pins that
 revision: its Linux debug CI passed 244 Rust tests, 84 Python tests and all eight
-fresh RustFS gates. Release verification is running; native qualification,
-retained-store recovery and performance remain open. See the
+fresh RustFS gates. Its release candidate passed, but later PR-head release CI
+failed the disconnected-admission test with HTTP 503. All 100 isolated and two
+full-target diagnostic runs passed on unchanged source; that does not resolve
+the failure. Native qualification, retained-store recovery and performance
+remain open. See the
 [current dependency checkpoint](2026-10-01-cellule-main-qualification.md).
 No result from this activation or frozen campaign transfers to the new pin.
 

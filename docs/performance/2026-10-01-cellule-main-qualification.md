@@ -2,8 +2,10 @@
 
 PR #18 now pins all six Cellule packages to
 `191409685b001a82bd02780def45102b4fc2f164`, rechecked against upstream main
-when publishing this update. Linux debug correctness and fresh RustFS gates
-passed; release verification is running. The original-corpus campaign still
+when publishing the dependency update. Linux debug correctness and fresh RustFS
+gates passed. The release candidate passed, but PR-head release CI subsequently
+failed a disconnected-admission test. An unchanged-source diagnostic did not
+reproduce that failure; its cause and resolution remain open. The original-corpus campaign still
 uses the frozen, release-qualified `0dc04a6` executable. Results from that
 executable do not transfer to the new dependency revision.
 
@@ -27,9 +29,44 @@ provenance and logs. Its first attempt failed during tool setup because the
 runner's package index had no `awscli` candidate; no tests ran. The corrected
 workflow checks the existing runner CLI and initializes evidence before setup.
 The [corrected release run](https://github.com/crabbuild/canopy/actions/runs/36968478780)
-has passed setup, source binding, formatting, release lints, workspace tests
-and the Python harness. RustFS gates and executable retention were still
-running at publication. PR-head CI is a separate check.
+passed 244 top-level Rust tests (zero failed, nine ignored), all 84 Python tests,
+the eight release RustFS gates, formatting, release lints and executable retention.
+Its archive, 267 source/workflow hashes, locked metadata and executable checksum
+were independently audited. PR-head CI is a separate check.
+
+## PR-head failure and unchanged-source diagnostic
+
+| Check | Exact source / result | Interpretation |
+| --- | --- | --- |
+| [PR-head release CI](https://github.com/crabbuild/canopy/actions/runs/36969961214) | `5581d5c`: disconnected-admission test failed HTTP 503; 240 top-level tests passed, one failed, nine ignored before Cargo aborted | Python, provider gates and executable retention were skipped; not a release pass |
+| [PR debug CI](https://github.com/crabbuild/canopy/actions/runs/36969965999) and [push debug CI](https://github.com/crabbuild/canopy/actions/runs/36969961213) | `5581d5c`: each passed 244 top-level Rust tests, 84 Python tests and eight fresh RustFS gates | Neither run clears the release failure |
+| [Unchanged-source release diagnostic](https://github.com/crabbuild/canopy/actions/runs/36972048946) | `49268ba`: all 100 isolated repetitions passed; both full-target runs passed 104 tests, zero failed, nine ignored | Nonreproduction, not a fix, full-workspace qualification or performance evidence |
+
+The failing test is
+`residency::faults::disconnected_admission_finishes_release_and_allows_a_later_restore`.
+The diagnostic's 264 production, test, script and Cargo inputs exactly match
+`5581d5c`. It executes the same retained release test binary for every declared
+case, including four-thread full-target runs. No test assertion, HTTP retry,
+residency budget or production code changed. Failed repetitions would remain
+failed; the workflow does not retry until green. Its first setup-only failure
+is retained separately.
+
+The diagnostic closed October 2 at 06:27:34 UTC (October 1 Pacific). An independent
+audit verified the GitHub archive digest, exact 111-file inventory, source hashes,
+all six Cellule metadata entries, retained ELF checksum and all 102 result/log
+bindings. The evidence and auditor were copied and independently reread as
+115 files on another local filesystem; this is not an off-machine backup.
+
+| Diagnostic artifact | SHA-256 |
+| --- | --- |
+| GitHub artifact archive | `80522d2d0d33d6bbcf3d48c8b40a0583f32953bde75ac39218aac038735ff7e9` |
+| Release `multi_server` executable | `b9d2fe7dc845b8c8f0791296208ed2b99c848820a498e6a14ae35821d99fda10` |
+| Independent diagnostic audit | `ccd848c30d08b75e0958ff3b973e9416df027d1ebb81cd2fa685eca7f6ce018f` |
+| Verified local copy manifest | `0735c73eaaa8ba60bb4bf34f02bbd437e10027d1592c30a597a10bb52a817ebe` |
+
+The earlier successful release candidate remains historical evidence. The later
+failure remains unresolved despite the passing diagnostic. Establish its cause
+with a reproducible cancellation/release probe before claiming a correction.
 
 Native release qualification, retained-store recovery, every-ACK verification,
 matched performance and reference capacity remain open for `1914096`.
