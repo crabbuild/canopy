@@ -1,0 +1,125 @@
+name: Reproduce SSH test HTTP reservation gap
+
+on:
+  push:
+    branches:
+      - 'codex/ssh-http-reservation-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  reservation-reproduction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Initialize evidence
+        run: |
+          mkdir diagnostic
+          git rev-parse HEAD > diagnostic/head.txt
+          cp .github/workflows/diagnose-ssh-http-reservation.yml diagnostic/workflow.yml
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs openssh-client
+          git lfs install
+      - name: Bind unchanged production and exact SSH regression inputs
+        run: |
+          git fetch --depth=1 origin 0ba777536ac390e58d9d6b12bce3d7826f16792c
+          cargo fmt --all -- --check
+          cargo metadata --locked --format-version 1 > diagnostic/metadata.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          files = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '0ba777536ac390e58d9d6b12bce3d7826f16792c', '--', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
+          assert changed == ['crates/canopy-server/tests/multi_server/ssh/mod.rs'], changed
+          record = {'diagnostic_changes': changed, 'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'baseline_head': '0ba777536ac390e58d9d6b12bce3d7826f16792c',
+                    'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
+                    'scope': 'SSH HTTP reservation regression and affected stock-Git test on exact release source; not production performance or corpus recovery qualification.'}
+          Path('diagnostic/inputs.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - name: Compile and retain exact release test executable
+        run: |
+          cargo test --release --locked -p canopy-server --test multi_server --no-run --message-format=json > diagnostic/build.jsonl 2> diagnostic/build.log
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          rows = [json.loads(line) for line in Path('diagnostic/build.jsonl').read_text().splitlines()]
+          paths = [row['executable'] for row in rows if row.get('reason') == 'compiler-artifact'
+                   and row['target']['name'] == 'multi_server' and row.get('executable')]
+          assert len(paths) == 1
+          executable = Path(paths[0])
+          record = {'executable': str(executable), 'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
+                    'bytes': executable.stat().st_size}
+          Path('diagnostic/test-executable.json').write_text(json.dumps(record, indent=2) + '\n')
+          subprocess.run(['tar', '-czf', 'diagnostic/multi-server-release.tar.gz', '-C', str(executable.parent), executable.name], check=True)
+          PY
+      - name: Record all declared repetitions without retry-until-green
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import time
+
+          root = Path('diagnostic')
+          executable = json.loads((root / 'test-executable.json').read_text())['executable']
+          target = 'ssh::sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup'
+          affected = 'ssh::sha256_ssh_push_and_clone'
+          environment = {**os.environ, 'RUST_LOG': 'warn', 'RUST_BACKTRACE': '1'}
+          runs = []
+          # Each failed repetition stays failed. Include original full-target
+          # concurrency to distinguish isolation from suite interference.
+          schedule = [('reservation-regression', [target, '--exact', '--nocapture'], 3),
+                      ('affected-stock-git', [affected, '--exact', '--nocapture'], 10),
+                      ('full-target', ['--test-threads=4', '--nocapture'], 2)]
+          for phase, arguments, count in schedule:
+              for index in range(count):
+                  log = root / f'{phase}-{index:03d}.log'
+                  started = time.monotonic()
+                  with log.open('xb') as output:
+                      try:
+                          result = subprocess.run([executable, *arguments], env=environment,
+                                                  stdout=output, stderr=subprocess.STDOUT, timeout=900)
+                          code, timed_out = result.returncode, False
+                      except subprocess.TimeoutExpired:
+                          code, timed_out = None, True
+                  row = {'phase': phase, 'repetition': index, 'exit_code': code, 'timeout': timed_out,
+                         'arguments': arguments, 'elapsed_seconds': time.monotonic() - started, 'log': str(log),
+                         'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest()}
+                  runs.append(row)
+                  (root / 'repetitions.json').write_text(json.dumps({'completed': False, 'runs': runs}, indent=2) + '\n')
+                  print(json.dumps(row), flush=True)
+          inputs = json.loads((root / 'inputs.json').read_text())
+          assert all(hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
+                     for name, digest in inputs['source_sha256'].items())
+          result = {'completed': True, 'runs': runs, 'bound_source_unchanged': True,
+                    'failed_repetitions': sum(row['exit_code'] != 0 for row in runs),
+                    'scope': inputs['scope']}
+          (root / 'repetitions.json').write_text(json.dumps(result, indent=2) + '\n')
+          raise SystemExit(1 if result['failed_repetitions'] else 0)
+          PY
+      - name: Retain negative and positive evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ssh-http-reservation-${{ github.sha }}-${{ github.run_attempt }}
+          path: diagnostic/
+          if-no-files-found: error
+          retention-days: 30

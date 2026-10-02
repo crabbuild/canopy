@@ -90,6 +90,53 @@ fn server_config(
     Ok(cfg)
 }
 
+// Keep the affected test's actual startup path and expose its reservation gap
+// to a deterministic competing binder. The unmodified call sites pass false.
+async fn start_sha256_ssh_server(
+    data_dir: std::path::PathBuf,
+    host: &ssh_key::PrivateKey,
+    store: Arc<dyn ObjectStore>,
+    competing_binder: bool,
+) -> Result<CanopyServer> {
+    let address = available_address().await?;
+    let _competing = if competing_binder {
+        Some(TcpListener::bind(address).await?)
+    } else {
+        None
+    };
+    Ok(CanopyServer::start(server_config(address, data_dir, host)?, store).await?)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup() -> Result {
+    let workspace = tempfile::TempDir::new()?;
+    let host = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]).into(),
+        "canopy-test",
+    )?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    for name in ["initial", "restored"] {
+        let server =
+            start_sha256_ssh_server(workspace.path().join(name), &host, Arc::clone(&store), true)
+                .await?;
+        let http = server.local_addr();
+        let ssh = server.ssh_addr().ok_or("SSH listener missing")?;
+        assert_eq!(
+            TcpListener::bind(http).await.unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+        let response = reqwest::Client::new()
+            .get(format!("http://{http}/api/repositories"))
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        server.shutdown().await?;
+        assert_eq!(TcpListener::bind(http).await?.local_addr()?, http);
+        assert_eq!(TcpListener::bind(ssh).await?.local_addr()?, ssh);
+    }
+    Ok(())
+}
+
 async fn known_host(
     path: &Path,
     address: std::net::SocketAddr,
@@ -218,12 +265,14 @@ async fn sha256_ssh_push_and_clone() -> Result {
         ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]).into(),
         "canopy-test",
     )?;
-    let address = available_address().await?;
-    let server = CanopyServer::start(
-        server_config(address, workspace.path().join("node"), &host)?,
+    let server = start_sha256_ssh_server(
+        workspace.path().join("node"),
+        &host,
         Arc::clone(&store),
+        false,
     )
     .await?;
+    let address = server.local_addr();
     reqwest::Client::new()
         .post(format!("http://{address}/api/repositories"))
         .bearer_auth(AUTH)
@@ -275,12 +324,8 @@ async fn sha256_ssh_push_and_clone() -> Result {
     );
     git(Some(&clone), &ssh, &["fsck", "--full", "--strict"]).await?;
     server.shutdown().await?;
-    let restored_address = available_address().await?;
-    let restored = CanopyServer::start(
-        server_config(restored_address, workspace.path().join("restored"), &host)?,
-        store,
-    )
-    .await?;
+    let restored =
+        start_sha256_ssh_server(workspace.path().join("restored"), &host, store, false).await?;
     let restored_ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
     known_host(&known, restored_ssh_address, &host).await?;
     let restored_url = format!("ssh://git@{restored_ssh_address}/canopy/sha256-ssh.git");
