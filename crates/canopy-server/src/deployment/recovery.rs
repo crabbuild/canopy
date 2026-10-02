@@ -172,7 +172,11 @@ impl Deployment {
                         } else {
                             return Err(Error::Release("unknown maintenance Cell namespace").into());
                         };
-                        if !self.registry.is_current_cell(
+                        // Existing catalog entries pin their original contract.
+                        // Retained executable code is valid for restoration;
+                        // requiring target code would strand predecessor Cells.
+                        // Acquisition separately validates persisted Control.
+                        if !self.registry.supports_cell(
                             entry.namespace(),
                             entry.role(),
                             entry.initial_code(),

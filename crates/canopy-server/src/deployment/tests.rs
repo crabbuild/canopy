@@ -8,6 +8,8 @@ use object_store::{ObjectStoreExt, memory::InMemory};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod retained_maintenance;
+
 fn fixture() -> std::result::Result<Deployment, Box<dyn std::error::Error>> {
     let app = CanopyApplication::compile(build_descriptor(
         include_bytes!("../../../../Cargo.lock"),
