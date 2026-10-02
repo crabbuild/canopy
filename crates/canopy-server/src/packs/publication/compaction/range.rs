@@ -144,6 +144,9 @@ impl PreparedCompaction {
     }
 }
 impl RangeSelection {
+    pub(super) fn last_moved(&self) -> ObjectId {
+        self.portion.coverage.last_oid
+    }
     fn digest(&self, repository: [u8; 16], format: ObjectFormat) -> Result<[u8; 32], CodecError> {
         let mut hash = blake3::Hasher::new();
         let mut e = BoundedEncoder::new(1024)?;

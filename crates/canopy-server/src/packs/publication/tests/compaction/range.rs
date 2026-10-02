@@ -8,7 +8,7 @@ use crate::{
     },
 };
 
-fn job_limits() -> CompactionLimits {
+pub(super) fn job_limits() -> CompactionLimits {
     CompactionLimits {
         spool: limits(),
         output: crate::packs::metadata::MetadataLimits {
@@ -78,7 +78,7 @@ async fn publish(fixture: &Fixture, compact: &PreparedCompaction) -> Result {
     assert!(matches!(result.output, CompactionReply::Published(_)));
     Ok(())
 }
-async fn entries(
+pub(super) async fn entries(
     prepared: &Prepared,
     catalog: crate::packs::catalog::StoredCatalog,
 ) -> Result<std::collections::BTreeMap<ObjectId, crate::packs::directory::DirectoryEntry>> {

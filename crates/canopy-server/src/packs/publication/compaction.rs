@@ -16,11 +16,13 @@ use tokio::time::timeout_at;
 mod prepare;
 mod publish;
 mod range;
+mod schedule;
 pub use publish::{
     CheckCompletedCompaction, CompactionReply, PublishCatalogCompaction, PublishedCompaction,
 };
 pub use range::CompactionSource;
 use range::RangeSelection;
+pub use schedule::{CompactionPlanner, CompactionPolicy, CompactionPressure};
 
 #[derive(Clone, Copy)]
 pub struct CompactionLimits {

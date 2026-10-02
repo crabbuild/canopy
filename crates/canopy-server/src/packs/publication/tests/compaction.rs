@@ -14,6 +14,7 @@ use cellule_ltx::DiskBudget;
 
 mod range;
 mod recovery;
+mod schedule;
 
 struct Inventory {
     provider: Arc<dyn object_store::ObjectStore>,
