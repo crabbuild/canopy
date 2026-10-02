@@ -121,11 +121,16 @@ async fn sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup
     )?;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     for name in ["initial", "restored"] {
+        eprintln!("[DEBUG-ssh-reservation-9a0] {name} startup begin");
         let server =
             start_sha256_ssh_server(workspace.path().join(name), &host, Arc::clone(&store), true)
-                .await?;
+                .await
+                .map_err(|error| {
+                    format!("[DEBUG-ssh-reservation-9a0] {name} startup: {error:?}")
+                })?;
         let http = server.local_addr();
         let ssh = server.ssh_addr().ok_or("SSH listener missing")?;
+        eprintln!("[DEBUG-ssh-reservation-9a0] {name} ready http={http} ssh={ssh}");
         assert_eq!(
             TcpListener::bind(http).await.unwrap_err().kind(),
             std::io::ErrorKind::AddrInUse
@@ -135,9 +140,29 @@ async fn sha256_ssh_http_address_is_reserved_through_initial_and_restore_startup
             .send()
             .await?;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
-        server.shutdown().await?;
-        assert_eq!(TcpListener::bind(http).await?.local_addr()?, http);
-        assert_eq!(TcpListener::bind(ssh).await?.local_addr()?, ssh);
+        eprintln!("[DEBUG-ssh-reservation-9a0] {name} shutdown begin http={http} ssh={ssh}");
+        server
+            .shutdown()
+            .await
+            .map_err(|error| format!("[DEBUG-ssh-reservation-9a0] {name} shutdown: {error:?}"))?;
+        eprintln!("[DEBUG-ssh-reservation-9a0] {name} shutdown complete http={http} ssh={ssh}");
+        let released_http = TcpListener::bind(http).await.map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("[DEBUG-ssh-reservation-9a0] {name} HTTP rebind {http}: {error}"),
+            )
+        })?;
+        assert_eq!(released_http.local_addr()?, http);
+        drop(released_http);
+        let released_ssh = TcpListener::bind(ssh).await.map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("[DEBUG-ssh-reservation-9a0] {name} SSH rebind {ssh}: {error}"),
+            )
+        })?;
+        assert_eq!(released_ssh.local_addr()?, ssh);
+        drop(released_ssh);
+        eprintln!("[DEBUG-ssh-reservation-9a0] {name} both rebind checks passed");
     }
     Ok(())
 }
