@@ -31,6 +31,7 @@ jobs:
           git lfs install
       - name: Bind unchanged production and test inputs
         run: |
+          git fetch --depth=1 origin 5581d5c61722609111f4fe5550a2fe722c3d2918
           git diff --exit-code 5581d5c61722609111f4fe5550a2fe722c3d2918 -- Cargo.toml Cargo.lock crates scripts
           cargo metadata --locked --format-version 1 > diagnostic/metadata.json
           python3 - <<'PY'
