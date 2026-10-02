@@ -94,6 +94,16 @@ async fn maintenance_recovers_unpublished_retained_directory() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_recovers_published_retained_directory_without_changing_data() -> TestResult {
+    recover_published_directory(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn maintenance_recovers_retained_directory_after_same_descriptor_image_selection()
+-> TestResult {
+    recover_published_directory(true).await
+}
+
+async fn recover_published_directory(change_image: bool) -> TestResult {
     let deployment = fixture()?;
     deployment.initialize().await?;
     let files = tempfile::TempDir::new()?;
@@ -165,8 +175,54 @@ async fn maintenance_recovers_published_retained_directory_without_changing_data
             .value(),
         before.value()
     );
-    advertise_owner(&deployment, true).await?;
+    advertise_owner(&deployment, !change_image).await?;
     let operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
+    let deployment = if change_image {
+        // Model a closed, canonically retired old-image owner, as in the retained
+        // corpus. Synthetic image digests here do not qualify physical binaries.
+        let now = crate::server::unix_now_ms()?;
+        let advertisement = deployment
+            .nodes
+            .load(session, now)
+            .await?
+            .ok_or("owner missing")?;
+        deployment.nodes.withdraw(&advertisement, now).await?;
+        assert!(deployment.nodes.is_retired(session).await?);
+        let bridge = Deployment::new(
+            deployment.layout.store().clone(),
+            deployment.prefix.clone(),
+            deployment.identity,
+            deployment.nodes.fleet(),
+            Digest::from_bytes([55; 32]),
+            Arc::clone(&deployment.registry),
+        )?;
+        assert!(bridge.require_ready().await.is_err());
+        let old = deployment.record().await?;
+        let prepared = deployment
+            .releases
+            .prepare(
+                deployment.registry.release_bytes(),
+                deployment.registry.release_digest(),
+                old.revision(),
+                &bridge.image,
+                operation,
+            )
+            .await?;
+        assert_eq!(prepared.current(), old.current());
+        assert_eq!(prepared.desired(), old.current());
+        assert_eq!(prepared.desired_image(), bridge.image);
+        assert!(deployment.begin_maintenance(operation).await.is_err());
+        assert!(
+            deployment
+                .recover_maintenance(operation, recovery_config(files.path().join("wrong-image")))
+                .await
+                .is_err()
+        );
+        assert!(!files.path().join("wrong-image").exists());
+        bridge
+    } else {
+        deployment
+    };
     deployment.begin_maintenance(operation).await?;
     deployment
         .recover_maintenance(operation, recovery_config(files.path().join("recover")))
