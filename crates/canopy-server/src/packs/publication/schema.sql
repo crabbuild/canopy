@@ -361,6 +361,9 @@ CREATE TABLE catalog_leases (
     expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
     attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
+    input_checkpoint BLOB CHECK(input_checkpoint IS NULL OR length(input_checkpoint) BETWEEN 1 AND 1024),
+    input_checkpoint_digest BLOB CHECK(input_checkpoint_digest IS NULL OR length(input_checkpoint_digest) = 32),
+    CHECK((input_checkpoint IS NULL) = (input_checkpoint_digest IS NULL)),
     CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
     CHECK(generation IS NOT NULL OR attestation IS NULL),
     PRIMARY KEY(incarnation, admission_sequence)
@@ -386,6 +389,9 @@ BEGIN SELECT RAISE(ABORT, 'catalog attempt identity is immutable'); END;
 CREATE TRIGGER catalog_lease_attestation_immutable BEFORE UPDATE OF attestation, attestation_digest ON catalog_leases
 WHEN OLD.attestation IS NOT NULL AND (NEW.attestation IS NOT OLD.attestation OR NEW.attestation_digest IS NOT OLD.attestation_digest)
 BEGIN SELECT RAISE(ABORT, 'catalog attempt attestation is immutable'); END;
+CREATE TRIGGER catalog_lease_inputs_immutable BEFORE UPDATE OF input_checkpoint, input_checkpoint_digest ON catalog_leases
+WHEN OLD.input_checkpoint IS NOT NULL AND (NEW.input_checkpoint IS NOT OLD.input_checkpoint OR NEW.input_checkpoint_digest IS NOT OLD.input_checkpoint_digest)
+BEGIN SELECT RAISE(ABORT, 'creating input checkpoint is immutable'); END;
 
 CREATE TABLE catalog_operations (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),

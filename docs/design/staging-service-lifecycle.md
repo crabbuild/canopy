@@ -1,6 +1,6 @@
 # Service owned staging lifecycle
 
-`StagingCoordinator` now owns admitted Begin/Renew/Bind commands, input tasks and completed input results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
+`StagingCoordinator` now owns admitted Begin/Claim/Renew/Bind commands, input tasks and completed input results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
 
 ## Admission and ownership
 
@@ -24,7 +24,7 @@ The service map retains each admitted job. Dropping StagingTicket, StagingTask o
 
 ## Execution and deadlines
 
-After Begin succeeds, query CheckStaging at its receipt. Derive the local monotonic deadline from a timestamp sampled before the query and the queried remaining lease, capped by MAX_LEASE_MS. Queue and transport time shorten usable custody. A saved or replayed success never establishes a fresh deadline.
+After Begin or Claim succeeds, query CheckStaging at its receipt. Derive the local monotonic deadline from a timestamp sampled before the query and the queried remaining lease, capped by MAX_LEASE_MS. Queue and transport time shorten usable custody. A saved or replayed success never establishes a fresh deadline.
 
 The service periodically prepares and executes RenewStaging before that deadline. Each renewal has a fresh mutation identity; an ambiguous renewal retains its original command instead of allocating another. After a known success, another authoritative query checks live identity, format, expiry and current access before advancing the shared deadline. Producers receive StagingContext, which supplies the checked namespace token and format, and observes the shared conservative deadline and lifetime.
 
@@ -44,13 +44,13 @@ Bound preparation is not automatically renewed by this staging service. Transfer
 
 ## Exact uncertainty and shutdown
 
-Begin, Renew and Bind share the same exact invocation/resolution implementation with push and compaction dispatch. Resolution of authoritative absence permits execution of the retained exact command. A committed outcome decodes with its original receipt; it never reruns the handler. Unknown, expired, unreachable, changed-incarnation and malformed published results retain evidence and reservation.
+Begin, Claim, Renew and Bind share the same exact invocation/resolution implementation with push and compaction dispatch. Resolution of authoritative absence permits execution of the retained exact command. A committed outcome decodes with its original receipt; it never reruns the handler. Unknown, expired, unreachable, changed-incarnation and malformed published results retain evidence and reservation.
 
 Uncertain stops new producer admission. Existing work can continue only through its previously established deadline. `recover(ticket)` resumes the exact retained command; it cannot replace its identity or bytes. No new renewal or bind is issued while an earlier command remains ambiguous. Panicked command tasks retain pending evidence. Unexpected service-worker failure fences local work and requires explicit exact recovery before restarting supervision.
 
 `stop` prevents new workers and waits for accepted input tasks/results to drain while renewal continues. It does not retract an independent SQL pin. `close_and_drain` closes all admission, stops jobs and returns still-charged uncertain tickets once running commands and input slots have drained. Service consumers must take retained completed results before a graceful stop can finish; retrieve lost observers through pending_task. Recovery remains possible after closing. A reached lifetime or lost authority fences and discards untransferred results conservatively.
 
-This service is process-local ownership, not a durable outbox or authenticated input inventory after process loss. Owner takeover must resolve exact/logical outcomes and reconstruct or adopt retained physical inputs under the new admitted namespace through the unfinished authenticated custody protocol. Neither local completion nor SQL reaping authorizes remote deletion.
+This service is process-local ownership, not a durable outbox or authenticated input inventory after process loss. Owner takeover must resolve exact/logical outcomes and reconstruct or adopt retained physical inputs under the new admitted namespace through the [authenticated input checkpoint protocol](native-input-checkpoint.md). ReadyStaging::claim now retains/resolves the exact Claim command and supplies a fresh staging context. Checkpoint registration supervision and complete wire-plan/response recovery remain production integration work. Neither local completion nor SQL reaping authorizes remote deletion.
 
 ## Evidence and remaining work
 

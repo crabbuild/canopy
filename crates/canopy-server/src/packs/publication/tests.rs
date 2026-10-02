@@ -4,6 +4,7 @@ mod compaction;
 mod completion;
 mod coordinator;
 mod frontier;
+mod inputs;
 mod namespaces;
 mod native_capture;
 mod prepare;
@@ -78,6 +79,7 @@ impl CellModule for Module {
                     descriptor(25),
                     descriptor(26),
                     descriptor(28),
+                    descriptor(29),
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -87,6 +89,7 @@ impl CellModule for Module {
                     descriptor(21),
                     descriptor(23),
                     descriptor(27),
+                    descriptor(30),
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],

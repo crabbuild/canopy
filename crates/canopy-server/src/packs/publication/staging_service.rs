@@ -89,6 +89,8 @@ pub enum StagingError {
     Input(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("staging begin failed")]
     Begin(#[source] Box<InvocationError<StagingReply>>),
+    #[error("staging claim failed")]
+    Claim(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging renewal failed")]
     Renew(#[source] Box<InvocationError<StagingReply>>),
     #[error("staging bind failed")]
@@ -107,7 +109,7 @@ impl StagingError {
             )
         }
         match self {
-            Self::Begin(e) | Self::Renew(e) => unknown(e),
+            Self::Begin(e) | Self::Renew(e) | Self::Claim(e) => unknown(e),
             Self::Bind(e) => unknown(e),
             _ => false,
         }
@@ -143,7 +145,7 @@ struct StagingRequest {
     client: CellClient,
     target: CellTarget,
     request: BeginRequest,
-    command: PreparedCommand<BeginStaging>,
+    command: Exact,
 }
 impl ReadyStaging {
     pub async fn new(
@@ -170,7 +172,44 @@ impl ReadyStaging {
                 client,
                 target,
                 request,
-                command,
+                command: Exact::Begin(command),
+            }),
+        })
+    }
+    /// Resume the same logical staging request through the authoritative Claim
+    /// command, with a new creating namespace and independent previous pin.
+    pub async fn claim(
+        client: CellClient,
+        target: CellTarget,
+        request: LeaseRequest,
+        identity: MutationIdentity,
+    ) -> Result<Self, StagingError> {
+        let begin = BeginRequest {
+            repository: request.check.token.repository,
+            operation: request.check.token.operation,
+            request_digest: request.check.token.request_digest,
+            actor: request.check.actor.clone(),
+            lease_ms: request.lease_ms,
+        };
+        if crate::repository_target(target.tenant(), target.application(), begin.repository)
+            .map_err(|_| StagingError::Context)?
+            != target
+        {
+            return Err(StagingError::Context);
+        }
+        request
+            .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
+            .map_err(|_| StagingError::Context)?;
+        let command = client
+            .prepare_command::<ClaimStaging>(&target, identity, request)
+            .await
+            .map_err(|e| StagingError::Claim(Box::new(e)))?;
+        Ok(Self {
+            inner: Box::new(StagingRequest {
+                client,
+                target,
+                request: begin,
+                command: Exact::Claim(command),
             }),
         })
     }
@@ -229,6 +268,7 @@ struct Job {
 #[derive(Clone)]
 enum Exact {
     Begin(PreparedCommand<BeginStaging>),
+    Claim(PreparedCommand<ClaimStaging>),
     Renew(PreparedCommand<RenewStaging>),
     Bind(PreparedCommand<BindStaging>),
 }
@@ -240,6 +280,9 @@ impl Exact {
     fn pending(&self) -> StagingError {
         match self {
             Self::Begin(c) => StagingError::Begin(Box::new(InvocationError::Pending(Box::new(
+                c.evidence().clone(),
+            )))),
+            Self::Claim(c) => StagingError::Claim(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
             Self::Renew(c) => StagingError::Renew(Box::new(InvocationError::Pending(Box::new(
@@ -261,6 +304,10 @@ impl Exact {
                 .await
                 .map(Outcome::Stage)
                 .map_err(|e| StagingError::Begin(Box::new(e))),
+            Self::Claim(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                .await
+                .map(Outcome::Stage)
+                .map_err(|e| StagingError::Claim(Box::new(e))),
             Self::Renew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Stage)
@@ -366,7 +413,7 @@ impl StagingCoordinator {
                 renew: false,
             }),
             work: Mutex::new(WorkSlots::default()),
-            exact: Mutex::new(Some(Exact::Begin(ready.inner.command))),
+            exact: Mutex::new(Some(ready.inner.command)),
             status: watch::channel(StagingState::Starting).0,
             changed: Notify::new(),
         });
@@ -664,6 +711,16 @@ pub struct StagingContext {
     format: ObjectFormat,
 }
 impl StagingContext {
+    pub(super) fn capability(&self) -> (&CellClient, &CellTarget, LeaseCheck) {
+        (
+            &self.job.client,
+            &self.job.target,
+            LeaseCheck {
+                token: self.token,
+                actor: self.job.actor.clone(),
+            },
+        )
+    }
     pub fn token(&self) -> Result<PreparationToken, StagingError> {
         self.ensure_live()?;
         Ok(self.token)

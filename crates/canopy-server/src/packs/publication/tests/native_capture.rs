@@ -118,12 +118,17 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         let producer = backend.clone();
         let upload_store = Arc::clone(&store);
         let task = ticket.spawn(move |context| async move {
-            producer
+            let inputs = producer
                 .stage_native_packs(&context, &upload_store, physical_limits())
                 .await
-                .map_err(|error| StagingError::Input(Box::new(error)))
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let certificate = context
+                .seal_native_inputs(upload_store, inputs.iter().copied())
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            Ok((inputs, certificate))
         })?;
-        let inputs = task
+        let (inputs, input_certificate) = task
             .wait()
             .await
             .map_err(|error| format!("capture: {error:?}"))?;
@@ -131,6 +136,29 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         assert_eq!(inputs[0].operation, initial.token.artifact_operation);
         assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
         assert_ne!(inputs[0].index.manifest_digest, [0; 32]);
+        let checkpoint = fixture
+            .client()
+            .command::<RegisterStagedInputs>(
+                &fixture.target,
+                identity()?,
+                input_certificate.clone(),
+            )
+            .await?;
+        assert_eq!(
+            fixture
+                .client()
+                .query::<CheckStagedInputs>(
+                    &fixture.target,
+                    Some(checkpoint.receipt),
+                    LeaseCheck {
+                        token: initial.token,
+                        actor: "owner".into()
+                    }
+                )
+                .await?
+                .output,
+            Some(input_certificate)
+        );
         drop((backend, source));
         assert!(cache_weak.upgrade().is_none());
         cleaned(work_root.path(), &disk).await?;

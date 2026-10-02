@@ -17,6 +17,9 @@ mod verification;
 pub use verification::{PackCoverage, VerifiedPackBinding};
 mod native;
 pub use native::NativePackDescriptor;
+mod inputs;
+pub type NativeInputIndex = RangeIndex<NativePackDescriptor>;
+pub type NativeInputRoot = NodeRef<NativePackDescriptor>;
 mod resolve;
 pub use resolve::{ResolvedSource, SourceLoader};
 

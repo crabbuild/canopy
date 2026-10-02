@@ -59,7 +59,11 @@ pub use staging_service::{
     ReadyStaging, StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits,
     StagingState, StagingStats, StagingTask, StagingTicket,
 };
+mod inputs;
 mod staging;
+pub use inputs::{
+    CheckStagedInputs, InputCheckpointError, NativeInputCertificate, RegisterStagedInputs,
+};
 pub use staging::{
     BeginStaging, BindStaging, CheckStaging, ClaimStaging, RenewStaging, StagingLease, StagingReply,
 };
@@ -175,6 +179,8 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RenewStaging>()?;
     registry.bind_command::<BindStaging>()?;
     registry.bind_command::<ClaimStaging>()?;
+    registry.bind_command::<RegisterStagedInputs>()?;
+    registry.bind_query::<CheckStagedInputs>()?;
     registry.bind_query::<CheckStaging>()?;
     registry.bind_command::<BeginPreparation>()?;
     registry.bind_command::<ClaimPreparation>()?;
