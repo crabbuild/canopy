@@ -90,21 +90,26 @@ fn server_config(
     Ok(cfg)
 }
 
-// Keep the affected test's actual startup path and expose its reservation gap
-// to a deterministic competing binder. The unmodified call sites pass false.
+// Reserve HTTP until supervised startup takes ownership. The injected binder
+// tests the same helper used by the stock-Git initial and restore paths.
 async fn start_sha256_ssh_server(
     data_dir: std::path::PathBuf,
     host: &ssh_key::PrivateKey,
     store: Arc<dyn ObjectStore>,
     competing_binder: bool,
 ) -> Result<CanopyServer> {
-    let address = available_address().await?;
-    let _competing = if competing_binder {
-        Some(TcpListener::bind(address).await?)
-    } else {
-        None
-    };
-    Ok(CanopyServer::start(server_config(address, data_dir, host)?, store).await?)
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    if competing_binder {
+        assert_eq!(
+            TcpListener::bind(address).await.unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+    }
+    Ok(
+        CanopyServer::start_with_listener(server_config(address, data_dir, host)?, store, listener)
+            .await?,
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]
