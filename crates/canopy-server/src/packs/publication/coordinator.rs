@@ -22,6 +22,8 @@ use tokio::{
 /// Scratch/native work remains independently charged to its DiskBudget.
 const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
+mod inputs;
+pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
 mod work;
 use work::MAINTENANCE_RESERVATION;
 pub use work::{
@@ -216,6 +218,7 @@ struct Job {
     // payloads or local inventory after the admission charge is released.
     ready: Mutex<Option<ReadyPublication>>,
     class: PublicationClass,
+    reservation: u64,
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
@@ -378,6 +381,7 @@ impl PublicationCoordinator {
     ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
         let ready = ready.into();
         let class = ready.class();
+        let reservation = ready.reservation();
         let at = class.index();
         let (client, target, check) = ready.capability();
         let mut state = self.inner.state.lock().await;
@@ -405,7 +409,7 @@ impl PublicationCoordinator {
                 .get(&check.actor)
                 .map_or(0, |counts| counts[at])
                 >= limits.per_actor
-            || state.bytes[at] > byte_limit - class.reservation()
+            || state.bytes[at] > byte_limit - reservation
         {
             Some(PublicationScheduleError::Capacity)
         } else {
@@ -429,6 +433,7 @@ impl PublicationCoordinator {
             operation: check.token.operation,
             actor: check.actor.clone(),
             class,
+            reservation,
             ready: Mutex::new(Some(ready)),
             status: watch::channel(PublicationState::Queued).0,
             read,
@@ -436,7 +441,7 @@ impl PublicationCoordinator {
         });
         state.actors.entry(job.actor.clone()).or_default()[at] += 1;
         state.counts[at] += 1;
-        state.bytes[at] += class.reservation();
+        state.bytes[at] += job.reservation;
         state.jobs.insert(job.operation, Arc::clone(&job));
         state.queue.push(
             job.class,
@@ -758,7 +763,7 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
             state.actors.remove(&job.actor);
         }
         state.counts[at] -= 1;
-        state.bytes[at] -= job.class.reservation();
+        state.bytes[at] -= job.reservation;
         job.status
             .send_replace(PublicationState::Finished(outcome.map_err(Arc::new)));
     }

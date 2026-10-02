@@ -127,6 +127,19 @@ impl NativeInputCertificate {
             actor: data.actor,
         })
     }
+    pub(super) fn bound_digest(
+        &self,
+        session: &PreparationSession,
+    ) -> Result<[u8; 32], CodecError> {
+        let data: Inputs = self.0.data()?;
+        if self.scoped_check(&session.target)? != session.check
+            || data.format != session.lease.format
+            || data.source.is_none()
+        {
+            return Err(CodecError::Invalid("bound input checkpoint context"));
+        }
+        Ok(*blake3::hash(&self.bytes()?).as_bytes())
+    }
     pub fn token(&self) -> Result<PreparationToken, CodecError> {
         Ok(self.0.data::<Inputs>()?.token)
     }
@@ -577,4 +590,25 @@ pub(super) fn retention_matches(
         && inputs.format == data.catalog.format
         && inputs.tenant == data.tenant
         && inputs.application == data.application)
+}
+
+/// A durable receipt is not usable custody. Check the exact independent input
+/// pin, then observe the same live bound attempt/floor with a fresh clock.
+pub(super) async fn observe_bound_registration(
+    session: &PreparationSession,
+    digest: [u8; 32],
+    minimum: cellule_runtime::Receipt,
+) -> Result<(), InputCheckpointError> {
+    let current = session
+        .client
+        .query::<CheckStagedInputs>(&session.target, Some(minimum), session.check.clone())
+        .await
+        .map_err(|e| InputCheckpointError::Retained(Box::new(e)))?
+        .output
+        .ok_or(PreparationBaseError::Inactive)?;
+    if *blake3::hash(&current.bytes()?).as_bytes() != digest {
+        return Err(PreparationBaseError::Context.into());
+    }
+    session.refresh(minimum).await?;
+    Ok(())
 }

@@ -41,10 +41,11 @@ pub use completion::{
     PushCompletionRequest, SignedPushAnnotation, replay_push_response,
 };
 pub use coordinator::{
-    CompactionReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
-    PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
-    PublicationState, PublicationStats, PublicationTicket, ReadyCatalogCompaction,
-    ReadyCatalogPush, ReadyPublication,
+    CompactionReadyError, NativeInputReadyError, PublicationAdmissionFailure, PublicationClass,
+    PublicationCoordinator, PublicationError, PublicationLimits, PublicationOutcome,
+    PublicationScheduleError, PublicationState, PublicationStats, PublicationTicket,
+    ReadyCatalogCompaction, ReadyCatalogPush, ReadyNativeInputs, ReadyPublication,
+    RegisteredNativeInputs,
 };
 mod commands;
 mod compaction;

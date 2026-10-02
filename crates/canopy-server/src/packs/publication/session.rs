@@ -92,23 +92,38 @@ impl PreparationSession {
             )
             .await
             .map_err(|error| PreparationBaseError::Command(Box::new(error)))?;
-        let (lease, deadline) = probe(
-            &self.client,
-            &self.target,
-            &self.check,
-            Some(committed.receipt),
-        )
-        .await?;
+        self.refresh(committed.receipt).await
+    }
+    pub(super) fn fence(&self) {
+        self.fenced.store(true, Ordering::Release);
+    }
+    pub(super) async fn refresh(&self, minimum: Receipt) -> Result<(), PreparationBaseError> {
+        let result = self.refresh_inner(minimum).await;
+        if result.is_err() {
+            self.fence();
+        }
+        result
+    }
+    async fn refresh_inner(&self, minimum: Receipt) -> Result<(), PreparationBaseError> {
+        if self.fenced.load(Ordering::Acquire) {
+            return Err(PreparationBaseError::Inactive);
+        }
+        let (lease, deadline) =
+            probe(&self.client, &self.target, &self.check, Some(minimum)).await?;
         if lease.token != self.lease.token
             || lease.base != self.lease.base
             || lease.format != self.lease.format
         {
             return Err(PreparationBaseError::Context);
         }
-        *self
+        let mut shared = self
             .deadline
             .lock()
-            .map_err(|_| PreparationBaseError::Context)? = deadline;
+            .map_err(|_| PreparationBaseError::Context)?;
+        if self.fenced.load(Ordering::Acquire) {
+            return Err(PreparationBaseError::Inactive);
+        }
+        *shared = deadline;
         Ok(())
     }
 }

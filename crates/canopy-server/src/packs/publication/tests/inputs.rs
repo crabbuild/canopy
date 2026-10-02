@@ -1,4 +1,5 @@
 use super::*;
+mod bound;
 mod custody;
 use crate::packs::sources::{NativeInputIndex, NativePackDescriptor};
 use canopy_object_storage::artifact::{ArtifactDescriptor, ArtifactStore};
@@ -456,16 +457,18 @@ async fn bound_preparation_claim_adopts_exact_input_root_without_copying_nodes()
         )
         .await?;
     let next = lease(claimed.output)?;
-    let session = PreparationSession::open(
-        fixture.client(),
-        fixture.target.clone(),
-        LeaseCheck {
-            token: next.token,
-            actor: "owner".into(),
-        },
-        Some(claimed.receipt),
-    )
-    .await?;
+    let session = Arc::new(
+        PreparationSession::open(
+            fixture.client(),
+            fixture.target.clone(),
+            LeaseCheck {
+                token: next.token,
+                actor: "owner".into(),
+            },
+            Some(claimed.receipt),
+        )
+        .await?,
+    );
     let adopted = session.adopt_native_inputs(store, &prior).await?;
     assert_eq!(adopted.root()?, prior.root()?);
     assert_eq!(adopted.token()?, next.token);
@@ -473,10 +476,17 @@ async fn bound_preparation_claim_adopts_exact_input_root_without_copying_nodes()
         adopted.token()?.artifact_operation,
         prior.token()?.artifact_operation
     );
-    fixture
-        .client()
-        .command::<RegisterStagedInputs>(&fixture.target, identity()?, adopted.clone())
-        .await?;
+    let publisher =
+        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let ready = session.ready_inputs(identity()?, adopted.clone()).await?;
+    let registered = publisher.submit(ready).await?;
+    let PublicationState::Finished(Ok(PublicationOutcome::Inputs(result))) =
+        timeout(Duration::from_secs(10), registered.wait()).await?
+    else {
+        return Err("bound registration".into());
+    };
+    assert!(result.custody.is_ok());
+    assert!(publisher.close_and_drain().await.is_empty());
     assert_eq!(
         check(&fixture.client(), &fixture.target, next.token).await?,
         Some(adopted)

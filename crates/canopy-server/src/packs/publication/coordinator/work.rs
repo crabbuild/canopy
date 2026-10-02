@@ -69,6 +69,7 @@ impl PreparedCompaction {
 pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     Compaction(ReadyCatalogCompaction),
+    Inputs(ReadyNativeInputs),
 }
 impl From<ReadyCatalogPush> for ReadyPublication {
     fn from(ready: ReadyCatalogPush) -> Self {
@@ -80,7 +81,18 @@ impl From<ReadyCatalogCompaction> for ReadyPublication {
         Self::Compaction(ready)
     }
 }
+impl From<ReadyNativeInputs> for ReadyPublication {
+    fn from(ready: ReadyNativeInputs) -> Self {
+        Self::Inputs(ready)
+    }
+}
 impl ReadyPublication {
+    pub(super) fn reservation(&self) -> u64 {
+        match self {
+            Self::Inputs(_) => inputs::INPUT_RESERVATION,
+            _ => self.class().reservation(),
+        }
+    }
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
@@ -91,17 +103,23 @@ impl ReadyPublication {
                 prepared: Arc::clone(&ready.prepared),
                 command: ready.command.clone(),
             }),
+            Self::Inputs(ready) => Self::Inputs(ReadyNativeInputs {
+                session: ready.session.clone(),
+                command: ready.command.clone(),
+                digest: ready.digest,
+            }),
         }
     }
     pub(super) fn class(&self) -> PublicationClass {
         match self {
-            Self::Push(_) => PublicationClass::Foreground,
+            Self::Push(_) | Self::Inputs(_) => PublicationClass::Foreground,
             Self::Compaction(_) => PublicationClass::Maintenance,
         }
     }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
         match self {
             Self::Push(ready) => ready.owner.capability(),
+            Self::Inputs(ready) => ready.session.capability(),
             Self::Compaction(ready) => ready.prepared.preparation_base().capability(),
         }
     }
@@ -113,11 +131,15 @@ impl ReadyPublication {
             Self::Compaction(ready) => PublicationError::Compaction(InvocationError::Pending(
                 Box::new(ready.command.evidence().clone()),
             )),
+            Self::Inputs(ready) => PublicationError::Inputs(InvocationError::Pending(Box::new(
+                ready.command.evidence().clone(),
+            ))),
         }
     }
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
         let client = self.capability().0.clone();
         match self {
+            Self::Inputs(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => {
                 super::super::exact::invoke(&client, ready.command, recover, 128, fault)
                     .await
@@ -138,9 +160,12 @@ impl ReadyPublication {
 pub enum PublicationOutcome {
     Push(Committed<CatalogCompletionReply>),
     Compaction(Committed<CompactionReply>),
+    Inputs(RegisteredNativeInputs),
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("bound input checkpoint: {0}")]
+    Inputs(#[source] InvocationError<StagingReply>),
     #[error("push publication: {0}")]
     Push(#[source] InvocationError<CatalogCompletionReply>),
     #[error("compaction publication: {0}")]
@@ -158,6 +183,7 @@ impl PublicationError {
         }
         match self {
             Self::Push(error) => kind(error),
+            Self::Inputs(error) => kind(error),
             Self::Compaction(error) => kind(error),
         }
     }
@@ -170,6 +196,7 @@ impl PublicationError {
         }
         match self {
             Self::Push(error) => unknown(error),
+            Self::Inputs(error) => unknown(error),
             Self::Compaction(error) => unknown(error),
         }
     }
