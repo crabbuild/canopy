@@ -23,17 +23,19 @@ async fn admitted_native_witnesses_assemble_exact_metadata_and_release_scratch()
         let baseline = budget.used();
         let mut verifier = CanonicalVerifier::new(fixture.root.path(), format)?;
         let mut witnesses = Vec::with_capacity(PAGE_OBJECTS);
+        let mut spool = spool::EdgeSpool::new(scratch.path(), budget.clone());
         for oid in fixture.index.ids() {
-            let witness = verifier
-                .inspect_to_disk(oid?, scratch.path(), budget.clone(), 1 << 20)
-                .await?;
+            let witness = verifier.inspect_to_spool(oid?, &spool, 1 << 20).await?;
             assert_eq!(witness.object(), fixture.objects[&witness.object().oid].0);
             witnesses.push(witness);
             if witnesses.len() == PAGE_OBJECTS {
+                drop(spool);
                 builder.put_verified_batch(std::mem::take(&mut witnesses))?;
                 assert_eq!(budget.used(), builder.admitted_bytes());
+                spool = spool::EdgeSpool::new(scratch.path(), budget.clone());
             }
         }
+        drop(spool);
         if !witnesses.is_empty() {
             builder.put_verified_batch(witnesses)?;
         }

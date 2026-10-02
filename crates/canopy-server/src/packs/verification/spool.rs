@@ -7,7 +7,10 @@ use cellule_ltx::DiskBudget;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// A decoded canonical witness with privately owned, admitted dependencies.
@@ -15,9 +18,13 @@ use std::{
 /// It is not a physical-pack or graph-closure certificate.
 pub struct VerifiedObject {
     object: CanonicalObject,
-    file: Option<AdmittedFile>,
+    range: Option<EdgeRange>,
     bytes: u64,
     digest: [u8; 32],
+}
+struct EdgeRange {
+    storage: Arc<Mutex<Storage>>,
+    offset: u64,
 }
 impl VerifiedObject {
     pub fn object(&self) -> CanonicalObject {
@@ -30,22 +37,33 @@ impl VerifiedObject {
         &mut self,
         mut append: impl FnMut(&[TypedEdge]) -> Result<(), MetadataError>,
     ) -> Result<(), MetadataError> {
-        let Some(file) = self.file.as_mut() else {
+        let Some(range) = self.range.as_ref() else {
             return if self.bytes == 0 && self.digest == *blake3::hash(&[]).as_bytes() {
                 Ok(())
             } else {
                 Err(MetadataError::Integrity)
             };
         };
+        let mut storage = range.storage.lock().map_err(|_| MetadataError::Integrity)?;
         let width = self.object.oid.len();
         let stride = width + 1;
-        if !self.bytes.is_multiple_of(stride as u64)
-            || file.file().as_file().metadata()?.len() != self.bytes
+        if storage.failed
+            || self.bytes == 0
+            || !self.bytes.is_multiple_of(stride as u64)
+            || range
+                .offset
+                .checked_add(self.bytes)
+                .is_none_or(|end| end > storage.bytes)
         {
             return Err(MetadataError::Integrity);
         }
+        let stored_bytes = storage.bytes;
+        let file = storage.file.as_mut().ok_or(MetadataError::Integrity)?;
+        if file.file().as_file().metadata()?.len() != stored_bytes {
+            return Err(MetadataError::Integrity);
+        }
         let input = file.file_mut().as_file_mut();
-        input.seek(SeekFrom::Start(0))?;
+        input.seek(SeekFrom::Start(range.offset))?;
         let mut buffer = [0; PAGE_OBJECTS * 33];
         let mut remaining = self.bytes;
         let mut hash = blake3::Hasher::new();
@@ -82,10 +100,68 @@ impl VerifiedObject {
     }
 }
 
-struct State {
+struct Storage {
     file: Option<AdmittedFile>,
     bytes: u64,
+    failed: bool,
+}
+
+/// One append-only dependency file for a bounded native-object batch. Each
+/// complete witness owns an immutable range; keeping any witness or queued job
+/// alive retains the complete file and its disk admission.
+pub(super) struct EdgeSpool {
+    root: PathBuf,
+    budget: DiskBudget,
+    storage: Arc<Mutex<Storage>>,
+    writing: Arc<AtomicBool>,
+}
+impl EdgeSpool {
+    pub(super) fn new(root: &Path, budget: DiskBudget) -> Self {
+        Self {
+            root: root.to_owned(),
+            budget,
+            storage: Arc::new(Mutex::new(Storage {
+                file: None,
+                bytes: 0,
+                failed: false,
+            })),
+            writing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    pub(super) fn sink(&self, parent: ObjectId, limit: u64) -> Result<DiskSink, ObjectReadError> {
+        // Hold exclusivity for an entire object, including between edge pages.
+        // Queued writes retain this permit after observer cancellation.
+        self.writing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| ObjectReadError::Malformed)?;
+        Ok(DiskSink {
+            parent,
+            root: self.root.clone(),
+            budget: self.budget.clone(),
+            limit,
+            failed: false,
+            state: Arc::new(Mutex::new(State {
+                storage: Arc::clone(&self.storage),
+                offset: None,
+                bytes: 0,
+                hash: blake3::Hasher::new(),
+                _writer: AppendPermit(Arc::clone(&self.writing)),
+            })),
+        })
+    }
+}
+struct AppendPermit(Arc<AtomicBool>);
+impl Drop for AppendPermit {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+struct State {
+    storage: Arc<Mutex<Storage>>,
+    offset: Option<u64>,
+    bytes: u64,
     hash: blake3::Hasher,
+    _writer: AppendPermit,
 }
 pub(super) struct DiskSink {
     parent: ObjectId,
@@ -97,18 +173,10 @@ pub(super) struct DiskSink {
 }
 impl DiskSink {
     pub(super) fn new(parent: ObjectId, root: &Path, budget: DiskBudget, limit: u64) -> Self {
-        Self {
-            parent,
-            root: root.to_owned(),
-            budget,
-            limit,
-            failed: false,
-            state: Arc::new(Mutex::new(State {
-                file: None,
-                bytes: 0,
-                hash: blake3::Hasher::new(),
-            })),
-        }
+        // A fresh private spool cannot have another writer.
+        EdgeSpool::new(root, budget)
+            .sink(parent, limit)
+            .expect("fresh edge spool")
     }
     pub(super) fn complete(
         self,
@@ -121,9 +189,13 @@ impl DiskSink {
             .map_err(|_| ObjectReadError::Malformed)?
             .into_inner()
             .map_err(|_| ObjectReadError::Malformed)?;
+        let range = state.offset.map(|offset| EdgeRange {
+            storage: Arc::clone(&state.storage),
+            offset,
+        });
         Ok(VerifiedObject {
             object,
-            file: state.file,
+            range,
             bytes: state.bytes,
             digest: *state.hash.finalize().as_bytes(),
         })
@@ -163,16 +235,32 @@ impl EdgeSink for DiskSink {
                 .checked_add(bytes.len() as u64)
                 .filter(|size| *size <= limit)
                 .ok_or(ObjectReadError::TooLarge)?;
-            if state.file.is_none() {
+            let storage = Arc::clone(&state.storage);
+            let mut storage = storage.lock().map_err(|_| ObjectReadError::Malformed)?;
+            if storage.failed {
+                return Err(ObjectReadError::Malformed);
+            }
+            let offset = state.offset.unwrap_or(storage.bytes);
+            if offset.checked_add(state.bytes) != Some(storage.bytes) {
+                return Err(ObjectReadError::Malformed);
+            }
+            let stored_next = storage
+                .bytes
+                .checked_add(bytes.len() as u64)
+                .ok_or(ObjectReadError::TooLarge)?;
+            // A partial write cannot be adopted by a later object. Failure
+            // poisons this file; all retained ranges reject replay.
+            storage.failed = true;
+            if storage.file.is_none() {
                 let reservation = budget
                     .try_reserve(bytes.len() as u64)
                     .map_err(std::io::Error::other)?;
                 let file = tempfile::Builder::new()
                     .prefix("canopy-verified-edges-")
                     .tempfile_in(root)?;
-                state.file = Some(AdmittedFile::new(file, reservation));
+                storage.file = Some(AdmittedFile::new(file, reservation));
             } else {
-                state
+                storage
                     .file
                     .as_mut()
                     .ok_or(ObjectReadError::Malformed)?
@@ -180,13 +268,17 @@ impl EdgeSink for DiskSink {
                     .try_grow(bytes.len() as u64)
                     .map_err(std::io::Error::other)?;
             }
-            state
-                .file
-                .as_mut()
-                .ok_or(ObjectReadError::Malformed)?
-                .file_mut()
-                .as_file_mut()
-                .write_all(&bytes)?;
+            let stored_bytes = storage.bytes;
+            let file = storage.file.as_mut().ok_or(ObjectReadError::Malformed)?;
+            if file.file().as_file().metadata()?.len() != stored_bytes {
+                return Err(ObjectReadError::Malformed);
+            }
+            let output = file.file_mut().as_file_mut();
+            output.seek(SeekFrom::Start(stored_bytes))?;
+            output.write_all(&bytes)?;
+            storage.bytes = stored_next;
+            storage.failed = false;
+            state.offset = Some(offset);
             state.hash.update(&bytes);
             state.bytes = next;
             Ok::<_, ObjectReadError>(())
@@ -198,155 +290,4 @@ impl EdgeSink for DiskSink {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        ObjectFormat,
-        packs::metadata::{
-            MetadataBuilder,
-            tests::{fixture, limits},
-        },
-    };
-    use std::future::Future;
-    type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-    #[test]
-    fn canceled_queued_write_retains_file_admission_and_cannot_complete() -> Result {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .max_blocking_threads(1)
-            .enable_all()
-            .build()?;
-        let root = tempfile::TempDir::new()?;
-        let budget = DiskBudget::new(100);
-        let parent = crate::object_id(ObjectFormat::Sha256, ObjectKind::Tree, b"tree");
-        let child = crate::object_id(ObjectFormat::Sha256, ObjectKind::Blob, b"blob");
-        let edge = [TypedEdge {
-            child,
-            expected_kind: ObjectKind::Blob,
-        }];
-        let mut sink = DiskSink::new(parent, root.path(), budget.clone(), 100);
-        runtime.block_on(sink.append(parent, &edge))?;
-        assert_eq!(budget.used(), 33);
-        let entered = Arc::new(tokio::sync::Notify::new());
-        let worker_entered = entered.clone();
-        let (release, wait) = std::sync::mpsc::channel();
-        let _blocker = runtime.spawn_blocking(move || {
-            worker_entered.notify_one();
-            wait.recv().expect("release blocker");
-        });
-        runtime.block_on(entered.notified());
-        runtime.block_on(async {
-            let mut pending = std::pin::pin!(sink.append(parent, &edge));
-            std::future::poll_fn(|context| {
-                assert!(pending.as_mut().poll(context).is_pending());
-                std::task::Poll::Ready(())
-            })
-            .await;
-            // Drop the confirmed queued append here, before releasing its worker.
-        });
-        assert!(
-            sink.complete(CanonicalObject {
-                oid: parent,
-                kind: ObjectKind::Tree,
-                size: 4,
-                digest: [0; 32]
-            })
-            .is_err()
-        );
-        assert_eq!(budget.used(), 33);
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
-        release.send(())?;
-        runtime.block_on(runtime.spawn_blocking(|| ()))?;
-        assert_eq!(budget.used(), 0);
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn late_scratch_corruption_rolls_back_entire_witness_batch_and_poison_sealing() -> Result
-    {
-        for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
-            let fixture = fixture(format, 1600).await?;
-            let root = tempfile::TempDir::new()?;
-            let budget = DiskBudget::new(128 << 20);
-            let mut builder =
-                MetadataBuilder::new(root.path(), budget.clone(), fixture.identity, limits())?;
-            let tree = fixture
-                .objects
-                .values()
-                .find(|(object, _)| object.kind == ObjectKind::Tree)
-                .ok_or("tree")?
-                .0
-                .oid;
-            let blob = fixture
-                .objects
-                .values()
-                .find(|(object, _)| object.kind == ObjectKind::Blob)
-                .ok_or("blob")?
-                .0
-                .oid;
-            let mut verifier = super::super::CanonicalVerifier::new(fixture.root.path(), format)?;
-            let first = verifier
-                .inspect_to_disk(blob, root.path(), budget.clone(), 1 << 20)
-                .await?;
-            assert!(first.file.is_none());
-            let mut corrupt = verifier
-                .inspect_to_disk(tree, root.path(), budget.clone(), 1 << 20)
-                .await?;
-            let file = corrupt
-                .file
-                .as_mut()
-                .ok_or("spool")?
-                .file_mut()
-                .as_file_mut();
-            file.seek(SeekFrom::Start(0))?;
-            let mut byte = [0];
-            file.read_exact(&mut byte)?;
-            byte[0] ^= 1; // valid OID bytes; detection occurs after all replay pages.
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&byte)?;
-            verifier.finish().await?;
-            assert!(matches!(
-                builder.put_verified_batch(vec![first, corrupt]),
-                Err(MetadataError::Integrity)
-            ));
-            let path = std::fs::read_dir(root.path())?
-                .find_map(|entry| {
-                    entry
-                        .ok()
-                        .filter(|entry| {
-                            entry
-                                .file_name()
-                                .to_string_lossy()
-                                .starts_with("canopy-metadata-")
-                        })
-                        .map(|entry| entry.path())
-                })
-                .ok_or("metadata")?;
-            let database = rusqlite::Connection::open_with_flags(
-                path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )?;
-            for table in ["objects", "object_edges"] {
-                let count: u64 =
-                    database.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                        row.get(0)
-                    })?;
-                assert_eq!(count, 0);
-            }
-            drop(database);
-            assert!(matches!(
-                builder.put_objects(&[fixture.objects[&blob].0]),
-                Err(MetadataError::Integrity)
-            ));
-            assert!(matches!(
-                builder.seal(&fixture.index),
-                Err(MetadataError::Integrity)
-            ));
-            assert_eq!(budget.used(), 0);
-            assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
-        }
-        Ok(())
-    }
-}
+mod tests;

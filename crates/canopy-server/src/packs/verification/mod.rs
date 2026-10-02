@@ -58,6 +58,19 @@ impl CanonicalVerifier {
         let object = self.inspect(oid, &mut sink).await?;
         sink.complete(object)
     }
+
+    /// Reuse one dependency file across an admitted physical-verification page.
+    /// Each witness retains its exact immutable range and complete digest.
+    async fn inspect_to_spool(
+        &mut self,
+        oid: ObjectId,
+        spool: &spool::EdgeSpool,
+        max_edge_bytes: u64,
+    ) -> Result<VerifiedObject, ObjectReadError> {
+        let mut sink = spool.sink(oid, max_edge_bytes)?;
+        let object = self.inspect(oid, &mut sink).await?;
+        sink.complete(object)
+    }
 }
 
 #[cfg(test)]

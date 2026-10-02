@@ -219,20 +219,19 @@ impl PhysicalVerifier {
                 return Err(PhysicalError::Integrity);
             }
             let mut witnesses = Vec::with_capacity(ids.len());
+            let edges = spool::EdgeSpool::new(&self.root, self.budget.clone());
             for oid in ids {
                 let witness = self
                     .native
                     .as_mut()
                     .ok_or(PhysicalError::Integrity)?
-                    .inspect_to_disk(
-                        oid,
-                        &self.root,
-                        self.budget.clone(),
-                        self.limits.max_edge_bytes,
-                    )
+                    .inspect_to_spool(oid, &edges, self.limits.max_edge_bytes)
                     .await?;
                 witnesses.push(witness);
             }
+            // Witnesses and detached SQL workers own the file through every
+            // replay. Drop the producer handle before handing off this page.
+            drop(edges);
             let cache = Arc::clone(&self.cache);
             builder = tokio::task::spawn_blocking(move || {
                 let _pin = cache;
