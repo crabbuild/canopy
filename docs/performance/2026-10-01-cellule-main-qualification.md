@@ -120,7 +120,7 @@ These are local, not off-machine backups.
 
 ## Remaining upgrade and performance gates
 
-PR #18 remains draft. The [subsequent owned-fixture upgrade and recovery](2026-10-01-old-binary-rustfs-upgrade.md)
+The [subsequent owned-fixture upgrade and recovery](2026-10-01-old-binary-rustfs-upgrade.md)
 verified actual old-executable RustFS data, controlled admission, new-executable
 restore, twenty scheduled critical workflows and their complete fresh-owner
 recovery. Its earlier clone-byte mismatch was traced to missing client LFS

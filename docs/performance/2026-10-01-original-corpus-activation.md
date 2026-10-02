@@ -270,7 +270,7 @@ retained-store recovery and performance remain open. See the
 [current dependency checkpoint](2026-10-01-cellule-main-qualification.md).
 No result from this activation or frozen campaign transfers to the new pin.
 
-PR #18 remains draft. The [full campaign](../performance-plan.md) still requires
+The [full campaign](../performance-plan.md) still requires
 the complete schedule and audit, concurrent faults, fresh-owner verification
 of the original corpus and every newly acknowledged write, higher admission
 profiles, matched comparisons, large
