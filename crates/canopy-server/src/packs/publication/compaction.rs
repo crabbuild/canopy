@@ -113,6 +113,7 @@ impl PreparedCompaction {
             object_count: self.object_count,
             edge_count: self.edge_count,
             input_count: self.input_count,
+            input_checkpoint_digest: None,
             inputs_digest: self.inputs_digest,
             inventory_digest: self.inventory_digest,
             refs_digest: None,

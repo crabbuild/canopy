@@ -26,6 +26,8 @@ pub enum CatalogPreparationError {
     Base(#[from] PreparationBaseError),
     #[error("preparation closure failed")]
     Closure(#[from] ClosureError),
+    #[error("preparation input custody failed")]
+    Inputs(#[from] InputCheckpointError),
     #[error("preparation metadata failed")]
     Metadata(#[from] MetadataError),
     #[error("preparation physical input failed")]
@@ -52,6 +54,7 @@ pub struct PreparedCatalog {
     incoming_root: Option<NodeRef>,
     incoming_sources: Option<SourceRoot>,
     closure: Arc<RetainedClosure>,
+    pub(super) input_checkpoint_digest: Option<[u8; 32]>,
 }
 impl PreparedCatalog {
     pub fn token(&self) -> PreparationToken {
@@ -126,6 +129,7 @@ impl PreparedCatalog {
                 incoming_root: self.incoming_root,
                 incoming_sources: self.incoming_sources,
                 closure: Arc::clone(&self.closure),
+                input_checkpoint_digest: self.input_checkpoint_digest,
             })
         })
         .await
@@ -149,9 +153,6 @@ async fn merge_sources(
     }
     let mut cursor = sources.cursor(incoming, None)?;
     while let Some(record) = cursor.next().await? {
-        if record.native().operation != operation {
-            return Err(IndexError::Integrity);
-        }
         base = Some(sources.insert(base, operation, record).await?);
     }
     Ok(base)
@@ -172,6 +173,7 @@ pub struct CatalogPreparation {
     output_limits: MetadataLimits,
     closure: Option<ClosureVerifier>,
     active: Option<NativePackDescriptor>,
+    input_checkpoint_digest: Option<[u8; 32]>,
     failed: bool,
 }
 impl CatalogPreparation {
@@ -251,6 +253,7 @@ impl CatalogPreparation {
                 output_limits,
                 closure: Some(closure),
                 active: None,
+                input_checkpoint_digest: None,
                 failed: false,
             })
         };
@@ -279,6 +282,41 @@ impl CatalogPreparation {
             .as_mut()
             .ok_or(CatalogPreparationError::Integrity)?
             .begin_pack(witness)?;
+        self.active = Some(native);
+        self.failed = false;
+        Ok(())
+    }
+    /// Accept a complete physical witness from the exact authenticated input
+    /// checkpoint retained by this attempt. Raw descriptors cannot bypass the
+    /// public begin_pack namespace guard or construct the private custody proof.
+    pub async fn begin_retained_pack(
+        &mut self,
+        witness: PhysicalPackWitness,
+    ) -> Result<(), CatalogPreparationError> {
+        let deadline = self.start()?;
+        if self.active.is_some() {
+            return Err(CatalogPreparationError::Integrity);
+        }
+        let native = witness.native();
+        witness.verify_store(&self.store)?;
+        let custody = timeout_at(
+            deadline,
+            inputs::RetainedNativeInput::open(&self.base, native),
+        )
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)??;
+        let digest = custody.digest();
+        if self
+            .input_checkpoint_digest
+            .is_some_and(|old| old != digest)
+        {
+            return Err(CatalogPreparationError::Integrity);
+        }
+        self.closure
+            .as_mut()
+            .ok_or(CatalogPreparationError::Integrity)?
+            .begin_retained_pack(witness, custody)?;
+        self.input_checkpoint_digest = Some(digest);
         self.active = Some(native);
         self.failed = false;
         Ok(())
@@ -331,7 +369,11 @@ impl CatalogPreparation {
         }
         self.incoming_sources = Some(
             self.sources
-                .insert(self.incoming_sources, native.operation, record)
+                .insert(
+                    self.incoming_sources,
+                    self.base.context_token().artifact_operation,
+                    record,
+                )
                 .await?,
         );
         Ok(())
@@ -445,6 +487,7 @@ impl CatalogPreparation {
             incoming_root,
             incoming_sources: self.incoming_sources,
             closure: Arc::new(closure),
+            input_checkpoint_digest: self.input_checkpoint_digest,
         })
     }
 }

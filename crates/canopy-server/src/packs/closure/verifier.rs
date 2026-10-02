@@ -3,6 +3,8 @@ use super::*;
 struct ActivePack {
     partition: PhysicalPartition,
     digest: [u8; 32],
+    native: crate::packs::sources::NativePackDescriptor,
+    custody: Option<crate::packs::publication::RetainedNativeInput>,
 }
 pub struct ClosureVerifier {
     spool: Arc<Mutex<Spool>>,
@@ -75,12 +77,29 @@ impl ClosureVerifier {
     /// Consume only a complete isolated physical witness. Copy its metadata
     /// shards sequentially; a missing or mismatched shard prevents finishing.
     pub fn begin_pack(&mut self, witness: PhysicalPackWitness) -> Result<(), ClosureError> {
+        self.begin_inner(witness, None)
+    }
+    pub(in crate::packs) fn begin_retained_pack(
+        &mut self,
+        witness: PhysicalPackWitness,
+        custody: crate::packs::publication::RetainedNativeInput,
+    ) -> Result<(), ClosureError> {
+        self.begin_inner(witness, Some(custody))
+    }
+    fn begin_inner(
+        &mut self,
+        witness: PhysicalPackWitness,
+        custody: Option<crate::packs::publication::RetainedNativeInput>,
+    ) -> Result<(), ClosureError> {
         self.healthy()?;
         self.failed = true;
         let native = witness.native();
+        if let Some(custody) = &custody {
+            custody.authorize(self.context, native)?;
+        }
         if self.active.is_some()
             || native.repository != self.context.repository
-            || native.operation != self.context.operation
+            || (native.operation != self.context.operation && custody.is_none())
             || native.format != self.context.format
         {
             return Err(ClosureError::Integrity);
@@ -88,6 +107,8 @@ impl ClosureVerifier {
         self.active = Some(ActivePack {
             partition: witness.partition(),
             digest: witness.metadata_digest(),
+            native,
+            custody,
         });
         self.failed = false;
         Ok(())
@@ -96,17 +117,18 @@ impl ClosureVerifier {
         self.healthy()?;
         self.failed = true;
         let mut guard = CancelGuard::new(self.canceled.clone());
-        self.active
-            .as_mut()
-            .ok_or(ClosureError::Integrity)?
-            .partition
-            .add(segment.descriptor())?;
+        let active = self.active.as_mut().ok_or(ClosureError::Integrity)?;
+        if let Some(custody) = &active.custody {
+            custody.authorize(self.context, active.native)?;
+        }
+        active.partition.add(segment.descriptor())?;
+        let operation = active.native.operation;
         let spool = self.spool.clone();
         tokio::task::spawn_blocking(move || {
             spool
                 .lock()
                 .map_err(|_| ClosureError::Integrity)?
-                .copy_segment(&segment)
+                .copy_segment(&segment, operation)
         })
         .await??;
         self.failed = false;
@@ -118,6 +140,9 @@ impl ClosureVerifier {
         self.failed = true;
         let mut guard = CancelGuard::new(self.canceled.clone());
         let active = self.active.take().ok_or(ClosureError::Integrity)?;
+        if let Some(custody) = &active.custody {
+            custody.authorize(self.context, active.native)?;
+        }
         active.partition.finish()?;
         let spool = self.spool.clone();
         tokio::task::spawn_blocking(move || {

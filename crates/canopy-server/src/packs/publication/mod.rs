@@ -60,6 +60,7 @@ pub use staging_service::{
     StagingError, StagingLimits, StagingState, StagingStats, StagingTask, StagingTicket,
 };
 mod inputs;
+pub(in crate::packs) use inputs::RetainedNativeInput;
 mod staging;
 pub use inputs::{
     CheckStagedInputs, InputCheckpointError, NativeInputCertificate, RegisterStagedInputs,

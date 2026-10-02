@@ -2,17 +2,19 @@ use super::*;
 
 /// One repository/format's bounded node clients, retained by a read worker
 /// across catalog publications. New generations reuse unchanged authenticated
-/// nodes rather than allocating a new pair of caches per snapshot/request.
+/// nodes rather than allocating new caches per snapshot/request.
 pub struct CatalogIndexes {
     store: Arc<ArtifactStore>,
     ranges: RangeIndex,
     sources: Arc<SourceIndex>,
+    inputs: super::super::sources::NativeInputIndex,
 }
 impl CatalogIndexes {
     pub fn new(store: Arc<ArtifactStore>, format: ObjectFormat) -> Self {
         Self {
             ranges: RangeIndex::new(Arc::clone(&store), format),
             sources: Arc::new(SourceIndex::new(Arc::clone(&store), format)),
+            inputs: super::super::sources::NativeInputIndex::new(Arc::clone(&store), format),
             store,
         }
     }
@@ -21,6 +23,12 @@ impl CatalogIndexes {
     }
     pub(in crate::packs) fn sources(&self) -> Arc<SourceIndex> {
         Arc::clone(&self.sources)
+    }
+    pub(in crate::packs) fn inputs(&self) -> &super::super::sources::NativeInputIndex {
+        &self.inputs
+    }
+    pub fn input_stats(&self) -> super::super::directory::index::ReadStats {
+        self.inputs.stats()
     }
     pub(in crate::packs) fn ranges(&self) -> &RangeIndex {
         &self.ranges

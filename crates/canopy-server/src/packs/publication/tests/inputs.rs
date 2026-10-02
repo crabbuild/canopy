@@ -1,4 +1,5 @@
 use super::*;
+mod custody;
 use crate::packs::sources::{NativeInputIndex, NativePackDescriptor};
 use canopy_object_storage::artifact::{ArtifactDescriptor, ArtifactStore};
 use tokio::time::{Duration, timeout};
@@ -649,8 +650,9 @@ async fn restored_owner_claims_and_adopts_only_a_retained_exact_input_checkpoint
     assert_eq!(adopted.token()?, new.token);
     assert_eq!(adopted.root()?.ok_or("new root")?.record_count, 1);
     assert_eq!(adopted.root()?, proof.root()?);
-    client
-        .command::<RegisterStagedInputs>(&fixture.target, identity()?, adopted.clone())
+    let registration_identity = identity()?;
+    let registered = client
+        .command::<RegisterStagedInputs>(&fixture.target, registration_identity, adopted.clone())
         .await?;
     // The committed destination root retains its native incarnations after the
     // source pin expires. Re-registration must not require the parent again.
@@ -673,6 +675,10 @@ async fn restored_owner_claims_and_adopts_only_a_retained_exact_input_checkpoint
     let index = NativeInputIndex::new(store.clone(), fixture.format);
     let mut old = index.cursor(proof.root()?, None)?;
     let mut new_cursor = index.cursor(adopted.root()?, None)?;
+    assert_eq!(
+        check(&client, &fixture.target, new.token).await?,
+        Some(adopted.clone())
+    );
     while let Some(native) = old.next().await? {
         assert_eq!(new_cursor.next().await?, Some(native));
         let scratch = tempfile::TempDir::new()?;
@@ -687,14 +693,75 @@ async fn restored_owner_claims_and_adopts_only_a_retained_exact_input_checkpoint
             resources.scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
-        verifier.inspect_next_shard(native.object_count).await?;
-        verifier.finish().await?;
+        let segment = verifier.inspect_next_shard(native.object_count).await?;
+        let witness = verifier.finish().await?;
+        let tip = segment
+            .headers_after(None)?
+            .into_iter()
+            .find(|h| h.object.kind == crate::ObjectKind::Commit)
+            .ok_or("retained commit")?
+            .object
+            .oid;
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        let indexes = Arc::new(crate::packs::catalog::CatalogIndexes::new(
+            store.clone(),
+            fixture.format,
+        ));
+        let files = Arc::new(crate::packs::catalog::CatalogFiles::new(
+            scratch.path(),
+            cellule_ltx::DiskBudget::new(64 << 20),
+            store.clone(),
+            fixture.format,
+            crate::packs::catalog::CatalogFileLimits::default(),
+        )?);
+        let base = Arc::new(ticket.open_base(indexes, files).await?);
+        let mut builder = CatalogPreparation::new(
+            scratch.path(),
+            cellule_ltx::DiskBudget::new(64 << 20),
+            base,
+            crate::packs::metadata::tests::limits(),
+        )
+        .await?;
+        builder.begin_retained_pack(witness).await?;
+        builder.add_segment(segment).await?;
+        builder.finish_pack().await?;
+        let prepared = builder.finish().await?;
+        let publication = prepared
+            .ref_proof(
+                super::publishing::plan(vec![super::publishing::update(
+                    "refs/heads/main",
+                    None,
+                    Some(tip),
+                )]),
+                scratch.path(),
+                cellule_ltx::DiskBudget::new(64 << 20),
+                crate::packs::metadata::tests::limits(),
+            )
+            .await?;
+        let committed = client
+            .command::<PublishCatalogRefs>(&fixture.target, identity()?, publication)
+            .await?;
+        assert!(matches!(committed.output, PublicationReply::Published(_)));
     }
     assert!(new_cursor.next().await?.is_none());
-    assert_eq!(
-        check(&client, &fixture.target, new.token).await?,
-        Some(adopted)
-    );
+    // Completion retires the active operation, while its independent pin and
+    // the published source roots keep their immutable custody facts.
+    assert!(check(&client, &fixture.target, new.token).await?.is_none());
+    let token = new.token;
+    let pinned = handle.query(0,32,move |connection| {
+        Ok(connection.query_row("SELECT input_checkpoint_digest FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2",rusqlite::params![token.owner.incarnation.as_bytes().as_slice(),token.attempt as i64],|row|row.get::<_,Vec<u8>>(0))?)
+    }).await?;
+    let mut e = BoundedEncoder::new(CERTIFICATE_BYTES)?;
+    adopted.encode(&mut e)?;
+    assert_eq!(pinned, blake3::hash(&e.finish()).as_bytes());
+    let replay = client
+        .command::<RegisterStagedInputs>(&fixture.target, registration_identity, adopted)
+        .await?;
+    assert_eq!(replay.receipt, registered.receipt);
     ticket.stop();
     assert!(coordinator.close_and_drain().await.is_empty());
     runtime.shutdown().await?;

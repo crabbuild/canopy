@@ -5,7 +5,7 @@ use crate::packs::directory::index::codec::fixed;
 
 pub const CERTIFICATE_BYTES: u32 = 1024;
 const PAYLOAD_BYTES: u32 = 960;
-const DOMAIN: &[u8] = b"canopy.catalog-attestation.v2\0";
+const DOMAIN: &[u8] = b"canopy.catalog-attestation.v3\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogCertificate(pub(super) CertificateEnvelope);
@@ -29,6 +29,7 @@ pub(super) struct CertificateData {
     pub(super) object_count: u64,
     pub(super) edge_count: u64,
     pub(super) input_count: u64,
+    pub(super) input_checkpoint_digest: Option<[u8; 32]>,
     pub(super) inputs_digest: [u8; 32],
     pub(super) inventory_digest: [u8; 32],
     /// Exact ref-plan and ancestry evidence binding, minted only after checks
@@ -53,6 +54,7 @@ impl CertificateData {
             object_count: prepared.object_count(),
             edge_count: prepared.edge_count(),
             input_count: prepared.input_count(),
+            input_checkpoint_digest: prepared.input_checkpoint_digest,
             inputs_digest: prepared.inputs_digest(),
             inventory_digest: prepared.inventory_digest(),
             refs_digest: None,
@@ -77,6 +79,8 @@ impl CertificateData {
                 .any(|value| *value > i64::MAX as u64)
             || (self.input_count == 0) != (self.object_count == 0)
             || (self.object_count == 0 && self.edge_count != 0)
+            || (self.input_checkpoint_digest.is_some()
+                && (self.input_count == 0 || self.compaction))
             || (self.compaction && (self.refs_digest.is_some() || self.completion_digest.is_some()))
         {
             return Err(CodecError::Invalid("invalid catalog attestation facts"));
@@ -103,6 +107,10 @@ impl WireValue for CertificateData {
         e.write_u64(self.object_count)?;
         e.write_u64(self.edge_count)?;
         e.write_u64(self.input_count)?;
+        e.write_bool(self.input_checkpoint_digest.is_some())?;
+        if let Some(digest) = self.input_checkpoint_digest {
+            e.write_bytes(&digest)?;
+        }
         e.write_bytes(&self.inputs_digest)?;
         e.write_bytes(&self.inventory_digest)?;
         e.write_bool(self.refs_digest.is_some())?;
@@ -136,6 +144,11 @@ impl WireValue for CertificateData {
             object_count: d.read_u64()?,
             edge_count: d.read_u64()?,
             input_count: d.read_u64()?,
+            input_checkpoint_digest: if d.read_bool()? {
+                Some(fixed(d)?)
+            } else {
+                None
+            },
             inputs_digest: fixed(d)?,
             inventory_digest: fixed(d)?,
             refs_digest: if d.read_bool()? {

@@ -13,6 +13,10 @@ use canopy_object_storage::artifact::ArtifactStore;
 use cellule_runtime::{CellClient, CellTarget, InvocationError, primitives::sql::SqlCell};
 use std::sync::Arc;
 
+mod custody;
+pub(in crate::packs) use custody::RetainedNativeInput;
+pub(super) use custody::verify_digest;
+
 const DOMAIN: &[u8] = b"canopy.staged-native-inputs.v1\0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeInputCertificate(CertificateEnvelope);
@@ -538,4 +542,39 @@ impl Query for CheckStagedInputs {
         }
         Ok(Some(proof))
     }
+}
+
+/// Command-local custody barrier for newly published catalogs using borrowed
+/// native inputs. Completed outcome replay precedes this check upstream.
+pub(super) fn retention_matches(
+    context: &CommandContext<'_, '_>,
+    data: &certificate::CertificateData,
+) -> cellule_runtime::Result<bool> {
+    let Some(expected) = data.input_checkpoint_digest else {
+        return Ok(true);
+    };
+    let retained = context.sql(&checkpoint(data.token)?)?;
+    let Some([SqlValue::Blob(bytes), digest, SqlValue::Integer(expires)]) =
+        rows(&retained)?.first().map(Vec::as_slice)
+    else {
+        return Ok(false);
+    };
+    if *expires <= now(context.now_ms())?
+        || fixed::<32>(digest)? != expected
+        || *blake3::hash(bytes).as_bytes() != expected
+    {
+        return Ok(false);
+    }
+    let proof = NativeInputCertificate::from_bytes(bytes)?;
+    let inputs: Inputs = proof.0.data()?;
+    let seed = attestation::seed(&context.sql(&statement(
+        "SELECT push_cert_seed FROM repository_identity WHERE singleton=1",
+        vec![],
+    ))?)?;
+    Ok(proof.0.authenticated(&seed)
+        && inputs.token == data.token
+        && inputs.actor == data.actor
+        && inputs.format == data.catalog.format
+        && inputs.tenant == data.tenant
+        && inputs.application == data.application)
 }

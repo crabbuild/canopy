@@ -2,12 +2,16 @@ use super::*;
 use spool::validate_header;
 
 impl Spool {
-    pub(super) fn copy_segment(&mut self, segment: &MetadataSegment) -> Result<(), ClosureError> {
+    pub(super) fn copy_segment(
+        &mut self,
+        segment: &MetadataSegment,
+        operation: [u8; 16],
+    ) -> Result<(), ClosureError> {
         self.check_cancel()?;
         let descriptor = segment.descriptor();
         let identity = descriptor.identity;
         if identity.repository != self.context.repository
-            || identity.operation != self.context.operation
+            || identity.operation != operation
             || identity.format != self.context.format
             || metadata::file_digest_with::<ClosureError>(segment.path(), descriptor.size, || {
                 self.check_cancel()

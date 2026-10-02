@@ -14,6 +14,8 @@ use tokio::time::timeout_at;
 pub enum CatalogAttestationError {
     #[error("catalog attestation base is inactive")]
     Base(#[from] PreparationBaseError),
+    #[error("catalog input custody failed")]
+    Inputs(#[from] InputCheckpointError),
     #[error("catalog attestation SQL capability failed")]
     Capability(#[from] Error),
     #[error("catalog attestation issuer query failed")]
@@ -85,6 +87,9 @@ pub(super) async fn issue_data_certificate(
         || live.format != data.catalog.format
     {
         return Err(PreparationBaseError::Context.into());
+    }
+    if let Some(digest) = data.input_checkpoint_digest {
+        inputs::verify_digest(base, digest).await?;
     }
     let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
     let mut statements = vec![

@@ -138,7 +138,8 @@ pub(super) fn retention_matches(
     let Some(row_generation) = row_generation else {
         return Ok(false);
     };
-    Ok(row_generation == data.retention_floor
+    Ok(inputs::retention_matches(context, data)?
+        && row_generation == data.retention_floor
         && fact(context, data.token.repository, format, Some(row_generation))?.certificate
             == data.retention_certificate)
 }
