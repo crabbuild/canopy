@@ -72,9 +72,31 @@ These are the next implementation slices. Each slice must update its contract, b
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The current build pins Cellule revision `a28de7b` and
+   a Canopy remote. The current source pins Cellule revision `0dc04a6` and
    owns a startup storage probe with cleanup on failure. Historical dependency
    qualification runs below remain evidence for their recorded revisions only.
+   The [live three-node trial](performance/2026-10-01-native-filesystem.md)
+   retains its separately bound `e07670e` executable; latest source is not a
+   claim that the running artifact was rebuilt or performance-qualified.
+   The [bounded authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
+   passed release correctness and eight RustFS compatibility gates. The
+   [retained catalog follow-up](performance/2026-10-01-retained-catalog-admission.md)
+   adds read-only existing-proof admission and rejects unsupported persisted
+   Control metadata before acquisition. Its 239-test release suite, eight RustFS
+   gates and repeated startup/residency regressions passed. The
+   [latest Cellule qualification](performance/2026-10-01-cellule-main-qualification.md)
+   reruns these checks on the new immutable revision without changing runtime
+   budgets. The [owned old-binary RustFS qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
+   passed controlled upgrade, twenty scheduled critical workflows and complete
+   recovery of that fixture after three-owner loss. The
+   [listener handoff follow-up](performance/2026-10-01-listener-handoff.md)
+   removes the affected test's reservation gap and passes 244 release tests,
+   lints, 84 Python tests and eight fresh RustFS gates. Both Linux CI workflows
+   at `eaebfc4` passed. The
+   [original corpus maintenance recovery](performance/2026-10-01-original-corpus-recovery.md)
+   settled all 301 remaining Cells and verified 10,003 idle Controls with
+   unchanged catalog and published roots. Old Maintenance still closes serving
+   admission; new-release verification and full reference performance remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits

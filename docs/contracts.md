@@ -448,6 +448,13 @@ starts. Requests for that candidate wait for the transition and recheck its
 serving state. Initialization must succeed before the ready route is exposed.
 Remote routes retain authoritative owner checks on the transition path.
 
+If inventory has no safe eviction candidate but an unrejected, unpinned local
+resident may settle, cold admission can reobserve inventory up to eight times
+with at most 200 ms of settling waits. The registry lock is released while
+waiting and request/residency permits stay charged. It never replays mutations
+or releases runtime-busy Cells. A fully request-pinned working set refuses
+immediately; the settling bound is not an HTTP or storage-I/O latency guarantee.
+
 At most 32 transition operations may be executing or waiting on that path.
 One authenticated account may hold at most 16 of those slots, across all its
 tokens and repository endpoints. Anonymous readers share a separate 16-slot
@@ -1186,8 +1193,10 @@ and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
-persistent preview. The current build pins Cellule revision
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. The earlier entity-partition
+persistent preview. The current source pins Cellule revision
+`0dc04a658bd99668936f7ec58032d054f6fbc141`; qualification artifacts
+remain bound to their recorded revisions, not silently replaced by this pin.
+The earlier entity-partition
 cutover also made pre-cutover prefixes incompatible; no migration is available.
 
 ## Accounts and authentication
@@ -1472,13 +1481,23 @@ storage. Historical credentials and runtime command outcomes remain retained;
 account-count admission, request-rate controls, receipt retention and deployment
 storage quotas still need their own policies.
 
-Directory credential command 3 and query 4 bind parameter 1 to one execution
+Directory credential command 3 and queries 4/5 bind parameter 1 to one execution
 timestamp for the entire SQL operation. They use the greater of owner wall time
 and Cellule admission time. The pinned runtime captures context time before
 queuing, so the handler samples the clock again after queued work. Commands
 still persist their replay outcome through Cellule; replay does not rerun a
 successful mutation or reactivate an expired record. Normal SQL operations 1/2
 remain for Directory operations that do not make credential-time decisions.
+
+Authentication uses typed query 5, codec 1, with a 36-byte canonical input limit
+and a 256-byte result limit. Its input is exactly one 32-byte token digest; the
+result contains at most one validated principal. Existing commands 1/3 and
+queries 2/4 keep their one-MiB contracts. Admission budgets and minimum receipts
+are unchanged. The Directory descriptor retains the exact preceding `f7254eda`
+code at schema 1. Descriptor compatibility alone is not an automatic upgrade or
+old-binary restore proof. The [catalog admission regression](performance/2026-10-01-retained-catalog-admission.md)
+exercises real startup against an owned in-memory predecessor fixture, not an
+old executable or the existing RustFS corpus.
 
 Authentication requires `expires_ms IS NULL OR expires_ms > now_ms`; it does not
 wait for a cleanup job. Token listing/issuance/revocation, account creation and
@@ -2478,8 +2497,9 @@ Stock `git lfs pull` without credentials verifies this behavior.
 
 Both Directory and Repository initialization schemas changed in this unreleased
 build. Use a fresh development prefix; existing data is not migrated or removed.
-Source digest validation rejects old modules; mixed-build rolling upgrades are
-not supported. Production upgrade migration remains a delivery gate.
+Source digest validation rejects unsupported module codes. Exact Directory
+predecessor retention is a contract check, not a migration. Mixed-build rolling
+upgrades are not supported. Production upgrade migration remains a delivery gate.
 
 ## Deployment release enrollment and maintenance
 
@@ -2504,6 +2524,16 @@ cancels its task group and applies runtime lease fencing while closing SQL;
 advertisement withdrawal follows the shutdown attempt. Unsettled controls still
 prevent maintenance completion if that attempt fails.
 The executable observes supervisor completion as well as OS stop signals.
+
+New SQL catalog entries still use strict current-code provisioning. Existing SQL
+entries are admitted read-only: their verified proof must match the derived
+target, namespace, partition and SQL role, and the registry must support their
+immutable initial code/schema. The selected release must be exact and Ready
+before and after admission, with the complete release record unchanged.
+The actual persisted Control code/schema is checked separately before bootstrap,
+takeover or restoration can claim ownership. Unsupported Control metadata is
+rejected without rewriting its canonical bytes. These checks do not activate a
+release, migrate schema or replace runtime CAS/fencing.
 
 Maintenance administration prepares the same compiled descriptor and enters
 Maintenance with a caller-supplied UUID. It does not select new code or modify Cell
@@ -2764,10 +2794,20 @@ remain required. No new configuration surface was added for diagnostic output.
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
 `cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. `cellule-types` is transitive.
+`0dc04a658bd99668936f7ec58032d054f6fbc141`. `cellule-types` is transitive.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.
+The [current revision checkpoint](performance/2026-10-01-cellule-main-qualification.md)
+records release correctness and fresh RustFS compatibility separately from
+performance. The [owned retained-store qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
+records actual old-executable restore and fresh-owner recovery; it does not
+provide a general upgrade controller or qualify the existing 10K corpus.
+The [listener handoff checkpoint](performance/2026-10-01-listener-handoff.md)
+qualifies the optional prebound HTTP listener through the same startup
+supervisor. Address mismatch is rejected before workspace/storage writes;
+readiness, fencing, cancellation cleanup and drain checks are unchanged.
+Its executable has separate bindings; earlier measurements do not certify it.
 
 The application declares one entity-partitioned SQL Cell type for repositories.
 `repository_target` validates the canonical UUID, then calls the app crate's

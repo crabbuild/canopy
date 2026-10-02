@@ -46,6 +46,7 @@ use crate::{
     repository_http::RepositoryHttp,
 };
 
+mod catalog_admission;
 mod discovery;
 mod lifecycle;
 pub(crate) mod peer;
@@ -402,7 +403,15 @@ impl RunningServer {
     async fn start(
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
+        listener: Option<TcpListener>,
     ) -> Result<Self, ServerError> {
+        if let Some(listener) = &listener
+            && listener.local_addr()? != config.listen
+        {
+            return Err(ServerError::Http(
+                "HTTP listener address differs from listen configuration",
+            ));
+        }
         // Cellule permits 10,000 active Cells; reserve one for Directory takeover.
         if !(1..10_000).contains(&config.max_active_repositories) {
             return Err(ServerError::Http(
@@ -461,7 +470,10 @@ impl RunningServer {
             identity.image,
             identity.release,
         );
-        let listener = TcpListener::bind(config.listen).await?;
+        let listener = match listener {
+            Some(listener) => listener,
+            None => TcpListener::bind(config.listen).await?,
+        };
         let mut config = config;
         let address = listener.local_addr()?;
         let ssh_listener = if let Some(ssh) = &config.ssh {
@@ -762,13 +774,20 @@ async fn acquire_sql_cell(
         layout.clone(),
         ApplicationIdentity::new(target.tenant(), target.application()),
     )?;
-    let proof = releases
-        .provision(
-            &catalog,
-            &registry,
-            CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
-        )
-        .await?;
+    let proof = match catalog.lookup(target.cell_id()).await? {
+        Some(proof) => {
+            catalog_admission::existing_sql_proof(&releases, &registry, target, proof).await?
+        }
+        None => {
+            releases
+                .provision(
+                    &catalog,
+                    &registry,
+                    CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
+                )
+                .await?
+        }
+    };
     acquire_provisioned_sql_cell(node, layout, directory, spec, session, endpoint, proof).await
 }
 
@@ -804,6 +823,17 @@ pub(crate) async fn acquire_provisioned_sql_cell(
                 .await?
         }
     };
+    // Catalog identity describes initial code/schema, not necessarily the
+    // current persisted Control. Reject unsupported Control metadata before
+    // bootstrap, ownership takeover, or restoration can mutate authority.
+    if !node.application().registry().supports_cell(
+        target.namespace(),
+        CatalogRole::Sql,
+        observed.value().code,
+        observed.value().schema,
+    ) {
+        return Err(Error::Control("persisted SQL Cell code/schema is unsupported").into());
+    }
     let cell_type = node
         .application()
         .cell_types()
