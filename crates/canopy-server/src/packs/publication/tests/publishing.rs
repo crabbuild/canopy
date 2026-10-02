@@ -373,8 +373,8 @@ async fn catalog_ref_membership_kind_and_tampered_bindings_cannot_publish() -> R
     reject(&fixture, edited, PreparationDenial::Unauthorized).await?;
     let mut edited = input.clone();
     // Change a signed digest byte while preserving both optional-field flags.
-    let digest_byte = edited.certificate.body.len() - 2;
-    edited.certificate.body[digest_byte] ^= 1;
+    let digest_byte = edited.certificate.0.body.len() - 2;
+    edited.certificate.0.body[digest_byte] ^= 1;
     reject(&fixture, edited, PreparationDenial::Unauthorized).await?;
     let mut edited = input.clone();
     edited.certificate = graph.prepared.certificate().await?;

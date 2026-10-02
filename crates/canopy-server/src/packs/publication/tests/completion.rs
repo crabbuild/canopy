@@ -851,3 +851,5 @@ async fn completed_preflight_prevents_repreparation_and_preserves_the_logical_id
     fixture.runtime.shutdown().await?;
     Ok(())
 }
+
+mod outcome;

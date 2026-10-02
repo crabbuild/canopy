@@ -86,8 +86,44 @@ impl PublicationLimits {
 /// rebuilding a completion allocates a different response identity.
 #[must_use]
 pub struct ReadyCatalogPush {
-    prepared: Arc<PreparedCatalog>,
+    owner: PushPreparation,
     command: PreparedCommand<CompleteCatalogPush>,
+}
+#[derive(Clone)]
+enum PushPreparation {
+    Catalog(Arc<PreparedCatalog>),
+    Outcome(Arc<PreparationSession>),
+}
+impl PushPreparation {
+    fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
+        match self {
+            Self::Catalog(prepared) => prepared.base.capability(),
+            Self::Outcome(session) => session.capability(),
+        }
+    }
+}
+impl PreparationSession {
+    /// Retain the exact outcome command in the same bounded dispatch/recovery
+    /// path as ref publications. No artifacts or catalog upload are needed.
+    pub async fn ready_outcome(
+        self: &Arc<Self>,
+        identity: MutationIdentity,
+        request: PushCompletionRequest,
+    ) -> Result<ReadyCatalogPush, PushCompletionProofError> {
+        let input = self.push_outcome(request).await?;
+        input.encode(&mut BoundedEncoder::new(INLINE_BYTES)?)?;
+        self.live_lease()?;
+        let command = self
+            .client
+            .prepare_command::<CompleteCatalogPush>(&self.target, identity, input)
+            .await
+            .map_err(|error| PushCompletionProofError::Command(Box::new(error)))?;
+        self.live_lease()?;
+        Ok(ReadyCatalogPush {
+            owner: PushPreparation::Outcome(Arc::clone(self)),
+            command,
+        })
+    }
 }
 impl PreparedCatalog {
     pub async fn ready_push(
@@ -98,6 +134,7 @@ impl PreparedCatalog {
         budget: DiskBudget,
         limits: MetadataLimits,
     ) -> Result<ReadyCatalogPush, PushCompletionProofError> {
+        let outcome_only = request.plan.is_none();
         let input = Box::pin(self.push_completion(request, root, budget, limits)).await?;
         // The reservation has a fixed upper bound even if a registry is later
         // configured with a larger command envelope. Large plans need roots.
@@ -110,7 +147,11 @@ impl PreparedCatalog {
             .map_err(|error| PushCompletionProofError::Command(Box::new(error)))?;
         self.ensure_live()?;
         Ok(ReadyCatalogPush {
-            prepared: Arc::clone(self),
+            owner: if outcome_only {
+                PushPreparation::Outcome(Arc::new(self.base.session.clone()))
+            } else {
+                PushPreparation::Catalog(Arc::clone(self))
+            },
             command,
         })
     }

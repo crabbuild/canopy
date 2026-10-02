@@ -361,7 +361,7 @@ async fn maintenance_certificate_purpose_authority_tampering_and_late_rollback_a
     let mut tampered = certificate.clone();
     let mut e = BoundedEncoder::new(960)?;
     data.encode(&mut e)?;
-    tampered.body = e.finish();
+    tampered.0.body = e.finish();
     reject(&fixture, tampered, PreparationDenial::Unauthorized).await?;
     edit(&fixture,"UPDATE repository_identity SET owner='other'; INSERT INTO repository_members VALUES('owner','write');").await?;
     reject(

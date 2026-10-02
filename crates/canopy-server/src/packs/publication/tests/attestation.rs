@@ -199,7 +199,7 @@ async fn edited_facts_wrong_scope_and_conflicting_attestations_do_not_replace_th
         }
         let mut encoder = BoundedEncoder::new(960)?;
         facts.encode(&mut encoder)?;
-        certificate.body = encoder.finish();
+        certificate.0.body = encoder.finish();
         denied(
             fixture
                 .client()

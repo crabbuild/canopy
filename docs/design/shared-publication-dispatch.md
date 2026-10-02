@@ -4,7 +4,7 @@
 
 ## Typed factories and outcomes
 
-`PreparedCatalog::ready_push` retains the verified catalog and exact command 19. `PreparedCompaction::ready_compaction` retains the verified compaction and exact command 22; it issues the existing maintenance certificate, checks a 4 KiB input envelope and checks the live lease before and after SDK preparation. Both factories perform verification/certification before admission. Raw descriptors and a caller-selected class cannot construct either ready object.
+`PreparedCatalog::ready_push` retains the verified catalog and exact command 19 when publishing refs. `PreparationSession::ready_outcome` retains only the admitted session and exact command 19 for refused/empty outcomes; it requires no catalog artifacts. The prepared-catalog wrapper delegates those outcomes to the same session factory and drops catalog ownership from the ready value. See the [outcome-only contract](outcome-only-completion.md). `PreparedCompaction::ready_compaction` retains the verified compaction and exact command 22; it issues the existing maintenance certificate, checks a 4 KiB input envelope and checks the live lease before and after SDK preparation. Both factories perform verification/certification before admission. Raw descriptors and a caller-selected class cannot construct either ready object.
 
 `ReadyPublication` wraps those private factory outputs. `submit` accepts either output and returns the same `PublicationTicket`. Admission failure returns the original typed ready value, preserving its mutation identity and wire bytes. Logical IDs are unique across both classes in one coordinator.
 

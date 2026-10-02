@@ -8,7 +8,10 @@ const PAYLOAD_BYTES: u32 = 960;
 const DOMAIN: &[u8] = b"canopy.catalog-attestation.v2\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CatalogCertificate {
+pub struct CatalogCertificate(pub(super) CertificateEnvelope);
+/// Shared bounded MAC carrier. Each typed proof validates its own domain/data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CertificateEnvelope {
     pub(super) body: Vec<u8>,
     tag: [u8; 32],
 }
@@ -150,23 +153,33 @@ impl WireValue for CertificateData {
         Ok(value)
     }
 }
-impl CatalogCertificate {
-    pub(super) fn seal(data: &CertificateData, seed: &[u8; 32]) -> Result<Self, CodecError> {
+impl CertificateEnvelope {
+    pub(super) fn seal(data: &impl WireValue, seed: &[u8; 32]) -> Result<Self, CodecError> {
         let mut encoder = BoundedEncoder::new(PAYLOAD_BYTES)?;
         data.encode(&mut encoder)?;
         let body = encoder.finish();
         let tag = *mac(seed, &body).as_bytes();
         Ok(Self { body, tag })
     }
-    pub(super) fn data(&self) -> Result<CertificateData, CodecError> {
+    pub(super) fn data<T: WireValue>(&self) -> Result<T, CodecError> {
         let mut decoder = BoundedDecoder::new(&self.body, PAYLOAD_BYTES)?;
-        let value = CertificateData::decode(&mut decoder)?;
+        let value = T::decode(&mut decoder)?;
         decoder.finish()?;
         Ok(value)
     }
     pub(super) fn authenticated(&self, seed: &[u8; 32]) -> bool {
-        // Hash equality uses BLAKE3's constant-time 32-byte comparison.
         mac(seed, &self.body) == blake3::Hash::from_bytes(self.tag)
+    }
+}
+impl CatalogCertificate {
+    pub(super) fn seal(data: &CertificateData, seed: &[u8; 32]) -> Result<Self, CodecError> {
+        Ok(Self(CertificateEnvelope::seal(data, seed)?))
+    }
+    pub(super) fn data(&self) -> Result<CertificateData, CodecError> {
+        self.0.data()
+    }
+    pub(super) fn authenticated(&self, seed: &[u8; 32]) -> bool {
+        self.0.authenticated(seed)
     }
     pub(super) fn bytes(&self) -> Result<Vec<u8>, CodecError> {
         let mut encoder = BoundedEncoder::new(CERTIFICATE_BYTES)?;
@@ -180,21 +193,32 @@ fn mac(seed: &[u8; 32], bytes: &[u8]) -> blake3::Hash {
     let key = blake3::derive_key("canopy.catalog-attestation-key.v1", seed);
     blake3::keyed_hash(&key, bytes)
 }
-impl WireValue for CatalogCertificate {
+impl WireValue for CertificateEnvelope {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
-        self.data()?;
+        if self.body.is_empty() || self.body.len() > PAYLOAD_BYTES as usize {
+            return Err(CodecError::Invalid("certificate size"));
+        }
         e.write_bytes(&self.body)?;
         e.write_bytes(&self.tag)
     }
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
         let body = d.read_bytes()?;
         if body.is_empty() || body.len() > PAYLOAD_BYTES as usize {
-            return Err(CodecError::Invalid("catalog certificate size"));
+            return Err(CodecError::Invalid("certificate size"));
         }
-        let value = Self {
+        Ok(Self {
             body: body.into(),
             tag: fixed(d)?,
-        };
+        })
+    }
+}
+impl WireValue for CatalogCertificate {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        self.data()?;
+        self.0.encode(e)
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        let value = Self(CertificateEnvelope::decode(d)?);
         value.data()?;
         Ok(value)
     }

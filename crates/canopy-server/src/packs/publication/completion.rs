@@ -34,15 +34,9 @@ pub struct PushCompletionRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompletionCatalogProof {
     Refs(RefPublicationProof),
-    OutcomeOnly(CatalogCertificate),
+    OutcomeOnly(OutcomeCertificate),
 }
 impl CompletionCatalogProof {
-    fn certificate(&self) -> &CatalogCertificate {
-        match self {
-            Self::Refs(proof) => &proof.certificate,
-            Self::OutcomeOnly(certificate) => certificate,
-        }
-    }
     fn refs_digest(&self) -> Result<Option<[u8; 32]>, CodecError> {
         match self {
             Self::Refs(proof) => Ok(Some(super::ref_proof::binding(
@@ -111,52 +105,32 @@ impl PreparedCatalog {
         budget: DiskBudget,
         limits: crate::packs::metadata::MetadataLimits,
     ) -> Result<CatalogPushCompletion, PushCompletionProofError> {
+        if request.plan.is_none() {
+            return self.base.session.push_outcome(request).await;
+        }
         let (_, deadline) = self.base.live_lease()?;
         timeout_at(deadline, async {
-            if request.certificate.as_ref().is_some_and(|certificate| {
-                certificate.target != *self.base.capability().1
-                    || certificate.request_digest != self.token().request_digest
-                    || certificate.signer != self.base.capability().2.actor
-            }) {
-                return Err(CodecError::Invalid("signed push witness context differs").into());
-            }
+            let signed = signed_annotation(&self.base.session, request.certificate)?;
             crate::push::report::publication_matches(&request.response, request.plan.as_ref())?;
-            let checked = match request.plan {
-                Some(plan) => Some(self.ref_evidence(plan, root, budget, limits).await?),
-                None => None,
-            };
-            let signed = request.certificate.map(|certificate| SignedPushAnnotation {
-                body: certificate.body,
-                signer: certificate.signer,
-                key: certificate.key,
-            });
-            if signed
-                .as_ref()
-                .is_some_and(|certificate| certificate.signer != self.base.capability().2.actor)
-            {
-                return Err(CodecError::Invalid("signed push actor differs").into());
-            }
+            let plan = request
+                .plan
+                .ok_or(CodecError::Invalid("missing ref plan"))?;
+            let (plan, ancestry) = self.ref_evidence(plan, root, budget, limits).await?;
             let response_id = uuid::Uuid::new_v4().into_bytes();
-            let refs_digest = checked
-                .as_ref()
-                .map(|(plan, bits)| super::ref_proof::binding(plan, bits))
-                .transpose()?;
+            let refs_digest = Some(super::ref_proof::binding(&plan, &ancestry)?);
             let binding = payload_binding(
-                checked.as_ref().map(|(plan, _)| plan),
+                Some(&plan),
                 &response_id,
                 &request.response,
                 &request.options,
                 signed.as_ref(),
             )?;
             let certificate = self.issue_certificate(refs_digest, Some(binding)).await?;
-            let proof = match checked {
-                Some((plan, ancestry)) => CompletionCatalogProof::Refs(RefPublicationProof {
-                    plan,
-                    ancestry,
-                    certificate,
-                }),
-                None => CompletionCatalogProof::OutcomeOnly(certificate),
-            };
+            let proof = CompletionCatalogProof::Refs(RefPublicationProof {
+                plan,
+                ancestry,
+                certificate,
+            });
             let input = CatalogPushCompletion {
                 proof,
                 response_id,
@@ -170,6 +144,25 @@ impl PreparedCatalog {
         .await
         .map_err(|_| PreparationBaseError::Inactive)?
     }
+}
+
+pub(super) fn signed_annotation(
+    session: &PreparationSession,
+    certificate: Option<VerifiedPushCertificate>,
+) -> Result<Option<SignedPushAnnotation>, CodecError> {
+    let (_, target, check) = session.capability();
+    if certificate.as_ref().is_some_and(|certificate| {
+        certificate.target != *target
+            || certificate.request_digest != check.token.request_digest
+            || certificate.signer != check.actor
+    }) {
+        return Err(CodecError::Invalid("signed push witness context differs"));
+    }
+    Ok(certificate.map(|certificate| SignedPushAnnotation {
+        body: certificate.body,
+        signer: certificate.signer,
+        key: certificate.key,
+    }))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -193,18 +186,7 @@ impl PreparedCatalog {
         &self,
         completed: &Committed<CatalogCompletionReply>,
     ) -> Result<GitHttpResponse, CatalogPushResponseError> {
-        let CatalogCompletionReply::Completed(output) = completed.output else {
-            return Err(CatalogPushResponseError::Invalid);
-        };
-        let (client, target, check) = self.base.capability();
-        let request = BeginRequest {
-            repository: check.token.repository,
-            operation: check.token.operation,
-            request_digest: check.token.request_digest,
-            actor: check.actor.clone(),
-            lease_ms: DEFAULT_LEASE_MS,
-        };
-        load_response(client, target, &request, completed.receipt, output).await
+        self.base.session.completed_push_response(completed).await
     }
 }
 /// Current authorized lookup and exact replay after reconnect/restart. It does
@@ -341,7 +323,7 @@ fn validate_payload(
     json(&options)?;
     Ok(())
 }
-fn payload_binding(
+pub(super) fn payload_binding(
     plan: Option<&PushPlan>,
     response_id: &[u8; 16],
     response: &GitHttpResponse,
@@ -422,7 +404,7 @@ impl WireValue for CatalogPushCompletion {
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
         let proof = match d.read_u8()? {
             0 => CompletionCatalogProof::Refs(RefPublicationProof::decode(d)?),
-            1 => CompletionCatalogProof::OutcomeOnly(CatalogCertificate::decode(d)?),
+            1 => CompletionCatalogProof::OutcomeOnly(OutcomeCertificate::decode(d)?),
             _ => return Err(CodecError::Invalid("completion proof kind")),
         };
         let response_id = crate::packs::directory::index::codec::fixed(d)?;
@@ -624,23 +606,44 @@ impl Command for CompleteCatalogPush {
         input: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
         let completion_digest = input.binding()?;
-        let Some((data, key)) = authenticate(
-            context,
-            input.proof.certificate(),
-            input.proof.refs_digest()?,
-            Some(completion_digest),
-        )?
-        else {
-            return Ok(denied(PreparationDenial::Unauthorized));
+        let (check, key, catalog_data, outcome_data) = match &input.proof {
+            CompletionCatalogProof::Refs(proof) => {
+                let Some((data, key)) = authenticate(
+                    context,
+                    &proof.certificate,
+                    input.proof.refs_digest()?,
+                    Some(completion_digest),
+                )?
+                else {
+                    return Ok(denied(PreparationDenial::Unauthorized));
+                };
+                (
+                    LeaseCheck {
+                        token: data.token,
+                        actor: data.actor.clone(),
+                    },
+                    key,
+                    Some(data),
+                    None,
+                )
+            }
+            CompletionCatalogProof::OutcomeOnly(certificate) => {
+                let Some((data, key)) =
+                    super::outcome::authenticate(context, certificate, completion_digest)?
+                else {
+                    return Ok(denied(PreparationDenial::Unauthorized));
+                };
+                (data.check.clone(), key, None, Some(data))
+            }
         };
         if input
             .signed
             .as_ref()
-            .is_some_and(|certificate| certificate.signer != data.actor)
+            .is_some_and(|certificate| certificate.signer != check.actor)
         {
             return Ok(denied(PreparationDenial::Unauthorized));
         }
-        let saved = context.sql(&statement("SELECT actor,request_digest,response_id,completion_digest,rejected,publication FROM pushes WHERE id=?1", vec![blob(data.token.operation)]))?;
+        let saved = context.sql(&statement("SELECT actor,request_digest,response_id,completion_digest,rejected,publication FROM pushes WHERE id=?1", vec![blob(check.token.operation)]))?;
         let mut pending = false;
         if let Some(row) = rows(&saved)?.first() {
             let [
@@ -654,7 +657,7 @@ impl Command for CompleteCatalogPush {
             else {
                 return Err(Error::Command("invalid completed push identity"));
             };
-            if *actor != data.actor || fixed::<32>(digest)? != data.token.request_digest {
+            if *actor != check.actor || fixed::<32>(digest)? != check.token.request_digest {
                 return Ok(denied(PreparationDenial::Conflict));
             }
             match response {
@@ -687,17 +690,17 @@ impl Command for CompleteCatalogPush {
                 _ => return Ok(denied(PreparationDenial::Conflict)),
             }
         }
-        if data.token.owner != context.owner_fence() {
+        if check.token.owner != context.owner_fence() {
             return Ok(denied(PreparationDenial::Stale));
         }
-        let Some(row) = load(context, data.token)? else {
+        let Some(row) = load(context, check.token)? else {
             return Ok(denied(PreparationDenial::Missing));
         };
         if !matched(
             &row,
             &LeaseCheck {
-                token: data.token,
-                actor: data.actor.clone(),
+                token: check.token,
+                actor: check.actor.clone(),
             },
         ) {
             return Ok(denied(PreparationDenial::Stale));
@@ -719,17 +722,22 @@ impl Command for CompleteCatalogPush {
         } else {
             false
         };
-        // A moving catalog requires reconciliation, not a permanent client ng.
+        if let Some(data) = &outcome_data
+            && !super::outcome::current_authority(context, data, row.generation)?
+        {
+            return Ok(denied(PreparationDenial::Unauthorized));
+        }
+        // A moving catalog requires reconciliation only when publishing refs.
         if !replay
-            && matches!(input.proof, CompletionCatalogProof::Refs(_))
+            && let Some(data) = &catalog_data
             && (!super::publish::retention_matches(
                 context,
-                &data,
+                data,
                 row.generation,
                 data.catalog.format,
             )? || super::commands::fact(
                 context,
-                data.token.repository,
+                check.token.repository,
                 data.catalog.format,
                 None,
             )? != data.base)
@@ -739,7 +747,14 @@ impl Command for CompleteCatalogPush {
         let mut publication = None;
         let mut rejected = replay;
         if !replay && let CompletionCatalogProof::Refs(proof) = &input.proof {
-            match super::publish::publish_authenticated(context, proof, data.clone(), key)? {
+            match super::publish::publish_authenticated(
+                context,
+                proof,
+                catalog_data
+                    .clone()
+                    .ok_or(Error::Command("missing catalog completion proof"))?,
+                key,
+            )? {
                 CommandResult::Success(PublicationReply::Published(value)) => {
                     publication = Some(value);
                     pending = true;
@@ -778,35 +793,39 @@ impl Command for CompleteCatalogPush {
             changed(context.sql(&statement(
                 "INSERT INTO pushes(id,actor,request_digest) VALUES(?1,?2,?3)",
                 vec![
-                    blob(data.token.operation),
-                    SqlValue::Text(data.actor.clone()),
-                    blob(data.token.request_digest),
+                    blob(check.token.operation),
+                    SqlValue::Text(check.actor.clone()),
+                    blob(check.token.request_digest),
                 ],
             ))?)?;
         }
         if let Some(certificate) = &input.signed
             && !replay
         {
-            changed(context.sql(&statement("INSERT INTO push_certificates(digest,push_id,actor,signer,key,size,recorded_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)", vec![blob(signed_digest.ok_or(Error::Command("missing signed push digest"))?),blob(data.token.operation),SqlValue::Text(data.actor.clone()),SqlValue::Text(certificate.signer.clone()),SqlValue::Text(certificate.key.clone()),number(certificate.body.len() as u64)?,SqlValue::Integer(context.now_ms())]))?)?;
+            changed(context.sql(&statement("INSERT INTO push_certificates(digest,push_id,actor,signer,key,size,recorded_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)", vec![blob(signed_digest.ok_or(Error::Command("missing signed push digest"))?),blob(check.token.operation),SqlValue::Text(check.actor.clone()),SqlValue::Text(certificate.signer.clone()),SqlValue::Text(certificate.key.clone()),number(certificate.body.len() as u64)?,SqlValue::Integer(context.now_ms())]))?)?;
             for (part, body) in certificate.body.chunks(CHUNK_BYTES).enumerate() {
                 changed(context.sql(&statement(
                     "INSERT INTO push_certificate_chunks(push_id,part,body) VALUES(?1,?2,?3)",
-                    vec![blob(data.token.operation), number(part as u64)?, blob(body)],
+                    vec![
+                        blob(check.token.operation),
+                        number(part as u64)?,
+                        blob(body),
+                    ],
                 ))?)?;
             }
         }
-        changed(context.sql(&statement("INSERT INTO push_responses(id,push_id,status,headers,size,digest) VALUES(?1,?2,?3,?4,?5,?6)", vec![blob(input.response_id),blob(data.token.operation),SqlValue::Integer(i64::from(response.status)),SqlValue::Text(serde_json::to_string(&response.headers).map_err(|_| Error::Command("invalid push response headers"))?),number(response.body.len() as u64)?,blob(blake3::hash(&response.body).as_bytes())]))?)?;
+        changed(context.sql(&statement("INSERT INTO push_responses(id,push_id,status,headers,size,digest) VALUES(?1,?2,?3,?4,?5,?6)", vec![blob(input.response_id),blob(check.token.operation),SqlValue::Integer(i64::from(response.status)),SqlValue::Text(serde_json::to_string(&response.headers).map_err(|_| Error::Command("invalid push response headers"))?),number(response.body.len() as u64)?,blob(blake3::hash(&response.body).as_bytes())]))?)?;
         for (part, body) in response.body.chunks(CHUNK_BYTES).enumerate() {
             changed(context.sql(&statement(
                 "INSERT INTO push_response_chunks(response_id,part,body) VALUES(?1,?2,?3)",
                 vec![blob(input.response_id), number(part as u64)?, blob(body)],
             ))?)?;
         }
-        changed(context.sql(&statement("UPDATE pushes SET response_id=?1,rejected=?2,options=?3,rejection_reason=?4,completion_digest=?5 WHERE id=?6 AND response_id IS NULL", vec![blob(input.response_id),SqlValue::Integer(i64::from(rejected)),SqlValue::Text(serde_json::to_string(&input.options).map_err(|_| Error::Command("invalid push options"))?),if rejected {SqlValue::Text(reason.into())} else {SqlValue::Null},blob(completion_digest),blob(data.token.operation)]))?)?;
+        changed(context.sql(&statement("UPDATE pushes SET response_id=?1,rejected=?2,options=?3,rejection_reason=?4,completion_digest=?5 WHERE id=?6 AND response_id IS NULL", vec![blob(input.response_id),SqlValue::Integer(i64::from(rejected)),SqlValue::Text(serde_json::to_string(&input.options).map_err(|_| Error::Command("invalid push options"))?),if rejected {SqlValue::Text(reason.into())} else {SqlValue::Null},blob(completion_digest),blob(check.token.operation)]))?)?;
         if publication.is_none() {
             changed(context.sql(&statement(
                 "DELETE FROM catalog_operations WHERE id=?1",
-                vec![blob(data.token.operation)],
+                vec![blob(check.token.operation)],
             ))?)?;
         }
         Ok(CommandResult::Success(CatalogCompletionReply::Completed(

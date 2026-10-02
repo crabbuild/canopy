@@ -14,6 +14,8 @@ use cellule_runtime::{
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
     registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
 };
+mod session;
+pub use session::PreparationSession;
 mod base;
 pub use base::{PreparationBaseError, PreparationBaseResolver};
 mod certificate;
@@ -29,6 +31,8 @@ mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
 mod publish;
 pub use publish::{PublicationReply, PublishCatalogRefs, PublishedRefs};
+mod outcome;
+pub use outcome::OutcomeCertificate;
 mod completion;
 mod coordinator;
 pub use completion::{

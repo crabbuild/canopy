@@ -84,7 +84,7 @@ impl ReadyPublication {
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
-                prepared: Arc::clone(&ready.prepared),
+                owner: ready.owner.clone(),
                 command: ready.command.clone(),
             }),
             Self::Compaction(ready) => Self::Compaction(ReadyCatalogCompaction {
@@ -101,7 +101,7 @@ impl ReadyPublication {
     }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
         match self {
-            Self::Push(ready) => ready.prepared.base.capability(),
+            Self::Push(ready) => ready.owner.capability(),
             Self::Compaction(ready) => ready.prepared.preparation_base().capability(),
         }
     }
