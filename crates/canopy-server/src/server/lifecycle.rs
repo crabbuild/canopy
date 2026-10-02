@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 impl CanopyServer {
     /// Starts a node only after storage fencing, authority and Git ingress are ready.
     /// Cancelling startup requests cleanup after admitted initialization settles.

@@ -42,7 +42,11 @@ jobs:
 
           baseline = '7497fc720e68a440e27614a83a1442576511cfd2'
           changed = subprocess.check_output(['git', 'diff', '--name-only', baseline, '--', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts'], text=True).splitlines()
-          assert changed == ['crates/canopy-server/src/server/residency/tests.rs'], changed
+          assert changed == ['crates/canopy-server/src/server/lifecycle.rs', 'crates/canopy-server/src/server/lifecycle/tests.rs'], changed
+          lifecycle = Path('crates/canopy-server/src/server/lifecycle.rs').read_bytes()
+          test_module = b'\n#[cfg(test)]\nmod tests;\n'
+          assert lifecycle.count(test_module) == 1
+          assert lifecycle.replace(test_module, b'', 1) == subprocess.check_output(['git', 'show', baseline + ':crates/canopy-server/src/server/lifecycle.rs'])
           files = subprocess.check_output(['git', 'ls-files', 'Cargo.toml', 'Cargo.lock', 'crates', 'scripts', '.github/workflows'], text=True).splitlines()
           metadata = json.loads(Path('diagnostic/metadata.json').read_text())
           revision = '0f4ca0919b0dfe20a3dcd964d21da03135e42eed'
@@ -87,7 +91,7 @@ jobs:
 
           root = Path('diagnostic')
           executable = json.loads((root / 'test-executable.json').read_text())['executable']
-          target = 'server::residency::tests::metadata_after_started_query_deadline_reacquires_released_cell'
+          target = 'server::lifecycle::tests::metadata_after_started_query_deadline_reacquires_released_cell'
           schedule = [('isolated-regression', [target, '--exact', '--nocapture'], 3),
                       ('full-library', ['--test-threads=4', '--nocapture'], 1)]
           runs = []
