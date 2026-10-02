@@ -98,13 +98,15 @@ recovery. Its earlier clone-byte mismatch was traced to missing client LFS
 filters; the full-byte assertion was retained. This closes a small prerequisite,
 not reference performance. The later
 [original corpus activation](2026-10-01-original-corpus-activation.md) passed
-full admission and controlled activation of all 10,003 Cells. Remote Git/LFS
-content verification remains a separate open gate.
+full admission and controlled activation of all 10,003 Cells. Its subsequent
+full remote Git/LFS verification passed with an independent audit and verified
+7,061-file copy. The first ten scheduled metadata windows and concurrent
+critical schedule include failed arrivals; see that checkpoint's result tables.
 
 The [full performance plan](../performance-plan.md) still requires three nodes
 behind a proxy, 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows,
-114,960 arrivals and 8,640 scheduled seconds. Full remote verification,
-concurrent critical operations and faults,
+114,960 arrivals and 8,640 scheduled seconds. Complete scheduled load/audit,
+concurrent faults, original-corpus fresh-owner recovery,
 every acknowledged write after owner loss, higher admission profiles, matched
 comparisons, non-sparse five-GiB transfers and isolated Linux capacity remain open.
 The separate diagnostic fleet's terminal lease-fencing failure is also unresolved.

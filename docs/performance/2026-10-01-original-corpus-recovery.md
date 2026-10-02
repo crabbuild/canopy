@@ -114,7 +114,9 @@ The UI preview and unrelated providers were not changed or signalled.
 
 The subsequent activation checkpoint closes rolling-descriptor and full
 actual-Control admission, controlled activation and three-gateway readiness.
-Full remote Git/LFS verification and fresh-owner/every-ACK recovery remain open.
+Its subsequent full remote Git/LFS verification passed with an independent
+audit and verified evidence copy. Fresh-owner/every-ACK recovery after the
+current load remains open; that checkpoint records failed diagnostic arrivals.
 The [full campaign](../performance-plan.md) remains **108 windows, 114,960
 arrivals and 8,640 scheduled seconds**, with independent rates/concurrency,
 uniform/skewed access, higher residency profiles, concurrent critical workflows

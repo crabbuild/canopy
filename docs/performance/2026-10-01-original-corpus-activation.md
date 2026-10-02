@@ -5,7 +5,9 @@ activation without changing any of its **10,003 Cell Controls, catalog entries
 or published roots**. The qualified executable uses Cellule `0dc04a6`; its
 selected release reached **Ready revision 9**. This closes the release-admission
 gate after [same-code maintenance recovery](2026-10-01-original-corpus-recovery.md).
-It does not establish remote Git/LFS content recovery, throughput or capacity.
+Activation alone does not establish remote Git/LFS content recovery, throughput
+or capacity. The subsequent remote verification passed; the first ten load
+windows below include failed arrivals and do not establish capacity.
 
 ## Activation sequence
 
@@ -24,7 +26,9 @@ Old Maintenance 5: all 10,003 Cells idle and unowned
                                        |
                                        +-- preserve and reread closed evidence
                                        +-- three fresh gateways and proxy ready
-                                       +-- remote Git/LFS verification still open
+                                       +-- remote Git/LFS verification passed
+                                       +-- full load running: failed arrivals retained
+                                       +-- fresh-owner/every-ACK recovery still open
 ```
 
 The activation controller repeats two complete scans at each of Ready 6,
@@ -95,22 +99,118 @@ This is not an off-machine or provider-data backup. No runtime budget was raised
 owner erased, Control force-CAS applied, catalog rewritten, corpus reseeded or
 provider restarted. The UI preview and unrelated providers remain unchanged.
 
-## Remaining verification
+## Full remote-content verification
 
 Three fresh gateways reported ready behind the proxy at 02:35:59 UTC with the
-exact qualified executable and 100 active repositories per node. Readiness is
-not a full remote-content result. Full verification of 10,000 identities,
-100 populated Git/LFS fixtures and the two critical repositories remains open,
-as does fresh-owner recovery of every acknowledged write.
+exact qualified executable and 100 active repositories per node. The subsequent
+read-only remote verifier closed successfully at **03:02:09 UTC**; an independent
+offline audit closed at **03:02:40 UTC** on October 2 (October 1 Pacific).
+
+| Check | Closed result |
+| --- | --- |
+| Original repository identities | All 10,000 names matched their exact UUIDs |
+| Original LFS objects | All 100 complete bodies matched their expected sizes and SHA-256 digests |
+| Stock Git | 200 clones across protocols v0/v2; exact HEAD, base commit, fixture files and full fsck |
+| Original critical fixtures | Both UUIDs, four exact v0/v2 ref inventories and mirrors, payloads, notes and full fsck |
+| Independent audit | 10,002 identities, 100 LFS digests, 824 Git commands, all 200 local clones and four mirrors reconciled |
+| Evidence preservation | 7,061 closed files and exact inputs copied and independently reread on a different local filesystem |
+
+HTTP checks used concurrency 16 and a 30-second timeout; Git commands retained
+their 120-second timeout. No retries, new seed or provider restart were used.
+The original fixtures upload LFS objects directly without committing LFS pointer
+files: this verifies complete download bytes, **not clone-side LFS hydration**.
+The 756.929-second corpus stage is verification wall time, not scheduled request
+latency. This check does not establish post-load owner-loss recovery.
+
+| Remote-verification artifact | SHA-256 |
+| --- | --- |
+| Verification receipt | `1447486483a253c3fad18000a73eaa449dbaa26a1223903c074497d2b431bd4a` |
+| Independent audit | `2b1a256a40cec3bcf24359a21559da8b35927d697ec0e25ba5a42982cdb030d0` |
+| Verified backup manifest | `783902ec100a41e7882c73478a98b912b06b6ec0293907146a60a7dd7d8b8078` |
+
+Closed receipts are in the qualification root's `upgraded-original-verification`
+directory; the verified copy is
+`/Volumes/Workspace/CrabData/canopy-original-upgraded-remote-dooxekr0`.
+
+## Scheduled load: failed diagnostic baseline
+
+The unchanged **108-window / 114,960-arrival / 8,640-second** campaign is running
+on the same qualified executable and original RustFS provider. This snapshot
+covers only its first **ten sealed, audited and preserved metadata windows**,
+observed October 2 at 03:36 UTC. All offer 20 requests/s for 120 seconds, with
+client concurrency 32 and node residency capped at 100. An active set of 500
+does not raise the per-node residency limit.
+
+| Active set / distribution / repetition | OK / 2,400 | Busy drops | HTTP 503 | Delivered RPS in window | Scheduled p95 / p99 (ms) |
+| --- | --- | --- | --- | --- | --- |
+| 100 / uniform / 1 | 2,344 | 56 | 0 | 19.500 | 1,447.299 / 3,198.533 |
+| 100 / uniform / 2 | 2,392 | 8 | 0 | 19.900 | 732.404 / 1,556.094 |
+| 100 / uniform / 3 | 2,400 | 0 | 0 | 20.000 | 387.751 / 714.107 |
+| 100 / skewed / 1 | 2,400 | 0 | 0 | 20.000 | 169.310 / 388.415 |
+| 100 / skewed / 2 | 2,400 | 0 | 0 | 20.000 | 206.813 / 395.493 |
+| 100 / skewed / 3 | 2,400 | 0 | 0 | 20.000 | 297.194 / 611.530 |
+| 500 / uniform / 1 | 2,349 | 50 | 1 | 19.467 | 1,360.391 / 2,787.405 |
+| 500 / uniform / 2 | 2,315 | 76 | 9 | 19.267 | 1,557.115 / 3,131.934 |
+| 500 / uniform / 3 | 2,379 | 16 | 5 | 19.783 | 684.082 / 1,993.517 |
+| 500 / skewed / 1 | 2,400 | 0 | 0 | 19.983 | 1,012.309 / 1,710.166 |
+
+Total: **23,779 OK / 24,000 scheduled, 206 busy drops and 15 HTTP 503s**.
+Busy drops have no completed-request latency and are not silently omitted from
+arrival counts. Percentiles cover completed attempts, including HTTP errors;
+RPS counts only successful completions inside the schedule window. Successful
+requests completed during drain remain in OK counts but not in-window RPS.
+No rate, cap, assertion or timeout was relaxed to obtain a passing result.
+
+The concurrent 300-second critical schedule also failed its arrival gate:
+
+| Check | Closed result |
+| --- | --- |
+| Scheduled workflows | 19 OK / 20 scheduled; one driver-busy drop, no writes for that dropped arrival |
+| Attempted workflows | All 19 receipts complete: 323 successful steps and 38 acknowledged repository UUIDs |
+| Delivered workflow throughput | 0.060000/s in-window; 0.060223/s including drain |
+| Whole-workflow p50 / p95 / p99 | 37.089 / 60.551 / 60.551 seconds, including stock-Git work and validation |
+| Correctness boundary | Ledger and receipt integrity passed; recovery of these ACKs after owner loss remains open |
+
+The read-only watcher audits each sealed window's exact sequence, deterministic
+selection, outcomes, latency, throughput and resource bindings before copying
+four finalized files. It also preserves each attempted workflow's receipt and
+local Git data. Changing campaign indexes, logs and live provider data are not
+copied. Observation and file-copy work are separate overhead; process self-CPU
+and proxy counters are not full-host CPU or cost measurements.
+
+Campaign outputs are at
+`/Volumes/Workspace/CrabData/canopy-original-full-0dc04a6-j6promvd`;
+per-window copies and manifests are at
+`/Users/haipingfu/.codex/canopy-original-full-window-copies-qknece2i`.
+The critical audit is `closed-critical-load-audit.json` in the qualification root;
+its verified final report/source copy is
+`/Users/haipingfu/.codex/canopy-original-closed-critical-dved6eyf`.
+These are local evidence copies, not off-machine or provider-data backups.
+
+| Closed critical artifact | SHA-256 |
+| --- | --- |
+| Report | `66a1468b8e51b2b4254813d06af12e04e802fa5598512f6bb0081cc484d16285` |
+| Sample ledger | `1ae9c44266cb49eeffaec80406ac74f3e3a342e6ab5b07fc42761a99fdb9988a` |
+| Verified backup manifest | `b8effa1957630581b09d1eec6ec7d25d8f7813449c956b8f203b564db50c8ea3` |
+
+Diagnosis remains open. In the first two windows, dispatch p99 was
+12.760/20.340 ms versus service p99 3,190.791/1,550.308 ms. Proxy connection
+deltas were balanced (85/85/84 and 106/106/105), with no proxy errors or
+rejections. This weakens timer scheduling and connection-count imbalance as
+dominant explanations; it does not prove a Directory or RustFS bottleneck.
+
+## Remaining verification
 
 Cellule upstream subsequently advanced by two commits to
 `191409685b001a82bd02780def45102b4fc2f164`, observed when publishing this checkpoint.
 Those commits change runtime forwarding/compaction and peer HTTP CI gates.
-They are **not** the dependency revision tested here and require independent
-qualification; no performance result transfers to them.
+They are **not** the dependency revision tested here. An isolated candidate
+passed locked metadata and formatting checks only; release and RustFS
+qualification remain open, and no performance result transfers to it.
 
 PR #18 remains draft. The [full campaign](../performance-plan.md) still requires
-108 windows, 114,960 arrivals and 8,640 scheduled seconds, concurrent critical
-operations and faults, higher admission profiles, matched comparisons, large
+the complete schedule and audit, concurrent faults, fresh-owner verification
+of the original corpus and every newly acknowledged write, higher admission
+profiles, matched comparisons, large
 transfers and isolated Linux capacity. The earlier diagnostic lease-fencing
 failure remains unexplained; successful activation does not establish its cause.

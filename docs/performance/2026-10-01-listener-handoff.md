@@ -118,7 +118,7 @@ Both [Linux PR CI](https://github.com/crabbuild/canopy/actions/runs/36950769630)
 and [push CI](https://github.com/crabbuild/canopy/actions/runs/36950765768) at
 `eaebfc4cdd7ead54a8d62978aebcd8656f0de0b8` passed Rust, real RustFS compatibility,
 server build and Python harness checks. PR #18 remains draft. The
-[full campaign](../performance-plan.md) still requires full remote Git/LFS verification, all 108 load
+[full campaign](../performance-plan.md) still requires completion of all 108 load
 windows, every acknowledged write after owner loss, higher admission profiles,
 matched comparisons, non-sparse five-GiB transfers and isolated Linux capacity.
 The original provider's read-only status at this qualification had zero advertised
@@ -127,5 +127,8 @@ The later [maintenance recovery](2026-10-01-original-corpus-recovery.md) settled
 those Cells without changing catalog identities or published roots. Subsequent
 [full-corpus activation](2026-10-01-original-corpus-activation.md) reached new
 Ready revision 9 after full admission and unchanged snapshots. Neither later
-action is a listener-build performance result. Both PR and push CI at the
-documentation-only head `4ddc742` also passed both Rust and harness jobs.
+action is a listener-build performance result. The activation checkpoint's
+subsequent full remote Git/LFS verification passed; its first ten metadata
+windows and concurrent critical load include failed arrivals. Both PR and push
+CI at documentation-only heads `4ddc742` and `2c897c7` passed both Rust and
+harness jobs. Later documentation commits require their own fresh CI.

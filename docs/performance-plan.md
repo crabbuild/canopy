@@ -5,8 +5,9 @@ It separates demonstrated behavior from proposed targets. The current Cellule
 dependency pin is `0dc04a658bd99668936f7ec58032d054f6fbc141`, verified against
 upstream main on October 1. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
 records 239 release Rust tests, 84 Python tests, lints and all eight fresh RustFS
-gates, with separately retained artifacts. Original-corpus remote-content
-verification and reference performance remain open. Upstream later advanced to
+gates, with separately retained artifacts. Subsequent original-corpus remote
+verification passed; scheduled load includes failed arrivals, and post-load
+owner-loss recovery and reference capacity remain open. Upstream later advanced to
 `191409685b001a82bd02780def45102b4fc2f164`; that revision is not yet qualified
 by this PR. The preceding `c51dd121` build is historical evidence.
 Unlike the earlier `a4500add` documentation
@@ -38,7 +39,7 @@ unsupported Control metadata. Its combined candidate passed 239 release tests,
 all eight RustFS gates, 20 cold-activation repetitions and 20 three-case retained
 startup repetitions, plus all 15 residency tests. Retained startup uses an owned
 in-memory fixture; the separate owned old-binary RustFS upgrade passed, while
-original-corpus new-release verification remains open. The
+original-corpus verification had not run at that checkpoint. The
 [original corpus maintenance recovery](performance/2026-10-01-original-corpus-recovery.md)
 left all 10,003 Controls durably idle under the old Maintenance release.
 Its catalog, roots and 9,702 previously idle Controls stayed unchanged; no new
@@ -46,7 +47,12 @@ gateway, remote payload verification or performance result is established.
 The subsequent [full-corpus activation](performance/2026-10-01-original-corpus-activation.md)
 passed new-release admission and controlled activation to Ready revision 9.
 All 10,003 Controls and published roots remained unchanged through activation;
-three upgraded gateways are ready, but remote-content verification is still open.
+three upgraded gateways subsequently passed full remote verification of 10,000
+identities, 100 full LFS bodies, 200 v0/v2 clones and both critical fixtures.
+The first ten scheduled metadata windows recorded 23,779 OK / 24,000 arrivals,
+206 busy drops and 15 HTTP 503s. Concurrent critical load recorded 19/20 OK,
+one busy drop and 323 successful steps. Both are failed arrival gates, not
+capacity passes; the full schedule continues unchanged.
 None of these checkpoints replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
@@ -57,7 +63,8 @@ seed and successful recovery of every recorded ACK.
 | Qualified Cellule revision | `0dc04a6`: release correctness, lints, Python harness, eight fresh RustFS gates and subsequent original-corpus activation passed. Upstream `1914096` remains unqualified; no measured improvement is claimed |
 | HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. Both Linux CI workflows at `eaebfc4` passed; not measured performance |
 | Original corpus maintenance recovery | [Complete metadata and fenced-recovery checkpoint](performance/2026-10-01-original-corpus-recovery.md): all 256 shards and 10,003 Controls checked twice before and after; 301 unsettled Cells drained, zero unsettled Cells, catalog and all published roots unchanged |
-| Original corpus activation | [Controlled full-corpus activation](performance/2026-10-01-original-corpus-activation.md): old Ready 6 → Prepared 7 → Activating 8 → new Ready 9; four allowed release/descriptor writes, eight complete unchanged scans. Three upgraded gateways are ready; remote Git/LFS verification and performance remain open |
+| Original corpus activation and remote verification | [Full-corpus checkpoint](performance/2026-10-01-original-corpus-activation.md): Ready 9 after four allowed writes and eight unchanged activation scans; subsequent 10K identities, 100 LFS bodies, 200 clones and critical-2 verification passed. Independent audit and 7,061-file verified copy closed; post-load owner-loss recovery remains open |
+| Current original-corpus load snapshot | First ten metadata windows: 23,779/24,000 OK, 206 busy drops, 15 HTTP 503s. Concurrent critical schedule: 19/20 OK, one busy drop, 323 successful steps, 38 UUIDs. Sealed ledgers audited and copied; unchanged full schedule still running, not reference capacity |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
@@ -70,9 +77,9 @@ seed and successful recovery of every recorded ACK.
 | Post-OOM diagnostic | Three old owners killed as a verified batch; 32.033-s absence wait recorded. Same provider/data restarted with memory raised from 2 to 4 GiB; full 10K/100 and critical-2 recovery passed, with independent 200-clone/four-mirror audits |
 | Complete 4-GiB load attempt | All 108 windows finished: 60,197 OK and 54,763 failed arrivals. The original attempt remains failed; local raw evidence is now unavailable |
 | Post-load ACK recovery | Recorded three-owner loss and 32.249-s wait; critical fixtures passed. Fresh fleet then recorded ENOSPC and shut down; full corpus and every-ACK verification are incomplete |
-| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. The versioned gate separates failed performance from mandatory correctness recovery; no live critical-load/fault result is established |
+| Concurrent critical Git workflows | [Separate driver](../scripts/benchmark_critical_git.py) retains the 17-step suite. Original-corpus concurrent load closed at 19/20 OK with one busy drop; all 19 attempted receipts complete. Fresh-owner verification of all 38 UUIDs and concurrent fault coverage remain open; the small-fixture 20/20 recovery result is separate |
 | Evidence availability | Old benchmark directories and executable disappeared; old receipts remain unavailable. New closed artifacts, all build bindings and the completed seed have verified backups on a separate filesystem outside Cargo targets; changing outputs are excluded |
-| Performance qualification | Latest full-corpus recovery, scheduled load, every post-load ACK, critical-operation load/fault coverage, higher admission profiles and matched comparisons remain open |
+| Performance qualification | Pre-load original-corpus remote verification passed. Complete scheduled load/audit, original-corpus and every-ACK recovery after owner loss, concurrent faults, higher admission profiles and matched comparisons remain open |
 
 The [native-filesystem trial](performance/2026-10-01-native-filesystem.md)
 records the storage hypothesis, graceful diagnostic drain and new bindings.
