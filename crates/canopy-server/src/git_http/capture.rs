@@ -42,6 +42,20 @@ struct CapturePin {
     _fence: File,
     cache: Arc<GitCache>,
 }
+impl Drop for CapturePin {
+    fn drop(&mut self) {
+        // CLOEXEC only closes accidental copies when unrelated children exec.
+        // Closing this parent's descriptor alone can leave the exclusive lock
+        // alive in such a child. All capture readers have drained when the last
+        // Arc drops, so explicitly release their lock before cache ownership.
+        // Native workers' shared locks still follow their descendants instead.
+        if let Err(error) = self._fence.unlock() {
+            // Failure stays conservative: native admission still probes the
+            // lock, and cache cleanup defers while any inherited lock survives.
+            tracing::error!(error = %error, "completed native capture fence unlock failed");
+        }
+    }
+}
 struct InputFile {
     path: PathBuf,
     _pin: Arc<CapturePin>,
@@ -191,6 +205,84 @@ impl GitHttpBackend {
 mod tests {
     use super::*;
     use std::future::Future;
+    #[cfg(unix)]
+    #[test]
+    fn completed_capture_releases_fence_despite_unrelated_pre_exec_inheritance()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Read, Write};
+        use std::os::{
+            fd::AsRawFd,
+            unix::{net::UnixStream, process::CommandExt},
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let root = tempfile::TempDir::new()?;
+        let backend = runtime.block_on(GitHttpBackend::initialize(
+            root.path().into(),
+            DiskBudget::new(1 << 20),
+            "refs/heads/main",
+            crate::ObjectFormat::Sha1,
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        ))?;
+        let fence =
+            crate::native_git::lock_file(&backend.git_dir().join(crate::native_git::WORKER_LOCK))?;
+        fence.try_lock().map_err(std::io::Error::from)?;
+        let captured = Arc::new(InputFile {
+            path: backend.git_dir().join("config"),
+            _pin: Arc::new(CapturePin {
+                _fence: fence,
+                cache: backend.cache.clone(),
+            }),
+        });
+        let retained = captured.clone();
+        let (mut ready, child_ready) = UnixStream::pair()?;
+        let (mut release, child_release) = UnixStream::pair()?;
+        ready.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let child = std::thread::spawn(move || {
+            let mut command = std::process::Command::new("true");
+            // SAFETY: only async-signal-safe read/write run after fork. Socket
+            // owners are captured until spawn returns; the parent controls EOF.
+            unsafe {
+                command.pre_exec(move || {
+                    let mut byte = 1u8;
+                    if libc::write(child_ready.as_raw_fd(), (&byte as *const u8).cast(), 1) != 1
+                        || libc::read(child_release.as_raw_fd(), (&mut byte as *mut u8).cast(), 1)
+                            != 1
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            command.status()
+        });
+        let ready_result = ready.read_exact(&mut [0]);
+        drop(captured);
+        // Another input/upload owner still protects the pair.
+        let retained_blocks = crate::native_git::command(&backend.git_dir())
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock);
+        drop(retained);
+        // Capture is fully complete. An unrelated child cannot mutate this
+        // cache; its accidentally inherited descriptor must not retain custody.
+        let admission = crate::native_git::command(&backend.git_dir());
+        // Release the task-owned child before asserting on any failure.
+        let released = release.write_all(&[1]);
+        drop(release);
+        let status = child.join().map_err(|_| "foreign child thread panicked")?;
+        ready_result?;
+        released?;
+        assert!(status?.success());
+        assert!(retained_blocks);
+        assert!(
+            admission.is_ok(),
+            "finished capture retained by foreign fork: {:?}",
+            admission.err()
+        );
+        Ok(())
+    }
+
     #[test]
     fn canceled_queued_capture_upload_retains_cache_fence_and_disk()
     -> Result<(), Box<dyn std::error::Error>> {
