@@ -94,9 +94,10 @@ activation CAS as compatibility proof.
 The frozen source is local commit `392a343b83a492d49c08a6f3e83ff4dd2917437f`.
 At the first publication, the PR production source, tests, scripts and Cargo files
 were byte-identical to that candidate. The follow-up records the current qualified
-source separately. All six Cellule packages remain locked to
-`c51dd121284ecc8878b75d32717a4dfbe2c406c2`. Upstream main was rechecked as
-`0dc04a658bd99668936f7ec58032d054f6fbc141`; separate qualification is required.
+source separately. All six Cellule packages in this checkpoint were locked to
+`c51dd121284ecc8878b75d32717a4dfbe2c406c2`. The
+[later Cellule qualification](2026-10-01-cellule-main-qualification.md) records
+`0dc04a658bd99668936f7ec58032d054f6fbc141` with its own artifacts and results.
 
 | Check | Closed result | Scope limit |
 | --- | --- | --- |
@@ -160,7 +161,7 @@ Required next proofs remain:
 - Full 10,000-identity/100-fixture Git/LFS verification and fresh-owner recovery.
 - The complete schedule, critical concurrent workflows and faults, and every new
   acknowledged write after owner loss.
-- Newer Cellule qualification, higher admission profiles, matched comparisons,
+- Higher admission profiles, matched comparisons,
   non-sparse five-GiB transfer and complete CPU/cost accounting.
 - Isolated Linux reference capacity; the shared Mac/Colima environment does not
   establish it. Missing historical ledgers still prevent old every-ACK proof.

@@ -72,7 +72,7 @@ These are the next implementation slices. Each slice must update its contract, b
 
 1. Expand the S3-compatible process smoke into a node/lease fault matrix and
    test the target production object store. Run the checked-in CI workflow on
-   a Canopy remote. The current source pins Cellule revision `c51dd121` and
+   a Canopy remote. The current source pins Cellule revision `0dc04a6` and
    owns a startup storage probe with cleanup on failure. Historical dependency
    qualification runs below remain evidence for their recorded revisions only.
    The [live three-node trial](performance/2026-10-01-native-filesystem.md)
@@ -83,7 +83,10 @@ These are the next implementation slices. Each slice must update its contract, b
    [retained catalog follow-up](performance/2026-10-01-retained-catalog-admission.md)
    adds read-only existing-proof admission and rejects unsupported persisted
    Control metadata before acquisition. Its 239-test release suite, eight RustFS
-   gates and repeated startup/residency regressions passed. Actual old-binary
+   gates and repeated startup/residency regressions passed. The
+   [latest Cellule qualification](performance/2026-10-01-cellule-main-qualification.md)
+   reruns these checks on the new immutable revision without changing runtime
+   budgets. Actual old-binary
    RustFS upgrade, full-corpus recovery and performance remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger

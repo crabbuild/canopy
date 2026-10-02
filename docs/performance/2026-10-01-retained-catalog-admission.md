@@ -7,9 +7,10 @@ still does not provide an automatic upgrade controller or establish old-binary
 RustFS upgrade, full-corpus recovery or reference performance.
 
 This extends the [authentication and residency checkpoint](2026-10-01-bounded-authentication-and-residency.md).
-The Cellule pin remains `c51dd121284ecc8878b75d32717a4dfbe2c406c2`.
-Upstream main was rechecked as `0dc04a658bd99668936f7ec58032d054f6fbc141`;
-qualifying it remains a separate gate.
+The results below use Cellule `c51dd121284ecc8878b75d32717a4dfbe2c406c2`.
+The [subsequent Cellule qualification](2026-10-01-cellule-main-qualification.md)
+records the new revision and its independently rebuilt artifacts; it does not
+replace this historical evidence.
 
 ## Existing identity is admitted without reprovisioning
 
@@ -80,7 +81,8 @@ writers; it must not be copied as a live upgrade procedure.
 ## Combined qualification
 
 The frozen tested source is `402e9f93e21c576fc430cd20bbac16a4489d1558`.
-PR production files are checked byte-for-byte against that source before publication.
+At this checkpoint's publication, PR production files were checked byte-for-byte
+against that source. Later dependency qualification has separate source bindings.
 
 | Check | Closed result | Scope limit |
 | --- | --- | --- |

@@ -1194,7 +1194,7 @@ require a fresh development storage prefix;
 there is no upgrade reader for older development databases. The module
 descriptor and object paths will become compatibility boundaries at the first
 persistent preview. The current source pins Cellule revision
-`c51dd121284ecc8878b75d32717a4dfbe2c406c2`; qualification artifacts
+`0dc04a658bd99668936f7ec58032d054f6fbc141`; qualification artifacts
 remain bound to their recorded revisions, not silently replaced by this pin.
 The earlier entity-partition
 cutover also made pre-cutover prefixes incompatible; no migration is available.
@@ -2794,10 +2794,13 @@ remain required. No new configuration surface was added for diagnostic output.
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
 `cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. `cellule-types` is transitive.
+`0dc04a658bd99668936f7ec58032d054f6fbc141`. `cellule-types` is transitive.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.
+The [current revision checkpoint](performance/2026-10-01-cellule-main-qualification.md)
+records release correctness and fresh RustFS compatibility separately from the
+still-open retained-store upgrade and performance gates.
 
 The application declares one entity-partitioned SQL Cell type for repositories.
 `repository_target` validates the canonical UUID, then calls the app crate's

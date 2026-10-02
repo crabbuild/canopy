@@ -2,8 +2,12 @@
 
 Use this plan to design capacity work and interpret Canopy benchmark results.
 It separates demonstrated behavior from proposed targets. The current Cellule
-dependency pin is `c51dd121284ecc8878b75d32717a4dfbe2c406c2`, observed upstream
-main at build preparation on October 1. Unlike the earlier `a4500add` documentation
+dependency pin is `0dc04a658bd99668936f7ec58032d054f6fbc141`, verified against
+upstream main on October 1. Its [qualification checkpoint](performance/2026-10-01-cellule-main-qualification.md)
+records 239 release Rust tests, 84 Python tests, lints and all eight fresh RustFS
+gates, with separately retained artifacts. Retained-store upgrade and reference
+performance remain open. The preceding `c51dd121` build is historical evidence.
+Unlike the earlier `a4500add` documentation
 advance, this changes routing and resource-permit implementation. Locked
 metadata resolves all six packages; the lockfile changes only their sources.
 The original rebuilt artifact passed its locked release build and 227 release
@@ -13,8 +17,8 @@ and a proxy. The 84 Python harness tests cover accounting and guards. Full-corpu
 recovery, scheduled load and every-ACK verification remain separate gates; none
 of these functional checks establishes reference capacity.
 Upstream subsequently advanced to `0dc04a6` with atomic API and test changes.
-That revision needs a separate artifact and runtime qualification; the current
-experiment and its frozen source remain on `c51dd121`.
+The new candidate is independently qualified; the original corpus experiment
+and its frozen source remain on `c51dd121`.
 The [combined authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
 is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
 20 unchanged cold-activation repetitions and all 15 residency tests. It has not
@@ -26,14 +30,14 @@ unsupported Control metadata. Its combined candidate passed 239 release tests,
 all eight RustFS gates, 20 cold-activation repetitions and 20 three-case retained
 startup repetitions, plus all 15 residency tests. Retained startup uses an owned
 in-memory fixture; actual old-binary RustFS upgrade remains open.
-These results do not qualify newer upstream
-or replace the original complete performance schedule.
+Neither checkpoint replaces the original complete performance schedule.
 The [three-node proxy campaign](performance/2026-09-30-three-node-proxy.md)
 retains the earlier fixture race and its regression, plus the candidate's failed
 seed and successful recovery of every recorded ACK.
 
 | Current gate | Evidence / status |
 | --- | --- |
+| Current Cellule revision | `0dc04a6`: independently rebuilt release correctness, lints, Python harness and eight fresh RustFS gates passed. See the latest checkpoint for repeated regressions and exact bindings. Not retained-store upgrade, live deployment or measured performance |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |
 | Retained catalog admission follow-up | 239 release tests, eight RustFS gates, 20 cold-activation and 20 three-case retained-startup repetitions, 15 residency tests, lints and 84 Python tests passed. Existing supported identities restore without reprovisioning; unsupported Controls stay unchanged on refusal. Owned in-memory retained fixture, not old-binary RustFS upgrade, live deployment or performance qualification |
