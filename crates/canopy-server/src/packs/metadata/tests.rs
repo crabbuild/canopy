@@ -647,7 +647,7 @@ async fn large_inventory_and_wide_tree_use_bounded_pages_and_disk_admission() ->
     assert!(matches!(
         MetadataBuilder::new(
             fixture.root.path(),
-            DiskBudget::new(limits().max_file_bytes * 3 - 1),
+            DiskBudget::new(growth::INITIAL_BYTES * 3 - 1),
             fixture.identity,
             limits()
         ),

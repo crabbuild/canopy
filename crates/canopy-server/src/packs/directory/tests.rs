@@ -192,7 +192,7 @@ async fn large_run_pages_and_compaction_stay_within_disk_admission() -> Result {
     assert!(matches!(
         DirectoryBuilder::new(
             fixture.root.path(),
-            DiskBudget::new(3 * limits().max_file_bytes - 1),
+            DiskBudget::new(3 * metadata::growth::INITIAL_BYTES - 1),
             fixture.identity.repository,
             [4; 16],
             fixture.identity.format,

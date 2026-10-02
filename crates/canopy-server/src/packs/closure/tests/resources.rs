@@ -33,9 +33,10 @@ async fn disk_admission_precedes_files_and_sqlite_full_releases_the_spool() -> R
         .map(|n| graph::synthetic(ObjectFormat::Sha256, n, ObjectKind::Blob, &[]))
         .collect();
     let error = graph::insert(&mut spool, &page).unwrap_err();
-    assert!(
-        matches!(error.downcast_ref::<rusqlite::Error>(),Some(rusqlite::Error::SqliteFailure(code,_)) if code.code==rusqlite::ErrorCode::DiskFull)
-    );
+    assert!(matches!(
+        error.downcast_ref::<ClosureError>(),
+        Some(ClosureError::Metadata(MetadataError::Limit))
+    ));
     let pages: u64 = spool
         .connection
         .pragma_query_value(None, "page_count", |r| r.get(0))?;

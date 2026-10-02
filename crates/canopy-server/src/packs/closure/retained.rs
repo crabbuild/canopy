@@ -132,7 +132,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )?;
         {
-            let tx = spool.connection.transaction()?;
+            spool.write(|tx| {
             for n in 1u64..=10000 {
                 let mut oid = [0; 32];
                 oid[24..].copy_from_slice(&n.to_be_bytes());
@@ -146,7 +146,8 @@ mod tests {
                     )?;
                 }
             }
-            tx.commit()?;
+            Ok(())
+            })?;
         }
         let mut after = [0; 32];
         after[24..].copy_from_slice(&9000u64.to_be_bytes());
@@ -248,7 +249,7 @@ mod tests {
             // inventory. It may be retried after its queued reader drains.
             assert!(!retained.canceled.load(Ordering::Acquire));
             let held = budget.used();
-            assert_eq!(held, metadata::tests::limits().max_file_bytes * 3);
+            assert_eq!(held, metadata::growth::INITIAL_BYTES * 3);
             release.send(())?;
             worker.await?;
             retained.reconcile(selected, &Empty).await?;

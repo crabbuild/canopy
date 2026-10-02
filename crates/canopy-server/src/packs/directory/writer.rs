@@ -31,21 +31,24 @@ impl DirectoryBuilder {
         {
             return Err(MetadataError::Limit);
         }
-        let reservation = budget.try_reserve(
-            limits
-                .max_file_bytes
-                .checked_mul(3)
-                .ok_or(MetadataError::Limit)?,
-        )?;
+        let reservation = metadata::growth::reserve(&budget, limits.max_file_bytes)?;
         let file = tempfile::Builder::new()
             .prefix("canopy-directory-")
             .tempfile_in(root)?;
-        let admitted = AdmittedFile::new(file, reservation);
-        let connection = Connection::open(admitted.file().path())?;
+        let mut admitted = AdmittedFile::new(file, reservation);
+        let mut connection = Connection::open(admitted.file().path())?;
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA mmap_size=0;")?;
         connection.pragma_update(None, "cache_size", -(limits.cache_kib as i64))?;
-        connection.pragma_update(None, "max_page_count", limits.max_file_bytes / 4096)?;
-        connection.execute_batch(SCHEMA)?;
+        metadata::growth::configure(&connection, &mut admitted)?;
+        metadata::growth::transaction(
+            &mut connection,
+            &mut admitted,
+            limits.max_file_bytes,
+            |tx| {
+                tx.execute_batch(SCHEMA)?;
+                Ok::<_, MetadataError>(())
+            },
+        )?;
         Ok(Self {
             connection,
             admitted,
@@ -170,31 +173,36 @@ impl DirectoryBuilder {
                     .ok_or(MetadataError::Limit)?,
             );
         }
-        let transaction = self.connection.transaction()?;
-        {
-            let mut existing = transaction.prepare_cached("SELECT oid,kind,size,digest,edge_count,edge_digest,source_operation,source_digest,location_version FROM objects WHERE oid=?1")?;
-            let mut update = transaction.prepare_cached("UPDATE objects SET source_operation=?2,source_digest=?3,location_version=?4 WHERE oid=?1")?;
-            for (entry, version) in expected.iter().zip(versions) {
-                let current = existing
-                    .query_row([entry.header.object.oid.as_ref()], super::entry)
-                    .optional()?
-                    .ok_or(MetadataError::PlacementConflict)?;
-                if current.header != entry.header {
-                    return Err(MetadataError::IdentityConflict);
+        metadata::growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |transaction| {
+                {
+                    let mut existing = transaction.prepare_cached("SELECT oid,kind,size,digest,edge_count,edge_digest,source_operation,source_digest,location_version FROM objects WHERE oid=?1")?;
+                    let mut update = transaction.prepare_cached("UPDATE objects SET source_operation=?2,source_digest=?3,location_version=?4 WHERE oid=?1")?;
+                    for (entry, version) in expected.iter().zip(&versions) {
+                        let current = existing
+                            .query_row([entry.header.object.oid.as_ref()], super::entry)
+                            .optional()?
+                            .ok_or(MetadataError::PlacementConflict)?;
+                        if current.header != entry.header {
+                            return Err(MetadataError::IdentityConflict);
+                        }
+                        if current != *entry {
+                            return Err(MetadataError::PlacementConflict);
+                        }
+                        update.execute(params![
+                            entry.header.object.oid.as_ref(),
+                            source.operation.as_slice(),
+                            source.digest.as_slice(),
+                            *version as i64
+                        ])?;
+                    }
                 }
-                if current != *entry {
-                    return Err(MetadataError::PlacementConflict);
-                }
-                update.execute(params![
-                    entry.header.object.oid.as_ref(),
-                    source.operation.as_slice(),
-                    source.digest.as_slice(),
-                    version as i64
-                ])?;
-            }
-        }
-        transaction.commit()?;
-        Ok(())
+                Ok(())
+            },
+        )
     }
     pub(super) fn put_entries(&mut self, entries: &[DirectoryEntry]) -> Result<(), MetadataError> {
         if entries.is_empty() || entries.len() > PAGE_OBJECTS {
@@ -210,47 +218,53 @@ impl DirectoryBuilder {
         }) {
             return Err(MetadataError::Integrity);
         }
-        let transaction = self.connection.transaction()?;
-        {
-            let mut insert = transaction.prepare_cached(
+        metadata::growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |transaction| {
+                {
+                    let mut insert = transaction.prepare_cached(
                 "INSERT INTO objects VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT DO NOTHING",
             )?;
-            let mut existing = transaction.prepare_cached("SELECT oid,kind,size,digest,edge_count,edge_digest,source_operation,source_digest,location_version FROM objects WHERE oid=?1")?;
-            let mut relocate = transaction.prepare_cached(
+                    let mut existing = transaction.prepare_cached("SELECT oid,kind,size,digest,edge_count,edge_digest,source_operation,source_digest,location_version FROM objects WHERE oid=?1")?;
+                    let mut relocate = transaction.prepare_cached(
                 "UPDATE objects SET source_operation=?2,source_digest=?3,location_version=?4 WHERE oid=?1",
             )?;
-            for entry in entries {
-                let header = entry.header;
-                insert.execute(params![
-                    header.object.oid.as_ref(),
-                    header.object.kind.git_name(),
-                    header.object.size as i64,
-                    header.object.digest.as_slice(),
-                    header.edge_count as i64,
-                    header.edge_digest.as_slice(),
-                    entry.source.operation.as_slice(),
-                    entry.source.digest.as_slice(),
-                    entry.location_version as i64
-                ])?;
-                let stored = existing.query_row([header.object.oid.as_ref()], super::entry)?;
-                if stored.header != header {
-                    return Err(MetadataError::IdentityConflict);
+                    for entry in entries {
+                        let header = entry.header;
+                        insert.execute(params![
+                            header.object.oid.as_ref(),
+                            header.object.kind.git_name(),
+                            header.object.size as i64,
+                            header.object.digest.as_slice(),
+                            header.edge_count as i64,
+                            header.edge_digest.as_slice(),
+                            entry.source.operation.as_slice(),
+                            entry.source.digest.as_slice(),
+                            entry.location_version as i64
+                        ])?;
+                        let stored =
+                            existing.query_row([header.object.oid.as_ref()], super::entry)?;
+                        if stored.header != header {
+                            return Err(MetadataError::IdentityConflict);
+                        }
+                        if entry.location_version > stored.location_version
+                            || (entry.location_version == stored.location_version
+                                && entry.source < stored.source)
+                        {
+                            relocate.execute(params![
+                                header.object.oid.as_ref(),
+                                entry.source.operation.as_slice(),
+                                entry.source.digest.as_slice(),
+                                entry.location_version as i64
+                            ])?;
+                        }
+                    }
                 }
-                if entry.location_version > stored.location_version
-                    || (entry.location_version == stored.location_version
-                        && entry.source < stored.source)
-                {
-                    relocate.execute(params![
-                        header.object.oid.as_ref(),
-                        entry.source.operation.as_slice(),
-                        entry.source.digest.as_slice(),
-                        entry.location_version as i64
-                    ])?;
-                }
-            }
-        }
-        transaction.commit()?;
-        Ok(())
+                Ok(())
+            },
+        )
     }
     pub fn seal(self) -> Result<DirectoryRun, MetadataError> {
         self.seal_with_edges().map(|(run, _)| run)
@@ -290,17 +304,25 @@ impl DirectoryBuilder {
         }
         let first_oid = first.ok_or(MetadataError::Integrity)?;
         let last_oid = last.ok_or(MetadataError::Integrity)?;
-        self.connection.execute(
-            "INSERT INTO directory_identity VALUES (1,?1,?2,?3,?4,?5,?6,?7)",
-            params![
-                self.repository.as_slice(),
-                self.operation.as_slice(),
-                self.format.as_str(),
-                i64::try_from(count).map_err(|_| MetadataError::Limit)?,
-                first_oid.as_ref(),
-                last_oid.as_ref(),
-                inventory.as_slice()
-            ],
+        metadata::growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |tx| {
+                tx.execute(
+                    "INSERT INTO directory_identity VALUES (1,?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        self.repository.as_slice(),
+                        self.operation.as_slice(),
+                        self.format.as_str(),
+                        i64::try_from(count).map_err(|_| MetadataError::Limit)?,
+                        first_oid.as_ref(),
+                        last_oid.as_ref(),
+                        inventory.as_slice()
+                    ],
+                )?;
+                Ok::<_, MetadataError>(())
+            },
         )?;
         self.connection
             .close()

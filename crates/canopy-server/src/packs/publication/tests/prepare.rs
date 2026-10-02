@@ -406,7 +406,10 @@ fn canceled_catalog_finish_keeps_the_private_workspace_until_queued_work_drains(
         );
         drop(finish);
         assert!(workspace.exists());
-        assert_eq!(budget.used(), limits().max_file_bytes * 3);
+        assert_eq!(
+            budget.used(),
+            crate::packs::metadata::growth::INITIAL_BYTES * 3
+        );
         release_tx.send(())?;
         blocked.await?;
         cleaned(root.path(), &budget).await?;

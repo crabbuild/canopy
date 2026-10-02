@@ -12,6 +12,10 @@ pub struct MetadataBuilder {
     failed: bool,
 }
 impl MetadataBuilder {
+    #[cfg(test)]
+    pub(in crate::packs) fn admitted_bytes(&mut self) -> u64 {
+        self.admitted.reservation().bytes()
+    }
     pub fn new(
         root: &Path,
         budget: DiskBudget,
@@ -27,21 +31,24 @@ impl MetadataBuilder {
         {
             return Err(MetadataError::Limit);
         }
-        let reservation = budget.try_reserve(
-            limits
-                .max_file_bytes
-                .checked_mul(3)
-                .ok_or(MetadataError::Limit)?,
-        )?;
+        let reservation = growth::reserve(&budget, limits.max_file_bytes)?;
         let file = tempfile::Builder::new()
             .prefix("canopy-metadata-")
             .tempfile_in(root)?;
-        let admitted = AdmittedFile::new(file, reservation);
-        let connection = Connection::open(admitted.file().path())?;
+        let mut admitted = AdmittedFile::new(file, reservation);
+        let mut connection = Connection::open(admitted.file().path())?;
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA mmap_size=0;")?;
         connection.pragma_update(None, "cache_size", -(limits.cache_kib as i64))?;
-        connection.pragma_update(None, "max_page_count", limits.max_file_bytes / 4096)?;
-        connection.execute_batch(SCHEMA)?;
+        growth::configure(&connection, &mut admitted)?;
+        growth::transaction(
+            &mut connection,
+            &mut admitted,
+            limits.max_file_bytes,
+            |tx| {
+                tx.execute_batch(SCHEMA)?;
+                Ok::<_, MetadataError>(())
+            },
+        )?;
         Ok(Self {
             admitted,
             connection,
@@ -63,25 +70,31 @@ impl MetadataBuilder {
         }) {
             return Err(MetadataError::Integrity);
         }
-        let transaction = self.connection.transaction()?;
-        {
-            let mut insert = transaction.prepare_cached("INSERT INTO objects(oid, kind, size, digest) VALUES (?1,?2,?3,?4) ON CONFLICT DO NOTHING")?;
-            let mut existing = transaction
-                .prepare_cached("SELECT oid, kind, size, digest FROM objects WHERE oid = ?1")?;
-            for object in objects {
-                insert.execute(params![
-                    object.oid.as_ref(),
-                    object.kind.git_name(),
-                    object.size as i64,
-                    object.digest.as_slice()
-                ])?;
-                if existing.query_row([object.oid.as_ref()], canonical)? != *object {
-                    return Err(MetadataError::IdentityConflict);
+        growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |transaction| {
+                {
+                    let mut insert = transaction.prepare_cached("INSERT INTO objects(oid, kind, size, digest) VALUES (?1,?2,?3,?4) ON CONFLICT DO NOTHING")?;
+                    let mut existing = transaction.prepare_cached(
+                        "SELECT oid, kind, size, digest FROM objects WHERE oid = ?1",
+                    )?;
+                    for object in objects {
+                        insert.execute(params![
+                            object.oid.as_ref(),
+                            object.kind.git_name(),
+                            object.size as i64,
+                            object.digest.as_slice()
+                        ])?;
+                        if existing.query_row([object.oid.as_ref()], canonical)? != *object {
+                            return Err(MetadataError::IdentityConflict);
+                        }
+                    }
                 }
-            }
-        }
-        transaction.commit()?;
-        Ok(())
+                Ok(())
+            },
+        )
     }
 
     pub fn put_edges(
@@ -101,49 +114,56 @@ impl MetadataBuilder {
         {
             return Err(MetadataError::Integrity);
         }
-        let transaction = self.connection.transaction()?;
-        let parent_kind = transaction
-            .query_row(
-                "SELECT kind FROM objects WHERE oid = ?1",
-                [parent.as_ref()],
-                |row| kind(&row.get::<_, String>(0)?),
-            )
-            .optional()?
-            .ok_or(MetadataError::Integrity)?;
-        if parent_kind == ObjectKind::Blob
-            || edges.iter().any(|edge| match parent_kind {
-                ObjectKind::Tree => {
-                    !matches!(edge.expected_kind, ObjectKind::Blob | ObjectKind::Tree)
-                }
-                ObjectKind::Commit => {
-                    !matches!(edge.expected_kind, ObjectKind::Commit | ObjectKind::Tree)
-                }
-                _ => false,
-            })
-        {
-            return Err(MetadataError::Integrity);
-        }
-        {
-            let mut insert = transaction.prepare_cached("INSERT INTO object_edges(parent,child,expected_kind) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING")?;
-            let mut existing = transaction.prepare_cached(
-                "SELECT expected_kind FROM object_edges WHERE parent = ?1 AND child = ?2",
-            )?;
-            for edge in edges {
-                insert.execute(params![
-                    parent.as_ref(),
-                    edge.child.as_ref(),
-                    edge.expected_kind.git_name()
-                ])?;
-                if existing.query_row(params![parent.as_ref(), edge.child.as_ref()], |row| {
-                    kind(&row.get::<_, String>(0)?)
-                })? != edge.expected_kind
+        growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |transaction| {
+                let parent_kind = transaction
+                    .query_row(
+                        "SELECT kind FROM objects WHERE oid = ?1",
+                        [parent.as_ref()],
+                        |row| kind(&row.get::<_, String>(0)?),
+                    )
+                    .optional()?
+                    .ok_or(MetadataError::Integrity)?;
+                if parent_kind == ObjectKind::Blob
+                    || edges.iter().any(|edge| match parent_kind {
+                        ObjectKind::Tree => {
+                            !matches!(edge.expected_kind, ObjectKind::Blob | ObjectKind::Tree)
+                        }
+                        ObjectKind::Commit => {
+                            !matches!(edge.expected_kind, ObjectKind::Commit | ObjectKind::Tree)
+                        }
+                        _ => false,
+                    })
                 {
-                    return Err(MetadataError::IdentityConflict);
+                    return Err(MetadataError::Integrity);
                 }
-            }
-        }
-        transaction.commit()?;
-        Ok(())
+                {
+                    let mut insert = transaction.prepare_cached("INSERT INTO object_edges(parent,child,expected_kind) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING")?;
+                    let mut existing = transaction.prepare_cached(
+                        "SELECT expected_kind FROM object_edges WHERE parent = ?1 AND child = ?2",
+                    )?;
+                    for edge in edges {
+                        insert.execute(params![
+                            parent.as_ref(),
+                            edge.child.as_ref(),
+                            edge.expected_kind.git_name()
+                        ])?;
+                        if existing
+                            .query_row(params![parent.as_ref(), edge.child.as_ref()], |row| {
+                                kind(&row.get::<_, String>(0)?)
+                            })?
+                            != edge.expected_kind
+                        {
+                            return Err(MetadataError::IdentityConflict);
+                        }
+                    }
+                }
+                Ok(())
+            },
+        )
     }
 
     fn check_healthy(&self) -> Result<(), MetadataError> {
@@ -170,74 +190,79 @@ impl MetadataBuilder {
     /// until it finishes, even when the requesting async future is canceled.
     pub fn put_verified_batch(
         &mut self,
-        witnesses: Vec<super::super::verification::VerifiedObject>,
+        mut witnesses: Vec<super::super::verification::VerifiedObject>,
     ) -> Result<(), MetadataError> {
         self.check_healthy()?;
         self.failed = true;
         if witnesses.is_empty() || witnesses.len() > PAGE_OBJECTS {
             return Err(MetadataError::Limit);
         }
-        let transaction = self.connection.transaction()?;
-        for witness in witnesses {
-            let object = witness.object();
-            if object.oid.format() != self.identity.format
-                || object.oid.is_zero()
-                || object.size > i64::MAX as u64
-            {
-                return Err(MetadataError::Integrity);
-            }
-            transaction.execute("INSERT INTO objects(oid, kind, size, digest) VALUES (?1,?2,?3,?4) ON CONFLICT DO NOTHING", params![object.oid.as_ref(),object.kind.git_name(),object.size as i64,object.digest.as_slice()])?;
-            let existing = transaction.query_row(
-                "SELECT oid, kind, size, digest FROM objects WHERE oid = ?1",
-                [object.oid.as_ref()],
-                canonical,
-            )?;
-            if existing != object {
-                return Err(MetadataError::IdentityConflict);
-            }
-            {
-                let mut insert = transaction.prepare_cached("INSERT INTO object_edges(parent,child,expected_kind) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING")?;
-                let mut existing = transaction.prepare_cached(
+        growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |transaction| {
+                for witness in &mut witnesses {
+                    let object = witness.object();
+                    if object.oid.format() != self.identity.format
+                        || object.oid.is_zero()
+                        || object.size > i64::MAX as u64
+                    {
+                        return Err(MetadataError::Integrity);
+                    }
+                    transaction.execute("INSERT INTO objects(oid, kind, size, digest) VALUES (?1,?2,?3,?4) ON CONFLICT DO NOTHING", params![object.oid.as_ref(),object.kind.git_name(),object.size as i64,object.digest.as_slice()])?;
+                    let existing = transaction.query_row(
+                        "SELECT oid, kind, size, digest FROM objects WHERE oid = ?1",
+                        [object.oid.as_ref()],
+                        canonical,
+                    )?;
+                    if existing != object {
+                        return Err(MetadataError::IdentityConflict);
+                    }
+                    {
+                        let mut insert = transaction.prepare_cached("INSERT INTO object_edges(parent,child,expected_kind) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING")?;
+                        let mut existing = transaction.prepare_cached(
                     "SELECT expected_kind FROM object_edges WHERE parent = ?1 AND child = ?2",
                 )?;
-                witness.replay(|edges| {
-                    for edge in edges {
-                        if edge.child.format() != self.identity.format
-                            || edge.child.is_zero()
-                            || match object.kind {
-                                ObjectKind::Blob => true,
-                                ObjectKind::Tree => !matches!(
-                                    edge.expected_kind,
-                                    ObjectKind::Tree | ObjectKind::Blob
-                                ),
-                                ObjectKind::Commit => !matches!(
-                                    edge.expected_kind,
-                                    ObjectKind::Tree | ObjectKind::Commit
-                                ),
-                                ObjectKind::Tag => false,
+                        witness.replay(|edges| {
+                            for edge in edges {
+                                if edge.child.format() != self.identity.format
+                                    || edge.child.is_zero()
+                                    || match object.kind {
+                                        ObjectKind::Blob => true,
+                                        ObjectKind::Tree => !matches!(
+                                            edge.expected_kind,
+                                            ObjectKind::Tree | ObjectKind::Blob
+                                        ),
+                                        ObjectKind::Commit => !matches!(
+                                            edge.expected_kind,
+                                            ObjectKind::Tree | ObjectKind::Commit
+                                        ),
+                                        ObjectKind::Tag => false,
+                                    }
+                                {
+                                    return Err(MetadataError::Integrity);
+                                }
+                                insert.execute(params![
+                                    object.oid.as_ref(),
+                                    edge.child.as_ref(),
+                                    edge.expected_kind.git_name()
+                                ])?;
+                                if existing.query_row(
+                                    params![object.oid.as_ref(), edge.child.as_ref()],
+                                    |row| kind(&row.get::<_, String>(0)?),
+                                )? != edge.expected_kind
+                                {
+                                    return Err(MetadataError::IdentityConflict);
+                                }
                             }
-                        {
-                            return Err(MetadataError::Integrity);
-                        }
-                        insert.execute(params![
-                            object.oid.as_ref(),
-                            edge.child.as_ref(),
-                            edge.expected_kind.git_name()
-                        ])?;
-                        if existing
-                            .query_row(params![object.oid.as_ref(), edge.child.as_ref()], |row| {
-                                kind(&row.get::<_, String>(0)?)
-                            })?
-                            != edge.expected_kind
-                        {
-                            return Err(MetadataError::IdentityConflict);
-                        }
+                            Ok(())
+                        })?;
                     }
-                    Ok(())
-                })?;
-            }
-        }
-        transaction.commit()?;
+                }
+                Ok(())
+            },
+        )?;
         self.failed = false;
         Ok(())
     }
@@ -282,76 +307,115 @@ impl MetadataBuilder {
             if objects.is_empty() {
                 break;
             }
-            let transaction = self.connection.transaction()?;
-            for object in objects {
+            // Consume native ordinals once, outside the replayable SQL body.
+            for object in &objects {
                 if native.next().transpose()? != Some(object.oid) {
                     return Err(MetadataError::Integrity);
                 }
-                let mut chain = edge_seed(object.oid);
-                let mut edge_count = 0_u64;
-                let mut tree_count = 0_u64;
-                {
-                    let mut statement = transaction.prepare_cached("SELECT child, expected_kind FROM object_edges WHERE parent = ?1 ORDER BY child")?;
-                    let mut rows = statement.query([object.oid.as_ref()])?;
-                    while let Some(row) = rows.next()? {
-                        let child = oid(row.get(0)?)?;
-                        let expected_kind = kind(&row.get::<_, String>(1)?)?;
-                        let mut record = [0; 33];
-                        let width = child.len();
-                        record[..width].copy_from_slice(&child);
-                        record[width] = kind_code(expected_kind);
-                        chain = fold(chain, edge_count, &record[..width + 1]);
-                        edge_count = edge_count.checked_add(1).ok_or(MetadataError::Limit)?;
-                        tree_count += u64::from(expected_kind == ObjectKind::Tree);
-                    }
-                }
-                if (object.kind == ObjectKind::Blob && edge_count != 0)
-                    || (object.kind == ObjectKind::Tag && edge_count != 1)
-                    || (object.kind == ObjectKind::Commit && tree_count != 1)
-                {
-                    return Err(MetadataError::Integrity);
-                }
-                let edge_count_sql = i64::try_from(edge_count).map_err(|_| MetadataError::Limit)?;
-                transaction.execute(
+            }
+            let (next_inventory, next_ordinal, next_total, next_first, next_last, next_after) =
+                growth::transaction(
+                    &mut self.connection,
+                    &mut self.admitted,
+                    self.limits.max_file_bytes,
+                    |transaction| {
+                        let mut inventory = inventory;
+                        let mut ordinal = ordinal;
+                        let mut total_edges = total_edges;
+                        let mut first_oid = first_oid;
+                        let mut last_oid = last_oid;
+                        let mut after = after.clone();
+                        for &object in &objects {
+                            let mut chain = edge_seed(object.oid);
+                            let mut edge_count = 0_u64;
+                            let mut tree_count = 0_u64;
+                            {
+                                let mut statement = transaction.prepare_cached("SELECT child, expected_kind FROM object_edges WHERE parent = ?1 ORDER BY child")?;
+                                let mut rows = statement.query([object.oid.as_ref()])?;
+                                while let Some(row) = rows.next()? {
+                                    let child = oid(row.get(0)?)?;
+                                    let expected_kind = kind(&row.get::<_, String>(1)?)?;
+                                    let mut record = [0; 33];
+                                    let width = child.len();
+                                    record[..width].copy_from_slice(&child);
+                                    record[width] = kind_code(expected_kind);
+                                    chain = fold(chain, edge_count, &record[..width + 1]);
+                                    edge_count =
+                                        edge_count.checked_add(1).ok_or(MetadataError::Limit)?;
+                                    tree_count += u64::from(expected_kind == ObjectKind::Tree);
+                                }
+                            }
+                            if (object.kind == ObjectKind::Blob && edge_count != 0)
+                                || (object.kind == ObjectKind::Tag && edge_count != 1)
+                                || (object.kind == ObjectKind::Commit && tree_count != 1)
+                            {
+                                return Err(MetadataError::Integrity);
+                            }
+                            let edge_count_sql =
+                                i64::try_from(edge_count).map_err(|_| MetadataError::Limit)?;
+                            transaction.execute(
                     "UPDATE objects SET edge_count = ?2, edge_digest = ?3 WHERE oid = ?1",
                     params![object.oid.as_ref(), edge_count_sql, chain.as_slice()],
                 )?;
-                inventory = fold_header(
-                    inventory,
-                    ordinal,
-                    ObjectHeader {
-                        object,
-                        edge_count,
-                        edge_digest: chain,
+                            inventory = fold_header(
+                                inventory,
+                                ordinal,
+                                ObjectHeader {
+                                    object,
+                                    edge_count,
+                                    edge_digest: chain,
+                                },
+                            );
+                            ordinal += 1;
+                            total_edges = total_edges
+                                .checked_add(edge_count)
+                                .ok_or(MetadataError::Limit)?;
+                            first_oid.get_or_insert(object.oid);
+                            last_oid = Some(object.oid);
+                            after = object.oid.to_vec();
+                        }
+                        Ok::<_, MetadataError>((
+                            inventory,
+                            ordinal,
+                            total_edges,
+                            first_oid,
+                            last_oid,
+                            after,
+                        ))
                     },
-                );
-                ordinal += 1;
-                total_edges = total_edges
-                    .checked_add(edge_count)
-                    .ok_or(MetadataError::Limit)?;
-                first_oid.get_or_insert(object.oid);
-                last_oid = Some(object.oid);
-                after = object.oid.to_vec();
-            }
-            transaction.commit()?;
+                )?;
+            inventory = next_inventory;
+            ordinal = next_ordinal;
+            total_edges = next_total;
+            first_oid = next_first;
+            last_oid = next_last;
+            after = next_after;
         }
         if ordinal != count {
             return Err(MetadataError::Integrity);
         }
         let identity = self.identity;
-        self.connection.execute(
-            "INSERT INTO segment_identity VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                identity.repository.as_slice(),
-                identity.operation.as_slice(),
-                identity.format.as_str(),
-                identity.pack_digest.as_slice(),
-                identity.git_checksum.as_ref(),
-                identity.first_ordinal,
-                identity.object_count,
-                i64::try_from(total_edges).map_err(|_| MetadataError::Limit)?,
-                inventory.as_slice()
-            ],
+        growth::transaction(
+            &mut self.connection,
+            &mut self.admitted,
+            self.limits.max_file_bytes,
+            |tx| {
+                tx.execute(
+                    "INSERT INTO segment_identity VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    params![
+                        identity.repository.as_slice(),
+                        identity.operation.as_slice(),
+                        identity.format.as_str(),
+                        identity.pack_digest.as_slice(),
+                        identity.git_checksum.as_ref(),
+                        identity.first_ordinal,
+                        identity.object_count,
+                        i64::try_from(total_edges).map_err(|_| MetadataError::Limit)?,
+                        inventory.as_slice()
+                    ],
+                )?;
+                Ok::<_, MetadataError>(())
+            },
         )?;
         self.connection
             .close()

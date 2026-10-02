@@ -27,8 +27,13 @@ impl Spool {
                 break;
             }
             let canceled = Arc::clone(&self.canceled);
-            let tx = self.connection.transaction()?;
-            for header in headers {
+            let (next_first, next_after, next_inventory, next_count, next_edges) = self.write(|tx| {
+                let mut first = first;
+                let mut after = after;
+                let mut inventory = inventory;
+                let mut count = count;
+                let mut edge_count = edge_count;
+            for &header in &headers {
                 validate_header(header, identity.format)?;
                 let h = header.object;
                 tx.execute("INSERT INTO objects(oid,kind,size,digest,edge_count,edge_digest) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT DO NOTHING", params![h.oid.as_ref(),h.kind.git_name(),h.size as i64,h.digest.as_slice(),header.edge_count as i64,header.edge_digest.as_slice()])?;
@@ -40,7 +45,7 @@ impl Spool {
                 if current != header {
                     return Err(MetadataError::IdentityConflict.into());
                 }
-                verify_edges(&tx, segment, header, &canceled)?;
+                verify_edges(tx, segment, header, &canceled)?;
                 first.get_or_insert(h.oid);
                 after = Some(h.oid);
                 inventory = metadata::fold_header(inventory, count, header);
@@ -49,7 +54,13 @@ impl Spool {
                     .checked_add(header.edge_count)
                     .ok_or(MetadataError::Limit)?;
             }
-            tx.commit()?;
+                Ok((first, after, inventory, count, edge_count))
+            })?;
+            first = next_first;
+            after = next_after;
+            inventory = next_inventory;
+            count = next_count;
+            edge_count = next_edges;
         }
         if count != u64::from(identity.object_count)
             || edge_count != descriptor.edge_count

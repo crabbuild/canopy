@@ -15,7 +15,9 @@ async fn admitted_native_witnesses_assemble_exact_metadata_and_release_scratch()
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = fixture(format, 1600).await?;
         let scratch = tempfile::TempDir::new()?;
-        let budget = DiskBudget::new(128 << 20);
+        // A 16 MiB shard ceiling must not require a 48 MiB reservation before
+        // verification. This budget admits the real database and edge spools.
+        let budget = DiskBudget::new(2 << 20);
         let mut builder =
             MetadataBuilder::new(scratch.path(), budget.clone(), fixture.identity, limits())?;
         let baseline = budget.used();
@@ -29,7 +31,7 @@ async fn admitted_native_witnesses_assemble_exact_metadata_and_release_scratch()
             witnesses.push(witness);
             if witnesses.len() == PAGE_OBJECTS {
                 builder.put_verified_batch(std::mem::take(&mut witnesses))?;
-                assert_eq!(budget.used(), baseline);
+                assert_eq!(budget.used(), builder.admitted_bytes());
             }
         }
         if !witnesses.is_empty() {
@@ -51,7 +53,8 @@ async fn admitted_native_witnesses_assemble_exact_metadata_and_release_scratch()
             builder.put_verified(repeated)?;
         }
         verifier.finish().await?;
-        assert_eq!(budget.used(), baseline);
+        assert_eq!(budget.used(), builder.admitted_bytes());
+        assert!(budget.used() > baseline);
         let segment = builder.seal(&fixture.index)?;
         for (oid, (expected, edges)) in &fixture.objects {
             let header = segment.header(*oid)?.ok_or("header")?;

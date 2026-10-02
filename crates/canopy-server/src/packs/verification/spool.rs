@@ -27,7 +27,7 @@ impl VerifiedObject {
     /// Replay exact occurrence bytes in bounded pages. SQL deduplicates typed
     /// edges; the digest detects changed scratch bytes before transaction commit.
     pub(in crate::packs) fn replay(
-        mut self,
+        &mut self,
         mut append: impl FnMut(&[TypedEdge]) -> Result<(), MetadataError>,
     ) -> Result<(), MetadataError> {
         let Some(file) = self.file.as_mut() else {

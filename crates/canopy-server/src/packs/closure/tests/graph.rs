@@ -31,7 +31,7 @@ pub(super) fn insert(spool: &mut Spool, objects: &[(ObjectHeader, Vec<TypedEdge>
     // Private synthetic graph fixtures bypass physical verification to exercise
     // cycles and type faults. No production constructor can accept these rows.
     for page in objects.chunks(PAGE_OBJECTS) {
-        let tx = spool.connection.transaction()?;
+        spool.write(|tx| {
         for (h, edges) in page {
             tx.execute("INSERT INTO objects(oid,kind,size,digest,edge_count,edge_digest) VALUES(?1,?2,?3,?4,?5,?6)",params![h.object.oid.as_ref(),h.object.kind.git_name(),h.object.size as i64,h.object.digest.as_slice(),h.edge_count as i64,h.edge_digest.as_slice()])?;
             for e in edges {
@@ -45,7 +45,8 @@ pub(super) fn insert(spool: &mut Spool, objects: &[(ObjectHeader, Vec<TypedEdge>
                 )?;
             }
         }
-        tx.commit()?;
+        Ok(())
+        })?;
     }
     Ok(())
 }
@@ -115,6 +116,14 @@ fn deep_chain_wide_fanout_and_many_ready_leaves_do_not_require_a_heap_graph() ->
         );
         // Critical paged queries must use their index and avoid a temp sort.
         for (sql, index) in [
+            (
+                "SELECT oid FROM objects WHERE oid>x'00' ORDER BY oid LIMIT 512",
+                "PRIMARY KEY",
+            ),
+            (
+                "SELECT DISTINCT child FROM object_edges WHERE child>x'00' ORDER BY child LIMIT 512",
+                "edge_child",
+            ),
             (
                 "SELECT oid FROM objects WHERE pending=0 AND done=0 ORDER BY oid LIMIT 512",
                 "ready_objects",

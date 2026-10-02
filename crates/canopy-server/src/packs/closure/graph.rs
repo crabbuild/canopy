@@ -18,7 +18,24 @@ impl Spool {
         }
         // Only incoming vertices need topological processing. Certified external
         // dependencies are anchors; historical graph edges never enter scratch.
-        self.connection.execute("UPDATE objects SET pending=(SELECT count(*) FROM object_edges e JOIN objects c ON c.oid=e.child WHERE e.parent=objects.oid)", [])?;
+        let mut after = Vec::new();
+        loop {
+            self.check_cancel()?;
+            let ids: Vec<Vec<u8>> = self
+                .connection
+                .prepare_cached("SELECT oid FROM objects WHERE oid>?1 ORDER BY oid LIMIT ?2")?
+                .query_map(params![after, PAGE_OBJECTS as i64], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            if ids.is_empty() {
+                break;
+            }
+            self.write(|tx| {
+                let mut pending = tx.prepare_cached("UPDATE objects SET pending=(SELECT count(*) FROM object_edges e JOIN objects c ON c.oid=e.child WHERE e.parent=objects.oid) WHERE oid=?1")?;
+                for oid in &ids { pending.execute([oid])?; }
+                Ok(())
+            })?;
+            after = ids.last().ok_or(ClosureError::Integrity)?.clone();
+        }
         // Reuse the partial ready index as a disk-backed queue. A transaction
         // performs at most 512 vertex/edge updates, including newly-ready
         // vertices, so long chains do not create a journal per vertex. One wide
@@ -26,9 +43,13 @@ impl Spool {
         let mut active = None;
         loop {
             self.check_cancel()?;
-            let tx = self.connection.transaction()?;
-            let exhausted = advance(&tx, &mut active, &self.canceled)?;
-            tx.commit()?;
+            let canceled = Arc::clone(&self.canceled);
+            let (exhausted, next) = self.write(|tx| {
+                let mut next = active.clone();
+                let exhausted = advance(tx, &mut next, &canceled)?;
+                Ok((exhausted, next))
+            })?;
+            active = next;
             if exhausted {
                 break;
             }

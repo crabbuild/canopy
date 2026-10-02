@@ -138,7 +138,10 @@ async fn canceled_observer_does_not_cancel_admitted_native_publication_or_releas
         drop(ticket);
         drop(prepared);
         assert!(weak.upgrade().is_some());
-        assert_eq!(graph.budget.used(), 48 << 20);
+        assert_eq!(
+            graph.budget.used(),
+            crate::packs::metadata::growth::INITIAL_BYTES * 3
+        );
         release.send(()).map_err(|_| "worker disappeared")?;
         assert!(
             timeout(Duration::from_secs(10), coordinator.close_and_drain())
@@ -342,7 +345,10 @@ async fn unknown_absent_lost_ack_and_worker_panic_recover_exact_native_command()
             (1, 0, 0, 1)
         );
         assert_eq!(coordinator.reservations_for_test().await, (1, 8 << 20, 1));
-        assert_eq!(graph.budget.used(), 48 << 20);
+        assert_eq!(
+            graph.budget.used(),
+            crate::packs::metadata::growth::INITIAL_BYTES * 3
+        );
         assert!(weak.upgrade().is_some());
         drop(ticket);
         let retained = coordinator
@@ -601,7 +607,10 @@ async fn oversized_inline_completion_fails_before_dispatch_while_inventory_stays
         None
     );
     prepared.ensure_live()?;
-    assert_eq!(budget.used(), 48 << 20);
+    assert_eq!(
+        budget.used(),
+        crate::packs::metadata::growth::INITIAL_BYTES * 3
+    );
     let ready = Box::pin(prepared.ready_push(
         identity()?,
         request(refused()),

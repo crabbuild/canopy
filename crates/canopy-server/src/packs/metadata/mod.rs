@@ -14,6 +14,7 @@ use std::{
     sync::Mutex,
 };
 
+pub(in crate::packs) mod growth;
 mod writer;
 pub use writer::MetadataBuilder;
 pub(super) mod transport;
@@ -68,7 +69,10 @@ pub struct SegmentDescriptor {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MetadataLimits {
-    /// One shard's main database; scratch reserves 3x for rollback journals.
+    /// Main database ceiling. Builders admit 64 KiB initially (or this ceiling
+    /// if smaller), then double before raising SQLite's cap; each cap reserves
+    /// 3x for database, rollback journal, and overhead. Sealing retains only the
+    /// exact immutable file size.
     pub max_file_bytes: u64,
     pub cache_kib: u32,
 }
@@ -104,11 +108,9 @@ pub enum MetadataError {
 }
 impl From<rusqlite::Error> for MetadataError {
     fn from(error: rusqlite::Error) -> Self {
-        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DiskFull) {
-            Self::Limit
-        } else {
-            Self::Sql(error)
-        }
+        // Preserve the SQLite cause so admitted builders can distinguish a
+        // rolled-back capacity failure from validation/batch limits.
+        Self::Sql(error)
     }
 }
 
