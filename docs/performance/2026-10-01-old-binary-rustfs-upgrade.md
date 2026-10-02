@@ -129,7 +129,9 @@ The old executable SHA-256 is
 `32b114119960608c0a91d1c783bb69eafec432831bfa452d54d8950b09bc0e99`;
 the new qualified executable is
 `a541cef36acae0b21a651316fda2e9b3204ef7ea3f02173b65a7c217cd6026e9`.
-Production source still matches `bbd784a40c3867646044a8c716b7ee517f9aca49`.
+The measured production source matches `bbd784a40c3867646044a8c716b7ee517f9aca49`.
+The subsequent [listener handoff fix](2026-10-01-listener-handoff.md) is a
+separately verified build, not a new performance binding for this run.
 The producer, upgrade, load and recovery ran October 2 at 00:13–00:36 UTC,
 October 1 in the local Pacific timezone.
 
@@ -143,8 +145,10 @@ the small fixture does not explain the original fleet's terminal lease failure.
 
 At PR head `240203a7`, both Python CI jobs and one complete Rust job passed.
 The other Rust job failed with `AddrInUse` in the SHA-256 merge-candidate test.
-The failure log is retained; a passing parallel job does not erase it. Port
-reservation/handoff needs reproduction and correction before merge readiness.
+The failure log is retained; a passing parallel job does not erase it. The
+[listener handoff follow-up](2026-10-01-listener-handoff.md) reproduces the
+reservation gap, removes it from the affected SHA-256 tests and passes release
+and fresh-RustFS checks. The changed PR head still needs its own Linux CI.
 
 The [full performance plan](../performance-plan.md) remains unchanged:
 10,000 identities, 100 populated Git/LFS fixtures, all 108 windows, 114,960 arrivals

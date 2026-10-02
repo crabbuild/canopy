@@ -19,6 +19,11 @@ of these functional checks establishes reference capacity.
 Upstream subsequently advanced to `0dc04a6` with atomic API and test changes.
 The new candidate is independently qualified; the original corpus experiment
 and its frozen source remain on `c51dd121`.
+The subsequent [listener handoff correction](performance/2026-10-01-listener-handoff.md)
+passes 244 release Rust tests, lints, 84 Python tests and eight fresh RustFS gates
+on its own frozen source. It changes no runtime budget and supplies no new
+throughput or latency measurement; the earlier measured executable remains
+separately bound.
 The [combined authentication and residency candidate](performance/2026-10-01-bounded-authentication-and-residency.md)
 is now in PR #18: 231 release tests and all eight RustFS gates passed, as did
 20 unchanged cold-activation repetitions and all 15 residency tests. It has not
@@ -38,6 +43,7 @@ seed and successful recovery of every recorded ACK.
 | Current gate | Evidence / status |
 | --- | --- |
 | Current Cellule revision | `0dc04a6`: independently rebuilt release correctness, lints, Python harness and eight fresh RustFS gates passed. See the latest checkpoint for repeated regressions and exact bindings. Not retained-store upgrade, live deployment or measured performance |
+| HTTP listener handoff | [Separate startup qualification](performance/2026-10-01-listener-handoff.md): the affected SHA-256 tests retain their bound listeners through supervised startup; 244 release tests, 84 Python tests, eight fresh RustFS gates and repeated cancellation/handoff checks passed. New PR head requires fresh Linux CI; not measured performance |
 | Owned old-binary RustFS upgrade | [Controlled fixture qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md) passed actual old-byte restore through three fresh gateways/proxy, both new Git/LFS writes, twenty scheduled 17-step workflows and recovery of all forty critical repositories after all three owners were killed. Two retained repositories; not the original 10K corpus or reference capacity |
 | Original rebuilt Cellule artifact | `c51dd121` build, 227 Rust tests, eight RustFS gates and initial 17-step proxy check passed; full 10K/100 seed closed, but remote verification failed HTTP 503. A separate 10K metadata diagnostic returned 9,999 matching identities and one 503; downstream fault/load gates stopped without owner signals. Cause unresolved |
 | Combined authentication and residency candidate | First publication passed 231 release tests, eight RustFS gates, 20 cold-activation repetitions and 15 residency tests. Exact predecessor descriptor is retained; see the separately qualified catalog follow-up |

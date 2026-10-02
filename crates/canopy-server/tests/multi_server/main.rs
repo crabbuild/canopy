@@ -36,6 +36,7 @@ mod issues;
 mod large_objects;
 mod lfs_locks;
 mod lifecycle;
+mod listener_handoff;
 mod peers;
 mod residency;
 mod retained_catalog;

@@ -403,7 +403,15 @@ impl RunningServer {
     async fn start(
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
+        listener: Option<TcpListener>,
     ) -> Result<Self, ServerError> {
+        if let Some(listener) = &listener
+            && listener.local_addr()? != config.listen
+        {
+            return Err(ServerError::Http(
+                "HTTP listener address differs from listen configuration",
+            ));
+        }
         // Cellule permits 10,000 active Cells; reserve one for Directory takeover.
         if !(1..10_000).contains(&config.max_active_repositories) {
             return Err(ServerError::Http(
@@ -462,7 +470,10 @@ impl RunningServer {
             identity.image,
             identity.release,
         );
-        let listener = TcpListener::bind(config.listen).await?;
+        let listener = match listener {
+            Some(listener) => listener,
+            None => TcpListener::bind(config.listen).await?,
+        };
         let mut config = config;
         let address = listener.local_addr()?;
         let ssh_listener = if let Some(ssh) = &config.ssh {

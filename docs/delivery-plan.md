@@ -88,8 +88,12 @@ These are the next implementation slices. Each slice must update its contract, b
    reruns these checks on the new immutable revision without changing runtime
    budgets. The [owned old-binary RustFS qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
    passed controlled upgrade, twenty scheduled critical workflows and complete
-   recovery of that fixture after three-owner loss. Original-corpus upgrade,
-   full reference performance and the CI port-handoff failure remain open.
+   recovery of that fixture after three-owner loss. The
+   [listener handoff follow-up](performance/2026-10-01-listener-handoff.md)
+   removes the affected test's reservation gap and passes 244 release tests,
+   lints, 84 Python tests and eight fresh RustFS gates. Its changed head needs
+   fresh Linux CI. Original-corpus upgrade and full reference performance
+   remain open.
 2. Execute the [repository-density performance plan](performance-plan.md),
    then qualify the bounded Linux deployment and residency under faults and larger
    hot sets. Each node reserves one SQL slot for Directory takeover and admits

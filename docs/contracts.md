@@ -2803,6 +2803,11 @@ records release correctness and fresh RustFS compatibility separately from
 performance. The [owned retained-store qualification](performance/2026-10-01-old-binary-rustfs-upgrade.md)
 records actual old-executable restore and fresh-owner recovery; it does not
 provide a general upgrade controller or qualify the existing 10K corpus.
+The [listener handoff checkpoint](performance/2026-10-01-listener-handoff.md)
+qualifies the optional prebound HTTP listener through the same startup
+supervisor. Address mismatch is rejected before workspace/storage writes;
+readiness, fencing, cancellation cleanup and drain checks are unchanged.
+Its executable has separate bindings; earlier measurements do not certify it.
 
 The application declares one entity-partitioned SQL Cell type for repositories.
 `repository_target` validates the canonical UUID, then calls the app crate's

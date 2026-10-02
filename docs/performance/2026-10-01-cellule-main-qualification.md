@@ -16,8 +16,10 @@ The tested source is `bbd784a40c3867646044a8c716b7ee517f9aca49`. The dependency
 change replaces five direct manifest pins and six lockfile source revisions;
 it changes no other dependency versions, Canopy implementation or runtime budgets.
 Locked metadata resolves all six Cellule packages to the same immutable commit.
-Before publication, all 263 production, test, script and Cargo files on the PR
-branch are checked against this frozen source.
+At first publication (`240203a7`), all 263 production, test, script and Cargo
+files on the PR branch matched this frozen source. The subsequent
+[listener handoff verification](2026-10-01-listener-handoff.md) has its own
+source, executable and checks; the artifacts below remain historical bindings.
 
 The new revision includes atomic API and upstream test changes. Passing
 functional tests is not evidence of a throughput or latency improvement.
