@@ -58,8 +58,9 @@ pub use compaction::{
 mod exact;
 mod staging_service;
 pub use staging_service::{
-    ReadyStaging, StagedInputsTicket, StagingBound, StagingContext, StagingCoordinator,
-    StagingError, StagingLimits, StagingState, StagingStats, StagingTask, StagingTicket,
+    ReadyStaging, StagedInputsTicket, StagedPublicationFailure, StagedPublicationTicket,
+    StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits, StagingState,
+    StagingStats, StagingTask, StagingTicket,
 };
 mod inputs;
 pub(in crate::packs) use inputs::RetainedNativeInput;

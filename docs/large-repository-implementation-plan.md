@@ -6,7 +6,7 @@ Implement the [packed repository design](large-repository-storage-design.md) as 
 
 **Deliverable status:** the design, executable schema fragment, schema checks and native Git smoke fixture are delivered. Runtime changes listed below are not implemented by these documents. Existing working-tree cache/benchmark work is separate and should be integrated, not overwritten. No Kubernetes, Linux or Chromium capacity claim is closed by the small fixtures.
 
-Track actual primitive integration and remaining full scope in [implementation status](large-repository-implementation-status.md). The earlier schema fixture is superseded for the large-team release; its passing checks do not validate the new catalog architecture.
+Track actual primitive integration and remaining full scope in [implementation status](large-repository-implementation-status.md). The [final publication lifecycle](design/final-publication-lifecycle.md) now connects private final factories, staging worker/result drain, exact renewal/checkpoint recovery and account-fair dispatch without another command payload layout. It remains a process-local composition requiring production wiring and durable takeover. The earlier schema fixture is superseded for the large-team release; its passing checks do not validate the new catalog architecture.
 
 ## Implementation sequence
 

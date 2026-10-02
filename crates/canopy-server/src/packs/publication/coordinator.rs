@@ -101,11 +101,14 @@ enum PushPreparation {
     Outcome(Arc<PreparationSession>),
 }
 impl PushPreparation {
-    fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
+    fn session(&self) -> &PreparationSession {
         match self {
-            Self::Catalog(prepared) => prepared.base.capability(),
-            Self::Outcome(session) => session.capability(),
+            Self::Catalog(prepared) => &prepared.base.session,
+            Self::Outcome(session) => session,
         }
+    }
+    fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
+        self.session().capability()
     }
 }
 impl PreparationSession {
@@ -177,6 +180,8 @@ pub enum PublicationScheduleError {
     Duplicate,
     #[error("publication does not have an unresolved outcome")]
     NotUncertain,
+    #[error("publication is no longer held without execution")]
+    NotHeld,
 }
 pub struct PublicationAdmissionFailure {
     pub reason: PublicationScheduleError,
@@ -198,16 +203,23 @@ impl std::error::Error for PublicationAdmissionFailure {}
 
 #[derive(Clone, Debug)]
 pub enum PublicationState {
+    /// Admitted and charged, but cannot execute until explicitly activated.
+    Held,
     Queued,
     Running,
     /// Retained in the coordinator and charged until explicit resolution.
     Uncertain(Arc<PublicationError>),
     /// Rejected carries its durable receipt; NotStarted never acknowledges.
     Finished(Result<PublicationOutcome, Arc<PublicationError>>),
+    /// Held proof dropped before returning credits; no command was dispatched.
+    Discarded,
 }
 impl PublicationState {
     fn observed(&self) -> bool {
-        matches!(self, Self::Uncertain(_) | Self::Finished(_))
+        matches!(
+            self,
+            Self::Uncertain(_) | Self::Finished(_) | Self::Discarded
+        )
     }
 }
 struct ReadContext {
@@ -349,6 +361,7 @@ pub struct PublicationTicket {
 pub struct PublicationStats {
     pub admitted: usize,
     pub accounts: usize,
+    pub held: usize,
     pub queued: usize,
     pub in_flight: usize,
     pub uncertain: usize,
@@ -384,11 +397,35 @@ impl PublicationCoordinator {
         ready: impl Into<ReadyPublication>,
     ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
         let ready = ready.into();
+        let mut state = self.inner.state.lock().await;
+        self.admit(&mut state, ready, false)
+    }
+    /// Synchronous ownership handoff without dispatch. A lifecycle can retain
+    /// this ticket before yielding, so cancellation cannot strand an unowned
+    /// admission. Contended admission returns the original ready value.
+    pub fn try_reserve(
+        &self,
+        ready: impl Into<ReadyPublication>,
+    ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
+        let ready = ready.into();
+        let Ok(mut state) = self.inner.state.try_lock() else {
+            return Err(Box::new(PublicationAdmissionFailure {
+                reason: PublicationScheduleError::Capacity,
+                ready,
+            }));
+        };
+        self.admit(&mut state, ready, true)
+    }
+    fn admit(
+        &self,
+        state: &mut State,
+        ready: ReadyPublication,
+        held: bool,
+    ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
         let class = ready.class();
         let reservation = ready.reservation();
         let at = class.index();
         let (client, target, check) = ready.capability();
-        let mut state = self.inner.state.lock().await;
         let limits = self.inner.limits;
         let (operation_limit, byte_limit) = match class {
             PublicationClass::Foreground => (
@@ -439,7 +476,12 @@ impl PublicationCoordinator {
             class,
             reservation,
             ready: Mutex::new(Some(ready)),
-            status: watch::channel(PublicationState::Queued).0,
+            status: watch::channel(if held {
+                PublicationState::Held
+            } else {
+                PublicationState::Queued
+            })
+            .0,
             read,
             admitted: Instant::now(),
         });
@@ -447,17 +489,11 @@ impl PublicationCoordinator {
         state.counts[at] += 1;
         state.bytes[at] += job.reservation;
         state.jobs.insert(job.operation, Arc::clone(&job));
-        state.queue.push(
-            job.class,
-            job.actor.clone(),
-            Work {
-                job: Arc::clone(&job),
-                recover: false,
-                queued: Instant::now(),
-            },
-        );
-        self.start(&mut state);
-        self.inner.changed.notify_one();
+        if !held {
+            enqueue(state, &job, false);
+            self.start(state);
+            self.inner.changed.notify_one();
+        }
         Ok(PublicationTicket {
             inner: Arc::clone(&self.inner),
             job,
@@ -483,15 +519,7 @@ impl PublicationCoordinator {
             return Err(PublicationScheduleError::NotUncertain);
         }
         ticket.job.status.send_replace(PublicationState::Queued);
-        state.queue.push(
-            ticket.job.class,
-            ticket.job.actor.clone(),
-            Work {
-                job: Arc::clone(&ticket.job),
-                recover: true,
-                queued: Instant::now(),
-            },
-        );
+        enqueue(&mut state, &ticket.job, true);
         self.start(&mut state);
         self.inner.changed.notify_one();
         Ok(())
@@ -503,7 +531,9 @@ impl PublicationCoordinator {
         }
     }
     /// Stop new work and wait for dispatched commands (without cancellation).
-    /// Recovery remains available after closing. Every returned ticket remains
+    /// Held activation/discard and recovery remain available after closing.
+    /// Close the producer lifecycle first: this does not activate held proofs.
+    /// Every returned ticket remains
     /// charged and owns the original command, identity and verification input.
     pub async fn close_and_drain(&self) -> Vec<PublicationTicket> {
         loop {
@@ -546,6 +576,7 @@ impl PublicationCoordinator {
         let mut stats = PublicationStats {
             admitted: state.jobs.len(),
             accounts: state.actors.len(),
+            held: 0,
             queued: 0,
             in_flight: 0,
             uncertain: 0,
@@ -556,10 +587,11 @@ impl PublicationCoordinator {
         };
         for job in state.jobs.values() {
             match *job.status.borrow() {
+                PublicationState::Held => stats.held += 1,
                 PublicationState::Queued => stats.queued += 1,
                 PublicationState::Running => stats.in_flight += 1,
                 PublicationState::Uncertain(_) => stats.uncertain += 1,
-                PublicationState::Finished(_) => {}
+                PublicationState::Finished(_) | PublicationState::Discarded => {}
             }
         }
         stats
@@ -594,8 +626,63 @@ impl PublicationCoordinator {
             state.actors.len(),
         )
     }
+    #[cfg(test)]
+    pub(super) async fn with_admission_for_test<T>(&self, inspect: impl FnOnce() -> T) -> T {
+        let _state = self.inner.state.lock().await;
+        inspect()
+    }
 }
 impl PublicationTicket {
+    /// Join the existing fair queue once. Idempotence lets a recovering
+    /// lifecycle observe an already activated command without recreating it.
+    /// Existing admission can activate after coordinator close.
+    pub async fn activate(&self) -> Result<(), PublicationScheduleError> {
+        let mut state = self.inner.state.lock().await;
+        let held = matches!(self.state(), PublicationState::Held);
+        if matches!(self.state(), PublicationState::Discarded) {
+            return Err(PublicationScheduleError::NotHeld);
+        }
+        if !held {
+            return Ok(());
+        }
+        self.job.status.send_replace(PublicationState::Queued);
+        enqueue(&mut state, &self.job, false);
+        PublicationCoordinator {
+            inner: Arc::clone(&self.inner),
+        }
+        .start(&mut state);
+        self.inner.changed.notify_one();
+        Ok(())
+    }
+    /// Only a proven unexecuted held command can be discarded. Holding the
+    /// coordinator state lock serializes this with activation; drop private
+    /// proof resources before returning their admission credits.
+    pub async fn discard_held(&self) -> Result<(), PublicationScheduleError> {
+        let mut state = self.inner.state.lock().await;
+        if !matches!(self.state(), PublicationState::Held) {
+            return Err(PublicationScheduleError::NotHeld);
+        }
+        self.job.ready.lock().await.take();
+        release(&mut state, &self.job);
+        self.job.status.send_replace(PublicationState::Discarded);
+        self.inner.drained.notify_waiters();
+        Ok(())
+    }
+    pub async fn recover(&self) -> Result<(), PublicationScheduleError> {
+        PublicationCoordinator {
+            inner: Arc::clone(&self.inner),
+        }
+        .recover(self)
+        .await
+    }
+    pub(super) async fn wait_recovered(&self) {
+        let mut status = self.job.status.subscribe();
+        while matches!(*status.borrow_and_update(), PublicationState::Uncertain(_)) {
+            if status.changed().await.is_err() {
+                return;
+            }
+        }
+    }
     pub fn class(&self) -> PublicationClass {
         self.job.class
     }
@@ -633,6 +720,32 @@ impl PublicationTicket {
         )
         .await
     }
+}
+
+fn enqueue(state: &mut State, job: &Arc<Job>, recover: bool) {
+    state.queue.push(
+        job.class,
+        job.actor.clone(),
+        Work {
+            job: Arc::clone(job),
+            recover,
+            queued: Instant::now(),
+        },
+    );
+}
+fn release(state: &mut State, job: &Job) {
+    state.jobs.remove(&job.operation);
+    let count = state
+        .actors
+        .get_mut(&job.actor)
+        .expect("admitted actor count");
+    let at = job.class.index();
+    count[at] -= 1;
+    if *count == [0, 0] {
+        state.actors.remove(&job.actor);
+    }
+    state.counts[at] -= 1;
+    state.bytes[at] -= job.reservation;
 }
 
 async fn supervise(inner: Arc<Inner>) {
@@ -756,18 +869,7 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
         // Drop large resources before making their admission reusable.
         job.ready.lock().await.take();
         let mut state = inner.state.lock().await;
-        state.jobs.remove(&job.operation);
-        let count = state
-            .actors
-            .get_mut(&job.actor)
-            .expect("admitted actor count");
-        let at = job.class.index();
-        count[at] -= 1;
-        if *count == [0, 0] {
-            state.actors.remove(&job.actor);
-        }
-        state.counts[at] -= 1;
-        state.bytes[at] -= job.reservation;
+        release(&mut state, job);
         job.status
             .send_replace(PublicationState::Finished(outcome.map_err(Arc::new)));
     }

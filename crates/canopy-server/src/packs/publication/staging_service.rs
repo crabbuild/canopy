@@ -19,6 +19,8 @@ use tokio::{
 
 mod bound;
 use bound::accept_bound;
+mod publication;
+pub use publication::{StagedPublicationFailure, StagedPublicationTicket};
 
 const COMMAND_BYTES: u32 = 4096;
 #[derive(Clone, Copy, Debug)]
@@ -112,6 +114,10 @@ pub enum StagingError {
     Query(#[source] Box<InvocationError<Option<StagingLease>>>),
     #[error("bound base failed")]
     Base(#[from] PreparationBaseError),
+    #[error("final publication admission failed: {0}")]
+    PublicationAdmission(PublicationScheduleError),
+    #[error("final publication failed: {0}")]
+    Publication(#[source] Arc<PublicationError>),
 }
 impl StagingError {
     fn uncertain(&self) -> bool {
@@ -143,12 +149,19 @@ pub enum StagingState {
     Resolving,
     Uncertain(Arc<StagingError>),
     Bound(Arc<StagingBound>),
+    Finishing,
+    Publishing,
+    /// Original final outcome; no post-completion lease query can erase it.
+    Published(Result<PublicationOutcome, Arc<PublicationError>>),
     Fenced(Arc<StagingError>),
     Stopped,
 }
 impl StagingState {
     fn terminal(&self) -> bool {
-        matches!(self, Self::Bound(_) | Self::Fenced(_) | Self::Stopped)
+        matches!(
+            self,
+            Self::Bound(_) | Self::Published(_) | Self::Fenced(_) | Self::Stopped
+        )
     }
 }
 #[must_use]
@@ -296,6 +309,7 @@ struct Local {
     bound_started: Option<Instant>,
     bound_result: Option<Arc<StagingBound>>,
     bound_renewal: Option<Committed<PreparationReply>>,
+    finishing: bool,
     deadline: Instant,
     lifetime: Instant,
     workers: usize,
@@ -324,6 +338,7 @@ struct Job {
     work: Mutex<WorkSlots>,
     exact: Mutex<Option<Exact>>,
     checkpoint: Mutex<Option<Arc<InputRegistration>>>,
+    publication: Mutex<Option<PublicationTicket>>,
     status: watch::Sender<StagingState>,
     changed: Notify,
 }
@@ -505,6 +520,7 @@ impl StagingCoordinator {
                 bound_started: ready.inner.bound_source.as_ref().map(|_| now),
                 bound_result: None,
                 bound_renewal: None,
+                finishing: false,
                 deadline: now,
                 lifetime: now + Duration::from_millis(self.inner.limits.lifetime_ms),
                 workers: 0,
@@ -517,6 +533,7 @@ impl StagingCoordinator {
             work: Mutex::new(WorkSlots::default()),
             exact: Mutex::new(Some(ready.inner.command)),
             checkpoint: Mutex::new(None),
+            publication: Mutex::new(None),
             status: watch::channel(StagingState::Starting).0,
             changed: Notify::new(),
         });
@@ -676,6 +693,7 @@ impl StagingTicket {
         let local = self.job.local.lock().expect("staging local");
         let bound = local.bound.is_some();
         if local.fenced
+            || local.finishing
             || local.stop
             || (local.seal && !bound)
             || Instant::now() >= local.deadline.min(local.lifetime)
@@ -745,6 +763,8 @@ impl StagingTicket {
                     | StagingState::RegisteringInputs
                     | StagingState::Resolving
                     | StagingState::Draining(_)
+                    | StagingState::Finishing
+                    | StagingState::Publishing
             ) {
                 return state;
             }
@@ -801,6 +821,7 @@ impl StagingTicket {
     pub fn bound_session(&self) -> Result<Arc<PreparationSession>, StagingError> {
         let l = self.job.local.lock().expect("staging local");
         if l.stop
+            || l.finishing
             || l.fenced
             || Instant::now() >= l.lifetime
             || !matches!(self.state(), StagingState::Bound(_))
@@ -869,6 +890,7 @@ impl StagingTicket {
         let context = {
             let mut l = self.job.local.lock().expect("staging local");
             if (l.seal && !bound)
+                || l.finishing
                 || l.bound.is_some() != bound
                 || l.stop
                 || l.fenced
@@ -1157,6 +1179,18 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
         }
         let exact = job.exact.lock().expect("staging exact").clone();
         let Some(exact) = exact else {
+            let publication = job.publication.lock().expect("staging publication").clone();
+            if let Some(ticket) = publication
+                && !matches!(
+                    ticket.state(),
+                    PublicationState::Held | PublicationState::Discarded
+                )
+            {
+                // The other coordinator owns execution and exact evidence.
+                // Observe it even if this supervisor lost its local authority.
+                publication::observe(&inner, &job, &ticket).await;
+                return;
+            }
             fence_and_drain(&inner, &job, StagingError::Worker).await;
             return;
         };
@@ -1191,6 +1225,16 @@ async fn await_recovery(job: &Job) {
 }
 async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
     loop {
+        let publication = job.publication.lock().expect("staging publication").clone();
+        if let Some(ticket) = publication
+            && !matches!(
+                ticket.state(),
+                PublicationState::Held | PublicationState::Discarded
+            )
+        {
+            publication::observe(&inner, &job, &ticket).await;
+            return;
+        }
         let command = job.exact.lock().expect("staging exact").clone();
         if let Some(command) = command {
             if recover {
@@ -1266,9 +1310,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     }
                     let mut local = job.local.lock().expect("staging local");
                     local.deadline = *session.deadline.lock().expect("bound deadline");
-                    job.status.send_replace(StagingState::Bound(
-                        local.bound_result.clone().expect("bound original result"),
-                    ));
+                    job.status.send_replace(bound_state(&local));
                     recover = false;
                 }
                 Ok(Outcome::BoundRenew(value)) => {
@@ -1298,9 +1340,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     };
                     let mut local = job.local.lock().expect("staging local");
                     local.deadline = *session.deadline.lock().expect("bound deadline");
-                    job.status.send_replace(StagingState::Bound(
-                        local.bound_result.clone().expect("bound original result"),
-                    ));
+                    job.status.send_replace(bound_state(&local));
                     recover = false;
                 }
                 Ok(outcome @ (Outcome::Stage(_) | Outcome::Checkpoint(_))) => {
@@ -1380,6 +1420,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Renew(LeaseCheck),
             BoundRenew(LeaseCheck),
             Checkpoint(Arc<InputRegistration>),
+            Publish,
             Wait(Instant),
         }
         let wake = job.changed.notified();
@@ -1416,7 +1457,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 .cloned();
             if l.fenced || now >= l.deadline.min(l.lifetime) {
                 Next::Fence
-            } else if l.stop && l.workers == 0 && checkpoint.is_none() {
+            } else if l.stop && !l.finishing && l.workers == 0 && checkpoint.is_none() {
                 Next::Stop
             } else if l.bound.is_none()
                 && l.seal
@@ -1434,11 +1475,52 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 }
             } else if let Some(registration) = checkpoint {
                 Next::Checkpoint(registration)
+            } else if l.finishing && l.workers == 0 {
+                Next::Publish
             } else {
                 Next::Wait(due.min(l.lifetime))
             }
         };
         match next {
+            Next::Publish => {
+                let ticket = job
+                    .publication
+                    .lock()
+                    .expect("staging publication")
+                    .clone()
+                    .expect("accepted final publication");
+                let (session, receipt) = {
+                    let l = job.local.lock().expect("staging local");
+                    let mut receipt = l.bound_result.as_ref().expect("bound receipt").receipt;
+                    if let Some(renewal) = &l.bound_renewal
+                        && renewal.receipt.commit_sequence > receipt.commit_sequence
+                    {
+                        receipt = renewal.receipt;
+                    }
+                    if let Some(registration) =
+                        job.checkpoint.lock().expect("staging checkpoint").as_ref()
+                        && let Some(Ok(registered)) = registration.result.borrow().as_ref()
+                        && registered.commit_sequence > receipt.commit_sequence
+                    {
+                        receipt = *registered;
+                    }
+                    (l.bound.clone().expect("bound publication session"), receipt)
+                };
+                if let Err(error) = session.refresh(receipt).await {
+                    fence_and_drain(&inner, &job, StagingError::Base(error)).await;
+                    return;
+                }
+                if job.local.lock().expect("staging local").fenced {
+                    fence_and_drain(&inner, &job, StagingError::Inactive).await;
+                    return;
+                }
+                if let Err(error) = ticket.activate().await {
+                    fence_and_drain(&inner, &job, StagingError::PublicationAdmission(error)).await;
+                    return;
+                }
+                publication::observe(&inner, &job, &ticket).await;
+                return;
+            }
             Next::Stop => {
                 let mut local = job.local.lock().expect("staging local");
                 local.fenced = true;
@@ -1582,12 +1664,36 @@ async fn fence_and_drain(inner: &Inner, job: &Job, error: StagingError) {
             session.fence();
         }
     }
+    let publication = job.publication.lock().expect("staging publication").clone();
+    if let Some(ticket) = publication {
+        match ticket.state() {
+            PublicationState::Held => {
+                if ticket.discard_held().await.is_err()
+                    && !matches!(ticket.state(), PublicationState::Discarded)
+                {
+                    // A service-internal activation raced fencing. Execution
+                    // owns exact evidence now; preserve its original outcome.
+                    publication::observe(inner, job, &ticket).await;
+                    return;
+                }
+            }
+            PublicationState::Discarded => {}
+            _ => {
+                publication::observe(inner, job, &ticket).await;
+                return;
+            }
+        }
+    }
     let error = Arc::new(error);
     job.status
         .send_replace(StagingState::Fenced(Arc::clone(&error)));
     if let Some(registration) = job.checkpoint.lock().expect("staging checkpoint").as_ref() {
         registration.finish(Err(error));
     }
+    drain_work(job).await;
+    remove(inner, job);
+}
+async fn drain_work(job: &Job) {
     // Release the service's completed-result ownership. In-flight supervisors
     // still own their slots until abort/join and retain their admission guards.
     let slots = std::mem::take(&mut job.work.lock().expect("staging work").slots);
@@ -1600,10 +1706,16 @@ async fn fence_and_drain(inner: &Inner, job: &Job, error: StagingError) {
         tokio::pin!(wake);
         wake.as_mut().enable();
         if job.local.lock().expect("staging local").workers == 0 {
-            remove(inner, job);
             return;
         }
         wake.await;
+    }
+}
+fn bound_state(local: &Local) -> StagingState {
+    if local.finishing {
+        StagingState::Finishing
+    } else {
+        StagingState::Bound(local.bound_result.clone().expect("bound original result"))
     }
 }
 fn remove(inner: &Inner, job: &Job) {

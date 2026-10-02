@@ -93,6 +93,20 @@ impl From<ReadyPreparation> for ReadyPublication {
     }
 }
 impl ReadyPublication {
+    /// Final work must share the lifecycle's exact session fence and clock.
+    /// Equal SQL tokens from an independently opened session are insufficient.
+    pub(in crate::packs::publication) fn belongs_to(&self, session: &PreparationSession) -> bool {
+        let source = match self {
+            Self::Push(ready) => ready.owner.session(),
+            Self::Compaction(ready) => &ready.prepared.preparation_base().session,
+            Self::Inputs(_) | Self::Preparation(_) => return false,
+        };
+        source.target == session.target
+            && source.check == session.check
+            && source.ceiling == session.ceiling
+            && Arc::ptr_eq(&source.deadline, &session.deadline)
+            && Arc::ptr_eq(&source.fenced, &session.fenced)
+    }
     pub(super) fn reservation(&self) -> u64 {
         match self {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
@@ -151,18 +165,42 @@ impl ReadyPublication {
         match self {
             Self::Inputs(ready) => ready.dispatch(recover, fault).await,
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
-            Self::Push(ready) => {
-                super::super::exact::invoke(&client, ready.command, recover, 128, fault)
-                    .await
-                    .map(PublicationOutcome::Push)
-                    .map_err(PublicationError::Push)
-            }
-            Self::Compaction(ready) => {
-                super::super::exact::invoke(&client, ready.command, recover, 128, fault)
-                    .await
-                    .map(PublicationOutcome::Compaction)
-                    .map_err(PublicationError::Compaction)
-            }
+            Self::Push(ready) => super::super::exact::invoke_guarded(
+                &client,
+                ready.command,
+                recover,
+                128,
+                fault,
+                move || {
+                    ready
+                        .owner
+                        .session()
+                        .live_lease()
+                        .map(|_| ())
+                        .map_err(|_| Error::Command("inactive final preparation"))
+                },
+            )
+            .await
+            .map(PublicationOutcome::Push)
+            .map_err(PublicationError::Push),
+            Self::Compaction(ready) => super::super::exact::invoke_guarded(
+                &client,
+                ready.command,
+                recover,
+                128,
+                fault,
+                move || {
+                    ready
+                        .prepared
+                        .preparation_base()
+                        .live_lease()
+                        .map(|_| ())
+                        .map_err(|_| Error::Command("inactive final preparation"))
+                },
+            )
+            .await
+            .map(PublicationOutcome::Compaction)
+            .map_err(PublicationError::Compaction),
         }
     }
 }

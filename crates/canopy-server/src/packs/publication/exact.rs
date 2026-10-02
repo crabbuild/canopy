@@ -9,10 +9,14 @@ pub(super) async fn resolve<C: Command>(
     client: &CellClient,
     command: PreparedCommand<C>,
     output_limit: u32,
+    before_execute: impl FnOnce() -> Result<(), Error> + Send,
 ) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
     let evidence = command.evidence().clone();
     match client.resolve(&evidence).await {
-        Ok(Resolution::Absent) => Box::pin(command.execute()).await,
+        Ok(Resolution::Absent) => {
+            before_execute().map_err(InvocationError::NotStarted)?;
+            Box::pin(command.execute()).await
+        }
         Ok(Resolution::Committed(outcome)) => {
             let receipt = Receipt {
                 cell: evidence.target().cell_id(),
@@ -51,12 +55,26 @@ pub(super) async fn invoke<C: Command>(
     output_limit: u32,
     fault: u8,
 ) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
+    invoke_guarded(client, command, recover, output_limit, fault, || Ok(())).await
+}
+
+/// A local custody guard applies only before initial submission or proven
+/// absence. Resolve known outcomes first, even after local custody is fenced.
+pub(super) async fn invoke_guarded<C: Command>(
+    client: &CellClient,
+    command: PreparedCommand<C>,
+    recover: bool,
+    output_limit: u32,
+    fault: u8,
+    before_execute: impl FnOnce() -> Result<(), Error> + Send,
+) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
     let evidence = command.evidence().clone();
     let outcome = if fault == 1 {
         Err(InvocationError::Pending(Box::new(evidence.clone())))
     } else if recover {
-        resolve(client, command, output_limit).await
+        resolve(client, command, output_limit, before_execute).await
     } else {
+        before_execute().map_err(InvocationError::NotStarted)?;
         Box::pin(command.execute()).await
     };
     if fault == 2 {

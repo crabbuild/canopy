@@ -158,7 +158,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         drop((backend, source));
         assert!(cache_weak.upgrade().is_none());
         cleaned(work_root.path(), &disk).await?;
-        let physical_root = tempfile::TempDir::new()?;
+        let physical_root = Arc::new(tempfile::TempDir::new()?);
         let physical_disk = DiskBudget::new(256 << 20);
         let mut verifier = PhysicalVerifier::download(
             physical_root.path(),
@@ -185,27 +185,51 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             CatalogFileLimits::default(),
         )?);
         let base = Arc::new(ticket.open_base(indexes, files).await?);
-        let mut builder =
-            CatalogPreparation::new(physical_root.path(), physical_disk.clone(), base, limits())
-                .await?;
-        builder.begin_pack(witness)?;
-        builder.add_segment(segment).await?;
-        builder.finish_pack().await?;
-        let prepared = builder.finish().await?;
         let expected = response.clone();
-        let completed = Box::pin(prepared.complete_push(
-            identity()?,
-            PushCompletionRequest {
-                plan: Some(plan(vec![update("refs/heads/main", None, Some(tip))])),
-                response,
-                options: Vec::new(),
-                certificate: None,
-            },
-            physical_root.path(),
-            physical_disk.clone(),
-            limits(),
-        ))
-        .await?;
+        let producer_root = Arc::clone(&physical_root);
+        let producer_disk = physical_disk.clone();
+        let publication_identity = identity()?;
+        let work = ticket.spawn_bound(move |_| async move {
+            let result = async {
+                let mut builder = CatalogPreparation::new(
+                    producer_root.path(),
+                    producer_disk.clone(),
+                    base,
+                    limits(),
+                )
+                .await?;
+                builder.begin_pack(witness)?;
+                builder.add_segment(segment).await?;
+                builder.finish_pack().await?;
+                let prepared = Arc::new(builder.finish().await?);
+                let ready = Box::pin(prepared.ready_push(
+                    publication_identity,
+                    PushCompletionRequest {
+                        plan: Some(plan(vec![update("refs/heads/main", None, Some(tip))])),
+                        response,
+                        options: Vec::new(),
+                        certificate: None,
+                    },
+                    producer_root.path(),
+                    producer_disk.clone(),
+                    limits(),
+                ))
+                .await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((prepared, ready))
+            }
+            .await;
+            result.map_err(StagingError::Input)
+        })?;
+        let (prepared, ready) = work.wait().await.map_err(|error| error.to_string())?;
+        let publications =
+            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let observer = ticket.publish(&publications, ready)?;
+        let completed =
+            super::coordinator::finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Published(Ok(_))
+        ));
         assert!(matches!(
             completed.output,
             CatalogCompletionReply::Completed(CompletedCatalogPush {
@@ -218,10 +242,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 ..
             })
         ));
-        assert_eq!(
-            prepared.completed_push_response(&completed).await?,
-            expected
-        );
+        assert_eq!(observer.response().await?, expected);
         let sql = cellule_runtime::primitives::sql::SqlCell::<RepositoryModule>::new(
             fixture.client(),
             fixture.target.clone(),
@@ -240,6 +261,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         drop(prepared);
         cleaned(physical_root.path(), &physical_disk).await?;
         assert!(coordinator.close_and_drain().await.is_empty());
+        assert!(publications.close_and_drain().await.is_empty());
         // A new admitted workspace reconstructs from the committed catalog's
         // source, with no producer descriptors/cache or SQL Git object records.
         let cold_root = tempfile::TempDir::new()?;

@@ -19,7 +19,7 @@ async fn wait_for(
     })
     .await?
 }
-async fn bind(
+pub(super) async fn bind(
     f: &Fixture,
     c: &StagingCoordinator,
     op: [u8; 16],
@@ -31,7 +31,7 @@ async fn bind(
     assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
     Ok(ticket)
 }
-async fn claim(
+pub(super) async fn claim(
     f: &Fixture,
     c: &StagingCoordinator,
     token: PreparationToken,

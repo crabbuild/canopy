@@ -1,4 +1,5 @@
 mod bound;
+mod publication;
 use super::*;
 use tokio::{
     sync::oneshot,

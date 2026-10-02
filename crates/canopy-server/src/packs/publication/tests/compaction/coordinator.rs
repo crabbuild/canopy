@@ -10,6 +10,110 @@ fn compacted(state: PublicationState) -> Result<cellule_runtime::Committed<Compa
 }
 
 #[tokio::test]
+async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_fair_dispatch()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let inventory = seed(&fixture, 2).await?;
+        let before_refs = refs(&fixture.handle).await?;
+        let stages = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let ready = ReadyStaging::new(
+            fixture.client(),
+            fixture.target.clone(),
+            fixture.begin([184; 16]),
+            identity()?,
+        )
+        .await?;
+        let ticket = stages.submit(ready).map_err(|(e, _)| e)?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait()).await?,
+            StagingState::Active(_)
+        ));
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        let session = ticket.bound_session()?;
+        let root = Arc::new(tempfile::TempDir::new()?);
+        let budget = DiskBudget::new(128 << 20);
+        let indexes = Arc::new(CatalogIndexes::new(inventory.store.clone(), format));
+        let files = Arc::new(CatalogFiles::new(
+            fixture.root.path(),
+            DiskBudget::new(64 << 20),
+            inventory.store.clone(),
+            format,
+            crate::packs::catalog::CatalogFileLimits::default(),
+        )?);
+        let base = Arc::new(ticket.open_base(indexes, files).await?);
+        let owned_root = root.clone();
+        let owned_budget = budget.clone();
+        let mutation = identity()?;
+        let work = ticket.spawn_bound(move |_| async move {
+            let prepared = Arc::new(
+                PreparedCompaction::prepare(
+                    owned_root.path(),
+                    owned_budget,
+                    base,
+                    &[0, 1],
+                    CompactionLimits {
+                        spool: limits(),
+                        output: crate::packs::metadata::MetadataLimits {
+                            max_file_bytes: 16 << 10,
+                            cache_kib: 16,
+                        },
+                        ..CompactionLimits::default()
+                    },
+                )
+                .await
+                .map_err(|e| StagingError::Input(Box::new(e)))?,
+            );
+            let weak = Arc::downgrade(&prepared);
+            let ready = prepared
+                .ready_compaction(mutation)
+                .await
+                .map_err(|e| StagingError::Input(Box::new(e)))?;
+            Ok((ready, weak))
+        })?;
+        let (ready, weak) = work.wait().await.map_err(|e| e.to_string())?;
+        let publications =
+            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let (release, entered) = publications.pause_for_test().await;
+        let observer = ticket.publish(&publications, ready)?;
+        timeout(Duration::from_secs(10), entered).await??;
+        let stats = publications.stats().await;
+        assert_eq!(
+            (stats.foreground, stats.maintenance, stats.command_bytes),
+            (0, 1, 8 << 10)
+        );
+        assert!(weak.upgrade().is_some());
+        assert_eq!(outcomes(&fixture.handle).await?, 0);
+        release
+            .send(())
+            .map_err(|_| "maintenance transport disappeared")?;
+        let completed = compacted(timeout(Duration::from_secs(10), observer.wait()).await?)?;
+        assert!(matches!(
+            completed.output,
+            CompactionReply::Published(PublishedCompaction { generation: 3, .. })
+        ));
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Published(Ok(PublicationOutcome::Compaction(_)))
+        ));
+        assert!(observer.response().await.is_err());
+        assert!(session.live_lease().is_err());
+        assert_eq!(refs(&fixture.handle).await?, before_refs);
+        assert_eq!(outcomes(&fixture.handle).await?, 1);
+        assert!(weak.upgrade().is_none());
+        cleaned(root.path(), &budget).await?;
+        assert!(stages.close_and_drain().await.is_empty());
+        assert!(publications.close_and_drain().await.is_empty());
+        fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn uncertain_compaction_retains_exact_command_and_recovers_original_receipt() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for fault in [1, 2, 3] {
@@ -23,9 +127,13 @@ async fn uncertain_compaction_retains_exact_command_and_recovers_original_receip
             let coordinator =
                 PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
             coordinator.fault_for_test(fault);
-            let ticket = coordinator.submit(ready).await?;
+            let ticket = coordinator.try_reserve(ready)?;
             assert_eq!(ticket.class(), PublicationClass::Maintenance);
+            assert_eq!(coordinator.stats().await.held, 1);
+            assert_eq!(outcomes(&fixture.handle).await?, 0);
             drop(compact);
+            assert!(weak.upgrade().is_some());
+            ticket.activate().await?;
             let uncertain = timeout(Duration::from_secs(10), ticket.wait()).await?;
             let PublicationState::Uncertain(error) = uncertain else {
                 return Err("uncertainty lost".into());
@@ -74,7 +182,7 @@ async fn uncertain_compaction_retains_exact_command_and_recovers_original_receip
             let drained = coordinator.close_and_drain().await;
             assert_eq!(drained.len(), 1);
             assert_eq!(drained[0].class(), PublicationClass::Maintenance);
-            coordinator.recover(&retained).await?;
+            retained.recover().await?;
             let completed = compacted(timeout(Duration::from_secs(10), retained.wait()).await?)?;
             if let Some(sequence) = original {
                 assert_eq!(completed.receipt.commit_sequence, sequence);
@@ -155,14 +263,11 @@ async fn reserved_classes_and_actor_quotas_keep_mixed_admission_bounded() -> Res
     for operation in [180, 181] {
         let prepared = prepare_compaction(&fixture, &inventory, operation, &[0, 1]).await?;
         let compact = Arc::new(prepared.compact);
-        tickets.push(
-            coordinator
-                .submit(compact.ready_compaction(identity()?).await?)
-                .await?,
-        );
+        tickets.push(coordinator.try_reserve(compact.ready_compaction(identity()?).await?)?);
         maintenance.push((compact, prepared.root, prepared.budget));
     }
     let stats = coordinator.stats().await;
+    assert_eq!((stats.held, stats.in_flight, stats.queued), (2, 1, 2));
     assert_eq!(
         (
             stats.admitted,
@@ -214,6 +319,9 @@ async fn reserved_classes_and_actor_quotas_keep_mixed_admission_bounded() -> Res
         .ok_or("cross-class duplicate")?;
     assert_eq!(cross_class.reason, PublicationScheduleError::Duplicate);
     assert!(matches!(cross_class.ready, ReadyPublication::Push(_)));
+    for ticket in &tickets {
+        ticket.activate().await?;
+    }
     release.send(()).map_err(|_| "worker disappeared")?;
     for ticket in tickets {
         let state = timeout(Duration::from_secs(10), ticket.wait()).await?;

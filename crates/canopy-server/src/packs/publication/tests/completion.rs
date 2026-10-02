@@ -131,7 +131,7 @@ async fn stored(handle: &CellHandle, id: [u8; 16]) -> Result<GitHttpResponse> {
         body,
     })
 }
-async fn counts(handle: &CellHandle) -> Result<Vec<u64>> {
+pub(super) async fn counts(handle: &CellHandle) -> Result<Vec<u64>> {
     let bytes = handle
         .query(0, 1024, |connection| {
             let counts = [
