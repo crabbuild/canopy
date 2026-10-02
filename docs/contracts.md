@@ -2587,7 +2587,11 @@ acquiring any Cells. Existing tombstones are retained; competing, unexpired
 recovery claims remain conflicts rather than being overwritten.
 
 A bounded scan of the catalog then skips already settled controls. Each remaining
-entry must match a known Canopy namespace and the current registry descriptor.
+entry must match a known Canopy namespace and a namespace/role/code/schema contract
+explicitly supported by the compiled registry. A supported retained predecessor
+contract need not be the current module contract. This restores the existing
+catalog identity; it does not upgrade its code or schema. Unknown contracts fail
+before acquisition, and acquisition still validates the persisted Control.
 Missing controls bootstrap from the published catalog proof. Unpublished owners
 use `takeover_unpublished`; published owners use `takeover_restored`, which verifies
 the authority-pinned root and materializes attached recovery through Cellule.
@@ -2609,6 +2613,9 @@ is returned without changing the release to Ready. `drained` describes writer
 closure, not data integrity: it is not an fsck or backup-verification result, and
 operators must resolve a reported restoration error before resuming. CLI logs go
 to stderr so successful administration output remains a single JSON status object.
+
+The [retained-contract recovery checkpoint](performance/2026-10-02-retained-maintenance-recovery.md)
+describes the regression fixtures and the separate, incomplete corpus rebuild.
 
 Crash qualification at every individual publication/claim boundary, long restore
 lease failures and production-store power loss remain part of the fault matrix.
