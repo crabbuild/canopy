@@ -154,6 +154,8 @@ pub struct CanopyServer {
 }
 
 struct RunningServer {
+    #[cfg(test)]
+    test_manager: Arc<RepositoryManager>,
     address: std::net::SocketAddr,
     ssh_address: Option<std::net::SocketAddr>,
     node: Arc<CellNode>,
@@ -637,6 +639,8 @@ impl RunningServer {
                 return Err(error);
             }
         };
+        #[cfg(test)]
+        let test_manager = Arc::clone(&manager);
         let ingress_stop = CancellationToken::new();
         let ssh_serving = match (ssh_config, ssh_listener) {
             (Some(config), Some(listener)) => {
@@ -664,6 +668,8 @@ impl RunningServer {
                 .await
         });
         Ok(Self {
+            #[cfg(test)]
+            test_manager,
             address,
             ssh_address,
             ssh_serving,

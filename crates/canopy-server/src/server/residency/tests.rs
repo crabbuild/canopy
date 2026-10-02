@@ -64,7 +64,7 @@ fn disconnect_releases_a_response_pin_without_polling_the_body() {
 fn fenced_cleanup_requires_the_exact_released_published_activation() {
     use cellule_runtime::{
         Digest, SessionId,
-        control::{Owner, RootRef},
+        control::{Owner, RecoveryOverlayRef, RootRef},
         identity::IncarnationId,
     };
 
@@ -110,5 +110,18 @@ fn fenced_cleanup_requires_the_exact_released_published_activation() {
     assert!(!released_local_fence(&changed, fence));
     let mut changed = control.clone();
     changed.incarnation = IncarnationId::from_bytes([6; 16]);
+    assert!(!released_local_fence(&changed, fence));
+    let mut changed = control.clone();
+    changed.recovery = Some(RecoveryOverlayRef {
+        leader_session: SessionId::from_bytes([7; 16]),
+        log_epoch: 1,
+        manifest_digest: Digest::from_bytes([8; 32]),
+        first_node_sequence: 1,
+        last_node_sequence: 1,
+        predecessor: control.root.clone().unwrap(),
+        final_txid: 2,
+        final_checksum: (1 << 63) | 1,
+        final_commit_sequence: 2,
+    });
     assert!(!released_local_fence(&changed, fence));
 }
