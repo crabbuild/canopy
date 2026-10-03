@@ -3,13 +3,12 @@ use super::*;
 #[derive(Clone)]
 #[must_use]
 pub struct ReadyRootRecovery {
-    recovery: RegisteredRootRecovery,
+    // The immutable headers/certificate are shared by dispatch and observers;
+    // cloning a queue entry must not copy the complete recovery bundle.
+    recovery: std::sync::Arc<RegisteredRootRecovery>,
     client: CellClient,
     store: ArtifactStore,
-}
-pub(in crate::packs::publication) const fn reservation() -> u64 {
-    // Two root bodies (loaded input and transport), plus two bounded headers.
-    2 * (ROOT_COMPLETION_BYTES as u64 + ROOT_BYTES as u64)
+    refusing: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl RegisteredRootRecovery {
     /// Submit through the existing PublicationCoordinator. This capability has
@@ -21,14 +20,49 @@ impl RegisteredRootRecovery {
         store: ArtifactStore,
     ) -> Result<ReadyRootRecovery, RootRecoveryError> {
         target_matches(self.evidence().target(), &store, &self.record.check)?;
-        Ok(ReadyRootRecovery {
-            recovery: self,
-            client,
-            store,
-        })
+        Ok(ReadyRootRecovery::from_verified(self, client, store))
     }
 }
 impl ReadyRootRecovery {
+    /// Only after the original factory or public recovery entry validates the
+    /// exact repository/artifact context. This does not bind a live lifecycle.
+    pub(in crate::packs::publication) fn from_verified(
+        recovery: RegisteredRootRecovery,
+        client: CellClient,
+        store: ArtifactStore,
+    ) -> Self {
+        Self {
+            recovery: std::sync::Arc::new(recovery),
+            client,
+            store,
+            refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+    pub(in crate::packs::publication) fn matches_registered(
+        &self,
+        registered: &RegisteredRootRecovery,
+    ) -> bool {
+        // Advancing the durable head cannot replace the original queued
+        // command. A later head for this exact attempt merely wakes its cold
+        // owner; dispatch authenticates the original predecessor journal.
+        self.recovery.record.check == registered.record.check
+            && self.recovery.record.tenant == registered.record.tenant
+            && self.recovery.record.application == registered.record.application
+            && (self.recovery.certificate == registered.certificate
+                || self.recovery.record.step < registered.record.step)
+    }
+    pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
+        self.recovery.record.kind == Kind::Policy
+    }
+    pub(in crate::packs::publication) fn reservation(&self) -> u64 {
+        2 * (u64::from(self.recovery.record.kind.body_limit())
+            + u64::from(ROOT_BYTES)
+            + if self.recovery.record.refusal.is_some() {
+                u64::from(ROOT_COMPLETION_BYTES)
+            } else {
+                0
+            })
+    }
     pub(in crate::packs::publication) fn capability(
         &self,
     ) -> (&CellClient, &CellTarget, &LeaseCheck) {
@@ -39,24 +73,52 @@ impl ReadyRootRecovery {
         )
     }
     pub(in crate::packs::publication) fn pending(&self) -> PublicationError {
-        PublicationError::RootPush(InvocationError::Pending(Box::new(
-            self.recovery.evidence().clone(),
-        )))
+        if self.refusing.load(std::sync::atomic::Ordering::Acquire)
+            && let Some(saved) = &self.recovery.bundle.refusal
+        {
+            PublicationError::RootPush(InvocationError::Pending(Box::new(
+                saved.snapshot.evidence().clone(),
+            )))
+        } else if self.recovery.record.kind == Kind::Policy {
+            PublicationError::PolicyPage(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
+        } else {
+            PublicationError::RootPush(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
+        }
     }
     pub(in crate::packs::publication) async fn dispatch(
         self,
         fault: u8,
     ) -> Result<PublicationOutcome, PublicationError> {
+        self.dispatch_bound(fault, None).await
+    }
+    pub(in crate::packs::publication) async fn dispatch_bound(
+        self,
+        fault: u8,
+        original: Option<&PreparationSession>,
+    ) -> Result<PublicationOutcome, PublicationError> {
         if fault == 1 {
             return Err(self.pending());
         }
-        let outcome = self.recovery.dispatch(&self.client, &self.store).await;
+        let outcome = match original {
+            Some(original) => {
+                self.recovery
+                    .dispatch_bound(&self.client, &self.store, &self.refusing, Some(original))
+                    .await
+            }
+            None => {
+                self.recovery
+                    .dispatch_any(&self.client, &self.store, &self.refusing)
+                    .await
+            }
+        };
         if fault == 2 {
             return Err(self.pending());
         }
         assert_ne!(fault, 3, "injected durable root panic after execution");
         outcome
-            .map(PublicationOutcome::RootPush)
-            .map_err(PublicationError::RootPush)
     }
 }

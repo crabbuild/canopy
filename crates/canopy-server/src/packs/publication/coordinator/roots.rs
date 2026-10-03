@@ -119,6 +119,84 @@ impl RootCommand {
     }
 }
 impl ReadyRootPush {
+    /// Preserve the original factory's shared lifecycle authority while
+    /// dispatching from its exact registered SDK snapshot and body.
+    pub fn bind_recovery(
+        self,
+        registered: RegisteredRootRecovery,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<ReadyBoundRecovery, Box<RecoveryBindingFailure<Self>>> {
+        let kind = match &self.command {
+            RootCommand::Publish(_) => super::super::recovery::Kind::Publish,
+            RootCommand::Outcome(_) => super::super::recovery::Kind::Outcome,
+        };
+        if !registered.matches_original(
+            kind,
+            self.command.evidence(),
+            None,
+            self.owner.session(),
+            store,
+        ) {
+            return Err(Box::new(RecoveryBindingFailure {
+                original: self,
+                registered,
+            }));
+        }
+        Ok(ReadyBoundRecovery::new(
+            self.owner,
+            None,
+            self.refusal,
+            registered,
+            store,
+        ))
+    }
+    pub(in crate::packs::publication) fn refusal_command(
+        &self,
+    ) -> Option<&PreparedCommand<CompleteRootOutcome>> {
+        if let RootCommand::Outcome(command) = &self.command
+            && self.refusal
+        {
+            Some(command)
+        } else {
+            None
+        }
+    }
+    pub async fn persist_recovery_after(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        previous: &RegisteredRootRecovery,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        let session = self.owner.session();
+        match &self.command {
+            RootCommand::Publish(command) => {
+                Box::pin(super::super::recovery::persist_full(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Publish,
+                    None,
+                    Some(previous),
+                    store,
+                    identity,
+                    0,
+                ))
+                .await
+            }
+            RootCommand::Outcome(command) => {
+                Box::pin(super::super::recovery::persist_full(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Outcome,
+                    None,
+                    Some(previous),
+                    store,
+                    identity,
+                    0,
+                ))
+                .await
+            }
+        }
+    }
     /// Persist exact bytes and authenticate their first-writer attempt pin
     /// before final submission. On uncertain registration, recover the winning
     /// record with RegisteredRootRecovery::load; do not regenerate the final
@@ -209,7 +287,7 @@ impl ReadyRootPush {
                     .await
             }
         };
-        outcome
+        super::super::recovery::normalize_root(outcome)
             .map(PublicationOutcome::RootPush)
             .map_err(PublicationError::RootPush)
     }

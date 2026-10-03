@@ -67,7 +67,7 @@ impl StagingTicket {
     pub fn register_policy_page(
         &self,
         coordinator: &PublicationCoordinator,
-        ready: ReadyRefPolicyPage,
+        ready: impl Into<ReadyPublication>,
     ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
         self.handoff(coordinator, ready.into(), true)
     }

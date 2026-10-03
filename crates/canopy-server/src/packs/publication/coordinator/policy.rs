@@ -75,6 +75,63 @@ impl std::fmt::Display for RefPolicyRefusalFailure {
 }
 impl std::error::Error for RefPolicyRefusalFailure {}
 impl ReadyRefPolicyPage {
+    /// Convert only after this exact original page/refusal bundle is registered.
+    /// The shared session and intent survive admission failure and uncertainty.
+    pub fn bind_recovery(
+        self,
+        registered: RegisteredRootRecovery,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<ReadyBoundRecovery, Box<RecoveryBindingFailure<Self>>> {
+        if !registered.matches_original(
+            super::super::recovery::Kind::Policy,
+            self.command.evidence(),
+            self.refusal
+                .as_ref()
+                .and_then(|ready| ready.refusal_command())
+                .map(|command| command.evidence()),
+            &self.prepared.base.session,
+            store,
+        ) {
+            return Err(Box::new(RecoveryBindingFailure {
+                original: self,
+                registered,
+            }));
+        }
+        Ok(ReadyBoundRecovery::new(
+            PushPreparation::Catalog(self.prepared),
+            Some(self.intent),
+            false,
+            registered,
+            store,
+        ))
+    }
+    /// Register both original SDK identities before page submission. A known
+    /// settled predecessor is required before this attempt can advance its pin.
+    pub async fn persist_recovery(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        previous: Option<&RegisteredRootRecovery>,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        let refusal = self
+            .refusal
+            .as_ref()
+            .and_then(|value| value.refusal_command())
+            .ok_or(RootRecoveryError::Context)?;
+        // Artifact uploads retain sizeable nested futures. Keep that state off
+        // the caller's stack, including when used by an owned native worker.
+        Box::pin(super::super::recovery::persist_full(
+            &self.prepared.base.session,
+            &self.command,
+            super::super::recovery::Kind::Policy,
+            Some(refusal),
+            previous,
+            store,
+            identity,
+            0,
+        ))
+        .await
+    }
     /// Arm a pre-frozen terminal refusal before admission. Both exact commands
     /// occupy one operation in the existing fair queue and remain charged until
     /// a known page success or terminal refusal. Share one Arc across successful
@@ -170,14 +227,15 @@ impl ReadyRefPolicyPage {
         .await;
         let refused = match &outcome {
             Ok(value) => {
-                matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
+                matches!(value.output, RefPolicyReply::Denied(_))
+                    || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
             }
             Err(InvocationError::Rejected(_)) => true,
             _ => false,
         };
         if refused && let Some(refusal) = self.refusal {
-            // Persist the phase before submitting: a panic or lost reply must
-            // resolve this exact terminal command, never re-execute the page.
+            // Registered pages commit the refusal phase in their domain
+            // transaction. This flag only selects the in-memory pending witness.
             self.refusing
                 .store(true, std::sync::atomic::Ordering::Release);
             #[cfg(test)]

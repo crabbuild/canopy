@@ -391,11 +391,15 @@ CREATE TABLE catalog_leases (
     expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
     attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
-    recovery BLOB CHECK(recovery IS NULL OR length(recovery) BETWEEN 1 AND 1024),
+    recovery BLOB CHECK(recovery IS NULL OR (typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024)),
+    recovery_phase BLOB CHECK(recovery_phase IS NULL OR (typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048)),
+    recovery_phase_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(recovery_phase_revision)='integer' AND recovery_phase_revision BETWEEN 0 AND 2),
     input_checkpoint BLOB CHECK(input_checkpoint IS NULL OR length(input_checkpoint) BETWEEN 1 AND 1024),
     input_checkpoint_digest BLOB CHECK(input_checkpoint_digest IS NULL OR length(input_checkpoint_digest) = 32),
     input_checkpoint_previous_digest BLOB CHECK(input_checkpoint_previous_digest IS NULL OR length(input_checkpoint_previous_digest) = 32),
     input_checkpoint_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(input_checkpoint_revision)='integer' AND input_checkpoint_revision BETWEEN 0 AND 256),
+    CHECK((recovery_phase IS NULL) = (recovery_phase_revision=0)),
+    CHECK(recovery IS NOT NULL OR recovery_phase IS NULL),
     CHECK((input_checkpoint IS NULL) = (input_checkpoint_digest IS NULL)),
     CHECK(input_checkpoint IS NOT NULL OR (input_checkpoint_revision=0 AND input_checkpoint_previous_digest IS NULL)),
     CHECK((input_checkpoint_revision=0) = (input_checkpoint_previous_digest IS NULL)),
@@ -403,6 +407,9 @@ CREATE TABLE catalog_leases (
     CHECK(generation IS NOT NULL OR attestation IS NULL),
     PRIMARY KEY(incarnation, admission_sequence)
 ) WITHOUT ROWID;
+-- Restart discovery seeks only retained command pins, independent of expiry.
+CREATE INDEX catalog_leases_recovery_scan ON catalog_leases(incarnation, admission_sequence)
+WHERE recovery IS NOT NULL;
 CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnation, admission_sequence);
 CREATE INDEX catalog_leases_by_generation ON catalog_leases(generation, expires_at_ms);
 CREATE TRIGGER catalog_generations_retained BEFORE DELETE ON catalog_generations
@@ -433,9 +440,13 @@ WHEN (OLD.input_checkpoint IS NULL AND (NEW.input_checkpoint_revision!=0 OR NEW.
       AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision+1 AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_digest)))
 BEGIN SELECT RAISE(ABORT, 'creating input checkpoint requires exact append'); END;
 
-CREATE TRIGGER catalog_lease_recovery_immutable BEFORE UPDATE OF recovery ON catalog_leases
-WHEN OLD.recovery IS NOT NULL AND NEW.recovery IS NOT OLD.recovery
-BEGIN SELECT RAISE(ABORT, 'root recovery command is immutable'); END;
+CREATE TRIGGER catalog_lease_recovery_immutable BEFORE UPDATE OF recovery,recovery_phase,recovery_phase_revision ON catalog_leases
+WHEN (OLD.recovery IS NOT NULL AND NEW.recovery IS NOT OLD.recovery AND NOT
+    (NEW.recovery IS NOT NULL AND OLD.recovery_phase_revision=1 AND NEW.recovery_phase IS NULL AND NEW.recovery_phase_revision=0))
+  OR (NEW.recovery IS OLD.recovery AND NOT
+    ((NEW.recovery_phase IS OLD.recovery_phase AND NEW.recovery_phase_revision=OLD.recovery_phase_revision)
+    OR (NEW.recovery_phase IS NOT NULL AND NEW.recovery_phase IS NOT OLD.recovery_phase AND NEW.recovery_phase_revision=OLD.recovery_phase_revision+1)))
+BEGIN SELECT RAISE(ABORT, 'publication recovery requires exact phase append'); END;
 -- Unknown commands retain metadata and exact bodies after custody expiry.
 -- Typed recovery/backup traversal must authorize releasing these pins.
 CREATE TRIGGER catalog_lease_recovery_retained BEFORE DELETE ON catalog_leases

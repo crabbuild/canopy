@@ -175,6 +175,22 @@ impl Command for CompleteRootOutcome {
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
+        let data = input.proof.0.data::<super::super::outcome::OutcomeData>()?;
+        let check = data.check;
+        super::super::recovery::execute(
+            context,
+            &check,
+            super::super::recovery::Kind::Outcome,
+            RootCompletionReply::Denied,
+            |context| Self::domain(context, input),
+        )
+    }
+}
+impl CompleteRootOutcome {
+    fn domain(
+        context: &mut CommandContext<'_, '_>,
+        input: RootOutcomeCompletion,
+    ) -> cellule_runtime::Result<CommandResult<RootCompletionReply>> {
         input.shape()?;
         let binding = RootOutcomeCompletion::binding(
             input.input_checkpoint_digest,

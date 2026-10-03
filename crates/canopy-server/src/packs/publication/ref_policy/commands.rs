@@ -87,6 +87,25 @@ impl Command for RegisterRefPolicyPage {
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
+        let data = input.proof.certificate.data()?;
+        let check = LeaseCheck {
+            token: data.token,
+            actor: data.actor,
+        };
+        super::super::recovery::execute(
+            context,
+            &check,
+            super::super::recovery::Kind::Policy,
+            RefPolicyReply::Denied,
+            |context| Self::domain(context, input),
+        )
+    }
+}
+impl RegisterRefPolicyPage {
+    fn domain(
+        context: &mut CommandContext<'_, '_>,
+        input: RefPolicyPage,
+    ) -> cellule_runtime::Result<CommandResult<RefPolicyReply>> {
         input.shape()?;
         let Some((data, _)) = authenticate(
             context,
