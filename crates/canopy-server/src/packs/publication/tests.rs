@@ -9,6 +9,7 @@ mod inputs;
 mod namespaces;
 mod native_capture;
 mod policy_dispatch;
+mod policy_refusal;
 mod prepare;
 mod publishing;
 mod reconcile;
@@ -75,6 +76,7 @@ impl CellModule for Module {
             root_completion.input_limit = ROOT_COMPLETION_BYTES;
             root_completion.output_limit = 512;
             let mut root_outcome = descriptor(38);
+            root_outcome.codec_version = 2;
             root_outcome.input_limit = ROOT_COMPLETION_BYTES;
             root_outcome.output_limit = 512;
             let mut root_lookup = descriptor(37);

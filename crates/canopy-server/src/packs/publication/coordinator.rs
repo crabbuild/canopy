@@ -25,7 +25,7 @@ const INLINE_BYTES: u32 = 4 << 20;
 mod inputs;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
 mod policy;
-pub use policy::{ReadyRefPolicyPage, RefPolicyReadyError};
+pub use policy::{ReadyRefPolicyPage, RefPolicyReadyError, RefPolicyRefusalFailure};
 mod roots;
 pub use roots::{ReadyRootPush, RootPushReadyError};
 mod preparation;
@@ -240,6 +240,7 @@ struct Job {
     class: PublicationClass,
     reservation: u64,
     policy_page: bool,
+    root_refusal: bool,
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
@@ -481,6 +482,7 @@ impl PublicationCoordinator {
             class,
             reservation,
             policy_page: ready.is_policy_page(),
+            root_refusal: ready.is_root_refusal(),
             ready: Mutex::new(Some(ready)),
             status: watch::channel(if held {
                 PublicationState::Held
@@ -641,6 +643,9 @@ impl PublicationCoordinator {
 impl PublicationTicket {
     pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
         self.job.policy_page
+    }
+    pub(in crate::packs::publication) fn is_root_refusal(&self) -> bool {
+        self.job.root_refusal
     }
     /// Join the existing fair queue once. Idempotence lets a recovering
     /// lifecycle observe an already activated command without recreating it.

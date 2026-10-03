@@ -147,7 +147,14 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 }
             }
             PublicationState::Finished(outcome) => {
-                if ticket.is_policy_page() {
+                // An armed page may end in its exact refusal-only completion.
+                // Treat that as terminal; a successful page remains intermediate.
+                let root_outcome = match &outcome {
+                    Ok(PublicationOutcome::RootPush(_)) => true,
+                    Err(error) => matches!(&**error, PublicationError::RootPush(_)),
+                    _ => false,
+                };
+                if ticket.is_policy_page() && !root_outcome {
                     return finish_page(inner, job, outcome).await;
                 }
                 {

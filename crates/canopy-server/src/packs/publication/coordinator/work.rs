@@ -79,6 +79,11 @@ impl From<ReadyRefPolicyPage> for ReadyPublication {
         Self::PolicyPage(ready)
     }
 }
+impl From<Arc<ReadyRootPush>> for ReadyPublication {
+    fn from(ready: Arc<ReadyRootPush>) -> Self {
+        Self::RootPush(ready.dispatch_copy())
+    }
+}
 impl From<ReadyRootPush> for ReadyPublication {
     fn from(ready: ReadyRootPush) -> Self {
         Self::RootPush(ready)
@@ -108,6 +113,9 @@ impl ReadyPublication {
     pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
         matches!(self, Self::PolicyPage(_))
     }
+    pub(in crate::packs::publication) fn is_root_refusal(&self) -> bool {
+        matches!(self, Self::RootPush(ready) if ready.refusal)
+    }
     /// Final work must share the lifecycle's exact session fence and clock.
     /// Equal SQL tokens from an independently opened session are insufficient.
     pub(in crate::packs::publication) fn belongs_to(&self, session: &PreparationSession) -> bool {
@@ -129,7 +137,7 @@ impl ReadyPublication {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootPush(_) => roots::ROOT_RESERVATION,
-            Self::PolicyPage(_) => policy::RESERVATION,
+            Self::PolicyPage(ready) => ready.reservation(),
             _ => self.class().reservation(),
         }
     }
