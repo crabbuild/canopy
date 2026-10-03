@@ -11,12 +11,23 @@ pub(super) async fn resolve<C: Command>(
     output_limit: u32,
     before_execute: impl FnOnce() -> Result<(), Error> + Send,
 ) -> Result<Committed<C::Output>, InvocationError<C::Output>> {
-    let evidence = command.evidence().clone();
+    if let Some(result) = known::<C>(client, command.evidence(), output_limit).await? {
+        return Ok(result);
+    }
+    before_execute().map_err(InvocationError::NotStarted)?;
+    Box::pin(command.execute()).await
+}
+
+/// Resolve original evidence before loading a durable body or reacquiring
+/// write custody. Only authoritative absence returns `None`.
+pub(super) async fn known<C: Command>(
+    client: &CellClient,
+    evidence: &cellule_runtime::PendingMutation,
+    output_limit: u32,
+) -> Result<Option<Committed<C::Output>>, InvocationError<C::Output>> {
+    let evidence = evidence.clone();
     match client.resolve(&evidence).await {
-        Ok(Resolution::Absent) => {
-            before_execute().map_err(InvocationError::NotStarted)?;
-            Box::pin(command.execute()).await
-        }
+        Ok(Resolution::Absent) => Ok(None),
         Ok(Resolution::Committed(outcome)) => {
             let receipt = Receipt {
                 cell: evidence.target().cell_id(),
@@ -34,7 +45,7 @@ pub(super) async fn resolve<C: Command>(
                 source: Box::new(source.into()),
             })?;
             match outcome {
-                StoredOutcome::Success { .. } => Ok(decoded),
+                StoredOutcome::Success { .. } => Ok(Some(decoded)),
                 StoredOutcome::Rejected { .. } => Err(InvocationError::Rejected(Box::new(decoded))),
             }
         }

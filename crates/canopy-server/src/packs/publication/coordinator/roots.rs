@@ -119,6 +119,59 @@ impl RootCommand {
     }
 }
 impl ReadyRootPush {
+    /// Persist exact bytes and authenticate their first-writer attempt pin
+    /// before final submission. On uncertain registration, recover the winning
+    /// record with RegisteredRootRecovery::load; do not regenerate the final
+    /// command. No catalog or response identity is rebuilt during recovery.
+    pub async fn persist_recovery(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        self.persist_recovery_inner(store, identity, 0).await
+    }
+    #[cfg(test)]
+    pub(in crate::packs::publication) async fn persist_recovery_for_test(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        fault: u8,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        self.persist_recovery_inner(store, identity, fault).await
+    }
+    async fn persist_recovery_inner(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        fault: u8,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        let session = self.owner.session();
+        match &self.command {
+            RootCommand::Publish(command) => {
+                super::super::recovery::persist(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Publish,
+                    store,
+                    identity,
+                    fault,
+                )
+                .await
+            }
+            RootCommand::Outcome(command) => {
+                super::super::recovery::persist(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Outcome,
+                    store,
+                    identity,
+                    fault,
+                )
+                .await
+            }
+        }
+    }
+
     pub(super) fn dispatch_copy(&self) -> Self {
         Self {
             owner: self.owner.clone(),

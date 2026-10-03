@@ -272,6 +272,41 @@ async fn native_receive_policy_refusal_preserves_known_results_but_refuses_absen
     }
     Ok(())
 }
+#[tokio::test]
+async fn native_receive_durable_root_recovery_reconstructs_exact_commands_after_owner_loss()
+-> Result {
+    for fault in 0..=2 {
+        native_receive(
+            false,
+            CompletionMode::Durable {
+                fault,
+                revoked: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_durable_root_recovery_resolves_known_results_before_revoked_custody()
+-> Result {
+    native_receive(
+        false,
+        CompletionMode::Durable {
+            fault: 2,
+            revoked: true,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_durable_root_recovery_restores_joint_publication_and_fences_absent_old_owner()
+-> Result {
+    for fault in 0..=2 {
+        native_receive(true, CompletionMode::DurablePublish { fault }).await?;
+    }
+    Ok(())
+}
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -279,10 +314,10 @@ async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     Ok(())
 }
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
-    let ref_free = if let CompletionMode::RefFree { kind, .. } = mode {
-        Some(kind)
-    } else {
-        None
+    let ref_free = match mode {
+        CompletionMode::RefFree { kind, .. } => Some(kind),
+        CompletionMode::Durable { .. } => Some(super::root_outcome::Kind::Empty),
+        _ => None,
     };
     let fixture = Fixture::new(format).await?;
     let store = Arc::new(ArtifactStore::new(
@@ -599,6 +634,29 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     assert_eq!(recovered.response, response);
     drop(response);
     cleaned(work_root.path(), &disk).await?;
+    if let CompletionMode::Durable { fault, revoked } = mode {
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        Box::pin(super::durable_recovery::qualify(
+            super::root_outcome::Context {
+                fixture: &fixture,
+                store: &store,
+                staging: &coordinator,
+                ticket: &ticket,
+                root: work_root.path(),
+                budget: disk.clone(),
+                request: recovered,
+            },
+            fault,
+            revoked,
+        ))
+        .await?;
+        cleaned(work_root.path(), &disk).await?;
+        return Ok(());
+    }
     if let CompletionMode::RefFree {
         kind,
         fault,
@@ -664,6 +722,25 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         builder.add_segment(segment).await?;
         builder.finish_pack().await?;
         let prepared = builder.finish().await?;
+        if let CompletionMode::DurablePublish { fault } = mode {
+            Box::pin(super::durable_recovery::qualify_publish(
+                super::root_dispatch::Context {
+                    fixture: &fixture,
+                    prepared: Arc::new(prepared),
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: physical_root.path(),
+                    budget: physical_disk.clone(),
+                    request: recovered,
+                },
+                fault,
+            ))
+            .await?;
+            cleaned(work_root.path(), &disk).await?;
+            cleaned(physical_root.path(), &physical_disk).await?;
+            return Ok(());
+        }
         if let CompletionMode::PolicyRefusalDispatch { fault, loss } = mode {
             Box::pin(super::policy_refusal::qualify(
                 super::root_dispatch::Context {

@@ -3,6 +3,7 @@ mod attestation;
 mod compaction;
 mod completion;
 mod coordinator;
+mod durable_recovery;
 mod frontier;
 mod initialization;
 mod inputs;
@@ -116,6 +117,7 @@ impl CellModule for Module {
                     policy_reap,
                     root_completion,
                     root_outcome,
+                    descriptor(39),
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([

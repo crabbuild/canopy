@@ -19,6 +19,13 @@ pub(super) enum CompletionMode {
         fault: u8,
         loss: super::policy_dispatch::Loss,
     },
+    DurablePublish {
+        fault: u8,
+    },
+    Durable {
+        fault: u8,
+        revoked: bool,
+    },
     RefFree {
         kind: super::root_outcome::Kind,
         fault: u8,
