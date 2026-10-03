@@ -68,6 +68,11 @@ impl CellModule for Module {
             policy_query.output_limit = 128;
             let mut policy_reap = descriptor(35);
             policy_reap.output_limit = 128;
+            let mut root_completion = descriptor(36);
+            root_completion.input_limit = ROOT_COMPLETION_BYTES;
+            root_completion.output_limit = 512;
+            let mut root_lookup = descriptor(37);
+            root_lookup.output_limit = 512;
             // Match the existing production SQL transport contract exactly.
             // The generic 4 KiB fixture limit cannot encode even one valid
             // 65 KiB ref name; policy construction has its own smaller bound.
@@ -101,6 +106,7 @@ impl CellModule for Module {
                     initial_descriptor,
                     policy_page,
                     policy_reap,
+                    root_completion,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -113,6 +119,7 @@ impl CellModule for Module {
                     descriptor(30),
                     initial_query,
                     policy_query,
+                    root_lookup,
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],

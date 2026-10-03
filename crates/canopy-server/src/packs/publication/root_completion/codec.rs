@@ -87,3 +87,25 @@ impl WireValue for RootPushCompletion {
         Ok(value)
     }
 }
+impl WireValue for RootCompletionReply {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        match self {
+            Self::Completed(value) => {
+                CatalogCompletionReply::Completed(value.completion).encode(e)?;
+                value.root.encode(e)
+            }
+            Self::Denied(reason) => CatalogCompletionReply::Denied(*reason).encode(e),
+        }
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        Ok(match CatalogCompletionReply::decode(d)? {
+            CatalogCompletionReply::Completed(completion) => {
+                Self::Completed(Box::new(CompletedRootPush {
+                    completion,
+                    root: NativeOutcomeRoot::decode(d)?,
+                }))
+            }
+            CatalogCompletionReply::Denied(reason) => Self::Denied(reason),
+        })
+    }
+}

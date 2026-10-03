@@ -1,6 +1,19 @@
 use super::*;
 use tokio::time::{Duration, timeout};
 
+// Successful outcome-only completion intentionally saves terminal rows and
+// consumes its operation. Every published-root/pin/policy field must still
+// match exactly; rollback and replay keep using the complete state oracle.
+fn assert_outcome_only_effects(before: &[u8], after: &[u8]) -> Result {
+    let before: Vec<serde_json::Value> = serde_json::from_slice(before)?;
+    let after: Vec<serde_json::Value> = serde_json::from_slice(after)?;
+    assert_eq!(before.len(), 9);
+    assert_eq!(after.len(), 9);
+    assert_eq!(before[..8], after[..8]);
+    assert_ne!(before[8], after[8]);
+    Ok(())
+}
+
 async fn opened(fixture: &Fixture, operation: [u8; 16]) -> Result<Arc<PreparationSession>> {
     let started = fixture
         .client()
@@ -76,7 +89,19 @@ async fn refusals_and_noop_outcomes_need_no_catalog_artifacts_or_generation_incr
             assert_eq!(result.publication, None);
             assert!(!result.rejected);
             assert_eq!(session.completed_push_response(&first).await?, expected);
-            assert_eq!(state(&fixture.handle).await?, before);
+            assert_outcome_only_effects(&before, &state(&fixture.handle).await?)?;
+            let completed_count = i as u64 + 1;
+            assert_eq!(fixture.counts().await?, (0, completed_count));
+            assert_eq!(
+                counts(&fixture.handle).await?,
+                vec![
+                    completed_count,
+                    completed_count,
+                    completed_count.min(2),
+                    1,
+                    1
+                ]
+            );
             let exact = fixture
                 .client()
                 .command::<CompleteCatalogPush>(&fixture.target, mutation, input.clone())
@@ -125,7 +150,9 @@ async fn outcome_on_unavailable_old_catalog_survives_moving_frontier_without_loa
             .command::<CompleteCatalogPush>(&fixture.target, identity()?, input)
             .await?;
         assert_eq!(completed(committed.output)?.publication, None);
-        assert_eq!(state(&fixture.handle).await?, before);
+        assert_outcome_only_effects(&before, &state(&fixture.handle).await?)?;
+        assert_eq!(fixture.counts().await?, (0, 1));
+        assert_eq!(counts(&fixture.handle).await?, vec![1, 1, 1, 0, 0]);
         assert_eq!(session.completed_push_response(&committed).await?, expected);
         fixture.runtime.shutdown().await?;
     }

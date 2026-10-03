@@ -83,8 +83,9 @@ mod root_completion;
 pub(in crate::packs) use inputs::RetainedNativeInput;
 pub use native_result::{NativeResultError, NativeResultRoot, SavedNativeResult};
 pub use root_completion::{
-    NativeOutcomeRoot, ROOT_COMPLETION_BYTES, RootCompletionPreparationError, RootPushCompletion,
-    RootPushOutcomes, RootSignedPushFact,
+    CheckCompletedRootPush, CompleteRootPush, CompletedRootPush, NativeOutcomeRoot,
+    ROOT_COMPLETION_BYTES, RootCompletionPreparationError, RootCompletionReply, RootPushCompletion,
+    RootPushOutcomes, RootPushReplayError, RootSignedPushFact, replay_root_push_response,
 };
 mod staging;
 pub use inputs::{
@@ -227,6 +228,8 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<ReapRefPolicyGuard>()?;
     registry.bind_command::<PublishCatalogRefs>()?;
     registry.bind_command::<CompleteCatalogPush>()?;
+    registry.bind_command::<CompleteRootPush>()?;
+    registry.bind_query::<CheckCompletedRootPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;
     registry.bind_query::<CheckCompletedCompaction>()?;
     registry.bind_query::<CheckCompletedPush>()?;
