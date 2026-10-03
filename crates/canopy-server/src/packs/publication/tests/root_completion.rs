@@ -11,6 +11,9 @@ use cellule_runtime::Committed;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    DurablePolicy {
+        refusal: bool,
+    },
     PolicyRefusalDispatch {
         fault: u8,
         loss: super::policy_refusal::Loss,

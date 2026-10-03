@@ -3,13 +3,12 @@ use super::*;
 #[derive(Clone)]
 #[must_use]
 pub struct ReadyRootRecovery {
-    recovery: RegisteredRootRecovery,
+    // The immutable headers/certificate are shared by dispatch and observers;
+    // cloning a queue entry must not copy the complete recovery bundle.
+    recovery: std::sync::Arc<RegisteredRootRecovery>,
     client: CellClient,
     store: ArtifactStore,
-}
-pub(in crate::packs::publication) const fn reservation() -> u64 {
-    // Two root bodies (loaded input and transport), plus two bounded headers.
-    2 * (ROOT_COMPLETION_BYTES as u64 + ROOT_BYTES as u64)
+    refusing: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl RegisteredRootRecovery {
     /// Submit through the existing PublicationCoordinator. This capability has
@@ -22,13 +21,23 @@ impl RegisteredRootRecovery {
     ) -> Result<ReadyRootRecovery, RootRecoveryError> {
         target_matches(self.evidence().target(), &store, &self.record.check)?;
         Ok(ReadyRootRecovery {
-            recovery: self,
+            recovery: std::sync::Arc::new(self),
             client,
             store,
+            refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 }
 impl ReadyRootRecovery {
+    pub(in crate::packs::publication) fn reservation(&self) -> u64 {
+        2 * (u64::from(self.recovery.record.kind.body_limit())
+            + u64::from(ROOT_BYTES)
+            + if self.recovery.record.refusal.is_some() {
+                u64::from(ROOT_COMPLETION_BYTES)
+            } else {
+                0
+            })
+    }
     pub(in crate::packs::publication) fn capability(
         &self,
     ) -> (&CellClient, &CellTarget, &LeaseCheck) {
@@ -39,9 +48,21 @@ impl ReadyRootRecovery {
         )
     }
     pub(in crate::packs::publication) fn pending(&self) -> PublicationError {
-        PublicationError::RootPush(InvocationError::Pending(Box::new(
-            self.recovery.evidence().clone(),
-        )))
+        if self.refusing.load(std::sync::atomic::Ordering::Acquire)
+            && let Some(saved) = &self.recovery.bundle.refusal
+        {
+            PublicationError::RootPush(InvocationError::Pending(Box::new(
+                saved.snapshot.evidence().clone(),
+            )))
+        } else if self.recovery.record.kind == Kind::Policy {
+            PublicationError::PolicyPage(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
+        } else {
+            PublicationError::RootPush(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
+        }
     }
     pub(in crate::packs::publication) async fn dispatch(
         self,
@@ -50,13 +71,14 @@ impl ReadyRootRecovery {
         if fault == 1 {
             return Err(self.pending());
         }
-        let outcome = self.recovery.dispatch(&self.client, &self.store).await;
+        let outcome = self
+            .recovery
+            .dispatch_any(&self.client, &self.store, &self.refusing)
+            .await;
         if fault == 2 {
             return Err(self.pending());
         }
         assert_ne!(fault, 3, "injected durable root panic after execution");
         outcome
-            .map(PublicationOutcome::RootPush)
-            .map_err(PublicationError::RootPush)
     }
 }

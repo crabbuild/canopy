@@ -1,5 +1,5 @@
 use super::*;
-fn record() -> Record {
+pub(super) fn record() -> Record {
     let mut operation = *b"CANOPY01\0\0\0\0\0\0\0\0";
     operation[15] = 1;
     Record {
@@ -20,6 +20,17 @@ fn record() -> Record {
         tenant: [4; 16],
         application: [5; 16],
         kind: Kind::Publish,
+        primary: Stamp {
+            identity: MutationIdentity {
+                request_id: cellule_runtime::identity::RequestId::from_bytes([11; 16]),
+                issued_at_ms: 1,
+                expires_at_ms: 2,
+            },
+            digest: [12; 32],
+        },
+        refusal: None,
+        previous: None,
+        step: 0,
         root: StoredInputRoot {
             operation,
             artifact: ArtifactDescriptor {
