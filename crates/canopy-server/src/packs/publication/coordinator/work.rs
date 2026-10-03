@@ -104,7 +104,7 @@ impl ReadyPublication {
     pub(in crate::packs::publication) fn belongs_to(&self, session: &PreparationSession) -> bool {
         let source = match self {
             Self::Push(ready) => ready.owner.session(),
-            Self::RootPush(ready) => &ready.prepared.base.session,
+            Self::RootPush(ready) => ready.owner.session(),
             Self::Compaction(ready) => &ready.prepared.preparation_base().session,
             Self::Inputs(_) | Self::Preparation(_) => return false,
         };
@@ -125,10 +125,7 @@ impl ReadyPublication {
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
-            Self::RootPush(ready) => Self::RootPush(ReadyRootPush {
-                prepared: ready.prepared.clone(),
-                command: ready.command.clone(),
-            }),
+            Self::RootPush(ready) => Self::RootPush(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
                 owner: ready.owner.clone(),
                 command: ready.command.clone(),
@@ -155,7 +152,7 @@ impl ReadyPublication {
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
         match self {
             Self::Push(ready) => ready.owner.capability(),
-            Self::RootPush(ready) => ready.prepared.base.capability(),
+            Self::RootPush(ready) => ready.owner.capability(),
             Self::Inputs(ready) => ready.session.capability(),
             Self::Preparation(ready) => ready.capability(),
             Self::Compaction(ready) => ready.prepared.preparation_base().capability(),
@@ -164,9 +161,7 @@ impl ReadyPublication {
     pub(super) fn pending(&self) -> PublicationError {
         match self {
             Self::Preparation(ready) => ready.pending(),
-            Self::RootPush(ready) => PublicationError::RootPush(InvocationError::Pending(
-                Box::new(ready.command.evidence().clone()),
-            )),
+            Self::RootPush(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
                 ready.command.evidence().clone(),
             ))),

@@ -21,7 +21,7 @@ pub(super) struct OutcomeData {
     pub(super) check: LeaseCheck,
     pub(super) format: ObjectFormat,
     pub(super) floor: GenerationFact,
-    digest: [u8; 32],
+    pub(super) digest: [u8; 32],
 }
 impl OutcomeData {
     fn validate(&self) -> Result<(), CodecError> {
@@ -85,21 +85,63 @@ impl PreparationSession {
     ) -> Result<CatalogPushCompletion, PushCompletionProofError> {
         let (_, deadline) = self.live_lease()?;
         timeout_at(deadline, async {
-            if request.plan.is_some() { return Err(CodecError::Invalid("outcome-only completion has a ref plan").into()); }
+            if request.plan.is_some() {
+                return Err(CodecError::Invalid("outcome-only completion has a ref plan").into());
+            }
             let signed = super::completion::signed_annotation(self, request.certificate)?;
             crate::push::report::publication_matches(&request.response, None)?;
             let response_id = uuid::Uuid::new_v4().into_bytes();
-            let digest = payload_binding(None, &response_id, &request.response, &request.options, signed.as_ref())?;
-            let observed = self.client.query::<CheckPreparation>(&self.target, None, self.check.clone()).await.map_err(|error| PreparationBaseError::Query(Box::new(error)))?;
-            let live = observed.output.ok_or(PreparationBaseError::Inactive)?;
-            if live.token != self.lease.token || live.base != self.lease.base || live.format != self.lease.format { return Err(PreparationBaseError::Context.into()); }
-            let sql = SqlCell::<RepositoryModule>::new(self.client.clone(), self.target.clone()).map_err(CatalogAttestationError::from)?;
-            let seed = super::attestation::seed(&sql.query(Some(observed.receipt), statement("SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2", vec![blob(live.token.repository), SqlValue::Text(live.format.as_str().into())])).await.map_err(|error| CatalogAttestationError::Query(Box::new(error)))?.output).map_err(CatalogAttestationError::from)?;
-            let data = OutcomeData { tenant: *self.target.tenant().as_bytes(), application: *self.target.application().as_bytes(), check: self.check.clone(), format: live.format, floor: live.base, digest };
-            let proof = OutcomeCertificate(CertificateEnvelope::seal(&data, &seed)?);
+            let digest = payload_binding(
+                None,
+                &response_id,
+                &request.response,
+                &request.options,
+                signed.as_ref(),
+            )?;
+            let proof = self.issue_outcome_certificate(digest).await?;
             self.live_lease()?;
-            Ok(CatalogPushCompletion { proof: CompletionCatalogProof::OutcomeOnly(proof), response_id, response: request.response, options: request.options, signed })
-        }).await.map_err(|_| PreparationBaseError::Inactive)?
+            Ok(CatalogPushCompletion {
+                proof: CompletionCatalogProof::OutcomeOnly(proof),
+                response_id,
+                response: request.response,
+                options: request.options,
+                signed,
+            })
+        })
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)?
+    }
+    /// Shared private issuance; callers first certify their specific payload.
+    pub(super) async fn issue_outcome_certificate(
+        &self,
+        digest: [u8; 32],
+    ) -> Result<OutcomeCertificate, PushCompletionProofError> {
+        let observed = self
+            .client
+            .query::<CheckPreparation>(&self.target, None, self.check.clone())
+            .await
+            .map_err(|error| PreparationBaseError::Query(Box::new(error)))?;
+        let live = observed.output.ok_or(PreparationBaseError::Inactive)?;
+        if live.token != self.lease.token
+            || live.base != self.lease.base
+            || live.format != self.lease.format
+        {
+            return Err(PreparationBaseError::Context.into());
+        }
+        let sql = SqlCell::<RepositoryModule>::new(self.client.clone(), self.target.clone())
+            .map_err(CatalogAttestationError::from)?;
+        let seed = super::attestation::seed(&sql.query(Some(observed.receipt), statement("SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1 AND object_format=?2", vec![blob(live.token.repository), SqlValue::Text(live.format.as_str().into())])).await.map_err(|error| CatalogAttestationError::Query(Box::new(error)))?.output).map_err(CatalogAttestationError::from)?;
+        let data = OutcomeData {
+            tenant: *self.target.tenant().as_bytes(),
+            application: *self.target.application().as_bytes(),
+            check: self.check.clone(),
+            format: live.format,
+            floor: live.base,
+            digest,
+        };
+        let proof = OutcomeCertificate(CertificateEnvelope::seal(&data, &seed)?);
+        self.live_lease()?;
+        Ok(proof)
     }
     /// Admitted final commands must settle or retain exact uncertainty. A local
     /// lease timeout must never turn a possibly durable response into refusal.

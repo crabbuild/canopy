@@ -261,3 +261,222 @@ async fn native_result_checkpoint_requires_registered_custody_and_rejects_corrup
     request.fixture.runtime.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn root_outcome_preserves_plain_http_errors_without_verifying_or_publishing_pack_inventory()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let request = Request::new(format, false, false, [245; 16]).await?;
+        let native = PushCompletionRequest {
+            plan: None,
+            response: GitHttpResponse {
+                status: 503,
+                headers: vec![
+                    ("Content-Type".into(), "text/plain".into()),
+                    ("X-Native-Test".into(), "unchanged".into()),
+                ],
+                body: b"native service unavailable; no report-status packet\n".to_vec(),
+            },
+            options: vec!["canopy.note=failed".into()],
+            certificate: None,
+        };
+        let expected = native.response.clone();
+        let proof = retain(&request, native).await?;
+        assert!(
+            proof.root()?.is_some(),
+            "unverified input descriptors remain private"
+        );
+        request.ticket.seal()?;
+        assert!(matches!(
+            request.ticket.wait_terminal().await,
+            StagingState::Bound(_)
+        ));
+        let session = Arc::new(request.ticket.bound_session()?);
+        assert!(session.lease.base.catalog.is_none());
+        let ready = session
+            .ready_root_outcome(
+                identity()?,
+                &request.store,
+                request.directory.path(),
+                request.disk.clone(),
+                None,
+            )
+            .await?;
+        // Advance the current root through genuine private initialization.
+        // This response-only proof retains its original floor and must not
+        // reopen/rebuild the new catalog or expose its unverified input packs.
+        let (initial_base, _, _) = super::super::super::prepare::opened(
+            &request.fixture,
+            [246; 16],
+            request.store.clone(),
+        )
+        .await?;
+        let initial_root = tempfile::TempDir::new()?;
+        let initial_budget = cellule_ltx::DiskBudget::new(64 << 20);
+        let initial = CatalogPreparation::new(
+            initial_root.path(),
+            initial_budget.clone(),
+            initial_base,
+            crate::packs::metadata::tests::limits(),
+        )
+        .await?
+        .finish()
+        .await?;
+        request
+            .fixture
+            .client()
+            .command::<InitializeCatalogRefs>(
+                &request.fixture.target,
+                identity()?,
+                initial.empty_ref_initialization().await?,
+            )
+            .await?;
+        drop(initial);
+        super::super::super::prepare::cleaned(initial_root.path(), &initial_budget).await?;
+        let before = super::super::super::publishing::state(&request.fixture.handle).await?;
+        let p = PublicationCoordinator::new(
+            request.fixture.target.clone(),
+            PublicationLimits::default(),
+        )?;
+        let observer = request.ticket.publish(&p, ready)?;
+        let PublicationState::Finished(Ok(PublicationOutcome::RootPush(committed))) =
+            observer.wait().await
+        else {
+            return Err("plain native outcome not completed".into());
+        };
+        let RootCompletionReply::Completed(value) = committed.output else {
+            return Err("plain native outcome denied".into());
+        };
+        assert!(!value.completion.rejected);
+        assert!(value.completion.publication.is_none());
+        let mut actual = observer.root_response(&request.store).await?;
+        assert_eq!(actual.status, expected.status);
+        assert_eq!(actual.headers, expected.headers);
+        let mut body = Vec::new();
+        while let Some(part) = actual.body.next().await? {
+            body.extend_from_slice(&part);
+        }
+        assert_eq!(body, expected.body);
+        assert_eq!(request.fixture.counts().await?, (0, 2));
+        let before: Vec<serde_json::Value> = serde_json::from_slice(&before)?;
+        let after: Vec<serde_json::Value> = serde_json::from_slice(
+            &super::super::super::publishing::state(&request.fixture.handle).await?,
+        )?;
+        assert_eq!(before[..8], after[..8]);
+        assert_ne!(before[8], after[8]);
+        assert!(request.coordinator.close_and_drain().await.is_empty());
+        assert!(p.close_and_drain().await.is_empty());
+        request.fixture.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_outcome_exact_recovery_preserves_commits_and_refuses_expired_input_custody() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in 1..=3 {
+            let request = Request::new(format, false, false, [247; 16]).await?;
+            retain(
+                &request,
+                PushCompletionRequest {
+                    plan: None,
+                    response: GitHttpResponse {
+                        status: 503,
+                        headers: Vec::new(),
+                        body: b"native unavailable\n".to_vec(),
+                    },
+                    options: Vec::new(),
+                    certificate: None,
+                },
+            )
+            .await?;
+            request.ticket.seal()?;
+            assert!(matches!(
+                request.ticket.wait_terminal().await,
+                StagingState::Bound(_)
+            ));
+            let session = Arc::new(request.ticket.bound_session()?);
+            let ready = session
+                .ready_root_outcome(
+                    identity()?,
+                    &request.store,
+                    request.directory.path(),
+                    request.disk.clone(),
+                    None,
+                )
+                .await?;
+            let evidence = ready.evidence_for_test();
+            let p = PublicationCoordinator::new(
+                request.fixture.target.clone(),
+                PublicationLimits::default(),
+            )?;
+            p.fault_for_test(fault);
+            drop(request.ticket.publish(&p, ready)?);
+            tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
+                while !matches!(request.ticket.state(), StagingState::Uncertain(_)) {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await?;
+            let known = match request.fixture.client().resolve(&evidence).await? {
+                cellule_runtime::Resolution::Absent => None,
+                cellule_runtime::Resolution::Committed(value) => {
+                    Some((value.result().to_vec(), value.commit_sequence()))
+                }
+                other => return Err(format!("unexpected outcome-only resolution {other:?}").into()),
+            };
+            assert_eq!(known.is_some(), fault != 1);
+            super::super::super::publishing::edit(&request.fixture, "UPDATE catalog_operations SET expires_at_ms=0; UPDATE catalog_leases SET expires_at_ms=0;").await?;
+            let before = super::super::super::publishing::state(&request.fixture.handle).await?;
+            assert_eq!(request.coordinator.close_and_drain().await.len(), 1);
+            assert_eq!(p.close_and_drain().await.len(), 1);
+            p.pending(session.check.token.operation)
+                .await
+                .ok_or("ref-free command lost")?
+                .recover()
+                .await?;
+            let observer = request
+                .ticket
+                .pending_publication()
+                .ok_or("ref-free observer lost")?;
+            match observer.wait().await {
+                PublicationState::Finished(Ok(PublicationOutcome::RootPush(committed))) => {
+                    let (bytes, sequence) =
+                        known.ok_or("expired absent command unexpectedly committed")?;
+                    let mut encoded = BoundedEncoder::new(512)?;
+                    committed.output.encode(&mut encoded)?;
+                    assert_eq!(encoded.finish(), bytes);
+                    assert_eq!(committed.receipt.commit_sequence, sequence);
+                    let mut response = observer.root_response(&request.store).await?;
+                    assert_eq!(response.status, 503);
+                    assert_eq!(
+                        response.body.next().await?.ok_or("native error body")?,
+                        b"native unavailable\n".as_slice()
+                    );
+                    assert!(response.body.next().await?.is_none());
+                }
+                PublicationState::Finished(Err(error)) if fault == 1 => {
+                    assert!(
+                        matches!(&*error, PublicationError::RootPush(InvocationError::Rejected(value))
+                        if value.output == RootCompletionReply::Denied(PreparationDenial::Expired))
+                    );
+                    assert!(observer.root_response(&request.store).await.is_err());
+                    assert_eq!(request.fixture.counts().await?, (1, 1));
+                }
+                other => {
+                    return Err(format!("unexpected ref-free expired outcome {other:?}").into());
+                }
+            }
+            assert_eq!(
+                super::super::super::publishing::state(&request.fixture.handle).await?,
+                before
+            );
+            assert!(request.coordinator.close_and_drain().await.is_empty());
+            assert!(p.close_and_drain().await.is_empty());
+            assert_eq!(p.reservations_for_test().await, (0, 0, 0));
+            request.fixture.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}

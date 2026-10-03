@@ -2,7 +2,7 @@
 
 `PreparedCatalog::root_push_completion` prepares a joint catalog/ref/outcome input bounded by 8 KiB. Command 36, `CompleteRootPush`, atomically selects and persists its exact outcome together with any joint root publication. Query 37 and `replay_root_push_response` select that durable result under current read authorization and stream authenticated bytes. Preparation alone does not acknowledge a push; completion uses the existing Cell durability boundary. The service-owned dispatcher and bound lifecycle now retain and recover the exact root command. Typed collection, durable reconstruction and production hard cutover remain required.
 
-This factory requires a successful nonempty ref plan. Immutable outcome-only completion for a failed or empty-command receive remains required; the old inline outcome-only API is not a hard-cutover adapter.
+The catalog factory requires a successful nonempty ref plan. `PreparationSession::root_outcome_completion` now handles registered native results with no ref plan through command 38, `CompleteRootOutcome`. It reuses the same outcome roots and streaming reader; the inline API remains scheduled for removal at hard cutover.
 
 The private factory obtains its native result from the current registered input checkpoint. It authenticates that checkpoint against the prepared catalog's physical input custody, reopens the exact native plan/report/options and uses the existing scoped signing-key lookup for a signed annotation. The native plan must match the private policy guard's original intent and evidence. All ref expectations are checked through the immutable ref transition against the selected joint generation; there is no SQL-ref fallback. For a preparation with no physical inputs, the checkpoint must have no native pack inventory. Its exact digest is still included in the final certificate.
 
@@ -15,6 +15,16 @@ The factory freezes three outcomes before signing:
 | Signed certificate replayed | Same transformation with the existing certificate-replay reason |
 
 An absent report-status response becomes an explicit HTTP 409 rejection. The final command selects a durable refusal when current policy/ACL or signed ownership rejects publication. A moving catalog CAS instead preserves reconciliation/retry semantics. It never retains an unselected native success as the client outcome.
+
+## Ref-free completion
+
+The session factory accepts only the current MAC-registered native checkpoint. It checks authenticated native metadata for the absence of a plan before loading any plan frames, reopens exact response/options and freshly authorized signing facts, freezes outcomes in the admitted completing namespace and rechecks the original checkpoint. No artifact catalog reader, physical verification, ref tree, ancestry or policy page is required. Unverified native inventory can remain under its private input pin; this proof cannot expose it.
+
+`RootOutcomeCompletion` reuses `OutcomeCertificate`, its exact lease/token/format/immutable floor, `RootPushOutcomes`, and the original input-checkpoint digest. A distinct binding domain covers that checkpoint and complete frozen bundle, preventing an inline outcome certificate from being reused across the APIs. Ref generation zero is reserved for this ref-free bundle; joint-root completion still rejects zero. Command 38 uses the existing 8 KiB input and 512-byte result bounds. `ready_root_outcome` returns the same private `ReadyRootPush` type, retaining the session rather than a prepared catalog under the same 16 KiB reservation and shared lifecycle.
+
+For a new completion the command checks its actual admitted owner, exact live operation and independent pin, persisted format, original retained immutable floor and exact MAC-authenticated native checkpoint. The current root may have advanced independently. It selects the native response only with current write permission and unused signed ownership; final authority refusal or signed replay selects an explicit frozen HTTP 409 response. This does not parse an arbitrary native HTTP error as report-status. With valid authority, original error, rejection and empty-command status/headers/body remain exact. Signed first-use ownership, one selected immutable result row and operation consumption are atomic. It writes no catalog/ref generation, attestation, inline options, response body or signed chunks. The shared terminal persistence implementation pre-encodes every result before writes; any late error rolls back all effects.
+
+Exact logical replay precedes fresh authority and must match the original actor/request and full checkpoint/outcome binding. The same current-authorized query and ticket reader stream both joint and ref-free results. Process-loss reconstruction, genuine pending-attempt takeover, native signed root completion and complete typed audit/collection remain required.
 
 ## Representation and namespaces
 

@@ -17,7 +17,7 @@ impl WireValue for RootPushOutcomes {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         crate::validate_repository_id(self.response_id)
             .map_err(|_| CodecError::Invalid("invalid root response ID"))?;
-        if self.ref_generation == 0 || self.ref_generation > i64::MAX as u64 {
+        if self.ref_generation > i64::MAX as u64 {
             return Err(CodecError::Invalid("invalid completion ref generation"));
         }
         e.write_bytes(&self.response_id)?;

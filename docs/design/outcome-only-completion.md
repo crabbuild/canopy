@@ -1,5 +1,7 @@
 # Outcome-only push completion
 
+The immutable-root replacement is implemented by PreparationSession::root_outcome_completion, ready_root_outcome and command 38. It reuses the outcome certificate, operation/input pin, selected-result row and shared dispatch while storing response/options/signed audit bytes in authenticated native metadata. See the [immutable outcome contract](immutable-push-outcomes.md). The inline APIs below remain temporary implementation pending the mandatory producer/reader hard cutover; they are not a backward-compatibility architecture.
+
 Refused and empty native pushes must save their exact response without rebuilding or uploading a catalog. PreparationSession owns the existing authoritative lease capability separately from PreparationBaseResolver's catalog reader. Both share the same monotonic deadline and irreversible renewal-failure fence. Opening a session validates the canonical repository target and fresh CheckPreparation result; it does not accept a caller-supplied trusted token alone.
 
 ## API and stored structures

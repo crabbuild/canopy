@@ -101,6 +101,15 @@ fn outcome_bundle_bounds_signed_key_and_all_three_roots_without_payload() -> Res
     );
     value.signed = None;
     value.ref_generation = 0;
+    // The shared bundle represents ref-free outcomes too. Its enclosing
+    // command must enforce the zero/nonzero distinction, not this codec.
+    let mut e = BoundedEncoder::new(ROOT_COMPLETION_BYTES)?;
+    value.encode(&mut e)?;
+    let bytes = e.finish();
+    let mut d = BoundedDecoder::new(&bytes, ROOT_COMPLETION_BYTES)?;
+    assert_eq!(RootPushOutcomes::decode(&mut d)?, value);
+    d.finish()?;
+    value.ref_generation = i64::MAX as u64 + 1;
     assert!(
         value
             .encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)

@@ -914,7 +914,24 @@ pub(super) fn retention_matches(
     let Some(expected) = data.input_checkpoint_digest else {
         return Ok(true);
     };
-    let retained = context.sql(&checkpoint(data.token)?)?;
+    checkpoint_matches(
+        context,
+        &LeaseCheck {
+            token: data.token,
+            actor: data.actor.clone(),
+        },
+        data.catalog.format,
+        expected,
+    )
+}
+/// Scalar command-local custody check shared by catalog and ref-free outcomes.
+pub(super) fn checkpoint_matches(
+    context: &CommandContext<'_, '_>,
+    check: &LeaseCheck,
+    format: ObjectFormat,
+    expected: [u8; 32],
+) -> cellule_runtime::Result<bool> {
+    let retained = context.sql(&checkpoint(check.token)?)?;
     let Some([SqlValue::Blob(bytes), digest, SqlValue::Integer(expires)]) =
         rows(&retained)?.first().map(Vec::as_slice)
     else {
@@ -933,11 +950,11 @@ pub(super) fn retention_matches(
         vec![],
     ))?)?;
     Ok(proof.0.authenticated(&seed)
-        && inputs.token == data.token
-        && inputs.actor == data.actor
-        && inputs.format == data.catalog.format
-        && inputs.tenant == data.tenant
-        && inputs.application == data.application)
+        && inputs.token == check.token
+        && inputs.actor == check.actor
+        && inputs.format == format
+        && inputs.tenant == *context.target().tenant().as_bytes()
+        && inputs.application == *context.target().application().as_bytes())
 }
 
 /// A durable receipt is not usable custody. Check the exact independent input

@@ -94,6 +94,11 @@ pub(super) struct ResultRecord {
     options: Vec<String>,
     signed: Option<SignedPushAnnotation<ArtifactDescriptor>>,
 }
+impl ResultRecord {
+    pub(super) fn has_plan(&self) -> bool {
+        self.plan.is_some()
+    }
+}
 #[derive(Debug, thiserror::Error)]
 pub enum NativeResultError {
     #[error("native result metadata transport failed")]

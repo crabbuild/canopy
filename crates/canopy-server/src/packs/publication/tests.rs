@@ -16,6 +16,7 @@ mod ref_snapshot;
 mod refs;
 mod root_completion;
 mod root_dispatch;
+mod root_outcome;
 mod staging;
 mod staging_service;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};
@@ -72,6 +73,9 @@ impl CellModule for Module {
             let mut root_completion = descriptor(36);
             root_completion.input_limit = ROOT_COMPLETION_BYTES;
             root_completion.output_limit = 512;
+            let mut root_outcome = descriptor(38);
+            root_outcome.input_limit = ROOT_COMPLETION_BYTES;
+            root_outcome.output_limit = 512;
             let mut root_lookup = descriptor(37);
             root_lookup.output_limit = 512;
             // Match the existing production SQL transport contract exactly.
@@ -108,6 +112,7 @@ impl CellModule for Module {
                     policy_page,
                     policy_reap,
                     root_completion,
+                    root_outcome,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
