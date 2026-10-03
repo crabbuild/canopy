@@ -14,18 +14,21 @@ impl CanopyServer {
     /// The listener's local address must exactly match `config.listen`; the
     /// public URL may still name a proxy. All readiness and drain checks apply.
     /// Cancelling startup requests cleanup after admitted initialization settles.
-    pub async fn start_with_listener(
+    pub fn start_with_listener(
         config: ServerConfig,
         store: Arc<dyn ObjectStore>,
         listener: TcpListener,
-    ) -> Result<Self, ServerError> {
-        Self::start_supervised(config, store, Some(listener)).await
+    ) -> impl std::future::Future<Output = Result<Self, ServerError>> + Send {
+        // Acquire ownership synchronously: dropping an unpolled future must
+        // also deactivate any descriptor inherited by an unrelated fork.
+        let listener = listeners::ReservedListener::new(listener);
+        async move { Self::start_supervised(config, store, Some(listener?)).await }
     }
 
     async fn start_supervised(
         config: ServerConfig,
         store: Arc<dyn ObjectStore>,
-        listener: Option<TcpListener>,
+        listener: Option<listeners::ReservedListener>,
     ) -> Result<Self, ServerError> {
         let (ready, receive_ready) = oneshot::channel();
         let (shutdown, receive_shutdown) = oneshot::channel();
@@ -108,7 +111,7 @@ impl CanopyServer {
 }
 
 impl RunningServer {
-    async fn shutdown(self) -> Result<(), ServerError> {
+    async fn shutdown(mut self) -> Result<(), ServerError> {
         self.native.close();
         self.maintenance_stop.cancel();
         self.ingress_stop.cancel();
@@ -118,6 +121,7 @@ impl RunningServer {
         } else {
             None
         };
+        self.listeners.stop_ingress();
         self.tasks.close();
         self.tasks.wait().await;
         // Detached native reapers and blocking verifiers outlive their request

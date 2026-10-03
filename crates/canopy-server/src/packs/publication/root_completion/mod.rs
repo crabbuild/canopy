@@ -17,10 +17,12 @@ mod codec;
 mod outcome;
 mod ref_free;
 mod result;
+mod retention;
 pub use ref_free::{CompleteRootOutcome, RootOutcomeCompletion};
+pub(in crate::packs::publication) use retention::closed_graph;
 mod prepare;
 mod publish;
-mod read;
+pub(in crate::packs::publication) mod read;
 pub use publish::CompleteRootPush;
 pub use read::{CheckCompletedRootPush, RootPushReplayError, replay_root_push_response};
 #[cfg(test)]

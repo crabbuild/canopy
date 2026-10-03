@@ -132,7 +132,7 @@ impl Command for InitializeCatalogRefs {
         {
             return Ok(denied(PreparationDenial::Conflict));
         }
-        let pristine = context.sql(&statement("SELECT generation=0 AND default_branch=?1 AND NOT EXISTS(SELECT 1 FROM refs) AND NOT EXISTS(SELECT 1 FROM pushes) AND NOT EXISTS(SELECT 1 FROM catalog_compactions) AND NOT EXISTS(SELECT 1 FROM catalog_initialization) AND NOT EXISTS(SELECT 1 FROM catalog_generations WHERE generation>0) FROM ref_generation WHERE singleton=1", vec![SqlValue::Text(INITIAL_HEAD.into())]))?;
+        let pristine = context.sql(&statement("SELECT generation=0 AND default_branch=?1 AND NOT EXISTS(SELECT 1 FROM refs) AND NOT EXISTS(SELECT 1 FROM pushes WHERE initial_staging IS NULL OR response_id IS NOT NULL OR publication IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM catalog_compactions) AND NOT EXISTS(SELECT 1 FROM catalog_initialization) AND NOT EXISTS(SELECT 1 FROM catalog_generations WHERE generation>0) FROM ref_generation WHERE singleton=1", vec![SqlValue::Text(INITIAL_HEAD.into())]))?;
         match rows(&pristine)?.first().map(Vec::as_slice) {
             Some([SqlValue::Integer(1)]) => {}
             Some([SqlValue::Integer(0)]) => return Ok(denied(PreparationDenial::Conflict)),

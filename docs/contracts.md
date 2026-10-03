@@ -1149,6 +1149,15 @@ but cancelling the wait leaves that same supervisor running. The Tokio runtime
 must stay alive for cleanup to finish. This does not make runtime destruction,
 process death or panics graceful.
 
+On Linux, an unrelated native-process fork can inherit a listening socket until
+exec even when its descriptor has CLOEXEC. The node retains one additional owned
+descriptor per HTTP/SSH listener and deactivates the shared socket after ingress
+joins, before releasing its workspace fence. Startup errors use the same field
+drop order. Prebound HTTP handoff acquires this reservation synchronously, so an
+unpolled startup future also releases an inherited listener. The guard performs
+no work on request or Git command paths. Other platforms retain their existing
+listener-close behavior; this Linux fork regression does not qualify them.
+
 Shutdown stops ingress, waits for tracked request work, drains Cellule, then
 withdraws the advertisement. If node drain returns an error, Canopy retains its
 workspace lock for the rest of the process lifetime: worker closure is unproven.

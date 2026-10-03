@@ -14,16 +14,21 @@ use cellule_runtime::{
     CellClient, CellTarget, Committed, InvocationError, MutationIdentity, PendingMutation,
     PreparedCommand, PreparedCommandSnapshot, primitives::sql::SqlCell,
 };
+pub(in crate::packs::publication) mod archive;
 mod codec;
 mod ready;
 mod supervisor;
+pub use archive::{
+    ReadyTerminalRelease, ReleaseTerminalRecovery, TerminalReleaseCertificate,
+    TerminalReleaseInput, TerminalReleaseReply,
+};
 pub use supervisor::{RecoveryScanLimits, RecoveryScanStats, RecoverySupervisor};
 #[cfg(test)]
 mod tests;
 pub use ready::ReadyRootRecovery;
 mod registration;
 pub use registration::RegisterRootRecovery;
-mod phase;
+pub(in crate::packs::publication) mod phase;
 pub(in crate::packs::publication) use phase::{execute, normalize_root};
 
 const ROOT_BYTES: u32 = 8192;
@@ -31,6 +36,10 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v2\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("closed native audit graph failed")]
+    Audit(#[from] NativeResultError),
+    #[error("terminal release command preparation failed")]
+    Release(#[source] Box<InvocationError<TerminalReleaseReply>>),
     #[error("invalid restart recovery scan limits")]
     InvalidScanLimits,
     #[error("root command recovery encoding failed")]
@@ -74,12 +83,12 @@ impl Kind {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp {
+pub(in crate::packs::publication) struct Stamp {
     identity: MutationIdentity,
     digest: [u8; 32],
 }
 impl Stamp {
-    fn of(evidence: &PendingMutation) -> Self {
+    pub(in crate::packs::publication) fn of(evidence: &PendingMutation) -> Self {
         Self {
             identity: evidence.identity(),
             digest: *evidence.operation_digest().as_bytes(),
@@ -180,7 +189,7 @@ impl RegisteredRootRecovery {
         check: &LeaseCheck,
     ) -> Result<Option<Self>, RootRecoveryError> {
         target_matches(target, store, check)?;
-        Self::load_pin(
+        let loaded = Self::load_pin(
             client,
             target,
             store,
@@ -188,7 +197,11 @@ impl RegisteredRootRecovery {
             check.token.attempt,
             Some(check),
         )
-        .await
+        .await?;
+        match loaded {
+            Some(value) => Ok(Some(value)),
+            None => Self::load_archive(client, target, store, check).await,
+        }
     }
     async fn load_pin(
         client: &CellClient,
@@ -267,6 +280,24 @@ impl RegisteredRootRecovery {
             bundle,
             certificate,
         }))
+    }
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn command_bodies_for_test(
+        &self,
+    ) -> Vec<(ArtifactKey, ArtifactDescriptor)> {
+        std::iter::once(&self.bundle.primary)
+            .chain(self.bundle.refusal.iter())
+            .map(|saved| {
+                (
+                    ArtifactKey {
+                        operation: self.token().artifact_operation,
+                        binding_digest: saved.body.digest,
+                        kind: ArtifactKind::InputBody,
+                    },
+                    saved.body,
+                )
+            })
+            .collect()
     }
     pub(in crate::packs::publication) async fn dispatch(
         &self,

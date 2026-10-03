@@ -249,10 +249,10 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             Err(RootPushReplayError::Denied(PreparationDenial::Unauthorized))
         ));
     }
-    if let Some(expected) = saved_first {
+    if let Some(expected) = &saved_first {
         if !late_write {
             Box::pin(super::recovery_discovery::advanced_head(
-                f, &client, store, &first, &expected,
+                f, &client, store, &first, expected,
             ))
             .await?;
         }
@@ -285,6 +285,21 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
         })
         .await?;
     Box::pin(query_failure(&loaded, &client, &handle, store, &expected)).await?;
+    let _released = Box::pin(super::terminal_retention::archive(
+        f, &client, &handle, store, &loaded, &expected, 0,
+    ))
+    .await?;
+    if let Some(expected) = &saved_first {
+        let PublicationOutcome::PolicyPage(actual) =
+            first.dispatch_any(&client, store, &flag).await?
+        else {
+            return Err("archived original page lost".into());
+        };
+        assert_eq!(
+            (&actual.output, actual.receipt),
+            (&expected.output, expected.receipt)
+        );
+    }
     runtime.shutdown().await?;
     Ok(())
 }
