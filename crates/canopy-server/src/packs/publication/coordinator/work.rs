@@ -69,9 +69,15 @@ impl PreparedCompaction {
 pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     RootPush(ReadyRootPush),
+    PolicyPage(ReadyRefPolicyPage),
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyRefPolicyPage> for ReadyPublication {
+    fn from(ready: ReadyRefPolicyPage) -> Self {
+        Self::PolicyPage(ready)
+    }
 }
 impl From<ReadyRootPush> for ReadyPublication {
     fn from(ready: ReadyRootPush) -> Self {
@@ -99,12 +105,16 @@ impl From<ReadyPreparation> for ReadyPublication {
     }
 }
 impl ReadyPublication {
+    pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
+        matches!(self, Self::PolicyPage(_))
+    }
     /// Final work must share the lifecycle's exact session fence and clock.
     /// Equal SQL tokens from an independently opened session are insufficient.
     pub(in crate::packs::publication) fn belongs_to(&self, session: &PreparationSession) -> bool {
         let source = match self {
             Self::Push(ready) => ready.owner.session(),
             Self::RootPush(ready) => ready.owner.session(),
+            Self::PolicyPage(ready) => &ready.prepared.base.session,
             Self::Compaction(ready) => &ready.prepared.preparation_base().session,
             Self::Inputs(_) | Self::Preparation(_) => return false,
         };
@@ -119,6 +129,7 @@ impl ReadyPublication {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootPush(_) => roots::ROOT_RESERVATION,
+            Self::PolicyPage(_) => policy::RESERVATION,
             _ => self.class().reservation(),
         }
     }
@@ -126,6 +137,7 @@ impl ReadyPublication {
         match self {
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootPush(ready) => Self::RootPush(ready.dispatch_copy()),
+            Self::PolicyPage(ready) => Self::PolicyPage(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
                 owner: ready.owner.clone(),
                 command: ready.command.clone(),
@@ -143,9 +155,11 @@ impl ReadyPublication {
     }
     pub(super) fn class(&self) -> PublicationClass {
         match self {
-            Self::Push(_) | Self::RootPush(_) | Self::Inputs(_) | Self::Preparation(_) => {
-                PublicationClass::Foreground
-            }
+            Self::Push(_)
+            | Self::RootPush(_)
+            | Self::PolicyPage(_)
+            | Self::Inputs(_)
+            | Self::Preparation(_) => PublicationClass::Foreground,
             Self::Compaction(_) => PublicationClass::Maintenance,
         }
     }
@@ -153,6 +167,7 @@ impl ReadyPublication {
         match self {
             Self::Push(ready) => ready.owner.capability(),
             Self::RootPush(ready) => ready.owner.capability(),
+            Self::PolicyPage(ready) => ready.prepared.base.capability(),
             Self::Inputs(ready) => ready.session.capability(),
             Self::Preparation(ready) => ready.capability(),
             Self::Compaction(ready) => ready.prepared.preparation_base().capability(),
@@ -162,6 +177,7 @@ impl ReadyPublication {
         match self {
             Self::Preparation(ready) => ready.pending(),
             Self::RootPush(ready) => ready.pending(),
+            Self::PolicyPage(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
                 ready.command.evidence().clone(),
             ))),
@@ -179,6 +195,7 @@ impl ReadyPublication {
             Self::Inputs(ready) => ready.dispatch(recover, fault).await,
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::RootPush(ready) => ready.dispatch(recover, fault).await,
+            Self::PolicyPage(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => super::super::exact::invoke_guarded(
                 &client,
                 ready.command,
@@ -223,12 +240,16 @@ impl ReadyPublication {
 pub enum PublicationOutcome {
     Push(Committed<CatalogCompletionReply>),
     RootPush(Committed<RootCompletionReply>),
+    /// Original page result/receipt only; fresh guard checks remain mandatory.
+    PolicyPage(Committed<RefPolicyReply>),
     Compaction(Committed<CompactionReply>),
     Inputs(RegisteredNativeInputs),
     Preparation(PreparationCommandOutcome),
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("ref policy page registration: {0}")]
+    PolicyPage(#[source] InvocationError<RefPolicyReply>),
     #[error("immutable root push publication: {0}")]
     RootPush(#[source] InvocationError<RootCompletionReply>),
     #[error("bound preparation command: {0}")]
@@ -253,6 +274,7 @@ impl PublicationError {
         match self {
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
+            Self::PolicyPage(error) => kind(error),
             Self::Preparation(error) => kind(error),
             Self::Inputs(error) => kind(error),
             Self::Compaction(error) => kind(error),
@@ -268,6 +290,7 @@ impl PublicationError {
         match self {
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),
+            Self::PolicyPage(error) => unknown(error),
             Self::Preparation(error) => unknown(error),
             Self::Inputs(error) => unknown(error),
             Self::Compaction(error) => unknown(error),

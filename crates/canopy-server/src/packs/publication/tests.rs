@@ -8,6 +8,7 @@ mod initialization;
 mod inputs;
 mod namespaces;
 mod native_capture;
+mod policy_dispatch;
 mod prepare;
 mod publishing;
 mod reconcile;

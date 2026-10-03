@@ -11,6 +11,10 @@ use cellule_runtime::Committed;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    PolicyDispatch {
+        fault: u8,
+        loss: super::policy_dispatch::Loss,
+    },
     RefFree {
         kind: super::root_outcome::Kind,
         fault: u8,

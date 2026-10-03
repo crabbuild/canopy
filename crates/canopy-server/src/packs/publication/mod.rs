@@ -60,8 +60,8 @@ pub use coordinator::{
     PreparationReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
     PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
     PublicationState, PublicationStats, PublicationTicket, ReadyCatalogCompaction,
-    ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRootPush,
-    RegisteredNativeInputs, RootPushReadyError,
+    ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
+    ReadyRootPush, RefPolicyReadyError, RegisteredNativeInputs, RootPushReadyError,
 };
 mod commands;
 mod compaction;

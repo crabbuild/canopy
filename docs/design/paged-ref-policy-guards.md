@@ -10,6 +10,16 @@ The guard is independent of the selected catalog/ref generation. Unrelated catal
 
 `RefPolicyPreparation::page` copies at most 128 updates and encodes at most 256 KiB including certificate and framing. It counts encoded update bytes before copying, so long ref names reduce page length. Each page remaps ancestry bits from the original offset, including offsets within a byte. The existing catalog MAC uses a separate page binding over intent, offset, exact page plan and ancestry; another certificate purpose cannot register a page.
 
+## Service-owned registration
+
+`Arc<RefPolicyPreparation>::ready_page` prepares exact command 33 after the existing private page factory checks catalog/intent custody and the byte envelope. Its private output retains both the original intent/evidence and verified prepared catalog. `ReadyPublication::PolicyPage` shares foreground/account admission and exact recovery with root completion, reserving 512 KiB for two encoded copies bounded by 256 KiB each. Known results decode with their original receipt before fresh custody checks. Only authoritative absence can submit the same command after a live-custody check; unknown/expired evidence remains retained and charged. Regenerating a guard UUID, page, certificate or mutation identity is not recovery.
+
+`StagingTicket::register_policy_page` reuses the lifecycle's existing held publication slot and observation ticket with an explicit intermediate role. It requires the exact shared session fence and clock. Owned workers/results, due renewal and queued input checkpoints drain before activation. Intermediate pages cannot enter the final-completion API. A known successful page resumes Bound rather than acknowledging or terminating a push; a known refusal fences preparation. The latest known page receipt joins the existing minimum-receipt refresh before the next handoff, without changing the original Bind receipt. Historical progress never grants fresh guard authority.
+
+One page per logical operation may be outstanding. While its result is uncertain, the lifecycle blocks another page, bound work and final completion, even if the Cell has already durably registered the complete guard. Dropped observers do not cancel work; the existing pending observer/coordinator recover the original evidence. Shutdown retains started uncertainty until resolved. A stopped held intermediate page drains its accepted workers and is discarded before execution; accepted final commands retain their completion semantics. Closing after a committed page preserves its original receipt but cannot reopen preparation.
+
+These are local service-ownership semantics. Durable process-loss reconstruction, complete typed retention and production orchestration remain required. A failed policy page also needs production refusal orchestration before the hard cutover: fencing safely refuses publication but is not itself a durable final native-response outcome.
+
 ## Transactional registration
 
 Command 33, `RegisterRefPolicyPage`, checks shape and purpose MAC, scoped repository, actual admitted owner fence, current write access, format, live matching operation, expiry and independent retention pin. It checks that the certificate's selected generation remains an authenticated retained fact and that the original floor/input custody still match. The selected generation need not be current; registration does not publish roots.
@@ -67,7 +77,7 @@ Command 35, `ReapRefPolicyGuard`, requires the current admitted fence and admin 
 
 An invalid guard whose creating operation is still live retains its tiny tombstone even after all watches are gone. Deleting it early would allow an old signed first page to recreate the guard. Once that operation is inactive, or the actual admitted owner has changed, the empty guard can be removed. An old page must then fail operation/fence checks before recreating any state. Exact original mutation replay can return its historical receipt after restore but grants no new write.
 
-These records retain no remote artifact deletion authority. Cleanup scheduling, enumeration, account fairness and process-loss service reconstruction remain required.
+These records retain no remote artifact deletion authority. Cleanup scheduling, enumeration, fair cleanup preparation and process-loss service reconstruction remain required; registration now shares the account-fair dispatcher.
 
 ## Verification and open gates
 
