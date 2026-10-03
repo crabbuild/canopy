@@ -401,6 +401,15 @@ async fn native_receive_durable_root_recovery_restores_joint_publication_and_fen
     }
     Ok(())
 }
+#[tokio::test]
+async fn native_receive_restart_discovery_owns_original_commands_and_automatic_uncertain_recovery()
+-> Result {
+    for fault in [1, 2, 3] {
+        native_receive(false, CompletionMode::Discovery { fault }).await?;
+    }
+    Ok(())
+}
+
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -410,7 +419,9 @@ async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
-        CompletionMode::Durable { .. } => Some(super::root_outcome::Kind::Empty),
+        CompletionMode::Durable { .. } | CompletionMode::Discovery { .. } => {
+            Some(super::root_outcome::Kind::Empty)
+        }
         _ => None,
     };
     let fixture = Fixture::new(format).await?;
@@ -728,13 +739,16 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     assert_eq!(recovered.response, response);
     drop(response);
     cleaned(work_root.path(), &disk).await?;
-    if let CompletionMode::Durable { fault, revoked } = mode {
+    if matches!(
+        mode,
+        CompletionMode::Discovery { .. } | CompletionMode::Durable { .. }
+    ) {
         ticket.seal()?;
         assert!(matches!(
             timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
             StagingState::Bound(_)
         ));
-        Box::pin(super::durable_recovery::qualify(
+        super::recovery_discovery::qualify_native(
             super::root_outcome::Context {
                 fixture: &fixture,
                 store: &store,
@@ -744,9 +758,8 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
                 budget: disk.clone(),
                 request: recovered,
             },
-            fault,
-            revoked,
-        ))
+            mode,
+        )
         .await?;
         cleaned(work_root.path(), &disk).await?;
         return Ok(());

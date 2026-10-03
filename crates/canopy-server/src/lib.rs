@@ -274,6 +274,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/recovery/codec.rs"));
                 source.update(include_bytes!("packs/publication/recovery/registration.rs"));
                 source.update(include_bytes!("packs/publication/recovery/ready.rs"));
+                source.update(include_bytes!("packs/publication/recovery/supervisor.rs"));
                 source.update(include_bytes!("packs/publication/recovery/phase.rs"));
                 source.update(include_bytes!("packs/publication/exact.rs"));
                 source.update(include_bytes!("packs/publication/mod.rs"));

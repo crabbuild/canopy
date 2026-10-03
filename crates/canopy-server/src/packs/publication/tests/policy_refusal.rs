@@ -335,10 +335,8 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
         assert_eq!(p.reservations_for_test().await, (0, 0, 0));
         assert_eq!(Arc::strong_count(&refusal), 1);
     }
-    let guard = pending.ready(&prepared).await?;
-    let positive = prepared
-        .ready_root_push(identity()?, &guard, root, budget.clone(), limits(), None)
-        .await?;
+    let guard = Arc::new(pending.ready(&prepared).await?);
+    let positive = owned_positive(ticket, &prepared, &guard, root, budget.clone()).await?;
     let positive_evidence = positive.evidence_for_test();
     let page = pending.ready_page(&prepared, identity()?, 0).await?;
     let page_evidence = page.evidence_for_test();
@@ -351,9 +349,7 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
     drop(failure);
     let before = state(&f.handle).await?;
     let observer = if loss == Loss::Live {
-        let positive = prepared
-            .ready_root_push(identity()?, &guard, root, budget, limits(), None)
-            .await?;
+        let positive = owned_positive(ticket, &prepared, &guard, root, budget).await?;
         ticket.publish(&p, positive)?
     } else {
         let changed = if loss == Loss::LateWrite {
@@ -425,4 +421,29 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
     assert!(p.close_and_drain().await.is_empty());
     assert_eq!(p.reservations_for_test().await, (0, 0, 0));
     Ok(())
+}
+
+// Match the existing production ownership boundary instead of composing the
+// native fixture and expensive root-preparation poll frames on one stack.
+async fn owned_positive(
+    ticket: &StagingTicket,
+    prepared: &Arc<PreparedCatalog>,
+    guard: &Arc<PreparedRefPolicyGuard>,
+    root: &std::path::Path,
+    budget: cellule_ltx::DiskBudget,
+) -> Result<ReadyRootPush> {
+    let owner = prepared.clone();
+    let guard = guard.clone();
+    let directory = root.to_path_buf();
+    let mutation = identity()?;
+    Ok(ticket
+        .spawn_bound(move |_| async move {
+            owner
+                .ready_root_push(mutation, &guard, &directory, budget, limits(), None)
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))
+        })?
+        .wait()
+        .await
+        .map_err(|error| format!("owned positive preparation: {error}"))?)
 }

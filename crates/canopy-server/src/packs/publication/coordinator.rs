@@ -398,6 +398,9 @@ impl PublicationCoordinator {
             }),
         })
     }
+    pub(in crate::packs::publication) fn matches_target(&self, target: &CellTarget) -> bool {
+        self.inner.target == *target
+    }
     /// Non-waiting admission. All unbounded/native work precedes this call.
     /// The account key comes from the private lease, never a request label.
     pub async fn submit(
@@ -683,6 +686,27 @@ impl PublicationTicket {
         self.job.status.send_replace(PublicationState::Discarded);
         self.inner.drained.notify_waiters();
         Ok(())
+    }
+    /// Restart discovery may retry only the cold capability it actually found.
+    /// A live lifecycle or another attempt with the same logical ID keeps its
+    /// original observer, session and recovery ownership.
+    pub(in crate::packs::publication) async fn recover_discovered(
+        &self,
+        registered: &RegisteredRootRecovery,
+    ) -> Result<bool, PublicationScheduleError> {
+        let matches = {
+            let ready = self.job.ready.lock().await;
+            matches!(&*ready, Some(ReadyPublication::RootRecovery(value)) if value.matches_registered(registered))
+        };
+        if !matches || !matches!(self.state(), PublicationState::Uncertain(_)) {
+            return Ok(false);
+        }
+        match self.recover().await {
+            Ok(()) => Ok(true),
+            // The original observer may have requested recovery meanwhile.
+            Err(PublicationScheduleError::NotUncertain) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
     pub async fn recover(&self) -> Result<(), PublicationScheduleError> {
         PublicationCoordinator {

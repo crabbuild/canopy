@@ -250,6 +250,12 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
         ));
     }
     if let Some(expected) = saved_first {
+        if !late_write {
+            Box::pin(super::recovery_discovery::advanced_head(
+                f, &client, store, &first, &expected,
+            ))
+            .await?;
+        }
         let PublicationOutcome::PolicyPage(actual) =
             first.dispatch_any(&client, store, &flag).await?
         else {
