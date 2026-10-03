@@ -101,6 +101,13 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
                 .is_err()
         );
         let mut changed = input.clone();
+        changed.refusal = true;
+        assert!(
+            changed
+                .encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)
+                .is_err()
+        );
+        let mut changed = input.clone();
         changed.outcomes.ref_generation = 1;
         assert!(
             changed

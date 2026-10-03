@@ -22,6 +22,7 @@ pub enum RootPushReadyError {
 pub struct ReadyRootPush {
     pub(super) owner: PushPreparation,
     command: RootCommand,
+    pub(super) refusal: bool,
 }
 impl PreparedCatalog {
     pub async fn ready_root_push(
@@ -48,6 +49,7 @@ impl PreparedCatalog {
         Ok(ReadyRootPush {
             owner: PushPreparation::Catalog(self.clone()),
             command: RootCommand::Publish(command),
+            refusal: false,
         })
     }
 }
@@ -64,6 +66,30 @@ impl PreparationSession {
             .root_outcome_completion(store, directory, budget, signers)
             .await
             .map_err(|error| RootPushReadyError::Preparation(Box::new(error)))?;
+        self.ready_immutable_outcome(identity, input).await
+    }
+    /// Prepare before policy dispatch, while custody and signer authority are
+    /// live. Retain this exact command through any subsequent refusal/recovery.
+    pub async fn ready_root_refusal(
+        self: &Arc<Self>,
+        identity: MutationIdentity,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        directory: &Path,
+        budget: DiskBudget,
+        signers: Option<&DirectoryCell>,
+    ) -> Result<ReadyRootPush, RootPushReadyError> {
+        let input = self
+            .root_refusal_completion(store, directory, budget, signers)
+            .await
+            .map_err(|error| RootPushReadyError::Preparation(Box::new(error)))?;
+        self.ready_immutable_outcome(identity, input).await
+    }
+    async fn ready_immutable_outcome(
+        self: &Arc<Self>,
+        identity: MutationIdentity,
+        input: RootOutcomeCompletion,
+    ) -> Result<ReadyRootPush, RootPushReadyError> {
+        let refusal = input.refusal;
         input.encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)?;
         self.live_lease()?;
         let command = self
@@ -75,6 +101,7 @@ impl PreparationSession {
         Ok(ReadyRootPush {
             owner: PushPreparation::Outcome(self.clone()),
             command: RootCommand::Outcome(command),
+            refusal,
         })
     }
 }
@@ -96,6 +123,7 @@ impl ReadyRootPush {
         Self {
             owner: self.owner.clone(),
             command: self.command.clone(),
+            refusal: self.refusal,
         }
     }
     pub(super) fn pending(&self) -> PublicationError {

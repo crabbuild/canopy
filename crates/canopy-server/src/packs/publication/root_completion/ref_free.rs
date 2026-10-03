@@ -7,20 +7,27 @@ use super::super::{
 };
 use super::*;
 use crate::packs::directory::index::codec::fixed as wire_fixed;
-const DOMAIN: &[u8] = b"canopy.root-outcome-completion.v1\0";
+const DOMAIN: &[u8] = b"canopy.root-outcome-completion.v2\0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootOutcomeCompletion {
     pub proof: OutcomeCertificate,
     pub input_checkpoint_digest: [u8; 32],
     pub outcomes: RootPushOutcomes,
+    /// Authenticated selection constraint: a publishing plan can only refuse.
+    pub refusal: bool,
 }
 impl RootOutcomeCompletion {
-    fn binding(checkpoint: [u8; 32], outcomes: &RootPushOutcomes) -> Result<[u8; 32], CodecError> {
+    fn binding(
+        checkpoint: [u8; 32],
+        outcomes: &RootPushOutcomes,
+        refusal: bool,
+    ) -> Result<[u8; 32], CodecError> {
         let mut e = BoundedEncoder::new(ROOT_COMPLETION_BYTES)?;
         outcomes.encode(&mut e)?;
         let mut h = blake3::Hasher::new();
         h.update(DOMAIN);
         h.update(&checkpoint);
+        h.update(&[u8::from(refusal)]);
         h.update(&e.finish());
         Ok(*h.finalize().as_bytes())
     }
@@ -28,7 +35,8 @@ impl RootOutcomeCompletion {
         let data = self.proof.0.data::<super::super::outcome::OutcomeData>()?;
         if self.outcomes.ref_generation != 0
             || self.input_checkpoint_digest == [0; 32]
-            || data.digest != Self::binding(self.input_checkpoint_digest, &self.outcomes)?
+            || data.digest
+                != Self::binding(self.input_checkpoint_digest, &self.outcomes, self.refusal)?
             || [
                 self.outcomes.native,
                 self.outcomes.rejected,
@@ -48,6 +56,7 @@ impl WireValue for RootOutcomeCompletion {
         e.write_bytes(DOMAIN)?;
         self.proof.encode(e)?;
         e.write_bytes(&self.input_checkpoint_digest)?;
+        e.write_bool(self.refusal)?;
         self.outcomes.encode(e)
     }
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
@@ -57,6 +66,7 @@ impl WireValue for RootOutcomeCompletion {
         let value = Self {
             proof: OutcomeCertificate::decode(d)?,
             input_checkpoint_digest: wire_fixed(d)?,
+            refusal: d.read_bool()?,
             outcomes: RootPushOutcomes::decode(d)?,
         };
         value.shape()?;
@@ -73,6 +83,29 @@ impl PreparationSession {
         budget: DiskBudget,
         signers: Option<&DirectoryCell>,
     ) -> Result<RootOutcomeCompletion, RootCompletionPreparationError> {
+        self.prepare_root_outcome(store, directory, budget, signers, false)
+            .await
+    }
+    /// Freeze a terminal refusal from registered native custody, including a
+    /// publishing plan. It cannot select native success or expose any objects.
+    pub async fn root_refusal_completion(
+        &self,
+        store: &ArtifactStore,
+        directory: &Path,
+        budget: DiskBudget,
+        signers: Option<&DirectoryCell>,
+    ) -> Result<RootOutcomeCompletion, RootCompletionPreparationError> {
+        self.prepare_root_outcome(store, directory, budget, signers, true)
+            .await
+    }
+    async fn prepare_root_outcome(
+        &self,
+        store: &ArtifactStore,
+        directory: &Path,
+        budget: DiskBudget,
+        signers: Option<&DirectoryCell>,
+        refusal: bool,
+    ) -> Result<RootOutcomeCompletion, RootCompletionPreparationError> {
         let (_, deadline) = self.live_lease()?;
         timeout_at(
             deadline,
@@ -87,23 +120,22 @@ impl PreparationSession {
                 let record = native.read(store).await?;
                 // Refuse even an empty Some(plan) before materializing its frames.
                 // A publishing native result needs the catalog/ref factory instead.
-                if record.has_plan() {
+                if !refusal && record.has_plan() {
                     return Err(RootCompletionPreparationError::Context);
                 }
                 let request = self
                     .reopen_native_result(store, directory, &budget, signers)
                     .await?;
-                if request.plan.is_some() {
+                if !refusal && request.plan.is_some() {
                     return Err(RootCompletionPreparationError::Context);
                 }
-                crate::push::report::publication_matches(&request.response, None)?;
+                crate::push::report::publication_matches(&request.response, request.plan.as_ref())?;
                 let outcomes = outcome::freeze(
                     store,
                     self.check.token.artifact_operation,
                     native,
                     (record.operation, record.response),
-                    request.response,
-                    request.certificate,
+                    request,
                     0,
                 )
                 .await?;
@@ -112,13 +144,16 @@ impl PreparationSession {
                     return Err(RootCompletionPreparationError::Context);
                 }
                 let proof = self
-                    .issue_outcome_certificate(RootOutcomeCompletion::binding(digest, &outcomes)?)
+                    .issue_outcome_certificate(RootOutcomeCompletion::binding(
+                        digest, &outcomes, refusal,
+                    )?)
                     .await
                     .map_err(|error| RootCompletionPreparationError::Session(Box::new(error)))?;
                 let value = RootOutcomeCompletion {
                     proof,
                     input_checkpoint_digest: digest,
                     outcomes,
+                    refusal,
                 };
                 value.encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)?;
                 self.live_lease()?;
@@ -133,7 +168,7 @@ pub struct CompleteRootOutcome;
 impl Command for CompleteRootOutcome {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 38;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = RootOutcomeCompletion;
     type Output = RootCompletionReply;
     fn execute(
@@ -141,8 +176,11 @@ impl Command for CompleteRootOutcome {
         input: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
         input.shape()?;
-        let binding =
-            RootOutcomeCompletion::binding(input.input_checkpoint_digest, &input.outcomes)?;
+        let binding = RootOutcomeCompletion::binding(
+            input.input_checkpoint_digest,
+            &input.outcomes,
+            input.refusal,
+        )?;
         let Some((data, _)) = super::super::outcome::authenticate(context, &input.proof, binding)?
         else {
             return Ok(denied(PreparationDenial::Unauthorized));
@@ -210,7 +248,7 @@ impl Command for CompleteRootOutcome {
         )? == Some(data.format);
         let selection = if replayed {
             result::Selection::Replayed
-        } else if permitted {
+        } else if permitted && !input.refusal {
             result::Selection::Native
         } else {
             result::Selection::Rejected

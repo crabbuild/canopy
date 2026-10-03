@@ -36,13 +36,14 @@ impl PreparedCatalog {
                     .native_result()?
                     .ok_or(RootCompletionPreparationError::Context)?;
                 let store = self.base.indexes().store();
-                let request = self
+                let mut request = self
                     .base
                     .session
                     .reopen_native_result(&store, directory, &budget, signers)
                     .await?;
                 let plan = request
                     .plan
+                    .take()
                     .ok_or(RootCompletionPreparationError::Context)?;
                 let mut proof = self
                     .guarded_ref_snapshot(guard, plan, directory, budget, limits)
@@ -54,8 +55,7 @@ impl PreparedCatalog {
                     self.token().artifact_operation,
                     native,
                     (record.operation, record.response),
-                    request.response,
-                    request.certificate,
+                    request,
                     ref_generation,
                 )
                 .await?;

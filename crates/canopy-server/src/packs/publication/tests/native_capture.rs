@@ -203,6 +203,75 @@ async fn native_receive_policy_dispatch_preserves_known_receipts_and_refuses_cha
     }
     Ok(())
 }
+#[tokio::test]
+async fn native_receive_policy_refusal_shares_one_frozen_command_across_successful_pages() -> Result
+{
+    native_receive(
+        true,
+        CompletionMode::PolicyRefusalDispatch {
+            fault: 0,
+            loss: super::policy_refusal::Loss::Live,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_reuses_exact_command_after_completed_pages_and_revocation()
+-> Result {
+    for loss in [
+        super::policy_refusal::Loss::LatePolicy,
+        super::policy_refusal::Loss::LateWrite,
+    ] {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch { fault: 0, loss },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_saves_all_ref_rejection_without_publishing() -> Result {
+    for loss in [
+        super::policy_refusal::Loss::Policy,
+        super::policy_refusal::Loss::Write,
+    ] {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch { fault: 0, loss },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_recovers_original_terminal_phase_after_lost_reply_and_panic()
+-> Result {
+    for loss in [
+        super::policy_refusal::Loss::Policy,
+        super::policy_refusal::Loss::Write,
+    ] {
+        for fault in 1..=3 {
+            native_receive(true, CompletionMode::PolicyRefusalDispatch { fault, loss }).await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_preserves_known_results_but_refuses_absence_after_expiry()
+-> Result {
+    for fault in 1..=3 {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch {
+                fault,
+                loss: super::policy_refusal::Loss::Expiry,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -595,6 +664,26 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         builder.add_segment(segment).await?;
         builder.finish_pack().await?;
         let prepared = builder.finish().await?;
+        if let CompletionMode::PolicyRefusalDispatch { fault, loss } = mode {
+            Box::pin(super::policy_refusal::qualify(
+                super::root_dispatch::Context {
+                    fixture: &fixture,
+                    prepared: Arc::new(prepared),
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: physical_root.path(),
+                    budget: physical_disk.clone(),
+                    request: recovered,
+                },
+                fault,
+                loss,
+            ))
+            .await?;
+            cleaned(physical_root.path(), &physical_disk).await?;
+            fixture.runtime.shutdown().await?;
+            return Ok(());
+        }
         if let CompletionMode::PolicyDispatch { fault, loss } = mode {
             Box::pin(super::policy_dispatch::qualify(
                 super::root_dispatch::Context {

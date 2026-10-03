@@ -1493,6 +1493,20 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 && checkpoint.is_none()
             {
                 Next::Bind(check)
+            } else if l.finishing
+                && l.workers == 0
+                && checkpoint.is_none()
+                && job
+                    .publication
+                    .lock()
+                    .expect("staging publication")
+                    .as_ref()
+                    .is_some_and(PublicationTicket::is_root_refusal)
+            {
+                // A pre-frozen refusal cannot ACK or publish. Let its final
+                // transaction check custody rather than requiring fresh Write
+                // for a renewal after that permission has been revoked.
+                Next::Publish
             } else if l.renew || now >= due {
                 l.renew = false;
                 if l.bound.is_some() {
@@ -1538,7 +1552,12 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     }
                     (l.bound.clone().expect("bound publication session"), receipt)
                 };
-                if let Err(error) = session.refresh(receipt).await {
+                let refreshed = if ticket.is_root_refusal() {
+                    session.live_lease().map(|_| ())
+                } else {
+                    session.refresh(receipt).await
+                };
+                if let Err(error) = refreshed {
                     fence_and_drain(&inner, &job, StagingError::Base(error)).await;
                     return;
                 }

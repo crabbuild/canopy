@@ -41,19 +41,20 @@ pub(super) async fn retain_rejection(
     )
     .await
 }
-/// Both factories freeze the same three selected-outcome descriptors. A zero
-/// ref generation is reserved for ref-free completion, whose authority refusal
-/// is explicit HTTP failure rather than parsing an arbitrary native error body.
+/// Freeze the same three selected-outcome descriptors. Publishing native plans
+/// retain all-ref rejection reports even for a refusal-only completion; arbitrary
+/// ref-free error responses receive explicit HTTP failures.
 pub(super) async fn freeze(
     store: &ArtifactStore,
     operation: [u8; 16],
     native: NativeResultRoot,
     original: ([u8; 16], GitHttpResponse<ArtifactDescriptor>),
-    response: GitHttpResponse,
-    certificate: Option<crate::push::VerifiedPushCertificate>,
+    request: PushCompletionRequest,
     ref_generation: u64,
 ) -> Result<RootPushOutcomes, RootCompletionPreparationError> {
-    let signed = certificate.map(|signed| RootSignedPushFact {
+    let report = request.plan.is_some() || ref_generation != 0;
+    let response = request.response;
+    let signed = request.certificate.map(|signed| RootSignedPushFact {
         digest: Sha256::digest(&signed.body).into(),
         key: signed.key,
         size: signed.body.len() as u64,
@@ -68,7 +69,7 @@ pub(super) async fn freeze(
         },
     )
     .await?;
-    let (rejected, replayed) = if ref_generation == 0 {
+    let (rejected, replayed) = if !report {
         drop(response);
         (
             explicit_rejection(store, operation, native, crate::push::report::REJECTED).await?,
