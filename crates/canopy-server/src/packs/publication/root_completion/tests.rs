@@ -218,3 +218,20 @@ async fn frozen_no_report_rejection_is_explicit_http_failure() -> Result {
     }
     Ok(())
 }
+
+pub(in crate::packs::publication) async fn selected_body_for_test(
+    root: NativeOutcomeRoot,
+    store: &ArtifactStore,
+) -> Result<(
+    canopy_object_storage::artifact::ArtifactKey,
+    ArtifactDescriptor,
+)> {
+    let value = root
+        .0
+        .read::<super::OutcomeRecord>(store, INPUT_ROOT_BYTES)
+        .await?;
+    Ok((
+        super::super::native_result::body_key(value.body_operation, value.response.body),
+        value.response.body,
+    ))
+}

@@ -11,6 +11,9 @@ use cellule_runtime::Committed;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    TerminalRetention {
+        fault: u8,
+    },
     StagedDurableFence,
     StagedDurableRevoked {
         root: bool,
@@ -296,7 +299,7 @@ pub(super) async fn qualify(
     // Every last-write fault must restore all earlier effects, including the
     // saved root, consumed operation, joint generation and attestation pin.
     let mut faults = vec![
-        "CREATE TRIGGER fixture_root_fault BEFORE INSERT ON pushes BEGIN SELECT RAISE(ABORT,'late root outcome fault'); END",
+        "CREATE TRIGGER fixture_root_fault BEFORE UPDATE OF response_root ON pushes BEGIN SELECT RAISE(ABORT,'late root outcome fault'); END",
         "CREATE TRIGGER fixture_root_fault BEFORE DELETE ON catalog_operations BEGIN SELECT RAISE(ABORT,'late operation consumption fault'); END",
     ];
     if mode == CompletionMode::SignedAccepted {

@@ -53,7 +53,8 @@ impl CompleteRootPush {
         // Exact terminal logical replay precedes new authority. It never
         // restores an operation, generation, guard or signed ownership record.
         let saved = context.sql(&statement(read::SAVED, vec![blob(data.token.operation)]))?;
-        if !rows(&saved)?.is_empty() {
+        let pending = read::pending(&saved, &data.actor, data.token.request_digest)?;
+        if !rows(&saved)?.is_empty() && !pending {
             let Some(value) = read::saved(&saved, &data.actor, data.token.request_digest)? else {
                 return Ok(denied(PreparationDenial::Conflict));
             };
@@ -166,7 +167,8 @@ impl CompleteRootPush {
             },
             ready.then_some(input.proof.guard.plan_digest),
             context.now_ms(),
-        )?;
+        )?
+        .pending(pending);
         let mut encoded_catalog = BoundedEncoder::new(256)?;
         data.catalog.encode(&mut encoded_catalog)?;
         let mut encoded_refs = BoundedEncoder::new(128)?;

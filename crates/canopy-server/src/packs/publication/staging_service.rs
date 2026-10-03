@@ -110,6 +110,13 @@ pub enum StagingError {
     BoundClaim(#[source] Box<InvocationError<PreparationReply>>),
     #[error("staging bind failed")]
     Bind(#[source] Box<InvocationError<PreparationReply>>),
+    #[error("initial staging receipt recovery failed")]
+    ReceiptRecovery {
+        evidence: Box<cellule_runtime::PendingMutation>,
+        source: Box<StagingReceiptError>,
+    },
+    #[error("initial staging receipt lookup failed")]
+    ReceiptLookup(#[source] Box<StagingReceiptError>),
     #[error("staging query failed")]
     Query(#[source] Box<InvocationError<Option<StagingLease>>>),
     #[error("bound base failed")]
@@ -118,6 +125,11 @@ pub enum StagingError {
     PublicationAdmission(PublicationScheduleError),
     #[error("final publication failed: {0}")]
     Publication(#[source] Arc<PublicationError>),
+}
+impl From<StagingReceiptError> for StagingError {
+    fn from(error: StagingReceiptError) -> Self {
+        Self::ReceiptLookup(Box::new(error))
+    }
 }
 impl StagingError {
     fn uncertain(&self) -> bool {
@@ -130,6 +142,7 @@ impl StagingError {
         match self {
             Self::Begin(e) | Self::Renew(e) | Self::Claim(e) | Self::Checkpoint(e) => unknown(e),
             Self::Bind(e) | Self::BoundRenew(e) | Self::BoundClaim(e) => unknown(e),
+            Self::ReceiptRecovery { .. } => true,
             _ => false,
         }
     }
@@ -191,16 +204,23 @@ impl ReadyStaging {
         request
             .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
             .map_err(|_| StagingError::Context)?;
+        if StagingAdmission::load(&client, &target, request.operation)
+            .await?
+            .is_some()
+        {
+            return Err(StagingError::Duplicate);
+        }
         let command = client
             .prepare_command::<BeginStaging>(&target, identity, request.clone())
             .await
             .map_err(|e| StagingError::Begin(Box::new(e)))?;
+        let operation = request.operation;
         Ok(Self {
             inner: Box::new(StagingRequest {
                 client,
                 target,
                 request,
-                command: Exact::Begin(command),
+                command: Exact::Begin(command, operation),
                 bound_source: None,
             }),
         })
@@ -345,7 +365,7 @@ struct Job {
 }
 #[derive(Clone)]
 enum Exact {
-    Begin(PreparedCommand<BeginStaging>),
+    Begin(PreparedCommand<BeginStaging>, [u8; 16]),
     Claim(PreparedCommand<ClaimStaging>),
     Checkpoint(PreparedCommand<RegisterStagedInputs>),
     BoundCheckpoint(PreparedCommand<RegisterStagedInputs>),
@@ -365,7 +385,7 @@ enum Outcome {
 impl Exact {
     fn pending(&self) -> StagingError {
         match self {
-            Self::Begin(c) => StagingError::Begin(Box::new(InvocationError::Pending(Box::new(
+            Self::Begin(c, _) => StagingError::Begin(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
             Self::Claim(c) => StagingError::Claim(Box::new(InvocationError::Pending(Box::new(
@@ -395,10 +415,30 @@ impl Exact {
         fault: u8,
     ) -> Result<Outcome, StagingError> {
         match self {
-            Self::Begin(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::Stage)
-                .map_err(|e| StagingError::Begin(Box::new(e))),
+            Self::Begin(c, operation) => {
+                if recover {
+                    let known = async {
+                        match StagingAdmission::load(&client, c.evidence().target(), operation)
+                            .await?
+                        {
+                            Some(saved) => saved.original(c.evidence()),
+                            None => Ok(None),
+                        }
+                    }
+                    .await
+                    .map_err(|source| StagingError::ReceiptRecovery {
+                        evidence: Box::new(c.evidence().clone()),
+                        source: Box::new(source),
+                    })?;
+                    if let Some(value) = known {
+                        return Ok(Outcome::Stage(value));
+                    }
+                }
+                super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+                    .await
+                    .map(Outcome::Stage)
+                    .map_err(|e| StagingError::Begin(Box::new(e)))
+            }
             Self::Claim(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Stage)

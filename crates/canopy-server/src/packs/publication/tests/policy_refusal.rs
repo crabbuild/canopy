@@ -76,7 +76,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     // can exist without consuming custody in the same Cell transaction.
     if fault == 0 && loss == Loss::Policy {
         for trigger in [
-            "BEFORE INSERT ON pushes",
+            "BEFORE UPDATE OF response_root ON pushes",
             "BEFORE DELETE ON catalog_operations",
         ] {
             edit(f, &format!("CREATE TRIGGER policy_refusal_fault {trigger} BEGIN SELECT RAISE(ABORT,'policy refusal late fault'); END;")).await?;
@@ -266,7 +266,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 1
             );
             assert_eq!(
-                db.query_row("SELECT count(*) FROM pushes", [], |r| r.get::<_, u64>(0))?,
+                db.query_row(
+                    "SELECT count(*) FROM pushes WHERE response_root IS NOT NULL",
+                    [],
+                    |r| r.get::<_, u64>(0)
+                )?,
                 u64::from(!(loss == Loss::Expiry && fault == 1))
             );
             Ok(Vec::new())

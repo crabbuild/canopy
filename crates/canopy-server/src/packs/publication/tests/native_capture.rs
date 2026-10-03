@@ -410,6 +410,21 @@ async fn native_receive_restart_discovery_owns_original_commands_and_automatic_u
     Ok(())
 }
 
+#[tokio::test]
+async fn native_receive_terminal_retention_releases_only_closed_pins_and_recovers_original_receipts()
+-> Result {
+    for fault in [1, 2, 3] {
+        native_receive(false, CompletionMode::TerminalRetention { fault }).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_receive_automatic_terminal_retirement_preserves_original_release_after_pin_loss()
+-> Result {
+    native_receive(false, CompletionMode::TerminalRetention { fault: 4 }).await
+}
+
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -419,16 +434,14 @@ async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
-        CompletionMode::Durable { .. } | CompletionMode::Discovery { .. } => {
-            Some(super::root_outcome::Kind::Empty)
-        }
+        CompletionMode::Durable { .. }
+        | CompletionMode::Discovery { .. }
+        | CompletionMode::TerminalRetention { .. } => Some(super::root_outcome::Kind::Empty),
         _ => None,
     };
     let fixture = Fixture::new(format).await?;
-    let store = Arc::new(ArtifactStore::new(
-        Arc::new(InMemory::new()),
-        fixture.repository,
-    ));
+    let provider = Arc::new(InMemory::new());
+    let store = Arc::new(ArtifactStore::new(provider.clone(), fixture.repository));
     if rooted {
         let (base, _, _) = opened(&fixture, [159; 16], store.clone()).await?;
         let root = tempfile::TempDir::new()?;
@@ -741,7 +754,9 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     cleaned(work_root.path(), &disk).await?;
     if matches!(
         mode,
-        CompletionMode::Discovery { .. } | CompletionMode::Durable { .. }
+        CompletionMode::Discovery { .. }
+            | CompletionMode::Durable { .. }
+            | CompletionMode::TerminalRetention { .. }
     ) {
         ticket.seal()?;
         assert!(matches!(
@@ -759,6 +774,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
                 request: recovered,
             },
             mode,
+            provider,
         )
         .await?;
         cleaned(work_root.path(), &disk).await?;

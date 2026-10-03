@@ -95,6 +95,15 @@ pub(super) struct ResultRecord {
     signed: Option<SignedPushAnnotation<ArtifactDescriptor>>,
 }
 impl ResultRecord {
+    /// Closed audit retains plan and signed bytes, plus the selected response
+    /// separately. It never makes the original wire request a permanent root.
+    pub(super) fn audit_bodies(&self) -> Vec<(ArtifactKey, ArtifactDescriptor)> {
+        self.plan
+            .into_iter()
+            .chain(self.signed.iter().map(|value| value.body))
+            .map(|body| (body_key(self.operation, body), body))
+            .collect()
+    }
     pub(super) fn has_plan(&self) -> bool {
         self.plan.is_some()
     }

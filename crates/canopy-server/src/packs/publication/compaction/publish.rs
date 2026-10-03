@@ -127,8 +127,8 @@ impl Command for PublishCatalogCompaction {
             )));
         }
         if !rows(&context.sql(&statement(
-            "SELECT id FROM pushes WHERE id=?1",
-            vec![blob(data.token.operation)],
+            "SELECT id FROM pushes WHERE id=?1 AND NOT(actor=?2 AND request_digest=?3 AND initial_staging IS NOT NULL AND response_id IS NULL AND response_root IS NULL AND publication IS NULL)",
+            vec![blob(data.token.operation), SqlValue::Text(data.actor.clone()), blob(data.token.request_digest)],
         ))?)?
         .is_empty()
         {

@@ -89,16 +89,19 @@ pub(super) async fn leaves_live_owner(
     store: &ArtifactStore,
     queue: &PublicationCoordinator,
 ) -> Result {
-    let service = RecoverySupervisor::start(
+    let service = RecoverySupervisor::start_retiring(
         f.client(),
         f.target.clone(),
         store.clone(),
         queue.clone(),
         scan_limits(1),
+        super::terminal_retention::maintenance(&f.handle, f.repository).await?,
     )?;
     let stats = scanned(&service, |stats| stats.deferred > 0).await?;
     assert_eq!(stats.submitted, 0);
     assert_eq!(stats.recovered, 0);
+    assert_eq!(stats.release_submitted, 0);
+    assert_eq!(stats.release_recovered, 0);
     assert_eq!(queue.stats().await.uncertain, 1);
     assert_eq!(queue.stats().await.command_bytes, 544 << 10);
     service.shutdown().await?;
@@ -294,8 +297,12 @@ pub(super) async fn advanced_head(
 pub(super) fn qualify_native<'a>(
     context: Context<'a>,
     mode: super::root_completion::CompletionMode,
+    provider: Arc<InMemory>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result> + 'a>> {
     match mode {
+        super::root_completion::CompletionMode::TerminalRetention { fault } => {
+            Box::pin(super::terminal_retention::qualify(context, fault, provider))
+        }
         super::root_completion::CompletionMode::Discovery { fault } => {
             Box::pin(qualify(context, fault))
         }

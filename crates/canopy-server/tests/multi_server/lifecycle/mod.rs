@@ -17,6 +17,9 @@ use std::{
 };
 use tokio::{sync::Notify, time::timeout};
 
+#[cfg(target_os = "linux")]
+mod fork;
+
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 type StoreStream<T> = Pin<Box<dyn Stream<Item = object_store::Result<T>> + Send + 'static>>;
 
@@ -204,6 +207,16 @@ async fn wait_for_cleanup(data: &Path) -> Result {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelled_prebound_startup_keeps_listener_and_workspace_until_cleanup() -> Result {
+    cancelled_prebound_startup(false).await
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_prebound_startup_releases_listener_inherited_by_unrelated_fork() -> Result {
+    cancelled_prebound_startup(true).await
+}
+
+async fn cancelled_prebound_startup(hold_inherited_listener: bool) -> Result {
     let files = tempfile::TempDir::new()?;
     let data = files.path().join("node");
     let store = Arc::new(PausedStore::default());
@@ -216,6 +229,12 @@ async fn cancelled_prebound_startup_keeps_listener_and_workspace_until_cleanup()
         listener,
     ));
     store.wait().await?;
+    #[cfg(target_os = "linux")]
+    let child = hold_inherited_listener
+        .then(fork::PausedChild::new)
+        .transpose()?;
+    #[cfg(not(target_os = "linux"))]
+    assert!(!hold_inherited_listener);
     start.abort();
     assert!(start.await.is_err_and(|error| error.is_cancelled()));
     assert!(matches!(
@@ -228,11 +247,21 @@ async fn cancelled_prebound_startup_keeps_listener_and_workspace_until_cleanup()
     );
     store.proceed.notify_one();
     wait_for_cleanup(&data).await?;
-    let listener = TcpListener::bind(address).await?;
+    #[cfg(target_os = "linux")]
+    if let Some(child) = &child {
+        child.assert_live();
+    }
+    let listener = TcpListener::bind(address)
+        .await
+        .map_err(|error| format!("rebind after cancelled startup cleanup: {error}"))?;
+    #[cfg(target_os = "linux")]
+    drop(child);
     let server = CanopyServer::start_with_listener(config(address, data), store, listener).await?;
     create_repository(address, "after-cancellation").await?;
     server.shutdown().await?;
-    let rebound = TcpListener::bind(address).await?;
+    let rebound = TcpListener::bind(address)
+        .await
+        .map_err(|error| format!("rebind after restarted server shutdown: {error}"))?;
     assert_eq!(rebound.local_addr()?, address);
     Ok(())
 }

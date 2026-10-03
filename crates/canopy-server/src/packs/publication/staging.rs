@@ -95,14 +95,16 @@ impl Command for BeginStaging {
         )?;
         insert_lease(context, next, None, expires)?;
         let row = Operation {
-            actor: input.actor,
+            actor: input.actor.clone(),
             token: next,
             generation: None,
             expires,
         };
         insert_operation(context, &row)?;
+        let lease = granted(&row, format, now)?;
+        super::staging_receipt::save(context, &input, lease)?;
         Ok(CommandResult::Success(StagingReply::Granted(Box::new(
-            granted(&row, format, now)?,
+            lease,
         ))))
     }
 }
@@ -235,7 +237,41 @@ impl Command for ClaimStaging {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
         let Some(row) = load(context, check.token)? else {
-            return Ok(denied(PreparationDenial::Missing));
+            if !super::staging_receipt::restart_matches(context, &check)? {
+                return Ok(denied(PreparationDenial::Missing));
+            }
+            let begin = BeginRequest {
+                repository: check.token.repository,
+                operation: check.token.operation,
+                request_digest: check.token.request_digest,
+                actor: check.actor.clone(),
+                lease_ms: input.lease_ms,
+            };
+            if !logical_available(context, &begin)? {
+                return Ok(denied(PreparationDenial::Conflict));
+            }
+            if !quota(context, true)? {
+                return Ok(denied(PreparationDenial::Capacity));
+            }
+            let now = now(context.now_ms())?;
+            let expires = expiry(now, input.lease_ms)?;
+            let next = token(
+                context,
+                begin.repository,
+                begin.operation,
+                begin.request_digest,
+            )?;
+            insert_lease(context, next, None, expires)?;
+            let row = Operation {
+                actor: check.actor,
+                token: next,
+                generation: None,
+                expires,
+            };
+            insert_operation(context, &row)?;
+            return Ok(CommandResult::Success(StagingReply::Granted(Box::new(
+                granted(&row, format, now)?,
+            ))));
         };
         if !matched(&row, &check) {
             return Ok(denied(PreparationDenial::Stale));

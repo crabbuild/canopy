@@ -153,6 +153,23 @@ pub(super) async fn counts(handle: &CellHandle) -> Result<Vec<u64>> {
         .await?;
     Ok(serde_json::from_slice(&bytes)?)
 }
+pub(super) async fn completed_pushes(handle: &CellHandle) -> Result<u64> {
+    let bytes = handle
+        .query(0, 64, |db| {
+            let count: u64 = db.query_row(
+                "SELECT count(*) FROM pushes WHERE response_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count.to_be_bytes().to_vec())
+        })
+        .await?;
+    Ok(u64::from_be_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| "invalid completed push count")?,
+    ))
+}
 async fn reject(
     fixture: &Fixture,
     input: CatalogPushCompletion,
