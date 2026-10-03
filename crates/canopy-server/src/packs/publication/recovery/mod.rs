@@ -19,12 +19,13 @@ mod ready;
 #[cfg(test)]
 mod tests;
 pub use ready::ReadyRootRecovery;
-pub(super) use ready::reservation as ready_reservation;
 mod registration;
 pub use registration::RegisterRootRecovery;
+mod phase;
+pub(in crate::packs::publication) use phase::{execute, normalize_root};
 
-const ROOT_BYTES: u32 = 4096;
-const DOMAIN: &[u8] = b"canopy.root-command-recovery.v1\0";
+const ROOT_BYTES: u32 = 8192;
+const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v2\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
@@ -57,6 +58,29 @@ pub enum RootRecoveryReply {
 pub(super) enum Kind {
     Publish,
     Outcome,
+    Policy,
+}
+impl Kind {
+    fn body_limit(self) -> u32 {
+        if self == Self::Policy {
+            REF_POLICY_PAGE_BYTES
+        } else {
+            ROOT_COMPLETION_BYTES
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    identity: MutationIdentity,
+    digest: [u8; 32],
+}
+impl Stamp {
+    fn of(evidence: &PendingMutation) -> Self {
+        Self {
+            identity: evidence.identity(),
+            digest: *evidence.operation_digest().as_bytes(),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Record {
@@ -64,25 +88,60 @@ struct Record {
     tenant: [u8; 16],
     application: [u8; 16],
     kind: Kind,
+    primary: Stamp,
+    refusal: Option<Stamp>,
+    previous: Option<StoredInputRoot>,
+    step: u64,
     root: StoredInputRoot,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Bundle {
+struct SavedCommand {
     snapshot: PreparedCommandSnapshot,
     body: ArtifactDescriptor,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Bundle {
+    kind: Kind,
+    primary: SavedCommand,
+    refusal: Option<SavedCommand>,
+}
 
+enum AttemptError<T> {
+    Invocation(InvocationError<T>),
+    Phase(Box<RootRecoveryError>),
+}
+impl<T> From<InvocationError<T>> for AttemptError<T> {
+    fn from(error: InvocationError<T>) -> Self {
+        Self::Invocation(error)
+    }
+}
+impl<T> AttemptError<T> {
+    fn publication(
+        self,
+        evidence: &PendingMutation,
+        wrap: impl FnOnce(InvocationError<T>) -> PublicationError,
+    ) -> PublicationError {
+        match self {
+            Self::Invocation(error) => wrap(error),
+            Self::Phase(source) => PublicationError::Recovery {
+                evidence: Box::new(evidence.clone()),
+                source,
+            },
+        }
+    }
+}
 /// Trusted service recovery capability, never a response/read authorization.
-/// Loading needs no current write lease. Dispatch resolves the original SDK
-/// outcome first; proven absence alone permits reacquiring live custody.
+/// Loading needs no current write lease. Dispatch observes the durable phase
+/// before SDK resolution; proven absence alone permits reacquiring live custody.
 #[derive(Clone)]
 pub struct RegisteredRootRecovery {
     record: Record,
     bundle: Bundle,
+    certificate: RootRecoveryCertificate,
 }
 impl RegisteredRootRecovery {
     pub fn evidence(&self) -> &PendingMutation {
-        self.bundle.snapshot.evidence()
+        self.bundle.primary.snapshot.evidence()
     }
     pub fn token(&self) -> PreparationToken {
         self.record.check.token
@@ -127,47 +186,169 @@ impl RegisteredRootRecovery {
             return Err(RootRecoveryError::Context);
         }
         let bundle = record.root.read::<Bundle>(store, ROOT_BYTES).await?;
-        if bundle.snapshot.evidence().target() != target
-            || bundle.snapshot.evidence().incarnation() != check.token.owner.incarnation
+        if bundle.kind != record.kind
+            || Stamp::of(bundle.primary.snapshot.evidence()) != record.primary
+            || bundle
+                .refusal
+                .as_ref()
+                .map(|value| Stamp::of(value.snapshot.evidence()))
+                != record.refusal
+            || std::iter::once(&bundle.primary)
+                .chain(bundle.refusal.iter())
+                .any(|value| {
+                    value.snapshot.evidence().target() != target
+                        || value.snapshot.evidence().incarnation() != check.token.owner.incarnation
+                })
         {
             return Err(RootRecoveryError::Context);
         }
-        Ok(Some(Self { record, bundle }))
+        Ok(Some(Self {
+            record,
+            bundle,
+            certificate,
+        }))
     }
     pub(in crate::packs::publication) async fn dispatch(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
-    ) -> Result<Committed<RootCompletionReply>, InvocationError<RootCompletionReply>> {
-        match self.record.kind {
+    ) -> Result<Committed<RootCompletionReply>, PublicationError> {
+        let result = match self.record.kind {
             Kind::Publish => {
-                self.dispatch_command::<CompleteRootPush>(client, store)
+                self.dispatch_command::<CompleteRootPush>(client, store, false)
                     .await
             }
             Kind::Outcome => {
-                self.dispatch_command::<CompleteRootOutcome>(client, store)
+                self.dispatch_command::<CompleteRootOutcome>(client, store, false)
                     .await
             }
+            Kind::Policy => Err(AttemptError::Invocation(InvocationError::NotStarted(
+                Error::Command("policy recovery requires phase dispatch"),
+            ))),
+        };
+        match result {
+            Ok(value) => phase::normalize_root(Ok(value)).map_err(PublicationError::RootPush),
+            Err(error) => Err(error.publication(self.evidence(), PublicationError::RootPush)),
         }
     }
-    async fn dispatch_command<C: Command<Output = RootCompletionReply>>(
+    pub(super) async fn dispatch_any(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
-    ) -> Result<Committed<RootCompletionReply>, InvocationError<RootCompletionReply>> {
-        if let Some(known) = super::exact::known::<C>(client, self.evidence(), 512).await? {
+        refusing: &std::sync::atomic::AtomicBool,
+    ) -> Result<PublicationOutcome, PublicationError> {
+        if self.record.kind != Kind::Policy {
+            return self
+                .dispatch(client, store)
+                .await
+                .map(PublicationOutcome::RootPush);
+        }
+        let result = self
+            .dispatch_command::<RegisterRefPolicyPage>(client, store, false)
+            .await;
+        let refused = match &result {
+            Ok(value) => {
+                matches!(value.output, RefPolicyReply::Denied(_))
+                    || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
+            }
+            Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
+            _ => false,
+        };
+        if refused {
+            let journal = self
+                .current_journal(client, Some(store))
+                .await
+                .map_err(|source| PublicationError::Recovery {
+                    evidence: Box::new(self.evidence().clone()),
+                    source: Box::new(source),
+                })?;
+            if !journal
+                .refused(&self.record)
+                .map_err(|source| PublicationError::Recovery {
+                    evidence: Box::new(self.evidence().clone()),
+                    source: Box::new(RootRecoveryError::Codec(source)),
+                })?
+            {
+                return Err(PublicationError::PolicyPage(InvocationError::Pending(
+                    Box::new(self.evidence().clone()),
+                )));
+            }
+            refusing.store(true, std::sync::atomic::Ordering::Release);
+            let evidence = self
+                .bundle
+                .refusal
+                .as_ref()
+                .ok_or_else(|| PublicationError::Recovery {
+                    evidence: Box::new(self.evidence().clone()),
+                    source: Box::new(RootRecoveryError::Context),
+                })?
+                .snapshot
+                .evidence();
+            return match self
+                .dispatch_command::<CompleteRootOutcome>(client, store, true)
+                .await
+            {
+                Ok(value) => phase::normalize_root(Ok(value))
+                    .map(PublicationOutcome::RootPush)
+                    .map_err(PublicationError::RootPush),
+                Err(error) => Err(error.publication(evidence, PublicationError::RootPush)),
+            };
+        }
+        result
+            .map(PublicationOutcome::PolicyPage)
+            .map_err(|error| error.publication(self.evidence(), PublicationError::PolicyPage))
+    }
+    async fn known<C: Command>(
+        &self,
+        client: &CellClient,
+        store: &ArtifactStore,
+        refusal: bool,
+    ) -> Result<Option<Committed<C::Output>>, AttemptError<C::Output>> {
+        let journal = self
+            .current_journal(client, Some(store))
+            .await
+            .map_err(|error| AttemptError::Phase(Box::new(error)))?;
+        let saved = self.saved(refusal).map_err(|error| {
+            InvocationError::NotStarted(Error::Facility {
+                name: "frozen publication command",
+                source: Box::new(error),
+            })
+        })?;
+        if let Some(recorded) = if refusal {
+            journal.refusal
+        } else {
+            journal.primary
+        } {
+            return recorded
+                .committed(saved.snapshot.evidence())
+                .map(Some)
+                .map_err(|source| AttemptError::Phase(Box::new(RootRecoveryError::Codec(source))));
+        }
+        super::exact::known::<C>(client, saved.snapshot.evidence(), 512)
+            .await
+            .map_err(AttemptError::Invocation)
+    }
+    async fn dispatch_command<C: Command>(
+        &self,
+        client: &CellClient,
+        store: &ArtifactStore,
+        refusal: bool,
+    ) -> Result<Committed<C::Output>, AttemptError<C::Output>> {
+        if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);
         }
-        let command = match self.restore::<C>(client, store).await {
+        let command = match self.restore::<C>(client, store, refusal).await {
             Ok(command) => command,
             Err(error) => {
-                if let Some(known) = super::exact::known::<C>(client, self.evidence(), 512).await? {
+                if let Some(known) = self.known::<C>(client, store, refusal).await? {
                     return Ok(known);
                 }
-                return Err(InvocationError::NotStarted(Error::Facility {
-                    name: "root command restore",
-                    source: Box::new(error),
-                }));
+                return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                    Error::Facility {
+                        name: "publication command restore",
+                        source: Box::new(error),
+                    },
+                )));
             }
         };
         let session = match PreparationSession::open(
@@ -180,49 +361,68 @@ impl RegisteredRootRecovery {
         {
             Ok(session) => session,
             Err(error) => {
-                // The original can finish while body I/O or the custody query
-                // is in flight. A missing operation must not hide that receipt.
-                if let Some(known) = super::exact::known::<C>(client, self.evidence(), 512).await? {
+                if let Some(known) = self.known::<C>(client, store, refusal).await? {
                     return Ok(known);
                 }
-                return Err(InvocationError::NotStarted(Error::Facility {
-                    name: "root recovery custody",
-                    source: Box::new(error),
-                }));
+                return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                    Error::Facility {
+                        name: "publication recovery custody",
+                        source: Box::new(error),
+                    },
+                )));
             }
         };
-        // Resolve again after artifact I/O and the fresh custody query. A racing
-        // completion still returns its original receipt before the local guard.
-        super::exact::resolve(client, command, 512, move || {
-            session
-                .live_lease()
-                .map(|_| ())
-                .map_err(|_| Error::Command("inactive durable root preparation"))
-        })
-        .await
+        // A command can settle while body I/O or custody acquisition is in flight.
+        if let Some(known) = self.known::<C>(client, store, refusal).await? {
+            return Ok(known);
+        }
+        session.live_lease().map_err(|error| {
+            InvocationError::NotStarted(Error::Facility {
+                name: "publication recovery guard",
+                source: Box::new(error),
+            })
+        })?;
+        Box::pin(command.execute())
+            .await
+            .map_err(AttemptError::Invocation)
+    }
+    fn saved(&self, refusal: bool) -> Result<&SavedCommand, RootRecoveryError> {
+        if refusal {
+            self.bundle
+                .refusal
+                .as_ref()
+                .ok_or(RootRecoveryError::Context)
+        } else {
+            Ok(&self.bundle.primary)
+        }
     }
     async fn restore<C: Command>(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        refusal: bool,
     ) -> Result<PreparedCommand<C>, RootRecoveryError> {
         target_matches(self.evidence().target(), store, &self.record.check)?;
-        // This bound is checked before opening or allocating the body. The
-        // snapshot's broader global wire ceiling cannot widen a root command.
-        if self.bundle.body.size == 0 || self.bundle.body.size > u64::from(ROOT_COMPLETION_BYTES) {
+        let saved = self.saved(refusal)?;
+        let limit = if refusal {
+            ROOT_COMPLETION_BYTES
+        } else {
+            self.record.kind.body_limit()
+        };
+        if saved.body.size == 0 || saved.body.size > u64::from(limit) {
             return Err(RootRecoveryError::Context);
         }
         let key = ArtifactKey {
             operation: self.token().artifact_operation,
-            binding_digest: self.bundle.body.digest,
+            binding_digest: saved.body.digest,
             kind: ArtifactKind::InputBody,
         };
-        let mut reader = store.read(key, self.bundle.body).await?;
-        let mut bytes = Vec::with_capacity(self.bundle.body.size as usize);
+        let mut reader = store.read(key, saved.body).await?;
+        let mut bytes = Vec::with_capacity(saved.body.size as usize);
         while let Some(part) = reader.next().await? {
             bytes.extend_from_slice(&part);
         }
-        Ok(client.restore_command::<C>(self.bundle.snapshot.clone(), bytes)?)
+        Ok(client.restore_command::<C>(saved.snapshot.clone(), bytes)?)
     }
 }
 fn target_matches(
@@ -250,13 +450,30 @@ pub(super) async fn persist<C: Command>(
     identity: MutationIdentity,
     fault: u8,
 ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+    persist_full(session, command, kind, None, None, store, identity, fault).await
+}
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one registration binds primary, refusal and settled predecessor"
+)]
+pub(super) async fn persist_full<C: Command>(
+    session: &PreparationSession,
+    command: &PreparedCommand<C>,
+    kind: Kind,
+    refusal: Option<&PreparedCommand<CompleteRootOutcome>>,
+    previous: Option<&RegisteredRootRecovery>,
+    store: &ArtifactStore,
+    identity: MutationIdentity,
+    fault: u8,
+) -> Result<RegisteredRootRecovery, RootRecoveryError> {
     let (client, target, check) = session.capability();
     target_matches(target, store, check)?;
     session.live_lease()?;
     if command.evidence().target() != target
         || command.evidence().incarnation() != check.token.owner.incarnation
         || command.input_bytes().is_empty()
-        || command.input_bytes().len() > ROOT_COMPLETION_BYTES as usize
+        || command.input_bytes().len() > kind.body_limit() as usize
+        || (kind == Kind::Policy) != refusal.is_some()
     {
         return Err(RootRecoveryError::Context);
     }
@@ -277,9 +494,63 @@ pub(super) async fn persist<C: Command>(
             &mut bytes,
         )
         .await?;
-    let bundle = Bundle {
+    let primary = SavedCommand {
         snapshot: command.snapshot(),
         body,
+    };
+    let refusal = if let Some(command) = refusal {
+        if command.evidence().target() != target
+            || command.evidence().incarnation() != check.token.owner.incarnation
+            || command.input_bytes().is_empty()
+            || command.input_bytes().len() > ROOT_COMPLETION_BYTES as usize
+        {
+            return Err(RootRecoveryError::Context);
+        }
+        let mut bytes = command.input_bytes();
+        let digest = *blake3::hash(bytes).as_bytes();
+        let body = store
+            .put(
+                ArtifactKey {
+                    operation: check.token.artifact_operation,
+                    binding_digest: digest,
+                    kind: ArtifactKind::InputBody,
+                },
+                bytes.len() as u64,
+                digest,
+                &mut bytes,
+            )
+            .await?;
+        Some(SavedCommand {
+            snapshot: command.snapshot(),
+            body,
+        })
+    } else {
+        None
+    };
+    let bundle = Bundle {
+        kind,
+        primary,
+        refusal,
+    };
+    let previous_step = if let Some(value) = previous {
+        Some(
+            value
+                .record
+                .step
+                .checked_add(1)
+                .filter(|step| *step <= 65_535)
+                .ok_or(RootRecoveryError::Context)?,
+        )
+    } else {
+        None
+    };
+    let previous = if let Some(previous) = previous {
+        if previous.record.check != *check {
+            return Err(RootRecoveryError::Context);
+        }
+        Some(previous.settled_frame(client, store).await?)
+    } else {
+        None
     };
     let root =
         StoredInputRoot::upload(store, check.token.artifact_operation, &bundle, ROOT_BYTES).await?;
@@ -288,6 +559,16 @@ pub(super) async fn persist<C: Command>(
         tenant: *target.tenant().as_bytes(),
         application: *target.application().as_bytes(),
         kind,
+        primary: Stamp::of(command.evidence()),
+        refusal: bundle
+            .refusal
+            .as_ref()
+            .map(|value| Stamp::of(value.snapshot.evidence())),
+        previous,
+        step: match previous {
+            None => 0,
+            Some(_) => previous_step.ok_or(RootRecoveryError::Context)?,
+        },
         root,
     };
     let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;

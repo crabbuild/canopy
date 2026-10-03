@@ -17,6 +17,25 @@ impl Command for CompleteRootPush {
         context: &mut CommandContext<'_, '_>,
         input: Self::Input,
     ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
+        let data = input.proof.certificate.data()?;
+        let check = LeaseCheck {
+            token: data.token,
+            actor: data.actor,
+        };
+        super::super::recovery::execute(
+            context,
+            &check,
+            super::super::recovery::Kind::Publish,
+            RootCompletionReply::Denied,
+            |context| Self::domain(context, input),
+        )
+    }
+}
+impl CompleteRootPush {
+    fn domain(
+        context: &mut CommandContext<'_, '_>,
+        input: RootPushCompletion,
+    ) -> cellule_runtime::Result<CommandResult<RootCompletionReply>> {
         input.shape()?;
         let binding = input.outcomes.binding()?;
         let Some((data, key)) = authenticate(

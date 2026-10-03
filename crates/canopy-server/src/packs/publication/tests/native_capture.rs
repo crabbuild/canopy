@@ -216,6 +216,16 @@ async fn native_receive_policy_refusal_shares_one_frozen_command_across_successf
     .await
 }
 #[tokio::test]
+async fn native_receive_durable_policy_preserves_page_history_and_original_receipts_after_expiry()
+-> Result {
+    native_receive(true, CompletionMode::DurablePolicy { refusal: false }).await
+}
+#[tokio::test]
+async fn native_receive_durable_policy_refusal_recovers_recorded_results_after_owner_loss() -> Result
+{
+    native_receive(true, CompletionMode::DurablePolicy { refusal: true }).await
+}
+#[tokio::test]
 async fn native_receive_policy_refusal_reuses_exact_command_after_completed_pages_and_revocation()
 -> Result {
     for loss in [
@@ -722,6 +732,25 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         builder.add_segment(segment).await?;
         builder.finish_pack().await?;
         let prepared = builder.finish().await?;
+        if let CompletionMode::DurablePolicy { refusal } = mode {
+            Box::pin(super::durable_policy::qualify(
+                super::root_dispatch::Context {
+                    fixture: &fixture,
+                    prepared: Arc::new(prepared),
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: physical_root.path(),
+                    budget: physical_disk.clone(),
+                    request: recovered,
+                },
+                refusal,
+            ))
+            .await?;
+            cleaned(work_root.path(), &disk).await?;
+            cleaned(physical_root.path(), &physical_disk).await?;
+            return Ok(());
+        }
         if let CompletionMode::DurablePublish { fault } = mode {
             Box::pin(super::durable_recovery::qualify_publish(
                 super::root_dispatch::Context {
