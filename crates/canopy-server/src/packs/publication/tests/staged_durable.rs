@@ -196,6 +196,10 @@ pub(super) async fn qualify(
             intent = weak_intent
                 .upgrade()
                 .ok_or("original policy intent released while unknown")?;
+            Box::pin(super::recovery_discovery::leaves_live_owner(
+                f, store, &queue,
+            ))
+            .await?;
             // Recovery owns the same fence/clock and original policy intent.
             staging.recover(ticket)?;
             let resumed = settled(ticket).await?;

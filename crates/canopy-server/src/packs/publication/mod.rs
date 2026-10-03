@@ -74,8 +74,9 @@ pub use compaction::{
 mod exact;
 mod recovery;
 pub use recovery::{
-    ReadyRootRecovery, RegisterRootRecovery, RegisteredRootRecovery, RootRecoveryCertificate,
-    RootRecoveryError, RootRecoveryReply,
+    ReadyRootRecovery, RecoveryScanLimits, RecoveryScanStats, RecoverySupervisor,
+    RegisterRootRecovery, RegisteredRootRecovery, RootRecoveryCertificate, RootRecoveryError,
+    RootRecoveryReply,
 };
 mod staging_service;
 pub use staging_service::{
