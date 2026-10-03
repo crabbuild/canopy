@@ -38,6 +38,19 @@ impl ReadyRootRecovery {
             refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
+    pub(in crate::packs::publication) fn matches_registered(
+        &self,
+        registered: &RegisteredRootRecovery,
+    ) -> bool {
+        // Advancing the durable head cannot replace the original queued
+        // command. A later head for this exact attempt merely wakes its cold
+        // owner; dispatch authenticates the original predecessor journal.
+        self.recovery.record.check == registered.record.check
+            && self.recovery.record.tenant == registered.record.tenant
+            && self.recovery.record.application == registered.record.application
+            && (self.recovery.certificate == registered.certificate
+                || self.recovery.record.step < registered.record.step)
+    }
     pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
         self.recovery.record.kind == Kind::Policy
     }

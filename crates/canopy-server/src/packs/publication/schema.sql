@@ -407,6 +407,9 @@ CREATE TABLE catalog_leases (
     CHECK(generation IS NOT NULL OR attestation IS NULL),
     PRIMARY KEY(incarnation, admission_sequence)
 ) WITHOUT ROWID;
+-- Restart discovery seeks only retained command pins, independent of expiry.
+CREATE INDEX catalog_leases_recovery_scan ON catalog_leases(incarnation, admission_sequence)
+WHERE recovery IS NOT NULL;
 CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnation, admission_sequence);
 CREATE INDEX catalog_leases_by_generation ON catalog_leases(generation, expires_at_ms);
 CREATE TRIGGER catalog_generations_retained BEFORE DELETE ON catalog_generations

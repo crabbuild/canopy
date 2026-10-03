@@ -35,6 +35,9 @@ pub(super) enum CompletionMode {
     DurablePublish {
         fault: u8,
     },
+    Discovery {
+        fault: u8,
+    },
     Durable {
         fault: u8,
         revoked: bool,

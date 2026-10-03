@@ -16,6 +16,8 @@ use cellule_runtime::{
 };
 mod codec;
 mod ready;
+mod supervisor;
+pub use supervisor::{RecoveryScanLimits, RecoveryScanStats, RecoverySupervisor};
 #[cfg(test)]
 mod tests;
 pub use ready::ReadyRootRecovery;
@@ -29,6 +31,8 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v2\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("invalid restart recovery scan limits")]
+    InvalidScanLimits,
     #[error("root command recovery encoding failed")]
     Codec(#[from] CodecError),
     #[error("root command recovery artifact failed")]
@@ -176,14 +180,44 @@ impl RegisteredRootRecovery {
         check: &LeaseCheck,
     ) -> Result<Option<Self>, RootRecoveryError> {
         target_matches(target, store, check)?;
+        Self::load_pin(
+            client,
+            target,
+            store,
+            check.token.owner.incarnation,
+            check.token.attempt,
+            Some(check),
+        )
+        .await
+    }
+    async fn load_pin(
+        client: &CellClient,
+        target: &CellTarget,
+        store: &ArtifactStore,
+        incarnation: IncarnationId,
+        attempt: u64,
+        expected: Option<&LeaseCheck>,
+    ) -> Result<Option<Self>, RootRecoveryError> {
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
         let result = sql.query(None, SqlBatch { statements: vec![
-            SqlStatement { sql: "SELECT recovery FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND operation=?3 AND owner_epoch=?4 AND artifact_operation=?5".into(), parameters: vec![blob(check.token.owner.incarnation.as_bytes()), number(check.token.attempt)?, blob(check.token.operation), blob(check.token.owner.epoch.to_be_bytes()), blob(check.token.artifact_operation)] },
-            SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1".into(), parameters: vec![blob(check.token.repository)] },
+            SqlStatement { sql: "SELECT recovery,operation,owner_epoch,artifact_operation FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2".into(), parameters: vec![blob(incarnation.as_bytes()), number(attempt)?] },
+            SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1".into(), parameters: vec![blob(store.repository())] },
         ] }).await.map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
-        let Some([value]) = rows(&result.output)?.first().map(Vec::as_slice) else {
+        let Some([value, operation, epoch, artifact_operation]) =
+            rows(&result.output)?.first().map(Vec::as_slice)
+        else {
             return Ok(None);
         };
+        let operation = fixed::<16>(operation)?;
+        let epoch = u64::from_be_bytes(fixed::<8>(epoch)?);
+        let artifact_operation = fixed::<16>(artifact_operation)?;
+        if expected.is_some_and(|check| {
+            check.token.operation != operation
+                || check.token.owner.epoch != epoch
+                || check.token.artifact_operation != artifact_operation
+        }) {
+            return Ok(None);
+        }
         let SqlValue::Blob(bytes) = value else {
             if *value == SqlValue::Null {
                 return Ok(None);
@@ -199,12 +233,18 @@ impl RegisteredRootRecovery {
             return Err(RootRecoveryError::Context);
         }
         let record = certificate.0.data::<Record>()?;
-        if record.check != *check
+        if expected.is_some_and(|check| record.check != *check)
+            || record.check.token.owner.incarnation != incarnation
+            || record.check.token.attempt != attempt
+            || record.check.token.operation != operation
+            || record.check.token.owner.epoch != epoch
+            || record.check.token.artifact_operation != artifact_operation
             || record.tenant != *target.tenant().as_bytes()
             || record.application != *target.application().as_bytes()
         {
             return Err(RootRecoveryError::Context);
         }
+        target_matches(target, store, &record.check)?;
         let bundle = record.root.read::<Bundle>(store, ROOT_BYTES).await?;
         if bundle.kind != record.kind
             || Stamp::of(bundle.primary.snapshot.evidence()) != record.primary
@@ -217,7 +257,7 @@ impl RegisteredRootRecovery {
                 .chain(bundle.refusal.iter())
                 .any(|value| {
                     value.snapshot.evidence().target() != target
-                        || value.snapshot.evidence().incarnation() != check.token.owner.incarnation
+                        || value.snapshot.evidence().incarnation() != incarnation
                 })
         {
             return Err(RootRecoveryError::Context);

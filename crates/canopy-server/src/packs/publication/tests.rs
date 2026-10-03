@@ -15,6 +15,7 @@ mod policy_refusal;
 mod prepare;
 mod publishing;
 mod reconcile;
+mod recovery_discovery;
 mod ref_policy;
 mod ref_snapshot;
 mod refs;

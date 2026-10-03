@@ -306,7 +306,7 @@ async fn qualify_ready(
     runtime.shutdown().await?;
     Ok(())
 }
-async fn read_response(
+pub(super) async fn read_response(
     mut value: GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>,
 ) -> Result<GitHttpResponse> {
     let mut body = Vec::new();
