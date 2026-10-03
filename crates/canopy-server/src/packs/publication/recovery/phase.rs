@@ -6,13 +6,17 @@ const PHASE_DOMAIN: &[u8] = b"canopy.publication-phase.v1\0";
 const FRAME_DOMAIN: &[u8] = b"canopy.settled-publication-frame.v1\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Recorded {
+pub(in crate::packs::publication) struct Recorded {
     sequence: u64,
     rejected: bool,
     result: Vec<u8>,
 }
 impl Recorded {
-    pub(super) fn new(sequence: u64, rejected: bool, result: Vec<u8>) -> Result<Self, CodecError> {
+    pub(in crate::packs::publication) fn new(
+        sequence: u64,
+        rejected: bool,
+        result: Vec<u8>,
+    ) -> Result<Self, CodecError> {
         let value = Self {
             sequence,
             rejected,
@@ -21,16 +25,21 @@ impl Recorded {
         value.encode(&mut BoundedEncoder::new(1024)?)?;
         Ok(value)
     }
-    pub(super) fn rejected(&self) -> bool {
+    pub(in crate::packs::publication) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub(in crate::packs::publication) fn rejected(&self) -> bool {
         self.rejected
     }
-    pub(super) fn decode_reply<T: WireValue>(&self) -> Result<T, CodecError> {
+    pub(in crate::packs::publication) fn decode_reply<T: WireValue>(
+        &self,
+    ) -> Result<T, CodecError> {
         let mut d = BoundedDecoder::new(&self.result, 512)?;
         let result = T::decode(&mut d)?;
         d.finish()?;
         Ok(result)
     }
-    pub(super) fn committed<T: WireValue>(
+    pub(in crate::packs::publication) fn committed<T: WireValue>(
         &self,
         evidence: &PendingMutation,
     ) -> Result<Committed<T>, CodecError> {

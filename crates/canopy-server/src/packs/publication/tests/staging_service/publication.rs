@@ -360,7 +360,10 @@ async fn bound_final_ceiling_discards_held_proof_and_drops_result_before_worker_
     assert!(dropped.load(Ordering::Acquire));
     assert!(!wrong.load(Ordering::Acquire));
     assert!(session.live_lease().is_err());
-    assert_eq!(super::super::completion::counts(&f.handle).await?[0], 0);
+    assert_eq!(
+        super::super::completion::completed_pushes(&f.handle).await?,
+        0
+    );
     assert_eq!(p.reservations_for_test().await, (0, 0, 0));
     assert!(c.close_and_drain().await.is_empty());
     assert!(p.close_and_drain().await.is_empty());
@@ -465,7 +468,10 @@ async fn bound_final_queued_transport_rechecks_ceiling_before_initial_execution(
         if matches!(error.as_ref(), PublicationError::Push(InvocationError::NotStarted(_))))
     );
     assert!(observer.response().await.is_err());
-    assert_eq!(super::super::completion::counts(&f.handle).await?[0], 0);
+    assert_eq!(
+        super::super::completion::completed_pushes(&f.handle).await?,
+        0
+    );
     assert_eq!(p.reservations_for_test().await, (0, 0, 0));
     assert!(session.live_lease().is_err());
     assert!(c.close_and_drain().await.is_empty());

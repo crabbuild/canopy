@@ -28,7 +28,7 @@ mod tests;
 pub use ready::ReadyRootRecovery;
 mod registration;
 pub use registration::RegisterRootRecovery;
-mod phase;
+pub(in crate::packs::publication) mod phase;
 pub(in crate::packs::publication) use phase::{execute, normalize_root};
 
 const ROOT_BYTES: u32 = 8192;
@@ -83,12 +83,12 @@ impl Kind {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp {
+pub(in crate::packs::publication) struct Stamp {
     identity: MutationIdentity,
     digest: [u8; 32],
 }
 impl Stamp {
-    fn of(evidence: &PendingMutation) -> Self {
+    pub(in crate::packs::publication) fn of(evidence: &PendingMutation) -> Self {
         Self {
             identity: evidence.identity(),
             digest: *evidence.operation_digest().as_bytes(),

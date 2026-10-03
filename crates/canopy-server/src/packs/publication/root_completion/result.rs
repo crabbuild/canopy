@@ -83,6 +83,12 @@ impl PreparedResult {
             operation: check.token.operation,
         })
     }
+    pub(super) fn pending(mut self, pending: bool) -> Self {
+        if pending {
+            self.saved.statements[0].sql = "UPDATE pushes SET response_id=?4,completion_digest=?5,rejected=?6,rejection_reason=?7,publication=?8,publication_plan_digest=?9,response_root=?10 WHERE id=?1 AND actor=?2 AND request_digest=?3 AND response_id IS NULL AND response_root IS NULL AND publication IS NULL".into();
+        }
+        self
+    }
     /// Every authority/capacity/encoding check must precede this call. A late
     /// SQL error aborts the entire caller's transaction; no denial follows writes.
     pub(super) fn save(

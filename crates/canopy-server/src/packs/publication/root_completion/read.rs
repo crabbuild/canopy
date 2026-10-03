@@ -55,6 +55,27 @@ pub(in crate::packs::publication) fn saved(
     RootCompletionReply::Completed(Box::new(value)).encode(&mut BoundedEncoder::new(512)?)?;
     Ok(Some(value))
 }
+pub(super) fn pending(
+    sets: &[SqlResultSet],
+    actor: &str,
+    digest: [u8; 32],
+) -> cellule_runtime::Result<bool> {
+    let Some(
+        [
+            SqlValue::Text(original),
+            request,
+            SqlValue::Null,
+            SqlValue::Null,
+            SqlValue::Null,
+            SqlValue::Null,
+            SqlValue::Null,
+        ],
+    ) = rows(sets)?.first().map(Vec::as_slice)
+    else {
+        return Ok(false);
+    };
+    Ok(original == actor && fixed::<32>(request)? == digest)
+}
 pub struct CheckCompletedRootPush;
 impl Query for CheckCompletedRootPush {
     const MODULE: &'static str = RepositoryModule::NAME;
@@ -82,7 +103,7 @@ impl Query for CheckCompletedRootPush {
             )));
         }
         let sets = context.sql(&statement(SAVED, vec![blob(input.operation)]))?;
-        if rows(&sets)?.is_empty() {
+        if rows(&sets)?.is_empty() || pending(&sets, &input.actor, input.request_digest)? {
             return Ok(None);
         }
         Ok(Some(

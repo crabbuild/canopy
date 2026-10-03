@@ -24,6 +24,7 @@ mod root_dispatch;
 mod root_outcome;
 mod staged_durable;
 mod staging;
+mod staging_receipt;
 mod staging_service;
 mod terminal_retention;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};

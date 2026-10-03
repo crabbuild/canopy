@@ -148,7 +148,7 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
         );
         assert_eq!(state(&f.handle).await?, before);
         for trigger in [
-            "BEFORE INSERT ON pushes",
+            "BEFORE UPDATE OF response_root ON pushes",
             "BEFORE DELETE ON catalog_operations",
         ] {
             edit(f, &format!("CREATE TRIGGER root_outcome_fault {trigger} BEGIN SELECT RAISE(ABORT,'root outcome late fault'); END;")).await?;

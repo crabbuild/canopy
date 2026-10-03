@@ -205,7 +205,8 @@ impl CompleteRootOutcome {
         // Logical replay is independent of fresh ownership, write permission,
         // input-pin expiry and moving roots, but must match its exact binding.
         let saved = context.sql(&statement(read::SAVED, vec![blob(token.operation)]))?;
-        if !rows(&saved)?.is_empty() {
+        let pending = read::pending(&saved, &data.check.actor, token.request_digest)?;
+        if !rows(&saved)?.is_empty() && !pending {
             let Some(value) = read::saved(&saved, &data.check.actor, token.request_digest)? else {
                 return Ok(denied(PreparationDenial::Conflict));
             };
@@ -277,7 +278,8 @@ impl CompleteRootOutcome {
             selection,
             None,
             context.now_ms(),
-        )?;
+        )?
+        .pending(pending);
         if row.expires <= now(context.now_ms())? {
             return Ok(denied(PreparationDenial::Expired));
         }

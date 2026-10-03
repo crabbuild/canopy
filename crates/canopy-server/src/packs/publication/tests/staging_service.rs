@@ -45,6 +45,99 @@ async fn changed_lease(ticket: &StagingTicket, old: i64) -> Result<StagingLease>
 }
 
 #[tokio::test]
+async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing_uploads() -> Result
+{
+    for (format, fault) in [
+        (ObjectFormat::Sha1, 2),
+        (ObjectFormat::Sha1, 3),
+        (ObjectFormat::Sha256, 2),
+        (ObjectFormat::Sha256, 3),
+    ] {
+        let fixture = Fixture::new(format).await?;
+        let coordinator =
+            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let request = fixture.begin([219; 16]);
+        let mut mutation = identity()?;
+        mutation.expires_at_ms = mutation.issued_at_ms + 2_000;
+        let ready =
+            ReadyStaging::new(fixture.client(), fixture.target.clone(), request, mutation).await?;
+        coordinator.fault_for_test(fault);
+        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+        let StagingState::Uncertain(error) = terminal(&ticket).await? else {
+            return Err("missing lost Begin acknowledgement".into());
+        };
+        let StagingError::Begin(error) = error.as_ref() else {
+            return Err("wrong original admission role".into());
+        };
+        let InvocationError::Pending(evidence) = error.as_ref() else {
+            return Err("missing original Begin evidence".into());
+        };
+        let evidence = (**evidence).clone();
+        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert!(matches!(
+            ticket.spawn(|_| async { Ok(()) }),
+            Err(StagingError::Inactive)
+        ));
+        let cellule_runtime::Resolution::Committed(original) =
+            fixture.client().resolve(&evidence).await?
+        else {
+            return Err("lost acknowledgement did not follow an accepted Begin".into());
+        };
+        let mut decoder = BoundedDecoder::new(original.result(), 4096)?;
+        let StagingReply::Granted(lease) = StagingReply::decode(&mut decoder)? else {
+            return Err("original admission was not granted".into());
+        };
+        decoder.finish()?;
+        let receipt = cellule_runtime::Receipt {
+            cell: fixture.target.cell_id(),
+            incarnation: evidence.incarnation(),
+            commit_sequence: original.commit_sequence(),
+        };
+        let live = fixture
+            .client()
+            .query::<CheckStaging>(
+                &fixture.target,
+                Some(receipt),
+                LeaseCheck {
+                    token: lease.token,
+                    actor: "owner".into(),
+                },
+            )
+            .await?
+            .output
+            .ok_or("artifact custody expired with the SDK identity")?;
+        assert!(live.expires_at_ms > mutation.expires_at_ms);
+        let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        if now <= mutation.expires_at_ms {
+            tokio::time::sleep(Duration::from_millis(u64::try_from(
+                mutation.expires_at_ms - now + 1,
+            )?))
+            .await;
+        }
+        assert!(matches!(
+            fixture.client().resolve(&evidence).await?,
+            cellule_runtime::Resolution::Expired
+        ));
+        let saved = StagingAdmission::load(&fixture.client(), &fixture.target, [219; 16])
+            .await?
+            .ok_or("original admission missing")?;
+        assert_eq!(saved.receipt(), receipt);
+        assert_eq!(saved.lease(), *lease);
+        coordinator.recover(&ticket)?;
+        let recovered = timeout(Duration::from_secs(10), ticket.wait()).await?;
+        let counts = fixture.counts().await?;
+        coordinator.close_and_drain().await;
+        fixture.runtime.shutdown().await?;
+        assert!(
+            matches!(recovered, StagingState::Active(_)),
+            "{recovered:?}"
+        );
+        assert_eq!(counts, (1, 1));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn staged_service_canceled_observers_keep_workers_and_results_until_single_handoff() -> Result
 {
     let fixture = Fixture::new(ObjectFormat::Sha256).await?;
@@ -481,8 +574,6 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         ));
     }
     let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
-    let ticket = submit(&fixture, &coordinator, [229; 16], "owner").await?;
-    active(&ticket).await?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -490,6 +581,18 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         identity()?,
     )
     .await?;
+    let ticket = submit(&fixture, &coordinator, [229; 16], "owner").await?;
+    active(&ticket).await?;
+    assert!(matches!(
+        ReadyStaging::new(
+            fixture.client(),
+            fixture.target.clone(),
+            fixture.begin([229; 16]),
+            identity()?
+        )
+        .await,
+        Err(StagingError::Duplicate)
+    ));
     let (error, ready) = coordinator
         .submit(ready)
         .err()

@@ -96,6 +96,8 @@ pub use root_completion::{
     RootOutcomeCompletion, RootPushCompletion, RootPushOutcomes, RootPushReplayError,
     RootSignedPushFact, replay_root_push_response,
 };
+mod staging_receipt;
+pub use staging_receipt::{StagingAdmission, StagingReceiptError};
 mod staging;
 pub use inputs::{
     CheckStagedInputs, InputCheckpointError, NativeInputCertificate, RegisterStagedInputs,

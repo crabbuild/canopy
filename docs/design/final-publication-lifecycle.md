@@ -2,6 +2,8 @@
 
 StagingCoordinator now serializes final inline push, immutable root push and compaction publication after bound workers/results, due renewal and queued input registration. It uses the existing PublicationCoordinator job, private ready proof, exact SDK command, class/account fair queue and byte reservation. The staging job retains a small ticket; it does not copy the command or create another payload queue. Production handlers and durable owner-loss reconstruction still require integration.
 
+Initial staging admission now retains its first accepted original SDK receipt in the existing logical push row. Recovery reads that authenticated receipt before SDK expiry handling and separately checks current custody. Cold service callers use explicit Claim to acquire a new namespace under the executing owner, including after the original operation was reaped. Root completion updates the pending row while preserving initial knowledge. See the [initial staging receipt contract](initial-staging-receipts.md) for the exact bounds and remaining registered-attempt work.
+
 ## Admission and handoff
 
 PublicationCoordinator::try_reserve synchronously admits a Held job without dispatch. It applies the same target, logical-operation uniqueness, per-class account/operation limits and factory-derived byte reservation as submit. A contended admission lock returns Capacity with the original ready value; the consumer must retry through its bounded scheduling policy. submit still admits directly to Queued. Held jobs do not consume dispatch concurrency or advance the fair queue.
