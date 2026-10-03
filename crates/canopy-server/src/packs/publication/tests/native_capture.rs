@@ -1,3 +1,4 @@
+use super::root_completion::CompletionMode;
 use super::*;
 use super::{
     completion::packet,
@@ -23,14 +24,34 @@ use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss() -> Result {
-    native_receive(false).await
+    native_receive(false, CompletionMode::Success).await
 }
 #[tokio::test]
 async fn native_receive_prepares_bounded_immutable_root_completion_from_registered_custody()
 -> Result {
-    native_receive(true).await
+    native_receive(true, CompletionMode::Success).await
 }
-async fn native_receive(rooted: bool) -> Result {
+#[tokio::test]
+async fn native_receive_root_completion_records_policy_refusal_atomically() -> Result {
+    native_receive(true, CompletionMode::PolicyRefusal).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_records_watched_check_refusal_atomically() -> Result {
+    native_receive(true, CompletionMode::CheckRefusal).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_consumes_signed_ownership_atomically() -> Result {
+    native_receive(true, CompletionMode::SignedAccepted).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_retains_original_signed_replay_ownership() -> Result {
+    native_receive(true, CompletionMode::SignedReplay).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_records_write_revocation_without_root_changes() -> Result {
+    native_receive(true, CompletionMode::WriteRevoked).await
+}
+async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format).await?;
         let store = Arc::new(ArtifactStore::new(
@@ -348,20 +369,21 @@ async fn native_receive(rooted: bool) -> Result {
             builder.add_segment(segment).await?;
             builder.finish_pack().await?;
             let prepared = builder.finish().await?;
-            super::root_completion::qualify(
+            let replay = Box::pin(super::root_completion::qualify(
                 &fixture,
                 &prepared,
                 &store,
                 recovered,
                 physical_root.path(),
                 physical_disk.clone(),
-            )
+                mode,
+            ))
             .await
             .map_err(|error| format!("root composition: {error:?}"))?;
             drop(prepared);
             cleaned(physical_root.path(), &physical_disk).await?;
             assert!(coordinator.close_and_drain().await.is_empty());
-            fixture.runtime.shutdown().await?;
+            super::root_completion::restored(&fixture, &store, replay).await?;
             continue;
         }
         let expected = recovered.response.clone();

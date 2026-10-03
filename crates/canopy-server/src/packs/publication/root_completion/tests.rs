@@ -1,6 +1,13 @@
 use super::*;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+pub(in crate::packs::publication) fn reseal_fixture(completion: &mut RootPushCompletion) -> Result {
+    let mut data = completion.proof.certificate.data()?;
+    data.completion_digest = Some(completion.outcomes.binding()?);
+    completion.proof.certificate = CatalogCertificate::seal(&data, &[16; 32])?;
+    Ok(())
+}
+
 pub(in crate::packs::publication) async fn response(
     root: NativeOutcomeRoot,
     store: &ArtifactStore,

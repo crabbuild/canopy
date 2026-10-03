@@ -57,6 +57,24 @@ fn guard(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Guard>> {
 fn rejected(reason: PreparationDenial) -> CommandResult<RefPolicyReply> {
     CommandResult::Rejected(RefPolicyReply::Denied(reason))
 }
+/// Final command-local readiness. Advisory query replies are never authority.
+pub(in crate::packs::publication) fn current(
+    context: &CommandContext<'_, '_>,
+    data: &super::super::certificate::CertificateData,
+    intent: RefPolicyIntent,
+) -> cellule_runtime::Result<bool> {
+    let Some(row) = guard(&context.sql(&statement(GUARD, vec![blob(intent.id)]))?)? else {
+        return Ok(false);
+    };
+    Ok(
+        row.scope == scope(data.token, &data.actor, data.catalog.format, intent)?
+            && row.token == data.token
+            && row.epoch == intent.epoch
+            && row.progress.total == intent.updates
+            && row.progress.ready()
+            && epoch(&context.sql(&statement(EPOCH, vec![]))?)? == intent.epoch,
+    )
+}
 
 pub struct RegisterRefPolicyPage;
 impl Command for RegisterRefPolicyPage {

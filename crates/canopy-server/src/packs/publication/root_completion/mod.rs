@@ -16,6 +16,10 @@ use tokio::time::timeout_at;
 mod codec;
 mod outcome;
 mod prepare;
+mod publish;
+mod read;
+pub use publish::CompleteRootPush;
+pub use read::{CheckCompletedRootPush, RootPushReplayError, replay_root_push_response};
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -57,6 +61,16 @@ pub struct RootPushOutcomes {
 pub struct RootPushCompletion {
     pub proof: RefRootPublicationProof,
     pub outcomes: RootPushOutcomes,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletedRootPush {
+    pub completion: CompletedCatalogPush,
+    pub root: NativeOutcomeRoot,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RootCompletionReply {
+    Completed(Box<CompletedRootPush>),
+    Denied(PreparationDenial),
 }
 
 /// The completed traversal retains the native metadata's plan/options/signed

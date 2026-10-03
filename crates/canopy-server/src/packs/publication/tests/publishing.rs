@@ -205,7 +205,27 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture watch hash"))?);
         }
         let policy_hash=*hash.finalize().as_bytes();
-        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints,initial,policy,policy_hash)).map_err(|_| Error::Command("fixture publication state"))
+        hash.update(b"\0completed-root-and-operation-state\0");
+        let mut outcomes=connection.prepare("SELECT id,actor,request_digest,response_id,completion_digest,rejected,publication,publication_plan_digest,response_root FROM pushes ORDER BY id")?;
+        let mut rows=outcomes.query([])?;
+        while let Some(row)=rows.next()? {
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<i64>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,Option<Vec<u8>>>(7)?,row.get::<_,Option<Vec<u8>>>(8)?);
+            hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root outcome hash"))?);
+        }
+        let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations ORDER BY id")?;
+        let mut rows=operations.query([])?;
+        while let Some(row)=rows.next()? {
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Option<u64>>(4)?,row.get::<_,Option<Vec<u8>>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?);
+            hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root operation hash"))?);
+        }
+        let mut certificates=connection.prepare("SELECT digest,push_id,actor,signer,key,size,recorded_at_ms FROM push_certificates ORDER BY digest")?;
+        let mut rows=certificates.query([])?;
+        while let Some(row)=rows.next()? {
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,Vec<u8>>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,u64>(5)?,row.get::<_,i64>(6)?);
+            hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root ownership hash"))?);
+        }
+        let root_hash=*hash.finalize().as_bytes();
+        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints,initial,policy,policy_hash,root_hash)).map_err(|_| Error::Command("fixture publication state"))
     }).await?)
 }
 fn published(reply: PublicationReply) -> Result<PublishedRefs> {

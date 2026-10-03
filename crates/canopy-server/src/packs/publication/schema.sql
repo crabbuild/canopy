@@ -67,6 +67,7 @@ CREATE TABLE pushes (
     options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 65536),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     completion_digest BLOB CHECK(completion_digest IS NULL OR length(completion_digest) = 32),
+    response_root BLOB CHECK(response_root IS NULL OR (typeof(response_root)='blob' AND length(response_root) BETWEEN 1 AND 128)),
     rejected INTEGER CHECK(rejected IN (0, 1)),
     rejection_reason TEXT,
     -- Bounded exact logical publication outcome. HTTP completion additionally
@@ -75,7 +76,9 @@ CREATE TABLE pushes (
     publication_plan_digest BLOB CHECK(publication_plan_digest IS NULL OR length(publication_plan_digest) = 32),
     CHECK((publication IS NULL) = (publication_plan_digest IS NULL)),
     CHECK((response_id IS NULL) = (rejected IS NULL)),
-    CHECK((response_id IS NULL) = (completion_digest IS NULL))
+    CHECK((response_id IS NULL) = (completion_digest IS NULL)),
+    CHECK(response_root IS NULL OR response_id IS NOT NULL),
+    CHECK(rejected IS NOT 1 OR publication IS NULL)
 ) WITHOUT ROWID;
 CREATE TRIGGER push_publication_immutable BEFORE UPDATE OF publication,publication_plan_digest ON pushes
 WHEN OLD.publication IS NOT NULL AND (NEW.publication IS NOT OLD.publication OR NEW.publication_plan_digest IS NOT OLD.publication_plan_digest)
@@ -89,6 +92,14 @@ BEGIN SELECT RAISE(ABORT, 'push identity is immutable'); END;
 CREATE TRIGGER push_identity_not_replaced BEFORE INSERT ON pushes
 WHEN EXISTS(SELECT 1 FROM pushes WHERE id=NEW.id)
 BEGIN SELECT RAISE(ABORT, 'push identity cannot be replaced'); END;
+CREATE TRIGGER push_root_completion_immutable BEFORE UPDATE ON pushes
+WHEN OLD.response_root IS NOT NULL AND (
+    NEW.response_root IS NOT OLD.response_root OR NEW.publication IS NOT OLD.publication
+    OR NEW.publication_plan_digest IS NOT OLD.publication_plan_digest)
+BEGIN SELECT RAISE(ABORT, 'root completion is immutable'); END;
+CREATE TRIGGER push_root_completion_retained BEFORE DELETE ON pushes
+WHEN OLD.response_root IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'root completion must be retained'); END;
 
 CREATE TABLE push_certificates (
     digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
@@ -460,8 +471,10 @@ BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
 
 CREATE TRIGGER push_certificates_immutable BEFORE UPDATE ON push_certificates
 BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
+CREATE TRIGGER push_certificates_retained BEFORE DELETE ON push_certificates
+BEGIN SELECT RAISE(ABORT, 'signed push ownership must be retained'); END;
 CREATE TRIGGER push_certificates_not_replaced BEFORE INSERT ON push_certificates
-WHEN EXISTS(SELECT 1 FROM push_certificates WHERE digest=NEW.digest)
+WHEN EXISTS(SELECT 1 FROM push_certificates WHERE digest=NEW.digest OR push_id=NEW.push_id)
 BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
 
 CREATE TRIGGER push_certificate_chunks_immutable BEFORE UPDATE ON push_certificate_chunks

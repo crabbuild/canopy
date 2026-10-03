@@ -1,6 +1,6 @@
-# Immutable push outcome preparation
+# Immutable push outcomes and atomic completion
 
-`PreparedCatalog::root_push_completion` prepares a joint catalog/ref/outcome input bounded by 8 KiB. It does not execute a publication command or acknowledge a push. The final atomic publisher, authorized completed-response query, streaming replay adapter, typed collector and production hard cutover remain required.
+`PreparedCatalog::root_push_completion` prepares a joint catalog/ref/outcome input bounded by 8 KiB. Command 36, `CompleteRootPush`, atomically selects and persists its exact outcome together with any joint root publication. Query 37 and `replay_root_push_response` select that durable result under current read authorization and stream authenticated bytes. Preparation alone does not acknowledge a push; completion uses the existing Cell durability boundary. Typed collection, service orchestration and production hard cutover remain required.
 
 This factory requires a successful nonempty ref plan. Immutable outcome-only completion for a failed or empty-command receive remains required; the old inline outcome-only API is not a hard-cutover adapter.
 
@@ -14,7 +14,7 @@ The factory freezes three outcomes before signing:
 | Publication rejected | Existing all-successful-ref rejection transformation, preserving native failures and progress |
 | Signed certificate replayed | Same transformation with the existing certificate-replay reason |
 
-An absent report-status response becomes an explicit HTTP 409 rejection. The final command must select a durable refusal when current policy/ACL or signed ownership rejects publication. A moving catalog CAS must instead preserve reconciliation/retry semantics. It must never retain an unselected native success as the client outcome.
+An absent report-status response becomes an explicit HTTP 409 rejection. The final command selects a durable refusal when current policy/ACL or signed ownership rejects publication. A moving catalog CAS instead preserves reconciliation/retry semantics. It never retains an unselected native success as the client outcome.
 
 ## Representation and namespaces
 
@@ -24,12 +24,26 @@ Every new outcome metadata artifact and rejection body belongs to the current ad
 
 Completed retention must traverse the selected response body and the original native metadata's plan/options/signed annotation. It must not permanently retain the native metadata's original wire request/body merely because that descriptor remains present. For a rejection, the native success body also needs no completed-response retention unless a separate audit policy selects it. Active/uncertain input pins retain those private-input dependencies independently. The collector must implement and qualify these distinct typed traversals before any deletion is enabled.
 
-An outcome metadata record cannot decode as native-result metadata. A decoded root is transport data, not a native witness or read capability. The completed-response API must select the root from durable actor/logical-operation/request identity under current read authorization; it must never accept a caller-selected root. That API is not implemented yet.
+An outcome metadata record cannot decode as native-result metadata. A decoded root is transport data, not a native witness or read capability. The completed-response API selects the root from durable actor/logical-operation/request identity under current read authorization; it accepts no caller-selected root.
 
-## Binding and final obligations
+## Binding and atomic selection
 
 The completion certificate binds the exact catalog/base/pin/token/actor, policy intent, immutable ref snapshot, response UUID, ref generation, all three outcome descriptors and optional SHA-256 signed-certificate ownership facts. The largest permitted signing-key string is 4,096 bytes. Plans and response bytes are absent from the bounded input. After freezing every artifact, preparation rechecks checkpoint custody and live policy readiness before minting the completion-purpose certificate. The existing inline publisher refuses this purpose. An admitted service must retain this exact prepared input and its mutation identity through an uncertain command result; regenerating a new response UUID is not replay.
 
-These checks are conditional preparation. The final admitted command still must authenticate the complete MAC and check its actual owner fence, current lease/pin/ACL, guard/epoch/dependencies, selected retained base and root CAS in the same transaction as signed ownership, joint generation and selected outcome writes. It must return the original selected outcome on exact completed replay before requiring new authority, preserve independent pins and roll back every late error. It must perform no remote reads, response rewriting, per-object/per-ref writes or whole-plan decoding.
+The admitted command authenticates the complete MAC and exact outcome bundle first. An existing completion requires the original actor, request digest and outcome binding and returns its original selected descriptor before requiring a new owner fence or write permission. This logical replay creates no new generation, operation or ownership fact. The original SDK mutation identity retains its exact receipt through owner restore.
+
+For a new completion the command checks its actual admitted owner fence, matching live operation, expiry and exact independent pin; persisted repository identity/format; original retention floor and input custody; and the certificate's selected immutable generation fact. Signed ownership is an indexed digest lookup. Current write access and the command-local guard's scope/token/epoch/count/readiness determine whether publication is allowed. Dependency invalidation and rare configuration epoch checks use the same Cell transaction as final selection; advisory query receipts confer no authority.
+
+An allowed proposal must match the current joint generation exactly. A changed base returns Conflict before writes so the service can reconcile the preserved inputs. A policy/ACL refusal or existing signed owner records its frozen rejection without changing roots, even when unrelated generations have advanced. Signed replay preserves the original ownership record. A first signed use records scalar ownership in the completion transaction; its bytes remain in authenticated native metadata rather than SQL chunks.
+
+All capacity, checkpoint compatibility and encoding checks precede writes. The command optionally installs the attestation on the operation and independent pin, inserts the joint catalog/ref generation and advances its CAS, persists one immutable selected-outcome row, records first signed ownership and consumes the active operation. The independent pin remains. Every later SQL error aborts all these changes. The command performs no network/native work, report rewriting, whole-plan decoding or per-ref/per-object mutation. Input is at most 8 KiB and reply at most 512 bytes; work is bounded by scalar/indexed lookups and the existing fixed retained-generation cap.
+
+The fresh schema prevents completed identity/response/publication/root mutation or replacement and retains completed root rows. Signed ownership is also durable replay-prevention state; it cannot be deleted or replaced. Legacy inline response rows are not accepted as immutable outcomes by this API. Production schema selection remains a hard-cutover task.
+
+## Authorized replay and remaining obligations
+
+Query 37 requires current read access and the persisted repository UUID, then resolves the saved actor/logical operation/request digest. Missing completion returns None; a changed identity or legacy row refuses. The streaming adapter additionally matches the routed target and artifact store repository, authenticates the selected outcome metadata and opens only its exact body descriptor/creating namespace. It preserves status and headers and propagates late authenticated-body corruption. Neither a caller root nor a decoded completed DTO grants read access. A previously committed completion can still replay logically after write revocation, while response retrieval requires current read authorization.
+
+The implementation's tests cover late selected-outcome, operation-consumption and signed-ownership faults; stale CAS and reconciliation; current policy and write revocation; exact selected-root replay under changed authorization and restored owner; and no inline response, signed-body or per-ref writes. Signed ownership branch fixtures use trusted attestor resealing and do not qualify the complete native signed-CGI path. Genuine separately prepared pending-attempt takeover, supervised uncertain-result recovery and fresh-root cold-clone serving still require their production integration checks.
 
 Preparation still reopens a `Vec` plan/report and uses the existing report transformer. The 8 KiB bound applies to Cell transport and does not prove whole-operation RSS, CPU or end-to-end throughput. File-backed intent/report processing and hard OS containment remain mandatory, as do full-history Linux/Kubernetes/Chromium and 10,000-developer mixed-load qualification.

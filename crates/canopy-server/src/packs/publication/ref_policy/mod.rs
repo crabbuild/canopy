@@ -11,6 +11,7 @@ use tokio::time::timeout_at;
 mod codec;
 mod commands;
 mod prepare;
+pub(super) use commands::current;
 pub use commands::{CheckRefPolicyGuard, ReapRefPolicyGuard, RegisterRefPolicyPage};
 pub(super) use prepare::ensure_ready;
 
