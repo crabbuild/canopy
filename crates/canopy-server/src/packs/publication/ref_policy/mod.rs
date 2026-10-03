@@ -12,6 +12,7 @@ mod codec;
 mod commands;
 mod prepare;
 pub use commands::{CheckRefPolicyGuard, ReapRefPolicyGuard, RegisterRefPolicyPage};
+pub(super) use prepare::ensure_ready;
 
 pub const REF_POLICY_PAGE_BYTES: u32 = 256 << 10;
 pub const REF_POLICY_PAGE_UPDATES: usize = 128;
@@ -152,7 +153,7 @@ fn page_payload_binding(
     h.update(&e.finish());
     Ok(*h.finalize().as_bytes())
 }
-fn root_binding(
+pub(super) fn root_binding(
     intent: RefPolicyIntent,
     snapshot: RefStateSnapshotRoot,
 ) -> Result<[u8; 32], CodecError> {

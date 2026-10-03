@@ -229,6 +229,14 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/native_result.rs"));
                 source.update(include_bytes!("packs/publication/native_result/codec.rs"));
                 source.update(include_bytes!("packs/publication/native_result/plan.rs"));
+                source.update(include_bytes!("packs/publication/root_completion/mod.rs"));
+                source.update(include_bytes!("packs/publication/root_completion/codec.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/root_completion/prepare.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/root_completion/outcome.rs"
+                ));
                 source.update(include_bytes!("packs/publication/completion.rs"));
                 source.update(include_bytes!("packs/publication/ref_proof.rs"));
                 source.update(include_bytes!("packs/publication/ref_snapshot.rs"));

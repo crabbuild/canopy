@@ -1,7 +1,7 @@
 use super::*;
 use super::{
     completion::packet,
-    prepare::cleaned,
+    prepare::{cleaned, opened},
     publishing::{plan, update},
 };
 use crate::{
@@ -23,8 +23,39 @@ use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss() -> Result {
+    native_receive(false).await
+}
+#[tokio::test]
+async fn native_receive_prepares_bounded_immutable_root_completion_from_registered_custody()
+-> Result {
+    native_receive(true).await
+}
+async fn native_receive(rooted: bool) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format).await?;
+        let store = Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        ));
+        if rooted {
+            let (base, _, _) = opened(&fixture, [159; 16], store.clone()).await?;
+            let root = tempfile::TempDir::new()?;
+            let budget = DiskBudget::new(64 << 20);
+            let empty = CatalogPreparation::new(root.path(), budget.clone(), base, limits())
+                .await?
+                .finish()
+                .await?;
+            fixture
+                .client()
+                .command::<InitializeCatalogRefs>(
+                    &fixture.target,
+                    identity()?,
+                    empty.empty_ref_initialization().await?,
+                )
+                .await?;
+            drop(empty);
+            cleaned(root.path(), &budget).await?;
+        }
         let source = input_fixture(format, 4).await?;
         let tip = source
             .objects
@@ -64,6 +95,23 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             )
             .as_bytes(),
         );
+        let mut changes = vec![update("refs/heads/main", None, Some(tip))];
+        if rooted {
+            for i in 1..257 {
+                let name = format!("refs/heads/topic/{i:06}");
+                packet(
+                    &mut body,
+                    format!(
+                        "{} {} {name}\n",
+                        "0".repeat(format.bytes() * 2),
+                        hex::encode(tip)
+                    )
+                    .as_bytes(),
+                );
+                changes.push(update(&name, None, Some(tip)));
+            }
+        }
+        let command_bytes = body.len() + 4;
         body.extend_from_slice(b"0000");
         body.extend_from_slice(&std::fs::read(pack_path)?);
         let encoded = crate::git_gateway::preflight::EncodedPush::new(
@@ -107,10 +155,6 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             return Err("staging not active".into());
         };
         assert_eq!(initial.token.request_digest, request_digest);
-        let store = Arc::new(ArtifactStore::new(
-            Arc::new(InMemory::new()),
-            fixture.repository,
-        ));
         let upload_store = Arc::clone(&store);
         let retained = ticket.spawn(move |context| async move {
             let (encoded, saved) = encoded
@@ -123,14 +167,16 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 .map_err(|error| StagingError::Input(Box::new(error)))?;
             Ok((encoded, request))
         })?;
-        let (encoded, request_checkpoint) =
-            retained.wait().await.map_err(|error| error.to_string())?;
+        let (encoded, request_checkpoint) = retained
+            .wait()
+            .await
+            .map_err(|error| format!("native receive stage: {error:?}"))?;
         ticket
             .register_inputs(request_checkpoint.clone(), identity()?)
             .map_err(|(error, _)| error)?
             .wait()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("native receive stage: {error:?}"))?;
         assert!(request_checkpoint.root()?.is_none());
         assert!(request_checkpoint.wire_request()?.is_some());
         let producer = backend.clone();
@@ -156,7 +202,7 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                     &upload_store,
                     &request_checkpoint,
                     PushCompletionRequest {
-                        plan: Some(plan(vec![update("refs/heads/main", None, Some(tip))])),
+                        plan: Some(plan(changes)),
                         response,
                         options: Vec::new(),
                         certificate: None,
@@ -202,7 +248,10 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
         let checkpoint = ticket
             .register_inputs(input_certificate.clone(), identity()?)
             .map_err(|(error, _)| error)?;
-        let checkpoint_receipt = checkpoint.wait().await.map_err(|error| error.to_string())?;
+        let checkpoint_receipt = checkpoint
+            .wait()
+            .await
+            .map_err(|error| format!("native receive stage: {error:?}"))?;
         assert_eq!(
             fixture
                 .client()
@@ -235,10 +284,14 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 .await
                 .map_err(|error| StagingError::Input(Box::new(error)))?
                 .into_native_request();
+            if rooted {
+                assert!(command_bytes > 4096);
+                assert!(request.body.packet_prefix(4096).await.is_err());
+            }
             assert!(
                 request
                     .body
-                    .packet_prefix(4096)
+                    .packet_prefix(command_bytes)
                     .await
                     .map_err(|error| StagingError::Input(Box::new(error)))?
                     .windows(b"refs/heads/main".len())
@@ -249,7 +302,10 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
                 .await
                 .map_err(|error| StagingError::Input(Box::new(error)))
         })?;
-        let recovered = recovered.wait().await.map_err(|error| error.to_string())?;
+        let recovered = recovered
+            .wait()
+            .await
+            .map_err(|error| format!("native receive stage: {error:?}"))?;
         assert_eq!(recovered.response, response);
         drop(response);
         cleaned(work_root.path(), &disk).await?;
@@ -280,6 +336,34 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             CatalogFileLimits::default(),
         )?);
         let base = Arc::new(ticket.open_base(indexes, files).await?);
+        if rooted {
+            let mut builder = CatalogPreparation::new(
+                physical_root.path(),
+                physical_disk.clone(),
+                base,
+                limits(),
+            )
+            .await?;
+            builder.begin_retained_pack(witness).await?;
+            builder.add_segment(segment).await?;
+            builder.finish_pack().await?;
+            let prepared = builder.finish().await?;
+            super::root_completion::qualify(
+                &fixture,
+                &prepared,
+                &store,
+                recovered,
+                physical_root.path(),
+                physical_disk.clone(),
+            )
+            .await
+            .map_err(|error| format!("root composition: {error:?}"))?;
+            drop(prepared);
+            cleaned(physical_root.path(), &physical_disk).await?;
+            assert!(coordinator.close_and_drain().await.is_empty());
+            fixture.runtime.shutdown().await?;
+            continue;
+        }
         let expected = recovered.response.clone();
         let producer_root = Arc::clone(&physical_root);
         let producer_disk = physical_disk.clone();
@@ -310,7 +394,10 @@ async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_lo
             .await;
             result.map_err(StagingError::Input)
         })?;
-        let (prepared, ready) = work.wait().await.map_err(|error| error.to_string())?;
+        let (prepared, ready) = work
+            .wait()
+            .await
+            .map_err(|error| format!("native receive stage: {error:?}"))?;
         let publications =
             PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
         let observer = ticket.publish(&publications, ready)?;

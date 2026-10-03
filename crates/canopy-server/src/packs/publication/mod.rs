@@ -79,8 +79,13 @@ pub use staging_service::{
 };
 mod inputs;
 mod native_result;
+mod root_completion;
 pub(in crate::packs) use inputs::RetainedNativeInput;
 pub use native_result::{NativeResultError, NativeResultRoot, SavedNativeResult};
+pub use root_completion::{
+    NativeOutcomeRoot, ROOT_COMPLETION_BYTES, RootCompletionPreparationError, RootPushCompletion,
+    RootPushOutcomes, RootSignedPushFact,
+};
 mod staging;
 pub use inputs::{
     CheckStagedInputs, InputCheckpointError, NativeInputCertificate, RegisterStagedInputs,

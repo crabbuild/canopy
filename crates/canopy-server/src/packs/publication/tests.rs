@@ -14,6 +14,7 @@ mod reconcile;
 mod ref_policy;
 mod ref_snapshot;
 mod refs;
+mod root_completion;
 mod staging;
 mod staging_service;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};

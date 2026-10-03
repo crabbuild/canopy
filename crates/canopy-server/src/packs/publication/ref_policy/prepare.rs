@@ -97,7 +97,7 @@ impl PreparedCatalog {
         .map_err(|_| PreparationBaseError::Inactive)?
     }
 }
-async fn ensure_ready(
+pub(in crate::packs::publication) async fn ensure_ready(
     prepared: &PreparedCatalog,
     intent: RefPolicyIntent,
 ) -> Result<(), RefPolicyPreparationError> {

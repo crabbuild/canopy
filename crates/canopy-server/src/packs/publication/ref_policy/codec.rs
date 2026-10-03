@@ -190,11 +190,10 @@ impl WireValue for RefRootPublicationProof {
     }
 }
 impl RefRootPublicationProof {
-    pub(super) fn shape(&self) -> Result<(), CodecError> {
+    pub(in crate::packs::publication) fn shape(&self) -> Result<(), CodecError> {
         let data = self.certificate.data()?;
         if data.compaction
             || data.base.refs.is_none()
-            || data.completion_digest.is_some()
             || data.token.artifact_operation != self.snapshot.operation()
             || data.refs_digest != Some(root_binding(self.guard, self.snapshot)?)
         {

@@ -31,7 +31,10 @@ impl NativeResultRoot {
     pub(super) fn validate(self) -> Result<(), CodecError> {
         self.0.validate(INPUT_ROOT_BYTES)
     }
-    async fn read(self, store: &ArtifactStore) -> Result<ResultRecord, NativeResultError> {
+    pub(super) async fn read(
+        self,
+        store: &ArtifactStore,
+    ) -> Result<ResultRecord, NativeResultError> {
         let record: ResultRecord = self.0.read(store, INPUT_ROOT_BYTES).await?;
         if record.operation != self.operation() {
             return Err(NativeResultError::Context);
@@ -83,10 +86,10 @@ impl SavedNativeResult {
         Ok(self.root)
     }
 }
-struct ResultRecord {
-    operation: [u8; 16],
+pub(super) struct ResultRecord {
+    pub(super) operation: [u8; 16],
     request: WireRequestRoot,
-    response: GitHttpResponse<ArtifactDescriptor>,
+    pub(super) response: GitHttpResponse<ArtifactDescriptor>,
     plan: Option<ArtifactDescriptor>,
     options: Vec<String>,
     signed: Option<SignedPushAnnotation<ArtifactDescriptor>>,
@@ -116,14 +119,14 @@ pub enum NativeResultError {
     #[error("native result context differs or signing key is no longer authorized")]
     Context,
 }
-fn body_key(operation: [u8; 16], body: ArtifactDescriptor) -> ArtifactKey {
+pub(super) fn body_key(operation: [u8; 16], body: ArtifactDescriptor) -> ArtifactKey {
     ArtifactKey {
         operation,
         binding_digest: body.digest,
         kind: ArtifactKind::InputBody,
     }
 }
-async fn retain_body(
+pub(super) async fn retain_body(
     store: &ArtifactStore,
     operation: [u8; 16],
     body: Vec<u8>,
