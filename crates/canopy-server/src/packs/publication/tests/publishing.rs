@@ -254,9 +254,11 @@ async fn reject(
     Ok(())
 }
 pub(super) async fn edit(fixture: &Fixture, sql: &str) -> Result {
+    edit_handle(&fixture.handle, sql).await
+}
+pub(super) async fn edit_handle(handle: &CellHandle, sql: &str) -> Result {
     let sql = sql.to_owned();
-    fixture
-        .handle
+    handle
         .execute(
             identity()?,
             Digest::from_bytes(*blake3::hash(sql.as_bytes()).as_bytes()),

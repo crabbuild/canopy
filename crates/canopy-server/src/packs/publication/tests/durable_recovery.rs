@@ -206,44 +206,7 @@ async fn qualify_ready(
         ));
     }
     assert!(staging.close_and_drain().await.is_empty());
-    f.handle.drain().await?;
-    f.runtime.shutdown().await?;
-    let old_sqlite = f.root.path().join("a.sqlite");
-    if old_sqlite.exists() {
-        std::fs::remove_file(&old_sqlite)?;
-    }
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = f.root.path().join(format!("a.sqlite{suffix}"));
-        if sidecar.exists() {
-            std::fs::remove_file(sidecar)?;
-        }
-    }
-    let session_id = SessionId::from_bytes([249; 16]);
-    let runtime = CellRuntime::new(SqlWorkerPool::new(1, 4)?, 64 << 20, session_id)?;
-    let authority = CellAuthority::new(f.layout.clone());
-    let idle = authority
-        .load(f.target.cell_id())
-        .await?
-        .ok_or("durable idle owner")?;
-    let provision = CellCatalog::new(f.layout.clone(), f.target.tenant())
-        .lookup(f.target.cell_id())
-        .await?
-        .ok_or("durable provision")?;
-    let handle = runtime
-        .acquire_idle_restored(
-            provision,
-            f.replica.clone(),
-            authority,
-            idle,
-            f.root.path().join("durable-restored.sqlite"),
-            Owner {
-                session: session_id,
-                endpoint: "https://durable-restored.invalid".into(),
-            },
-        )
-        .await?;
-    assert!(handle.owner_fence().epoch > check.token.owner.epoch);
-    let client = CellClient::local(f.registry.clone(), handle.clone());
+    let (runtime, handle, client) = restore_owner(f, &check).await?;
     let loaded = RegisteredRootRecovery::load(&client, &f.target, store, &check)
         .await?
         .ok_or("durable record missing after restore")?;
@@ -265,7 +228,7 @@ async fn qualify_ready(
             matches!(tokio::time::timeout(std::time::Duration::from_secs(10), observer.wait()).await?,
             PublicationState::Uncertain(error) if matches!(&*error, PublicationError::RootPush(InvocationError::Pending(evidence)) if **evidence == original))
         );
-        assert_eq!(queue.stats().await.command_bytes, 24 << 10);
+        assert_eq!(queue.stats().await.command_bytes, 32 << 10);
         assert_eq!(queue.close_and_drain().await.len(), 1);
         observer.recover().await?;
         assert!(
@@ -310,8 +273,8 @@ async fn qualify_ready(
     } else {
         // Proven absence under a new owner cannot publish a stale old command.
         let denied = match result {
-            Err(InvocationError::Rejected(value)) => *value,
-            Err(InvocationError::NotStarted(_)) => {
+            Err(PublicationError::RootPush(InvocationError::Rejected(value))) => *value,
+            Err(PublicationError::RootPush(InvocationError::NotStarted(_))) => {
                 assert!(
                     client
                         .query::<CheckCompletedRootPush>(&f.target, None, lookup)
@@ -330,7 +293,7 @@ async fn qualify_ready(
             RootCompletionReply::Denied(PreparationDenial::Stale)
         );
         assert!(matches!(loaded.dispatch(&client, store).await,
-            Err(InvocationError::Rejected(replayed)) if replayed.receipt == denied.receipt && replayed.output == denied.output));
+            Err(PublicationError::RootPush(InvocationError::Rejected(replayed))) if replayed.receipt == denied.receipt && replayed.output == denied.output));
         assert!(
             client
                 .query::<CheckCompletedRootPush>(&f.target, None, lookup)
@@ -382,4 +345,49 @@ async fn assert_pin_retained(handle: &CellHandle) -> Result {
         })
         .await?;
     Ok(())
+}
+
+pub(super) async fn restore_owner(
+    f: &Fixture,
+    check: &LeaseCheck,
+) -> Result<(CellRuntime, CellHandle, CellClient)> {
+    f.handle.drain().await?;
+    f.runtime.shutdown().await?;
+    let old_sqlite = f.root.path().join("a.sqlite");
+    if old_sqlite.exists() {
+        std::fs::remove_file(&old_sqlite)?;
+    }
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = f.root.path().join(format!("a.sqlite{suffix}"));
+        if sidecar.exists() {
+            std::fs::remove_file(sidecar)?;
+        }
+    }
+    let session_id = SessionId::from_bytes([249; 16]);
+    let runtime = CellRuntime::new(SqlWorkerPool::new(1, 4)?, 64 << 20, session_id)?;
+    let authority = CellAuthority::new(f.layout.clone());
+    let idle = authority
+        .load(f.target.cell_id())
+        .await?
+        .ok_or("durable idle owner")?;
+    let provision = CellCatalog::new(f.layout.clone(), f.target.tenant())
+        .lookup(f.target.cell_id())
+        .await?
+        .ok_or("durable provision")?;
+    let handle = runtime
+        .acquire_idle_restored(
+            provision,
+            f.replica.clone(),
+            authority,
+            idle,
+            f.root.path().join("durable-restored.sqlite"),
+            Owner {
+                session: session_id,
+                endpoint: "https://durable-restored.invalid".into(),
+            },
+        )
+        .await?;
+    assert!(handle.owner_fence().epoch > check.token.owner.epoch);
+    let client = CellClient::local(f.registry.clone(), handle.clone());
+    Ok((runtime, handle, client))
 }

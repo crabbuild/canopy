@@ -143,7 +143,7 @@ impl ReadyPublication {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootPush(_) => roots::ROOT_RESERVATION,
-            Self::RootRecovery(_) => super::super::recovery::ready_reservation(),
+            Self::RootRecovery(ready) => ready.reservation(),
             Self::PolicyPage(ready) => ready.reservation(),
             _ => self.class().reservation(),
         }
@@ -268,6 +268,12 @@ pub enum PublicationOutcome {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("durable publication phase could not be observed: {source}")]
+    Recovery {
+        evidence: Box<cellule_runtime::PendingMutation>,
+        #[source]
+        source: Box<RootRecoveryError>,
+    },
     #[error("ref policy page registration: {0}")]
     PolicyPage(#[source] InvocationError<RefPolicyReply>),
     #[error("immutable root push publication: {0}")]
@@ -292,6 +298,7 @@ impl PublicationError {
             }
         }
         match self {
+            Self::Recovery { .. } => "pending",
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
             Self::PolicyPage(error) => kind(error),
@@ -308,6 +315,7 @@ impl PublicationError {
             )
         }
         match self {
+            Self::Recovery { .. } => true,
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),
             Self::PolicyPage(error) => unknown(error),

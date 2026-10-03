@@ -3,6 +3,7 @@ mod attestation;
 mod compaction;
 mod completion;
 mod coordinator;
+mod durable_policy;
 mod durable_recovery;
 mod frontier;
 mod initialization;
@@ -82,6 +83,8 @@ impl CellModule for Module {
             root_outcome.output_limit = 512;
             let mut root_lookup = descriptor(37);
             root_lookup.output_limit = 512;
+            let mut recovery = descriptor(39);
+            recovery.codec_version = 2;
             // Match the existing production SQL transport contract exactly.
             // The generic 4 KiB fixture limit cannot encode even one valid
             // 65 KiB ref name; policy construction has its own smaller bound.
@@ -117,7 +120,7 @@ impl CellModule for Module {
                     policy_reap,
                     root_completion,
                     root_outcome,
-                    descriptor(39),
+                    recovery,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([

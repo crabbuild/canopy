@@ -119,6 +119,53 @@ impl RootCommand {
     }
 }
 impl ReadyRootPush {
+    pub(in crate::packs::publication) fn refusal_command(
+        &self,
+    ) -> Option<&PreparedCommand<CompleteRootOutcome>> {
+        if let RootCommand::Outcome(command) = &self.command
+            && self.refusal
+        {
+            Some(command)
+        } else {
+            None
+        }
+    }
+    pub async fn persist_recovery_after(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        previous: &RegisteredRootRecovery,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        let session = self.owner.session();
+        match &self.command {
+            RootCommand::Publish(command) => {
+                super::super::recovery::persist_full(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Publish,
+                    None,
+                    Some(previous),
+                    store,
+                    identity,
+                    0,
+                )
+                .await
+            }
+            RootCommand::Outcome(command) => {
+                super::super::recovery::persist_full(
+                    session,
+                    command,
+                    super::super::recovery::Kind::Outcome,
+                    None,
+                    Some(previous),
+                    store,
+                    identity,
+                    0,
+                )
+                .await
+            }
+        }
+    }
     /// Persist exact bytes and authenticate their first-writer attempt pin
     /// before final submission. On uncertain registration, recover the winning
     /// record with RegisteredRootRecovery::load; do not regenerate the final
@@ -209,7 +256,7 @@ impl ReadyRootPush {
                     .await
             }
         };
-        outcome
+        super::super::recovery::normalize_root(outcome)
             .map(PublicationOutcome::RootPush)
             .map_err(PublicationError::RootPush)
     }
