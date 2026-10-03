@@ -704,6 +704,17 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
 
 fn git_failure(error: GatewayError) -> Response<Body> {
     match error {
+        GatewayError::Io(error)
+        | GatewayError::Http(crate::git_http::GitHttpError::Io(error))
+        | GatewayError::Cache(crate::git_cache::CacheError::Io(error))
+        | GatewayError::Objects(crate::git_objects::ObjectReadError::Io(error))
+            if crate::native_resources::is_exhausted(&error) =>
+        {
+            plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Native Git capacity exhausted; retry the request",
+            )
+        }
         GatewayError::Cell(error) | GatewayError::Push(crate::PushError::Cell(error))
             if cell_unavailable(error.as_ref()) =>
         {
@@ -852,5 +863,31 @@ mod tests {
             .status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+    #[test]
+    fn native_capacity_returns_503_only_for_typed_admission_exhaustion() {
+        use crate::native_resources::{NativeClass, NativeResources, NativeWork};
+        let pool = NativeResources::default();
+        let scope = pool.scope(NativeClass::Foreground);
+        let mut permits = Vec::new();
+        while let Ok(permit) = scope.try_admit(NativeWork::Read) {
+            permits.push(permit);
+        }
+        for wrap in [
+            GatewayError::Io,
+            |error| GatewayError::Http(crate::git_http::GitHttpError::Io(error)),
+            |error| GatewayError::Cache(crate::git_cache::CacheError::Io(error)),
+            |error| GatewayError::Objects(crate::git_objects::ObjectReadError::Io(error)),
+        ] {
+            let exhausted = scope.try_admit(NativeWork::Read).err().unwrap();
+            assert_eq!(
+                git_failure(wrap(exhausted)).status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+            assert_eq!(
+                git_failure(wrap(std::io::Error::from(std::io::ErrorKind::WouldBlock))).status(),
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
     }
 }

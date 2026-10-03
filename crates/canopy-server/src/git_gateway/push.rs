@@ -3,12 +3,16 @@ use super::*;
 impl GitGateway {
     pub(super) async fn handle_push(
         &self,
-        request: GitHttpRequest,
-        actor: &str,
-        id: [u8; 16],
-        digest: [u8; 32],
+        preflight: preflight::PushPreflight,
     ) -> Result<GitHttpResponse, GatewayError> {
-        let commands = branch_policy::PushCommands::read(&request).await?;
+        let preflight::PushParts {
+            request,
+            commands,
+            identity,
+        } = preflight.into_parts();
+        let actor = identity.actor.as_str();
+        let id = identity.operation;
+        let digest = identity.request_digest;
         let option_error = commands.option_error().or_else(|| {
             (commands.certificate().is_some() && self.signer_directory.is_none())
                 .then_some("Canopy signed pushes are unavailable on this gateway")
@@ -29,11 +33,11 @@ impl GitGateway {
                 |path| cached.backend.with_signers(path),
             );
             let mut response = backend.run(request).await?;
-            let certificate = self.verified_certificate(&cached, &commands, actor).await?;
+            let certificate = self.verified_certificate(&cached, &commands, actor, digest).await?;
             // Git may accept some refs and reject others unless atomic was requested.
             // Publish its actual changes before returning any successful per-ref report.
             let plan = if response.status == 200 {
-                let after = git_refs(&cached.backend.git_dir()).await?;
+                let after = git_refs(&cached.backend.git_dir(), &cached.backend.cache.native).await?;
                 let plan = diff_refs(&before, &after, actor);
                 if plan.updates.is_empty() {
                     None
@@ -119,6 +123,7 @@ impl GitGateway {
         cached: &CachedRepository,
         commands: &branch_policy::PushCommands,
         actor: &str,
+        request_digest: [u8; 32],
     ) -> Result<Option<crate::push::VerifiedPushCertificate>, GatewayError> {
         let Some(body) = commands.certificate() else {
             return Ok(None);
@@ -165,6 +170,8 @@ impl GitGateway {
             ));
         }
         Ok(Some(crate::push::VerifiedPushCertificate {
+            target: self.repository.target.clone(),
+            request_digest,
             body: body.to_vec(),
             signer: signer.into(),
             key: key.into(),

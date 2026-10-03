@@ -135,8 +135,27 @@ pub async fn delete_with_admission_retry(
             .output
             .is_some_and(|state| state.oid.is_none())
     );
+    // Admit only the encoded spool: any repeated gzip expansion must fail.
+    // Completed replay must resolve the original response before decoding.
+    let occupied = budget.try_reserve(budget.capacity() - warm - wire.len() as u64)?;
     let replay = request().send().await?.error_for_status()?.bytes().await?;
     assert_eq!(replay, response);
+    assert_eq!(budget.used(), occupied.bytes() + warm);
+    drop(occupied);
+    // Changing only gzip metadata preserves decoded commands, but is a
+    // different encoded request and cannot reuse the completed operation ID.
+    let mut changed = wire.clone();
+    changed[4..8].copy_from_slice(&1u32.to_le_bytes());
+    let conflict = client
+        .post(format!("{url}/git-receive-pack"))
+        .bearer_auth("local-test-token")
+        .header("Content-Type", "application/x-git-receive-pack-request")
+        .header("Content-Encoding", "gzip")
+        .header("Idempotency-Key", &id)
+        .body(changed)
+        .send()
+        .await?;
+    assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
     assert_eq!(
         repository.refs_page("", None).await?.output.generation,
         generation + 1

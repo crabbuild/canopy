@@ -23,7 +23,15 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
         "printf 'Content-Type: application/octet-stream\r\n\r\n'; dd if=/dev/zero bs=65536 count=1088 2>/dev/null; touch completed",
     );
     command.current_dir(files.path());
-    let mut response = start_stream(command, files, Duration::from_secs(30)).await?;
+    let mut response = start_stream(
+        command,
+        files,
+        Duration::from_secs(30),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    )
+    .await?;
     tokio::time::timeout(Duration::from_secs(5), async {
         while response.body.receiver.len() < 4 {
             tokio::task::yield_now().await;
@@ -48,8 +56,7 @@ async fn streaming_backpressure_bounds_queued_output_above_old_pack_limit()
 async fn exit_failure_after_headers_is_a_body_error() -> Result<(), Box<dyn std::error::Error>> {
     let mut response = start_stream(
         shell("printf 'Content-Type: application/octet-stream\r\n\r\npartial'; echo failed >&2; exit 7"),
-        (), Duration::from_secs(5),
-    ).await?;
+        (), Duration::from_secs(5), crate::native_resources::NativeResources::default().scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?).await?;
     let mut bytes = Vec::new();
     let error = loop {
         match chunk(&mut response.body).await {
@@ -72,6 +79,9 @@ async fn deadline_after_headers_is_a_body_error() -> Result<(), Box<dyn std::err
         shell("printf 'Content-Type: application/octet-stream\r\n\r\n'; sleep 30"),
         (),
         Duration::from_secs(1),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
     )
     .await?;
     assert!(matches!(
@@ -88,6 +98,9 @@ async fn malformed_headers_fail_before_exposing_a_stream() -> Result<(), Box<dyn
         shell("printf 'not-a-header\r\n\r\n'"),
         (),
         Duration::from_secs(5),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
     )
     .await;
     assert!(matches!(response, Err(GitHttpError::MalformedCgi)));
@@ -110,8 +123,7 @@ async fn disconnect_kills_the_process_group_and_releases_cache()
     let (released, receiver) = oneshot::channel();
     let mut response = start_stream(
         shell("sleep 30 & child=$!; printf 'Content-Type: text/plain\r\n\r\n%s %s\n' \"$$\" \"$child\"; wait"),
-        (Cache(Some(released)), permit), Duration::from_secs(30),
-    ).await?;
+        (Cache(Some(released)), permit), Duration::from_secs(30), crate::native_resources::NativeResources::default().scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?).await?;
     let mut ids = Vec::new();
     while !ids.contains(&b'\n') {
         ids.extend_from_slice(
@@ -174,6 +186,8 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
@@ -191,7 +205,14 @@ async fn completed_worker_releases_cache_before_headers_are_polled()
         cache: Some(cache),
         finished: Some(finished),
     };
-    let mut request = Box::pin(start_stream(command, owner, Duration::from_secs(5)));
+    let mut request = Box::pin(start_stream(
+        command,
+        owner,
+        Duration::from_secs(5),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground)
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    ));
     // On this single-thread executor the spawned worker cannot run before
     // the first header await. Leave the caller unpolled until worker cleanup.
     poll_fn(|cx| {
@@ -229,6 +250,7 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
         assert!(status.success());
         return Ok(());
     }
+    let resources = crate::native_resources::NativeResources::default();
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
     let cache = GitCache::create(
@@ -236,21 +258,36 @@ async fn failed_spawn_releases_parent_fence_before_cache_cleanup()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let mut command = crate::native_git::command(&cache.git_dir())?;
     command.current_dir(files.path().join("missing"));
     assert!(matches!(
-        GitProcess::spawn(command, cache),
-        Err(GitHttpError::Io(_))
+        GitProcess::spawn(command, cache, resources.scope(crate::native_resources::NativeClass::Foreground).try_admit(crate::native_resources::NativeWork::Read)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
     ));
+    // Concurrent forks can briefly inherit the parent's queued-command fence
+    // before exec closes their CLOEXEC descriptors. Cleanup remains charged
+    // until that fence is acquired rather than permanently leaking admission.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     assert_eq!(budget.used(), 0);
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
     Ok(())
 }
 
 // A concurrent fork can inherit the cache fence until it execs, even though
 // CLOEXEC remains set in the parent. Failed-spawn cleanup must not undercount
-// or delete such a generation; conservative quarantine lasts until restart.
+// or delete such a generation; deferred cleanup waits for the inherited fence.
 #[cfg(unix)]
 #[tokio::test]
 async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
@@ -287,6 +324,7 @@ async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
         }
     }
 
+    let resources = crate::native_resources::NativeResources::default();
     let files = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
     let cache = GitCache::create(
@@ -294,6 +332,7 @@ async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        resources.scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let charged = budget.used();
@@ -338,8 +377,13 @@ async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
     barrier.control.read_exact(&mut ready)?;
     assert_eq!(ready, *b"R");
     assert!(matches!(
-        GitProcess::spawn(command, cache),
-        Err(GitHttpError::Io(_))
+        GitProcess::spawn(
+            command,
+            cache,
+            resources.scope(crate::native_resources::NativeClass::Foreground)
+                .try_admit(crate::native_resources::NativeWork::Read)?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
     ));
     assert_eq!(budget.used(), charged);
     assert!(
@@ -350,15 +394,21 @@ async fn inherited_fork_fence_keeps_failed_spawn_cache_charged()
         crate::native_git::idle_fence(&git_dir).expect_err("inherited fence should still be held");
     assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
     barrier.finish()?;
-    drop(crate::native_git::idle_fence(&git_dir)?);
-    // Drop quarantined the generation while its fence was busy. Closing the
-    // inherited descriptor later must not silently release its disk charge
-    // while files remain. Startup recovery reclaims quarantined generations.
-    assert_eq!(
-        budget.used(),
-        charged,
-        "quarantined files must stay charged until they are reclaimed"
+    // Once the inherited worker has exec'd and drained its descriptor, the
+    // deferred reaper must remove the files before releasing their disk charge.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(
+        !git_dir.exists(),
+        "released disk admission requires reclamation"
     );
-    assert!(git_dir.exists());
+    assert_eq!(
+        resources.usage()?,
+        crate::native_resources::NativeUsage::default()
+    );
     Ok(())
 }

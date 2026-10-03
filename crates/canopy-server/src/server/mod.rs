@@ -108,6 +108,7 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,
     pub store_prefix: StorePath,
     pub local_disk_limit_bytes: u64,
+    pub native_limits: crate::native_resources::NativeLimits,
     pub max_active_repositories: usize,
 }
 
@@ -168,6 +169,7 @@ struct RunningServer {
     ssh_serving: Option<JoinHandle<std::io::Result<()>>>,
     tasks: TaskTracker,
     local: Arc<workspace::Workspace>,
+    native: crate::native_resources::NativeResources,
 }
 
 pub(crate) struct RepositoryManager {
@@ -183,6 +185,7 @@ pub(crate) struct RepositoryManager {
     local: Arc<workspace::Workspace>,
     external_store: Arc<dyn ObjectStore>,
     disk_budget: DiskBudget,
+    native: crate::native_resources::NativeResources,
     pub(crate) owner: String,
     pub(crate) public_url: String,
     pub(crate) ready: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -426,6 +429,7 @@ impl RunningServer {
             return Err(ServerError::Http("Git access token is required"));
         }
         http::validate_public_url(&config.public_url).map_err(ServerError::Http)?;
+        let native = crate::native_resources::NativeResources::new(config.native_limits)?;
         let data_dir = config.data_dir.clone();
         let local = Arc::new(
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
@@ -601,6 +605,7 @@ impl RunningServer {
                 local: Arc::clone(&local),
                 external_store,
                 disk_budget,
+                native: native.clone(),
                 owner: config.owner,
                 public_url: config.public_url,
                 ready,
@@ -624,6 +629,11 @@ impl RunningServer {
         let (api, peer, manager) = match startup {
             Ok(api) => api,
             Err(error) => {
+                maintenance_stop.cancel();
+                native.close();
+                tasks.close();
+                tasks.wait().await;
+                native.drain().await;
                 match node.shutdown().await {
                     Ok(()) => local.confirm_drained(),
                     Err(cleanup) => tracing::error!(error = %cleanup, "startup drain failed"),
@@ -682,6 +692,7 @@ impl RunningServer {
             serving,
             tasks,
             local,
+            native,
         })
     }
 }

@@ -42,7 +42,13 @@ async fn collect(
     included: Vec<crate::ObjectId>,
     excluded: Vec<crate::ObjectId>,
 ) -> TestResult<BTreeMap<crate::ObjectId, (ObjectKind, Vec<u8>)>> {
-    let mut objects = GitObjects::start(&path.join(".git"), included, excluded)?;
+    let mut objects = GitObjects::start(
+        &path.join(".git"),
+        included,
+        excluded,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let mut result = BTreeMap::new();
     while let Some(oid) = objects.next().await? {
         let object = objects.read(oid).await?.body().await?;
@@ -119,6 +125,8 @@ async fn missing_walk_root_cannot_finish_successfully() -> TestResult {
         &directory.path().join(".git"),
         vec![crate::ObjectId::Sha1([42; 20])],
         vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )?;
     assert_eq!(objects.next().await?, None);
     assert!(matches!(
@@ -165,10 +173,24 @@ async fn malformed_and_oversized_batches_fail_before_publication() {
 async fn dropping_reader_kills_both_children() -> TestResult {
     let directory = fixture().await?;
     let tip = oid(directory.path(), "HEAD").await?;
-    let objects = GitObjects::start(&directory.path().join(".git"), vec![tip], vec![])?;
+    let objects = GitObjects::start(
+        &directory.path().join(".git"),
+        vec![tip],
+        vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let pids = [
-        objects.walk.as_ref().unwrap().process.child.id().unwrap(),
-        objects.batch.child.id().unwrap(),
+        objects
+            .walk
+            .as_ref()
+            .unwrap()
+            .process
+            .worker
+            .child
+            .id()
+            .unwrap(),
+        objects.batch.worker.child.id().unwrap(),
     ];
     drop(objects);
     timeout(Duration::from_secs(5), async {
@@ -194,7 +216,13 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     tokio::fs::write(directory.path().join("large"), &body).await?;
     let output = git(directory.path(), &["hash-object", "-w", "large"]).await?;
     let oid = parse_oid(output.trim_ascii())?;
-    let mut objects = GitObjects::start(&directory.path().join(".git"), vec![oid], vec![])?;
+    let mut objects = GitObjects::start(
+        &directory.path().join(".git"),
+        vec![oid],
+        vec![],
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     assert_eq!(objects.next().await?, Some(oid));
     let mut object = objects.read(oid).await?;
     let store = crate::blob::LargeBlobStore::new(
@@ -212,6 +240,27 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
         offset += bytes.len();
     }
     assert_eq!(offset, body.len());
+    struct BlobSink;
+    impl EdgeSink for BlobSink {
+        async fn append(
+            &mut self,
+            _: crate::ObjectId,
+            _: &[crate::packs::metadata::TypedEdge],
+        ) -> Result<(), ObjectReadError> {
+            Err(ObjectReadError::Malformed)
+        }
+    }
+    let mut verifier = crate::packs::verification::CanonicalVerifier::new(
+        &directory.path().join(".git"),
+        oid.format(),
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
+    let canonical = verifier.inspect(oid, &mut BlobSink).await?;
+    assert_eq!(canonical.size, body.len() as u64);
+    assert_eq!(canonical.kind, ObjectKind::Blob);
+    assert_eq!(canonical.digest, *blake3::hash(&body).as_bytes());
+    verifier.finish().await?;
     Ok(())
 }
 
@@ -234,12 +283,62 @@ async fn missing_walk_streams_requested_history_without_unrelated_blobs() -> Tes
         let hex = hex::encode(oid);
         tokio::fs::remove_file(path.join(".git/objects").join(&hex[..2]).join(&hex[2..])).await?;
     }
-    let mut walk = GitObjectWalk::missing(&path.join(".git"), vec![root], None)?;
+    let mut walk = GitObjectWalk::missing(
+        &path.join(".git"),
+        vec![root],
+        None,
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+    )?;
     let mut found = std::collections::BTreeSet::new();
     while let Some(oid) = walk.next().await? {
         assert!(found.insert(oid), "duplicate missing object");
     }
     walk.finish().await?;
     assert_eq!(found, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn streamed_inspection_rejects_hash_mismatch_partial_bodies_bad_separators_and_invalid_graphs()
+-> TestResult {
+    struct NoEdges;
+    impl EdgeSink for NoEdges {
+        async fn append(
+            &mut self,
+            _: crate::ObjectId,
+            _: &[crate::packs::metadata::TypedEdge],
+        ) -> Result<(), ObjectReadError> {
+            Ok(())
+        }
+    }
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let body = b"canonical bytes";
+        let oid = crate::object_id(format, ObjectKind::Blob, body);
+        for (bytes, size, separator) in [
+            (&b"incorrect bytes"[..], body.len(), b'\n'),
+            (&body[..2], body.len(), b'\n'),
+            (&body[..], body.len(), b'X'),
+            (&body[..], 1, b'\n'),
+        ] {
+            let mut frame = format!("{} blob {size}\n", hex::encode(oid)).into_bytes();
+            frame.extend_from_slice(bytes);
+            frame.push(separator);
+            let mut input = frame.as_slice();
+            let object = open_object(&mut input, oid).await?;
+            assert!(object.inspect_graph(&mut NoEdges).await.is_err());
+        }
+        let body = b"100644 unfinished";
+        let oid = crate::object_id(format, ObjectKind::Tree, body);
+        let mut frame = format!("{} tree {}\n", hex::encode(oid), body.len()).into_bytes();
+        frame.extend_from_slice(body);
+        frame.push(b'\n');
+        let mut input = frame.as_slice();
+        let object = open_object(&mut input, oid).await?;
+        assert!(matches!(
+            object.inspect_graph(&mut NoEdges).await,
+            Err(ObjectReadError::Malformed)
+        ));
+    }
     Ok(())
 }

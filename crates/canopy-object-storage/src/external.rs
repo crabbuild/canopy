@@ -9,8 +9,10 @@ use std::future::poll_fn;
 use std::{future::Future, sync::Arc, time::Duration};
 
 pub const PART_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_PARTS: u64 = 65_536;
+pub const MAX_ARTIFACT_BYTES: u64 = PART_BYTES as u64 * MAX_PARTS;
 const MAGIC: &[u8; 8] = b"CANOPY01";
-const LFS_MAGIC: &[u8; 8] = b"CANOPY02";
+const HASHED_MAGIC: &[u8; 8] = b"CANOPY02";
 
 pub struct Manifest {
     meta: ObjectMeta,
@@ -34,13 +36,20 @@ pub fn part(path: &Path, index: u64) -> Path {
     Path::from(format!("{path}.parts/{index:016x}"))
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("invalid external body manifest or part")]
+struct IntegrityError;
+
+/// Classify our integrity failures without treating provider/network failures
+/// as corrupt input. Callers preserve their public transfer error contracts.
+pub fn is_corruption(error: &object_store::Error) -> bool {
+    matches!(error, object_store::Error::Generic { source, .. } if source.is::<IntegrityError>())
+}
+
 fn invalid() -> object_store::Error {
     object_store::Error::Generic {
         store: "Canopy external body",
-        source: Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid external body manifest or part",
-        )),
+        source: Box::new(IntegrityError),
     }
 }
 
@@ -95,22 +104,47 @@ impl Upload {
         self.publish_manifest(path, size, manifest).await
     }
 
-    pub async fn publish_lfs(
+    pub async fn publish_hashed(
         &mut self,
         path: &Path,
         size: u64,
         digests: &[[u8; 32]],
     ) -> object_store::Result<[u8; 32]> {
-        if u64::try_from(digests.len()).ok() != Some(size.div_ceil(PART_BYTES as u64).max(1)) {
+        if size > MAX_ARTIFACT_BYTES
+            || u64::try_from(digests.len()).ok() != Some(size.div_ceil(PART_BYTES as u64).max(1))
+        {
             return Err(invalid());
         }
-        let mut manifest = LFS_MAGIC.to_vec();
+        let mut manifest = HASHED_MAGIC.to_vec();
         manifest.extend_from_slice(&size.to_le_bytes());
         for digest in digests {
             manifest.extend_from_slice(digest);
         }
         let root = *blake3::hash(&manifest).as_bytes();
-        self.publish_manifest(path, size, manifest).await?;
+        if self.active.is_some() || self.parts != size.div_ceil(PART_BYTES as u64).max(1) {
+            return Err(invalid());
+        }
+        copy_parts(self.store.as_ref(), &self.stage, path, size).await?;
+        // Conditional copy collisions may name wrong or incomplete bytes. Check
+        // each destination part before creating its complete manifest.
+        for (ordinal, expected) in digests.iter().enumerate() {
+            let offset = ordinal as u64 * PART_BYTES as u64;
+            let length = size.saturating_sub(offset).min(PART_BYTES as u64) as usize;
+            let (_, bytes) = bounded(
+                self.store.as_ref(),
+                &part(path, ordinal as u64),
+                GetOptions::default(),
+                length,
+            )
+            .await?;
+            let digest = tokio::task::spawn_blocking(move || blake3::hash(&bytes))
+                .await
+                .map_err(|_| invalid())?;
+            if digest.as_bytes() != expected {
+                return Err(invalid());
+            }
+        }
+        self.create_manifest(path, manifest).await?;
         Ok(root)
     }
 
@@ -124,9 +158,17 @@ impl Upload {
             return Err(invalid());
         }
         copy_parts(self.store.as_ref(), &self.stage, path, size).await?;
+        self.create_manifest(path, manifest).await
+    }
+
+    async fn create_manifest(
+        &mut self,
+        path: &Path,
+        manifest: Vec<u8>,
+    ) -> object_store::Result<()> {
         match timed(self.store.put_opts(
             path,
-            manifest.into(),
+            manifest.clone().into(),
             PutOptions {
                 mode: PutMode::Create,
                 ..Default::default()
@@ -134,7 +176,20 @@ impl Upload {
         ))
         .await
         {
-            Ok(_) | Err(object_store::Error::AlreadyExists { .. }) => Ok(()),
+            Ok(_) => Ok(()),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                let (_, existing) = bounded(
+                    self.store.as_ref(),
+                    path,
+                    GetOptions::default(),
+                    manifest.len(),
+                )
+                .await?;
+                if existing.as_ref() != manifest.as_slice() {
+                    return Err(invalid());
+                }
+                Ok(())
+            }
             Err(error) => Err(error),
         }
     }
@@ -218,19 +273,22 @@ pub async fn open(
     Ok(Manifest { meta, bytes })
 }
 
-pub async fn open_lfs(
+pub async fn open_hashed(
     store: &dyn ObjectStore,
     path: &Path,
     size: u64,
     root: [u8; 32],
 ) -> object_store::Result<Manifest> {
+    if size > MAX_ARTIFACT_BYTES {
+        return Err(invalid());
+    }
     let length = usize::try_from(size.div_ceil(PART_BYTES as u64).max(1))
         .ok()
         .and_then(|parts| parts.checked_mul(32))
         .and_then(|bytes| bytes.checked_add(16))
         .ok_or_else(invalid)?;
     let (meta, bytes) = bounded(store, path, GetOptions::default(), length).await?;
-    if &bytes[..8] != LFS_MAGIC
+    if &bytes[..8] != HASHED_MAGIC
         || bytes[8..16] != size.to_le_bytes()
         || blake3::hash(&bytes).as_bytes() != &root
     {

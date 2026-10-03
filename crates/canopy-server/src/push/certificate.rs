@@ -10,10 +10,13 @@ pub struct PushCertificateReceipt {
     pub recorded_at_ms: i64,
 }
 
-pub(crate) struct VerifiedPushCertificate {
-    pub body: Vec<u8>,
-    pub signer: String,
-    pub key: String,
+/// Native-verified signed push. Its construction is confined to the gateway.
+pub struct VerifiedPushCertificate {
+    pub(crate) target: cellule_runtime::CellTarget,
+    pub(crate) request_digest: [u8; 32],
+    pub(crate) body: Vec<u8>,
+    pub(crate) signer: String,
+    pub(crate) key: String,
 }
 
 pub(super) struct CertificateMeta {

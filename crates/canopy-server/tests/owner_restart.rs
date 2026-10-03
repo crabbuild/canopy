@@ -114,6 +114,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         first_disk.path().to_path_buf(),
         Arc::clone(&object_store),
         DiskBudget::new(1 << 30),
+        canopy_server::native_resources::NativeResources::default(),
     ));
     let (address, stop, server) = serve(first_gateway).await?;
     let first_url = format!("http://{address}/canopy/example.git");
@@ -325,6 +326,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         second_disk.path().to_path_buf(),
         object_store,
         DiskBudget::new(1 << 30),
+        canopy_server::native_resources::NativeResources::default(),
     ));
     let (address, stop, server) = serve(second_gateway).await?;
     let second_url = format!("http://{address}/canopy/example.git");

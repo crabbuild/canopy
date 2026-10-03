@@ -308,6 +308,7 @@ async fn verify_preparation(
             scratch.path().into(),
             store.clone(),
             DiskBudget::new(1 << 30),
+            canopy_server::native_resources::NativeResources::default(),
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -475,6 +476,7 @@ async fn gateway_request(
         scratch.path().into(),
         store,
         DiskBudget::new(1 << 30),
+        canopy_server::native_resources::NativeResources::default(),
     );
     let response = gateway
         .handle(

@@ -38,6 +38,7 @@ mod discovery;
 mod fetch;
 mod hydration;
 mod maintenance;
+pub mod preflight;
 mod push;
 mod ssh;
 
@@ -108,6 +109,7 @@ pub struct GitGateway {
     lfs: LfsService,
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
+    native: crate::native_resources::NativeScope,
     cache: Mutex<Option<Arc<CachedRepository>>>,
     objects: Mutex<Option<CachedObjects>>,
     push: Mutex<()>,
@@ -119,17 +121,28 @@ impl GitGateway {
         scratch_root: PathBuf,
         blob_store: Arc<dyn ObjectStore>,
         disk_budget: DiskBudget,
+        native: crate::native_resources::NativeResources,
     ) -> Self {
+        let native = native.scope(crate::native_resources::NativeClass::Foreground);
         let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
-        let pack_reader = Arc::clone(repository.pack_reader.get_or_init(|| {
-            Arc::new(crate::pack_store::PackReader::new(
-                Arc::clone(&blob_store),
-                repository.repository_id(),
-                scratch_root.clone(),
-                disk_budget.clone(),
-                repository.object_format(),
-            ))
-        }));
+        // A reader belongs to this gateway's workspace and disk admission.
+        // Another gateway may use a different root/budget for the same Cell.
+        let pack_reader = Arc::new(crate::pack_store::PackReader::new(
+            Arc::clone(&blob_store),
+            repository.repository_id(),
+            scratch_root.clone(),
+            disk_budget.clone(),
+            repository.object_format(),
+            native.clone(),
+        ));
+        {
+            let mut readers = repository
+                .pack_readers
+                .lock()
+                .expect("packed reader registry poisoned");
+            readers.retain(|reader| reader.strong_count() > 0);
+            readers.push(Arc::downgrade(&pack_reader));
+        }
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
         Self {
             repository,
@@ -140,6 +153,7 @@ impl GitGateway {
             lfs,
             scratch_root,
             disk_budget,
+            native,
             cache: Mutex::new(None),
             objects: Mutex::new(None),
             push: Mutex::new(()),
@@ -204,22 +218,33 @@ impl GitGateway {
             }
             let request = self.receive(request, None, admission).await?;
             let id = push_id.unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes());
-            let digest = request_digest(&request).await?;
+            let encoded = preflight::EncodedPush::new(
+                request,
+                &self.repository.target,
+                self.repository.repository_id(),
+                self.repository.object_format(),
+                actor,
+                id,
+            )
+            .await?;
             // Upload spooling uses a private, budgeted scratch file. Serialize
             // the push-ID check, decode, native Git work and publication, but
             // do not let one slow client block another client's upload.
             let _push = self.push.lock().await;
-            if self.repository.begin_push(id, actor, digest).await? {
+            if self
+                .repository
+                .begin_push(id, actor, encoded.identity().request_digest)
+                .await?
+            {
                 return Ok(http_body(with_push_id(
                     self.repository.completed_response(id).await?,
                     id,
                 )));
             }
-            let request = self.decode(request, None).await?;
-            return self
-                .handle_push(request, actor, id, digest)
-                .await
-                .map(http_body);
+            let preflight = encoded
+                .decode(&self.scratch_root, &self.disk_budget, None)
+                .await?;
+            return self.handle_push(preflight).await.map(http_body);
         }
         let request = self
             .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
@@ -243,6 +268,7 @@ impl GitGateway {
                 self.disk_budget.clone(),
                 &head.output.reference,
                 self.repository.object_format(),
+                self.native.clone(),
             )
             .await?
             .with_nonce(self.certificate_nonce().await?);
@@ -383,6 +409,7 @@ impl GitGateway {
                 &snapshot.head,
                 self.repository.object_format(),
                 Some(Arc::clone(&shared.cache)),
+                self.native.clone(),
             )
             .await?,
             nonce_seed: self.certificate_nonce().await?,
@@ -473,9 +500,14 @@ impl GitGateway {
             packed_ids = Some(ids);
         }
         let mut objects = if let Some(ids) = packed_ids {
-            GitObjects::packed(&backend.git_dir(), ids)?
+            GitObjects::packed(&backend.git_dir(), ids, &backend.cache.native)?
         } else {
-            GitObjects::start(&backend.git_dir(), included, excluded)?
+            GitObjects::start(
+                &backend.git_dir(),
+                included,
+                excluded,
+                &backend.cache.native,
+            )?
         };
 
         let mut batch = ObjectBatch::default();
@@ -654,30 +686,6 @@ fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
     }
 }
 
-async fn request_digest(request: &GitHttpRequest) -> Result<[u8; 32], InputError> {
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"canopy-git-push-v2");
-    hash.update(&[
-        u8::from(request.protocol_v2),
-        u8::from(request.content_type.is_some()),
-        u8::from(request.gzip),
-    ]);
-    for field in [
-        request.method.as_bytes(),
-        request.path_info.as_bytes(),
-        request.query.as_bytes(),
-        request
-            .content_type
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes(),
-    ] {
-        hash.update(&(field.len() as u64).to_le_bytes());
-        hash.update(field);
-    }
-    request.body.digest(hash).await
-}
-
 fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse {
     response.headers.push((
         "X-Canopy-Push-Id".into(),
@@ -686,25 +694,64 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
     response
 }
 
-async fn git_output(git_dir: &Path, args: &[&str]) -> Result<Vec<u8>, GatewayError> {
-    let output = crate::native_git::command(git_dir)?
+async fn git_output(
+    git_dir: &Path,
+    args: &[&str],
+    native: &crate::native_resources::NativeScope,
+) -> Result<Vec<u8>, GatewayError> {
+    use crate::git_http::{GitProcess, WORKER_DEADLINE, read_bounded};
+    use tokio::io::AsyncReadExt;
+    let mut command = crate::native_git::command(git_dir)?;
+    command
         .arg("--git-dir")
         .arg(git_dir)
         .args(args)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(GatewayError::Git(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
-    }
-    Ok(output.stdout)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut process = GitProcess::spawn(
+        command,
+        (),
+        native.try_admit(crate::native_resources::NativeWork::Read)?,
+    )?;
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or(GatewayError::MalformedCache)?;
+    let stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or(GatewayError::MalformedCache)?;
+    let run = async {
+        let mut bytes = Vec::new();
+        let read_stdout = async {
+            stdout.read_to_end(&mut bytes).await?;
+            Ok::<_, GitHttpError>(())
+        };
+        let ((), stderr) = tokio::try_join!(read_stdout, read_bounded(stderr, 64 << 10))?;
+        let status = process.wait().await?;
+        if !status.success() {
+            return Err(GatewayError::Git(
+                String::from_utf8_lossy(&stderr).into_owned(),
+            ));
+        }
+        Ok(bytes)
+    };
+    tokio::time::timeout(WORKER_DEADLINE, run)
+        .await
+        .map_err(|_| GitHttpError::Timeout)?
 }
 
-async fn git_refs(git_dir: &Path) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
+async fn git_refs(
+    git_dir: &Path,
+    native: &crate::native_resources::NativeScope,
+) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
     let listing = git_output(
         git_dir,
         &["for-each-ref", "--format=%(refname)%00%(objectname)"],
+        native,
     )
     .await?;
     let mut refs = BTreeMap::new();

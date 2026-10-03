@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import hashlib
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import secrets
@@ -571,7 +572,7 @@ def main():
         "image_digest": "22" * 32,
         "owner": "canopy",
         "peer_endpoint": "https://smoke.example.invalid",
-        "local_disk_limit_bytes": 1 << 30,
+        "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 1 << 30,
         "max_active_repositories": 3,
     }
     workspace = (nullcontext(tempfile.mkdtemp(prefix="canopy-process-", dir=args.work_parent))

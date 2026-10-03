@@ -34,6 +34,10 @@ mod ref_snapshots;
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
 -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("canopy_server=warn")
+        .with_test_writer()
+        .try_init();
     let application = Arc::new(CanopyApplication::compile(build_descriptor(
         include_bytes!("../../../../Cargo.lock"),
         "smart-http-test",
@@ -103,7 +107,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         )?;
         let repository = Arc::new(RepositoryCell::new(
             &application_handle,
-            target.clone(),
+            target,
             repository_id,
             canopy_server::ObjectFormat::Sha1,
         )?);
@@ -118,6 +122,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             scratch.path().to_path_buf(),
             Arc::clone(&blob_store),
             disk_budget.clone(),
+            canopy_server::native_resources::NativeResources::default(),
         ));
         let invalid_oid = [0; 32];
         assert!(matches!(
@@ -441,26 +446,18 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         })
         .await?;
         drop(teardown_gateway);
-        // The canonical Cell also owns the shared pack reader. Drop both
-        // owners to prove complete cache teardown before the cold clone.
-        drop(repository);
         assert_eq!(
             disk_budget.used(),
             0,
-            "repository teardown releases retained object and snapshot charges"
+            "gateway teardown releases retained object and snapshot charges"
         );
 
-        let repository = Arc::new(RepositoryCell::new(
-            &application_handle,
-            target,
-            repository_id,
-            canopy_server::ObjectFormat::Sha1,
-        )?);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
             scratch.path().to_path_buf(),
             blob_store,
             DiskBudget::new(1 << 30),
+            canopy_server::native_resources::NativeResources::default(),
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;

@@ -109,6 +109,7 @@ impl CanopyServer {
 
 impl RunningServer {
     async fn shutdown(self) -> Result<(), ServerError> {
+        self.native.close();
         self.maintenance_stop.cancel();
         self.ingress_stop.cancel();
         let serving = self.serving.await;
@@ -119,6 +120,10 @@ impl RunningServer {
         };
         self.tasks.close();
         self.tasks.wait().await;
+        // Detached native reapers and blocking verifiers outlive their request
+        // observers. Keep Cell authority, heartbeat and workspace until every
+        // admitted owner releases its claim. Uncertain drain stays pending.
+        self.native.drain().await;
         let drained = self.node.shutdown().await;
         if drained.is_ok() {
             self.local.confirm_drained();
@@ -140,3 +145,6 @@ impl RunningServer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

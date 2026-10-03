@@ -23,14 +23,17 @@ pub(super) enum PushCommands {
 }
 
 impl PushCommands {
-    pub(super) async fn read(request: &GitHttpRequest) -> Result<Self, InputError> {
+    pub(super) async fn read(
+        request: &GitHttpRequest,
+        format: crate::ObjectFormat,
+    ) -> Result<Self, InputError> {
         // Native Git owns media-type errors and command-limit hook reports.
         if request.content_type.as_deref() != Some("application/x-git-receive-pack-request") {
             return Ok(Self::OtherMedia);
         }
         match request.body.packet_prefix(PREFIX_LIMIT).await {
             Ok(prefix) => {
-                let mut parsed = match commands(&prefix) {
+                let mut parsed = match commands_in_format(&prefix, Some(format)) {
                     Ok(parsed) => parsed,
                     // Count and byte limits share the native Git rejection path.
                     Err(InputError::TooLarge) => return Ok(Self::Limited),
@@ -278,7 +281,13 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
+fn commands(bytes: &[u8]) -> Result<PushCommands, InputError> {
+    commands_in_format(bytes, None)
+}
+fn commands_in_format(
+    mut bytes: &[u8],
+    format: Option<crate::ObjectFormat>,
+) -> Result<PushCommands, InputError> {
     let mut report_status = false;
     let mut sideband = false;
     let mut options_requested = false;
@@ -343,7 +352,12 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
                     *state = Certificate::Signature;
                 }
                 Certificate::Updates if payload.ends_with(b"\n") => {
-                    parse_update(&payload[..payload.len() - 1], &mut updates, &mut names)?;
+                    parse_update(
+                        &payload[..payload.len() - 1],
+                        &mut updates,
+                        &mut names,
+                        format,
+                    )?;
                 }
                 Certificate::Signature if payload == b"push-cert-end\n" => {
                     *state = Certificate::Done;
@@ -355,7 +369,10 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
         }
         let payload = payload.strip_suffix(b"\n").unwrap_or(payload);
         if let Some(shallow) = payload.strip_prefix(b"shallow ") {
-            if !updates.is_empty() || parse_oid(shallow).is_none() {
+            if !updates.is_empty()
+                || parse_oid(shallow)
+                    .is_none_or(|oid| format.is_some_and(|format| oid.format() != format))
+            {
                 return Err(InputError::Commands);
             }
             continue;
@@ -383,7 +400,7 @@ fn commands(mut bytes: &[u8]) -> Result<PushCommands, InputError> {
             certificate_body = Some(Vec::new());
             continue;
         }
-        parse_update(payload, &mut updates, &mut names)?;
+        parse_update(payload, &mut updates, &mut names, format)?;
     }
 }
 
@@ -410,6 +427,7 @@ fn parse_update<'a>(
     payload: &'a [u8],
     updates: &mut Vec<RefUpdate>,
     names: &mut BTreeSet<&'a str>,
+    format: Option<crate::ObjectFormat>,
 ) -> Result<(), InputError> {
     if updates.len() == MAX_UPDATES {
         return Err(InputError::TooLarge);
@@ -423,7 +441,7 @@ fn parse_update<'a>(
         .next()
         .and_then(parse_oid)
         .ok_or(InputError::Commands)?;
-    if old.format() != new.format() {
+    if old.format() != new.format() || format.is_some_and(|format| old.format() != format) {
         return Err(InputError::Commands);
     }
     let name = std::str::from_utf8(fields.next().ok_or(InputError::Commands)?)

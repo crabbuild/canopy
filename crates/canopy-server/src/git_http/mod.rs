@@ -11,18 +11,20 @@ use std::{
 };
 
 pub use crate::git_cache::CacheError;
+mod capture;
 use crate::{
     git_cache::GitCache,
     git_input::{GitInput, MAX_FETCH_REQUEST_BYTES},
 };
 use bytes::Bytes;
+pub use capture::NativeCaptureError;
 use cellule_ltx::DiskBudget;
 use futures_core::Stream;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::{mpsc, oneshot},
 };
 
@@ -72,6 +74,7 @@ pub struct GitHttpRequest<B = GitInput> {
 }
 
 /// CGI response with a streamed or collected body.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitHttpResponse<B = Vec<u8>> {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -97,9 +100,10 @@ impl GitHttpBackend {
         budget: DiskBudget,
         head: &str,
         object_format: crate::ObjectFormat,
+        native: crate::native_resources::NativeScope,
     ) -> Result<Self, GitHttpError> {
         Ok(Self {
-            cache: GitCache::create(scratch_root, budget, head, object_format).await?,
+            cache: GitCache::create(scratch_root, budget, head, object_format, native).await?,
             nonce_seed: None,
             signers: None,
         })
@@ -121,6 +125,32 @@ impl GitHttpBackend {
     /// Runs Git on decoded input and collects a bounded reply for durable push publication.
     pub async fn run(&self, request: GitHttpRequest) -> Result<GitHttpResponse, GitHttpError> {
         let response = self.stream(request, ()).await?;
+        self.collect(response).await
+    }
+
+    /// Receives native pack/index inputs for staged catalog preparation. The
+    /// caller must authenticate and admit the decoded request before invoking
+    /// this API, then capture and verify inputs before durable publication.
+    pub async fn run_native_receive(
+        &self,
+        request: GitHttpRequest,
+    ) -> Result<GitHttpResponse, GitHttpError> {
+        if request.method != "POST"
+            || request.path_info != "/repo.git/git-receive-pack"
+            || !request.query.is_empty()
+        {
+            return Err(GitHttpError::InvalidPath);
+        }
+        let mut command = self.transport_command()?;
+        command.args(["-c", "receive.unpackLimit=0"]);
+        let response = self.stream_command(request, (), command).await?;
+        self.collect(response).await
+    }
+
+    async fn collect(
+        &self,
+        response: GitHttpResponse<GitBody>,
+    ) -> Result<GitHttpResponse, GitHttpError> {
         let GitHttpResponse {
             status,
             headers,
@@ -204,6 +234,16 @@ impl GitHttpBackend {
         request: GitHttpRequest,
         keep_alive: T,
     ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
+        self.stream_command(request, keep_alive, self.transport_command()?)
+            .await
+    }
+
+    async fn stream_command<T: Send + 'static>(
+        &self,
+        request: GitHttpRequest,
+        keep_alive: T,
+        mut process: Command,
+    ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
         if request.gzip {
             return Err(GitHttpError::EncodedInput);
         }
@@ -213,7 +253,6 @@ impl GitHttpBackend {
         {
             return Err(GitHttpError::InvalidPath);
         }
-        let mut process = self.transport_command()?;
         process
             .arg("http-backend")
             .env("GIT_PROJECT_ROOT", self.cache.root())
@@ -247,6 +286,9 @@ impl GitHttpBackend {
             process,
             (keep_alive, Arc::clone(&self.cache), request.body),
             WORKER_DEADLINE,
+            self.cache
+                .native
+                .try_admit(crate::native_resources::NativeWork::Pack)?,
         )
         .await
     }
@@ -290,8 +332,9 @@ async fn start_stream<T: Send + 'static>(
     command: Command,
     keep_alive: T,
     deadline: Duration,
+    native: crate::native_resources::NativePermit,
 ) -> Result<GitHttpResponse<GitBody>, GitHttpError> {
-    let mut process = GitProcess::spawn(command, keep_alive)?;
+    let mut process = GitProcess::spawn(command, keep_alive, native)?;
     let stdout = process
         .child
         .stdout
@@ -339,8 +382,7 @@ async fn start_stream<T: Send + 'static>(
                 tokio::try_join!(read_stdout, read_bounded(stderr, MAX_CGI_STDERR_BYTES),)?;
             // Keep the group leader unreaped while descendants still own pipes;
             // cancellation can then signal its group without PID reuse ambiguity.
-            let status = process.child.wait().await?;
-            process.disarm();
+            let status = process.wait().await?;
             if !status.success() {
                 return Err(GitHttpError::GitExit {
                     status,
@@ -384,57 +426,7 @@ async fn start_stream<T: Send + 'static>(
     })
 }
 
-pub(crate) struct GitProcess<T> {
-    pub(crate) child: Child,
-    #[cfg(unix)]
-    group: Option<i32>,
-    // Drop signals the process group before fields release cache and input owners.
-    _keep_alive: T,
-}
-
-impl<T> GitProcess<T> {
-    pub(crate) fn spawn(mut command: Command, keep_alive: T) -> Result<Self, GitHttpError> {
-        #[cfg(unix)]
-        command.process_group(0);
-        let child = command.kill_on_drop(true).spawn();
-        // The pre-exec closure owns a parent copy of the worker fence. Release
-        // it before cleanup can drop the cache, including on spawn failure;
-        // only the running child and its descendants should retain that lock.
-        drop(command);
-        let child = child?;
-        #[cfg(unix)]
-        let group = Some(
-            i32::try_from(child.id().ok_or(GitHttpError::Interrupted)?)
-                .map_err(|_| GitHttpError::Interrupted)?,
-        );
-        Ok(Self {
-            child,
-            #[cfg(unix)]
-            group,
-            _keep_alive: keep_alive,
-        })
-    }
-
-    pub(crate) fn disarm(&mut self) {
-        #[cfg(unix)]
-        {
-            self.group = None;
-        }
-    }
-}
-
-impl<T> Drop for GitProcess<T> {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(group) = self.group {
-            // SAFETY: spawn created a separate process group with this positive PID.
-            // Its leader is not reaped until pipes close, preventing PID reuse here.
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-        }
-    }
-}
+pub(crate) use crate::native_git::process::GitProcess;
 
 pub(crate) async fn read_bounded<R: AsyncRead + Unpin>(
     reader: R,

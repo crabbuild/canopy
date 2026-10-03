@@ -249,7 +249,14 @@ async fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut process = GitProcess::spawn(command, Arc::clone(&backend.cache))?;
+    let mut process = GitProcess::spawn(
+        command,
+        Arc::clone(&backend.cache),
+        backend
+            .cache
+            .native
+            .try_admit(crate::native_resources::NativeWork::Pack)?,
+    )?;
     let mut stdin = process
         .child
         .stdin
@@ -277,8 +284,7 @@ async fn run(
         read_bounded(stdout, 128 * 1024),
         read_bounded(stderr, 64 * 1024)
     )?;
-    let status = process.child.wait().await?;
-    process.disarm();
+    let status = process.wait().await?;
     Ok(Output {
         status,
         stdout,

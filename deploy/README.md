@@ -62,6 +62,32 @@ public/peer URLs for this deployment. Set these container-specific values:
 {
   "listen": "0.0.0.0:8080",
   "data_dir": "/var/lib/canopy",
+  "native_limits": {
+    "total": {
+      "processes": 16,
+      "cpu_units": 16,
+      "memory_bytes": 2147483648,
+      "descriptors": 1024
+    },
+    "maintenance_reserved": {
+      "processes": 2,
+      "cpu_units": 5,
+      "memory_bytes": 805306368,
+      "descriptors": 128
+    },
+    "read": {
+      "processes": 1,
+      "cpu_units": 1,
+      "memory_bytes": 134217728,
+      "descriptors": 32
+    },
+    "pack": {
+      "processes": 1,
+      "cpu_units": 4,
+      "memory_bytes": 536870912,
+      "descriptors": 64
+    }
+  },
   "local_disk_limit_bytes": 1610612736,
   "max_active_repositories": 3
 }

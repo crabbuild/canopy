@@ -280,13 +280,38 @@ pub(crate) fn policies_allow(
 }
 
 fn policy_statement(update: &RefUpdate) -> SqlStatement {
+    policy_statement_for(update, None)
+}
+/// The final publisher supplies only MAC-verified catalog ancestry evidence.
+/// Current check-context versions/reporters and branch rules stay in this SQL.
+pub(crate) fn policy_statement_with_ancestry(update: &RefUpdate, ancestry: bool) -> SqlStatement {
+    policy_statement_for(update, Some(ancestry))
+}
+fn policy_statement_for(update: &RefUpdate, ancestry: Option<bool>) -> SqlStatement {
     let old = update.expected.as_ref().and_then(|old| old.oid);
+    let ancestry_sql = if ancestry.is_some() {
+        "?4"
+    } else {
+        "(?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3))"
+    };
+    let mut parameters = vec![
+        SqlValue::Text(update.name.clone()),
+        old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
+        update
+            .new_oid
+            .map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
+    ];
+    if let Some(value) = ancestry {
+        parameters.push(SqlValue::Integer(i64::from(value)));
+    }
     SqlStatement {
-        sql: "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), (?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3)), b.require_pull_request FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1".into(),
-        parameters: vec![SqlValue::Text(update.name.clone()), old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())), update.new_oid.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec()))],
+        sql: format!(
+            "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), {ancestry_sql}, b.require_pull_request FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1"
+        ),
+        parameters,
     }
 }
-fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy>> {
+pub(crate) fn decode_policy(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<Policy>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing branch policy result"))?;

@@ -93,6 +93,7 @@ def main():
         "provider_image": metadata["provider_image"], "git_version": local_eval.run("git", "--version"),
         "host_platform": platform.platform(), "host_cpu_count": os.cpu_count(),
         "disk_limit_bytes": config["local_disk_limit_bytes"],
+        "native_limits": config["native_limits"],
         "active_repository_limit": config["max_active_repositories"],
         "node_process_tree_peak_rss_bytes": 0,
         "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

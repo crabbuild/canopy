@@ -4,6 +4,8 @@ use std::{fs::File, io, path::Path};
 
 use tokio::process::Command;
 
+pub(crate) mod process;
+
 pub(crate) const WORKER_LOCK: &str = ".canopy-native.lock";
 
 pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
@@ -155,6 +157,8 @@ mod tests {
             cellule_ltx::DiskBudget::new(1 << 20),
             "refs/heads/main",
             crate::ObjectFormat::Sha1,
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         let git_dir = cache.git_dir();

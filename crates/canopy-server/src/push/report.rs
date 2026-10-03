@@ -4,6 +4,98 @@ pub(crate) const REJECTED: &str =
     "Canopy publication rejected: refs, permissions or policy changed; fetch and retry";
 const PACKET_BYTES: usize = 65520;
 
+/// Bind native success reports to the exact updates being published. Native
+/// failures can coexist with successful updates in a non-atomic push. A failure
+/// or empty-command outcome cannot acknowledge any unvalidated successful ref.
+pub(crate) fn publication_matches(
+    response: &GitHttpResponse,
+    plan: Option<&PushPlan>,
+) -> Result<(), PushError> {
+    use std::{borrow::Cow, collections::BTreeSet};
+    if response.status != 200 {
+        return if plan.is_none() {
+            Ok(())
+        } else {
+            Err(PushError::InvalidResponse)
+        };
+    }
+    let mut bytes = response.body.as_slice();
+    let first = if bytes.is_empty() {
+        None
+    } else {
+        packet(&mut bytes)?
+    };
+    let data = if first.is_some_and(|payload| matches!(payload.first(), Some(1..=3))) {
+        let mut data = Vec::new();
+        let mut next = first;
+        while let Some(payload) = next {
+            match payload.split_first() {
+                Some((1, body)) => data.extend_from_slice(body),
+                Some((2, _)) => {}
+                _ => return Err(PushError::InvalidResponse),
+            }
+            next = packet(&mut bytes)?;
+        }
+        if !bytes.is_empty() {
+            return Err(PushError::InvalidResponse);
+        }
+        Cow::Owned(data)
+    } else {
+        Cow::Borrowed(response.body.as_slice())
+    };
+    // A client may decline report-status. The service's private native witness
+    // then supplies the ref plan; final CAS and the certificate still bind it.
+    if data.is_empty() || data.as_ref() == b"0000" {
+        return Ok(());
+    }
+    let mut bytes = data.as_ref();
+    let unpack = packet(&mut bytes)?.ok_or(PushError::InvalidResponse)?;
+    if !unpack.starts_with(b"unpack ")
+        || !unpack.ends_with(b"\n")
+        || (plan.is_some() && unpack != b"unpack ok\n")
+    {
+        return Err(PushError::InvalidResponse);
+    }
+    let mut expected: BTreeSet<&str> = plan
+        .into_iter()
+        .flat_map(|plan| plan.updates.iter().map(|update| update.name.as_str()))
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(payload) = packet(&mut bytes)? {
+        let (success, name) = if let Some(name) = payload
+            .strip_prefix(b"ok ")
+            .and_then(|value| value.strip_suffix(b"\n"))
+        {
+            (true, name)
+        } else if let Some(failure) = payload
+            .strip_prefix(b"ng ")
+            .and_then(|value| value.strip_suffix(b"\n"))
+        {
+            let mut parts = failure.splitn(2, |byte| *byte == b' ');
+            let name = parts.next().ok_or(PushError::InvalidResponse)?;
+            if parts.next().is_none_or(|reason| reason.is_empty()) {
+                return Err(PushError::InvalidResponse);
+            }
+            (false, name)
+        } else {
+            return Err(PushError::InvalidResponse);
+        };
+        let name = std::str::from_utf8(name).map_err(|_| PushError::InvalidResponse)?;
+        if !crate::refs::valid_ref_name(name)
+            || !seen.insert(name)
+            || seen.len() > crate::refs::MAX_UPDATES
+            || (success && (unpack != b"unpack ok\n" || !expected.remove(name)))
+            || (!success && expected.contains(name))
+        {
+            return Err(PushError::InvalidResponse);
+        }
+    }
+    if !bytes.is_empty() || !expected.is_empty() {
+        return Err(PushError::InvalidResponse);
+    }
+    Ok(())
+}
+
 pub(crate) fn rejected_commands<'a>(
     names: impl Iterator<Item = &'a str>,
     report_status: bool,
