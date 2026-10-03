@@ -24,6 +24,8 @@ const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
 mod inputs;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
+mod roots;
+pub use roots::{ReadyRootPush, RootPushReadyError};
 mod preparation;
 pub use preparation::{
     PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,
@@ -719,6 +721,32 @@ impl PublicationTicket {
             output,
         )
         .await
+    }
+    /// Read only a known root completion, selected again under current read
+    /// authorization. Ticket/receipt DTOs never grant artifact read authority.
+    pub async fn root_response(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>, RootPushReplayError>
+    {
+        let completed = match self.state() {
+            PublicationState::Finished(Ok(PublicationOutcome::RootPush(completed)))
+                if matches!(completed.output, RootCompletionReply::Completed(_)) =>
+            {
+                completed
+            }
+            _ => return Err(RootPushReplayError::Context),
+        };
+        let read = &self.job.read;
+        replay_root_push_response(
+            &read.client,
+            &read.target,
+            read.request.clone(),
+            Some(completed.receipt),
+            store,
+        )
+        .await?
+        .ok_or(RootPushReplayError::Context)
     }
 }
 

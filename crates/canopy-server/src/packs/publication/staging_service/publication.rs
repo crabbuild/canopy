@@ -38,6 +38,15 @@ impl StagedPublicationTicket {
     ) -> Result<crate::git_http::GitHttpResponse, CatalogPushResponseError> {
         self.ticket.response().await
     }
+    pub async fn root_response(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<
+        crate::git_http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>,
+        RootPushReplayError,
+    > {
+        self.ticket.root_response(store).await
+    }
 }
 impl StagingTicket {
     /// Seal the bound phase and synchronously transfer the exact final command
