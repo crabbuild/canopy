@@ -309,6 +309,7 @@ struct Local {
     bound_started: Option<Instant>,
     bound_result: Option<Arc<StagingBound>>,
     bound_renewal: Option<Committed<PreparationReply>>,
+    policy_receipt: Option<Receipt>,
     finishing: bool,
     deadline: Instant,
     lifetime: Instant,
@@ -520,6 +521,7 @@ impl StagingCoordinator {
                 bound_started: ready.inner.bound_source.as_ref().map(|_| now),
                 bound_result: None,
                 bound_renewal: None,
+                policy_receipt: None,
                 finishing: false,
                 deadline: now,
                 lifetime: now + Duration::from_millis(self.inner.limits.lifetime_ms),
@@ -1191,6 +1193,7 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
         let Some(exact) = exact else {
             let publication = job.publication.lock().expect("staging publication").clone();
             if let Some(ticket) = publication
+                && job.local.lock().expect("staging local").finishing
                 && !matches!(
                     ticket.state(),
                     PublicationState::Held | PublicationState::Discarded
@@ -1198,8 +1201,9 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
             {
                 // The other coordinator owns execution and exact evidence.
                 // Observe it even if this supervisor lost its local authority.
-                publication::observe(&inner, &job, &ticket).await;
-                return;
+                if publication::observe(&inner, &job, &ticket).await {
+                    return;
+                }
             }
             fence_and_drain(&inner, &job, StagingError::Worker).await;
             return;
@@ -1237,13 +1241,16 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
     loop {
         let publication = job.publication.lock().expect("staging publication").clone();
         if let Some(ticket) = publication
+            && job.local.lock().expect("staging local").finishing
             && !matches!(
                 ticket.state(),
                 PublicationState::Held | PublicationState::Discarded
             )
         {
-            publication::observe(&inner, &job, &ticket).await;
-            return;
+            if publication::observe(&inner, &job, &ticket).await {
+                return;
+            }
+            continue;
         }
         let command = job.exact.lock().expect("staging exact").clone();
         if let Some(command) = command {
@@ -1465,7 +1472,17 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         .is_some()
                 })
                 .cloned();
-            if l.fenced || now >= l.deadline.min(l.lifetime) {
+            let stopped_page = l.stop
+                && l.workers == 0
+                && job
+                    .publication
+                    .lock()
+                    .expect("staging publication")
+                    .as_ref()
+                    .is_some_and(|ticket| {
+                        ticket.is_policy_page() && matches!(ticket.state(), PublicationState::Held)
+                    });
+            if l.fenced || now >= l.deadline.min(l.lifetime) || stopped_page {
                 Next::Fence
             } else if l.stop && !l.finishing && l.workers == 0 && checkpoint.is_none() {
                 Next::Stop
@@ -1507,6 +1524,11 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     {
                         receipt = renewal.receipt;
                     }
+                    if let Some(policy) = l.policy_receipt
+                        && policy.commit_sequence > receipt.commit_sequence
+                    {
+                        receipt = policy;
+                    }
                     if let Some(registration) =
                         job.checkpoint.lock().expect("staging checkpoint").as_ref()
                         && let Some(Ok(registered)) = registration.result.borrow().as_ref()
@@ -1528,8 +1550,9 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     fence_and_drain(&inner, &job, StagingError::PublicationAdmission(error)).await;
                     return;
                 }
-                publication::observe(&inner, &job, &ticket).await;
-                return;
+                if publication::observe(&inner, &job, &ticket).await {
+                    return;
+                }
             }
             Next::Stop => {
                 let mut local = job.local.lock().expect("staging local");
@@ -1683,15 +1706,29 @@ async fn fence_and_drain(inner: &Inner, job: &Job, error: StagingError) {
                 {
                     // A service-internal activation raced fencing. Execution
                     // owns exact evidence now; preserve its original outcome.
-                    publication::observe(inner, job, &ticket).await;
-                    return;
+                    if publication::observe(inner, job, &ticket).await {
+                        return;
+                    }
                 }
             }
             PublicationState::Discarded => {}
-            _ => {
-                publication::observe(inner, job, &ticket).await;
-                return;
+            _ if !ticket.is_policy_page() || job.local.lock().expect("staging local").finishing => {
+                let terminal = publication::observe(inner, job, &ticket).await;
+                if terminal {
+                    return;
+                }
             }
+            _ => {}
+        }
+    }
+    finish_fence(inner, job, error).await;
+}
+async fn finish_fence(inner: &Inner, job: &Job, error: StagingError) {
+    {
+        let mut local = job.local.lock().expect("staging local");
+        local.fenced = true;
+        if let Some(session) = &local.bound {
+            session.fence();
         }
     }
     let error = Arc::new(error);

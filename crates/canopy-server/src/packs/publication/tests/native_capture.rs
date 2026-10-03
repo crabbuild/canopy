@@ -162,6 +162,47 @@ async fn native_receive_root_outcome_records_write_refusal_and_requires_current_
     }
     Ok(())
 }
+#[tokio::test]
+async fn native_receive_policy_dispatch_orders_held_pages_and_refuses_stopped_handoff() -> Result {
+    for loss in [
+        super::policy_dispatch::Loss::None,
+        super::policy_dispatch::Loss::HeldStop,
+    ] {
+        native_receive(true, CompletionMode::PolicyDispatch { fault: 0, loss }).await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_dispatch_recovers_exact_pages_and_resumes_joint_completion() -> Result
+{
+    for fault in 1..=3 {
+        native_receive(
+            true,
+            CompletionMode::PolicyDispatch {
+                fault,
+                loss: super::policy_dispatch::Loss::None,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_dispatch_preserves_known_receipts_and_refuses_changed_authority()
+-> Result {
+    for loss in [
+        super::policy_dispatch::Loss::Write,
+        super::policy_dispatch::Loss::Epoch,
+        super::policy_dispatch::Loss::Check,
+        super::policy_dispatch::Loss::Expiry,
+        super::policy_dispatch::Loss::Close,
+    ] {
+        for fault in 1..=3 {
+            native_receive(true, CompletionMode::PolicyDispatch { fault, loss }).await?;
+        }
+    }
+    Ok(())
+}
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -554,6 +595,26 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         builder.add_segment(segment).await?;
         builder.finish_pack().await?;
         let prepared = builder.finish().await?;
+        if let CompletionMode::PolicyDispatch { fault, loss } = mode {
+            Box::pin(super::policy_dispatch::qualify(
+                super::root_dispatch::Context {
+                    fixture: &fixture,
+                    prepared: Arc::new(prepared),
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: physical_root.path(),
+                    budget: physical_disk.clone(),
+                    request: recovered,
+                },
+                fault,
+                loss,
+            ))
+            .await?;
+            cleaned(physical_root.path(), &physical_disk).await?;
+            fixture.runtime.shutdown().await?;
+            return Ok(());
+        }
         if let CompletionMode::Dispatch { fault, loss } = mode {
             Box::pin(super::root_dispatch::qualify(
                 super::root_dispatch::Context {

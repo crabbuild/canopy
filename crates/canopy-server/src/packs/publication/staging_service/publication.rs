@@ -20,7 +20,7 @@ impl std::fmt::Display for StagedPublicationFailure {
 }
 impl std::error::Error for StagedPublicationFailure {}
 
-/// Observation cannot activate/discard the lifecycle's held final command.
+/// Observation cannot activate/discard the lifecycle's held command.
 #[derive(Clone)]
 #[must_use]
 pub struct StagedPublicationTicket {
@@ -59,25 +59,44 @@ impl StagingTicket {
         coordinator: &PublicationCoordinator,
         ready: impl Into<ReadyPublication>,
     ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
-        let ready = ready.into();
+        self.handoff(coordinator, ready.into(), false)
+    }
+    /// Order one intermediate policy page through the same held slot. A known
+    /// successful page resumes Bound; it never terminates or acknowledges a
+    /// push. Retrieve the producer result before handing it off.
+    pub fn register_policy_page(
+        &self,
+        coordinator: &PublicationCoordinator,
+        ready: ReadyRefPolicyPage,
+    ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
+        self.handoff(coordinator, ready.into(), true)
+    }
+    fn handoff(
+        &self,
+        coordinator: &PublicationCoordinator,
+        ready: ReadyPublication,
+        policy_page: bool,
+    ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
         let mut local = self.job.local.lock().expect("staging local");
-        let reason =
-            if local.fenced || local.stop || Instant::now() >= local.deadline.min(local.lifetime) {
-                Some(StagingError::Inactive)
-            } else if local.finishing {
-                Some(StagingError::Duplicate)
-            } else if !matches!(
-                self.state(),
-                StagingState::Bound(_) | StagingState::RegisteringInputs
-            ) {
-                Some(StagingError::NotReady)
-            } else {
-                match local.bound.as_ref() {
-                    Some(session) if session.live_lease().is_err() => Some(StagingError::Inactive),
-                    Some(session) if ready.belongs_to(session) => None,
-                    _ => Some(StagingError::Context),
-                }
-            };
+        let reason = if ready.is_policy_page() != policy_page {
+            Some(StagingError::Context)
+        } else if local.fenced || local.stop || Instant::now() >= local.deadline.min(local.lifetime)
+        {
+            Some(StagingError::Inactive)
+        } else if local.finishing {
+            Some(StagingError::Duplicate)
+        } else if !matches!(
+            self.state(),
+            StagingState::Bound(_) | StagingState::RegisteringInputs
+        ) {
+            Some(StagingError::NotReady)
+        } else {
+            match local.bound.as_ref() {
+                Some(session) if session.live_lease().is_err() => Some(StagingError::Inactive),
+                Some(session) if ready.belongs_to(session) => None,
+                _ => Some(StagingError::Context),
+            }
+        };
         if let Some(reason) = reason {
             return Err(Box::new(StagedPublicationFailure { reason, ready }));
         }
@@ -105,7 +124,9 @@ impl StagingTicket {
     }
 }
 
-pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket) {
+/// True ends lifecycle ownership; a known successful intermediate page returns
+/// false after resuming Bound. Keep uncertain pages under the same exact owner.
+pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket) -> bool {
     loop {
         job.status.send_replace(StagingState::Publishing);
         match ticket.wait().await {
@@ -126,6 +147,9 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 }
             }
             PublicationState::Finished(outcome) => {
+                if ticket.is_policy_page() {
+                    return finish_page(inner, job, outcome).await;
+                }
                 {
                     let mut local = job.local.lock().expect("staging local");
                     local.fenced = true;
@@ -136,7 +160,7 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 drain_work(job).await;
                 job.status.send_replace(StagingState::Published(outcome));
                 remove(inner, job);
-                return;
+                return true;
             }
             PublicationState::Discarded => {
                 // Only service-internal premature discard can reach this path;
@@ -152,9 +176,58 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 job.status
                     .send_replace(StagingState::Fenced(Arc::new(StagingError::Inactive)));
                 remove(inner, job);
-                return;
+                return true;
             }
             _ => unreachable!("publication wait observes an outcome"),
         }
+    }
+}
+
+async fn finish_page(
+    inner: &Inner,
+    job: &Job,
+    outcome: Result<PublicationOutcome, Arc<PublicationError>>,
+) -> bool {
+    let (receipt, error) = match outcome {
+        Ok(PublicationOutcome::PolicyPage(value)) if matches!(value.output, RefPolicyReply::Registered(progress) if progress.valid) => {
+            (Some(value.receipt), None)
+        }
+        Err(error) => (None, Some(StagingError::Publication(error))),
+        _ => (None, Some(StagingError::Context)),
+    };
+    let error = {
+        let mut local = job.local.lock().expect("staging local");
+        local.finishing = false;
+        if let Some(receipt) = receipt
+            && local
+                .policy_receipt
+                .is_none_or(|old| old.commit_sequence < receipt.commit_sequence)
+        {
+            local.policy_receipt = Some(receipt);
+        }
+        if let Some(error) = error {
+            Some(error)
+        } else if local.stop
+            || local.fenced
+            || Instant::now() >= local.deadline.min(local.lifetime)
+            || local
+                .bound
+                .as_ref()
+                .is_none_or(|session| session.live_lease().is_err())
+        {
+            Some(StagingError::Inactive)
+        } else {
+            // This receipt is historical. Final factories still query current
+            // guard readiness and the final command rechecks it transactionally.
+            job.status.send_replace(bound_state(&local));
+            None
+        }
+    };
+    if let Some(error) = error {
+        finish_fence(inner, job, error).await;
+        true
+    } else {
+        job.changed.notify_one();
+        false
     }
 }

@@ -1,4 +1,4 @@
-//! Bounded, account-fair dispatch of already prepared final commands.
+//! Bounded, account-fair dispatch of privately prepared exact commands.
 //! Catalog reconciliation, uploads and ref proof construction happen before
 //! dispatch. This primitive does not guarantee progress against a moving root;
 //! frontier pipelining and production orchestration are separate requirements.
@@ -24,6 +24,8 @@ const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
 mod inputs;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
+mod policy;
+pub use policy::{ReadyRefPolicyPage, RefPolicyReadyError};
 mod roots;
 pub use roots::{ReadyRootPush, RootPushReadyError};
 mod preparation;
@@ -237,6 +239,7 @@ struct Job {
     ready: Mutex<Option<ReadyPublication>>,
     class: PublicationClass,
     reservation: u64,
+    policy_page: bool,
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
@@ -477,6 +480,7 @@ impl PublicationCoordinator {
             actor: check.actor.clone(),
             class,
             reservation,
+            policy_page: ready.is_policy_page(),
             ready: Mutex::new(Some(ready)),
             status: watch::channel(if held {
                 PublicationState::Held
@@ -635,6 +639,9 @@ impl PublicationCoordinator {
     }
 }
 impl PublicationTicket {
+    pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
+        self.job.policy_page
+    }
     /// Join the existing fair queue once. Idempotence lets a recovering
     /// lifecycle observe an already activated command without recreating it.
     /// Existing admission can activate after coordinator close.
