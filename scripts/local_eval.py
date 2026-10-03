@@ -7,6 +7,7 @@ profile binds only loopback; it does not establish Linux container containment.
 import argparse
 import hashlib
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import secrets
@@ -100,7 +101,7 @@ def initialize(args):
         "public_url": metadata["url"], "listen": f"127.0.0.1:{args.port}",
         "peer_endpoint": "https://local-evaluation.example.invalid",
         "data_dir": str(state / "node"),
-        "local_disk_limit_bytes": args.disk_gib * 1024**3,
+        "native_limits": fixture_native_limits(), "local_disk_limit_bytes": args.disk_gib * 1024**3,
         "max_active_repositories": args.active_repositories,
     }
     save(state / "secrets.json", credentials, private=True)

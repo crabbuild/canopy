@@ -214,6 +214,10 @@ pub struct DirectoryCell {
 }
 
 impl DirectoryCell {
+    pub(crate) fn matches_repository_scope(&self, repository: &CellTarget) -> bool {
+        directory_target(repository.tenant(), repository.application())
+            .is_ok_and(|target| target == self.target)
+    }
     pub fn new(
         application: &ApplicationHandle<CanopyApplication>,
         target: CellTarget,

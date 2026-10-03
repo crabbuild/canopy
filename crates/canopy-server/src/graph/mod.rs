@@ -11,6 +11,7 @@ use cellule_runtime::{
 };
 
 mod preparation;
+pub(crate) mod stream;
 
 type Oid = crate::ObjectId;
 type Edge = (Oid, Option<ObjectKind>);
@@ -273,7 +274,11 @@ fn object_edges(
     Ok(Some(edges))
 }
 
-fn edges(format: crate::ObjectFormat, kind: ObjectKind, mut body: &[u8]) -> Option<Vec<Edge>> {
+pub(crate) fn edges(
+    format: crate::ObjectFormat,
+    kind: ObjectKind,
+    mut body: &[u8],
+) -> Option<Vec<Edge>> {
     let mut edges = match kind {
         ObjectKind::Blob => Some(Vec::new()),
         ObjectKind::Tree => tree_edges(format, body),
@@ -363,7 +368,7 @@ fn hex_oid(text: &[u8]) -> Option<Oid> {
     (!oid.is_zero()).then_some(oid)
 }
 
-fn parse_kind(kind: &[u8]) -> Option<ObjectKind> {
+pub(crate) fn parse_kind(kind: &[u8]) -> Option<ObjectKind> {
     match kind {
         b"blob" => Some(ObjectKind::Blob),
         b"tree" => Some(ObjectKind::Tree),

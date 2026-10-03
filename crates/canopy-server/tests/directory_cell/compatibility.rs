@@ -3,9 +3,10 @@ use cellule_runtime::Digest;
 
 // Captured read-only from the unchanged RustFS deployment. The canonical
 // descriptor's SHA-256 is 8b85c842995e4a2b0bcc6d1f3d361ccdbd2c33a1c52592241b50ad8cfe9aeb88.
-// This is contract compatibility, not proof that old Cells have been restored.
+// The full historical application is refused by the Repository hard cutover.
+// Directory compatibility is checked separately; no old binary restore is implied.
 #[test]
-fn bounded_authentication_retains_the_exact_selected_predecessor()
+fn bounded_authentication_retains_the_exact_selected_predecessor_directory()
 -> Result<(), Box<dyn std::error::Error>> {
     let previous = include_bytes!("fixtures/c51-selected-release.json").trim_ascii_end();
     assert_eq!(
@@ -17,8 +18,14 @@ fn bounded_authentication_retains_the_exact_selected_predecessor()
         "directory-compatibility-test",
     ))?;
     let registry = application.registry();
-    // Directory compatibility remains independent of the repository pack
-    // schema. Whole-release rolling compatibility is fenced separately below.
+    assert!(matches!(
+        registry.verify_rolling_from(previous),
+        Err(cellule_runtime::Error::Registry(
+            "rolling release does not retain predecessor module code"
+        ))
+    ));
+    let scoped = retained_directory::predecessor(&registry, previous)?;
+    registry.verify_rolling_from(&scoped)?;
     let predecessor: serde_json::Value = serde_json::from_slice(previous)?;
     let old_directory = predecessor["modules"]
         .as_array()

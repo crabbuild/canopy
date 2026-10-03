@@ -936,12 +936,18 @@ async fn openssh_authenticates_registered_rsa_and_ecdsa_keys() -> Result {
         ssh_key::private::Ed25519Keypair::from_seed(&[11; 32]).into(),
         "test",
     )?;
-    let address = available_address().await?;
+    // Let the server own the ephemeral bind; probing and releasing a port
+    // before startup races other listeners in the parallel integration suite.
     let server = CanopyServer::start(
-        server_config(address, workspace.path().join("server"), &host)?,
+        server_config(
+            "127.0.0.1:0".parse()?,
+            workspace.path().join("server"),
+            &host,
+        )?,
         Arc::new(InMemory::new()),
     )
     .await?;
+    let address = server.local_addr();
     create_repository(address, "algorithms").await?;
     let ssh_address = server.ssh_addr().ok_or("SSH listener missing")?;
     let known = workspace.path().join("known_hosts");

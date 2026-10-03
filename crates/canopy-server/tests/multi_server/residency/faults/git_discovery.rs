@@ -32,10 +32,10 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
             assert!(blob.replace(meta.location).is_none());
         }
     }
-    // Evict the gateway and its full Git cache before the native clone starts.
-    for name in ["fourth", "fifth", "sixth"] {
-        create(&fixture.client, fixture.address, name).await?;
-    }
+    // Publication and maintenance can temporarily exclude the original from
+    // eviction. Establish the actual cold precondition with the same bounded
+    // helper as the other cold-restore tests before starting discovery.
+    fixture.make_original_cold().await?;
     assert!(!fixture.repository_dir.exists());
     *fixture.store.paused_read.lock().unwrap() = Some(blob.ok_or("external Git body missing")?);
     let destination = fixture.workspace.path().join("cold-clone");

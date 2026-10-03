@@ -360,6 +360,7 @@ dependencies = [
  "serde",
  "sha1",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
 ]
 
@@ -405,6 +406,7 @@ dependencies = [
  "percent-encoding",
  "rcgen",
  "reqwest 0.12.28",
+ "rusqlite",
  "russh",
  "serde",
  "serde_json",

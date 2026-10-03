@@ -1,6 +1,7 @@
 //! Real startup seam for an immutable predecessor Directory catalog entry.
 //! This owned in-memory fixture is not an upgrade of the live RustFS corpus
-//! or proof that an old executable produced the stored bytes.
+//! or proof that an old executable produced the stored bytes. Only the exact
+//! historical Directory contract is selected; other modules remain current.
 
 use super::*;
 use bytes::Bytes;
@@ -79,8 +80,14 @@ async fn retained_fixture() -> Result<RetainedFixture> {
         blake3::hash(previous).to_hex().as_str(),
         "e31bf1a951e2fa19d91e9f964b2ddeade1a81b05a20ad628362819a1487c16b1"
     );
-    // This explicit fixture activation carries only a Directory Cell. The
-    // repository pack schema separately rejects whole-release rolling upgrade.
+    assert!(matches!(
+        registry.verify_rolling_from(previous),
+        Err(cellule_runtime::Error::Registry(
+            "rolling release does not retain predecessor module code"
+        ))
+    ));
+    let scoped = retained_directory::predecessor(&registry, previous)?;
+    registry.verify_rolling_from(&scoped)?;
     let descriptor: serde_json::Value = serde_json::from_slice(previous)?;
     let module = descriptor["modules"]
         .as_array()
@@ -93,14 +100,13 @@ async fn retained_fixture() -> Result<RetainedFixture> {
             .try_into()
             .map_err(|_| "invalid predecessor code")?,
     );
-    assert!(registry.supports_cell(directory::DIRECTORY, CatalogRole::Sql, old_code, 1));
     let releases = ReleaseStore::new(layout.clone(), identity)?;
     let image = format!("sha256:{}", hex::encode(configuration.image.as_bytes()));
     let old_operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());
     let prepared = releases
         .prepare(
-            previous,
-            Digest::from_bytes(*blake3::hash(previous).as_bytes()),
+            &scoped,
+            Digest::from_bytes(*blake3::hash(&scoped).as_bytes()),
             0,
             &image,
             old_operation,

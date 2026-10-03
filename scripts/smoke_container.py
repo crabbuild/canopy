@@ -2,6 +2,7 @@
 """Qualify the bounded container against a caller-provided disposable S3 prefix."""
 import argparse
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import subprocess
@@ -71,7 +72,7 @@ def qualify(args):
             "tenant_id": str(uuid.uuid4()), "application_id": str(uuid.uuid4()), "node_id": str(uuid.uuid4()),
             "fleet_digest": "11" * 32, "image_digest": "22" * 32, "owner": "canopy",
             "listen": "0.0.0.0:8080", "public_url": url, "peer_endpoint": "https://container.example.invalid",
-            "data_dir": "/var/lib/canopy", "local_disk_limit_bytes": 1536 * 1024**2,
+            "data_dir": "/var/lib/canopy", "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 1536 * 1024**2,
             "max_active_repositories": 3,
         }
         config_file = directory / "config.json"

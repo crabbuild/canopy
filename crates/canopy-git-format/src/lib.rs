@@ -1,5 +1,7 @@
 //! Git object formats and canonical object identifiers.
 
+pub mod pack_index;
+
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::ops::Deref;
@@ -146,12 +148,16 @@ pub enum ObjectHasher {
 }
 impl ObjectHasher {
     pub fn new(format: ObjectFormat, kind: ObjectKind, size: u64) -> Self {
-        let mut hash = match format {
-            ObjectFormat::Sha1 => Self::Sha1(Sha1::new()),
-            ObjectFormat::Sha256 => Self::Sha256(Sha256::new()),
-        };
+        let mut hash = Self::raw(format);
         hash.update(format!("{} {size}\0", kind.git_name()).as_bytes());
         hash
+    }
+    /// Native pack/index checksum, without the canonical object header prefix.
+    pub fn raw(format: ObjectFormat) -> Self {
+        match format {
+            ObjectFormat::Sha1 => Self::Sha1(Sha1::new()),
+            ObjectFormat::Sha256 => Self::Sha256(Sha256::new()),
+        }
     }
     pub fn update(&mut self, bytes: &[u8]) {
         match self {

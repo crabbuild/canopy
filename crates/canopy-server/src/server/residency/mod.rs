@@ -532,6 +532,7 @@ impl RepositoryManager {
                 self.local.path().to_path_buf(),
                 Arc::clone(&self.external_store),
                 self.disk_budget.clone(),
+                self.native.clone(),
             )
             .with_signer_directory(Arc::clone(&self.directory)),
         );

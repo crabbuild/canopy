@@ -66,6 +66,7 @@ impl Fixture {
             ssh: None,
             data_dir: self.directory.join(name),
             store_prefix: self.prefix.clone(),
+            native_limits: canopy_server::native_resources::NativeLimits::default(),
             local_disk_limit_bytes: 1536 * 1024 * 1024,
             max_active_repositories: self.active_limit,
         }

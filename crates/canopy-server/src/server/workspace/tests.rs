@@ -120,6 +120,8 @@ async fn orphan_git_descendant_prevents_reclamation_until_it_exits() -> Result {
         cellule_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let data = workspace.path().join("directory.sqlite");

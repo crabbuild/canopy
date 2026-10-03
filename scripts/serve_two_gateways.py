@@ -72,6 +72,7 @@ def main():
             print(json.dumps({"ingresses": ingresses,
                               "corpus_repositories": len(manifest["repositories"]),
                               "max_active_repositories_per_node": settings["max_active_repositories"],
+                              "native_limits_per_node": settings["native_limits"],
                               "work_dir": str(args.work_dir)}), flush=True)
             while not stop.wait(0.5):
                 for index, process in enumerate(processes):

@@ -38,9 +38,13 @@ impl LfsRead {
         admission: Option<Arc<AdmissionPermit>>,
     ) -> Result<Self, LfsError> {
         let path = lfs_path(repository_id, &expected.sha256);
-        let manifest =
-            crate::external::open_lfs(store.as_ref(), &path, expected.size, expected.parts_digest)
-                .await?;
+        let manifest = crate::external::open_hashed(
+            store.as_ref(),
+            &path,
+            expected.size,
+            expected.parts_digest,
+        )
+        .await?;
         let state = ReadState {
             store,
             path,

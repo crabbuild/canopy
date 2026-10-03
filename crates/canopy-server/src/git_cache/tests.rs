@@ -1,5 +1,84 @@
 use super::*;
 
+async fn wait_for_cleanup(budget: &DiskBudget) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn overlapping_indexes_are_not_unique_coverage_and_registration_is_idempotent()
+-> Result<(), Box<dyn std::error::Error>> {
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(512 << 20);
+        let mut packs = Vec::new();
+        let mut verified = HashSet::new();
+        for unique in [b"first".as_slice(), b"second".as_slice()] {
+            let source = GitCache::create(
+                root.path().into(),
+                budget.clone(),
+                "refs/heads/main",
+                format,
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
+            )
+            .await?;
+            for body in [b"overlapping object".as_slice(), unique] {
+                let oid = object_id(format, ObjectKind::Blob, body);
+                verified.insert(oid);
+                source
+                    .store_object(oid, ObjectKind::Blob, body.to_vec())
+                    .await?;
+            }
+            packs.push(source.repacked(root.path().into(), budget.clone()).await?);
+        }
+        let target = GitCache::create(
+            root.path().into(),
+            budget.clone(),
+            "refs/heads/main",
+            format,
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
+        )
+        .await?;
+        for pack in &packs {
+            assert_eq!(
+                target
+                    .retain_verified_packs(Arc::clone(pack), verified.clone())
+                    .await?,
+                2
+            );
+        }
+        assert_eq!(verified.len(), 3);
+        assert_eq!(target.indexed_entries(), 4);
+        assert_eq!(
+            target
+                .retain_verified_packs(Arc::clone(&packs[0]), verified.clone())
+                .await?,
+            2
+        );
+        assert_eq!(target.indexed_entries(), 4);
+        drop(packs);
+        // Registered handles belong to copied destination indexes, not to the
+        // disposable source cache whose files have now been removed.
+        assert!(
+            target
+                .missing_objects(verified.into_iter().collect())
+                .await?
+                .is_empty()
+        );
+        drop(target);
+        wait_for_cleanup(&budget).await?;
+        assert_eq!(budget.used(), 0);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -10,6 +89,8 @@ async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers(
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let mut ids = Vec::new();
@@ -25,12 +106,14 @@ async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers(
     let packed = cache.repacked(root.path().into(), budget.clone()).await?;
     assert!(packed.missing_objects(ids.clone()).await?.is_empty());
     assert!(!packed.object_path(ids[0]).exists());
-    assert_eq!(packed.packed_count(), 64);
+    assert_eq!(packed.indexed_entries(), 64);
     let reused = GitCache::create(
         root.path().into(),
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     assert_eq!(
@@ -59,6 +142,7 @@ async fn repacking_rotates_a_complete_cache_without_invalidating_active_readers(
     drop(packed);
     assert!(reader.object_path(ids[0]).is_file());
     drop(reader);
+    wait_for_cleanup(&budget).await?;
     assert_eq!(budget.used(), 0);
     Ok(())
 }
@@ -73,6 +157,8 @@ async fn concurrent_hydration_publishes_each_object_once() -> Result<(), Box<dyn
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     assert!(cache.object_writes.get().is_none());
@@ -111,6 +197,8 @@ async fn hydrated_files_remain_charged_until_the_last_reader_releases_them()
         budget.clone(),
         "refs/heads/stable/next",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     assert_eq!(
@@ -164,6 +252,8 @@ async fn hydration_stops_before_writing_unadmitted_bytes() -> Result<(), Box<dyn
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let initial = budget.used();
@@ -201,6 +291,8 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let body = b"verified durable object";
@@ -217,6 +309,8 @@ async fn snapshots_share_verified_bytes_and_keep_native_writes_private()
             "refs/heads/main",
             crate::ObjectFormat::Sha1,
             Some(Arc::clone(&objects)),
+            crate::native_resources::NativeResources::default()
+                .scope(crate::native_resources::NativeClass::Foreground),
         )
         .await?;
         assert!(cache.object_writes.get().is_none());
@@ -280,6 +374,8 @@ async fn a_fenced_generation_retains_its_borrowed_objects() -> Result<(), Box<dy
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let generation = GitCache::create_with_objects(
@@ -288,6 +384,8 @@ async fn a_fenced_generation_retains_its_borrowed_objects() -> Result<(), Box<dy
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
         Some(Arc::clone(&objects)),
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let fence =
@@ -302,6 +400,14 @@ async fn a_fenced_generation_retains_its_borrowed_objects() -> Result<(), Box<dy
     assert!(object_path.exists());
     assert_eq!(budget.used(), charged);
     drop(fence);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while budget.used() != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(!generation_path.exists());
+    assert!(!object_path.exists());
     Ok(())
 }
 
@@ -315,6 +421,8 @@ async fn native_writes_require_admission_before_reconciliation_succeeds()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let initial = budget.used();
@@ -346,6 +454,8 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let charged = budget.used();
@@ -372,6 +482,8 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let blobs =
@@ -402,6 +514,8 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let occupied = budget.try_reserve(budget.capacity() - budget.used())?;
@@ -427,6 +541,8 @@ async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let store = Arc::new(object_store::memory::InMemory::new());
@@ -479,6 +595,8 @@ async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     let body = vec![b'x'; 2 << 20];
@@ -504,6 +622,7 @@ async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign
         root.path().into(),
         budget.clone(),
         crate::ObjectFormat::Sha1,
+        source.native.clone(),
     );
     let record = crate::pack_store::PackRecord {
         hash,
@@ -517,6 +636,8 @@ async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     target
@@ -548,6 +669,8 @@ async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign
         budget.clone(),
         "refs/heads/main",
         crate::ObjectFormat::Sha1,
+        crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
     )
     .await?;
     assert!(

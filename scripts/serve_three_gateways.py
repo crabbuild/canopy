@@ -11,6 +11,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import secrets
@@ -37,7 +38,7 @@ def serve(args):
         settings = {"storage_url": args.storage_url.rstrip("/") + "/" + uuid.uuid4().hex,
                     "tenant_id": str(uuid.uuid4()), "application_id": str(uuid.uuid4()),
                     "fleet_digest": "11" * 32, "image_digest": "22" * 32, "owner": "canopy",
-                    "local_disk_limit_bytes": 1536 * 1024**2,
+                    "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 1536 * 1024**2,
                     "max_active_repositories": 100}
     if args.max_active_repositories is not None:
         settings["max_active_repositories"] = args.max_active_repositories
@@ -79,6 +80,7 @@ def serve(args):
                     binary_sha256=hashlib.sha256(args.binary.read_bytes()).hexdigest(),
                     public_url=front.url, work_dir=str(args.work_dir),
                     max_active_repositories_per_node=settings["max_active_repositories"],
+                    native_limits_per_node=settings["native_limits"],
                     topology="three host processes, loopback TCP proxy, TLS peer proxies; external S3 fixture",
                     balance="round-robin TCP connections; keep-alive retains its backend",
                     proxy_limits={"connections": front.max_connections, "buffer_bytes": front.buffer_bytes},
