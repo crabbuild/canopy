@@ -59,10 +59,10 @@ pub use coordinator::{
     CompactionReadyError, NativeInputReadyError, PreparationCommandKind, PreparationCommandOutcome,
     PreparationReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
     PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
-    PublicationState, PublicationStats, PublicationTicket, ReadyCatalogCompaction,
-    ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
-    ReadyRootPush, RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs,
-    RootPushReadyError,
+    PublicationState, PublicationStats, PublicationTicket, ReadyBoundRecovery,
+    ReadyCatalogCompaction, ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation,
+    ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
+    RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
 };
 mod commands;
 mod compaction;

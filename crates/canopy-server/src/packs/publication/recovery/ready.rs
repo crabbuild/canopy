@@ -20,15 +20,27 @@ impl RegisteredRootRecovery {
         store: ArtifactStore,
     ) -> Result<ReadyRootRecovery, RootRecoveryError> {
         target_matches(self.evidence().target(), &store, &self.record.check)?;
-        Ok(ReadyRootRecovery {
-            recovery: std::sync::Arc::new(self),
-            client,
-            store,
-            refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        })
+        Ok(ReadyRootRecovery::from_verified(self, client, store))
     }
 }
 impl ReadyRootRecovery {
+    /// Only after the original factory or public recovery entry validates the
+    /// exact repository/artifact context. This does not bind a live lifecycle.
+    pub(in crate::packs::publication) fn from_verified(
+        recovery: RegisteredRootRecovery,
+        client: CellClient,
+        store: ArtifactStore,
+    ) -> Self {
+        Self {
+            recovery: std::sync::Arc::new(recovery),
+            client,
+            store,
+            refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+    pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
+        self.recovery.record.kind == Kind::Policy
+    }
     pub(in crate::packs::publication) fn reservation(&self) -> u64 {
         2 * (u64::from(self.recovery.record.kind.body_limit())
             + u64::from(ROOT_BYTES)
@@ -68,13 +80,28 @@ impl ReadyRootRecovery {
         self,
         fault: u8,
     ) -> Result<PublicationOutcome, PublicationError> {
+        self.dispatch_bound(fault, None).await
+    }
+    pub(in crate::packs::publication) async fn dispatch_bound(
+        self,
+        fault: u8,
+        original: Option<&PreparationSession>,
+    ) -> Result<PublicationOutcome, PublicationError> {
         if fault == 1 {
             return Err(self.pending());
         }
-        let outcome = self
-            .recovery
-            .dispatch_any(&self.client, &self.store, &self.refusing)
-            .await;
+        let outcome = match original {
+            Some(original) => {
+                self.recovery
+                    .dispatch_bound(&self.client, &self.store, &self.refusing, Some(original))
+                    .await
+            }
+            None => {
+                self.recovery
+                    .dispatch_any(&self.client, &self.store, &self.refusing)
+                    .await
+            }
+        };
         if fault == 2 {
             return Err(self.pending());
         }

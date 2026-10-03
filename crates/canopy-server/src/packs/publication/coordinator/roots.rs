@@ -119,6 +119,37 @@ impl RootCommand {
     }
 }
 impl ReadyRootPush {
+    /// Preserve the original factory's shared lifecycle authority while
+    /// dispatching from its exact registered SDK snapshot and body.
+    pub fn bind_recovery(
+        self,
+        registered: RegisteredRootRecovery,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<ReadyBoundRecovery, Box<RecoveryBindingFailure<Self>>> {
+        let kind = match &self.command {
+            RootCommand::Publish(_) => super::super::recovery::Kind::Publish,
+            RootCommand::Outcome(_) => super::super::recovery::Kind::Outcome,
+        };
+        if !registered.matches_original(
+            kind,
+            self.command.evidence(),
+            None,
+            self.owner.session(),
+            store,
+        ) {
+            return Err(Box::new(RecoveryBindingFailure {
+                original: self,
+                registered,
+            }));
+        }
+        Ok(ReadyBoundRecovery::new(
+            self.owner,
+            None,
+            self.refusal,
+            registered,
+            store,
+        ))
+    }
     pub(in crate::packs::publication) fn refusal_command(
         &self,
     ) -> Option<&PreparedCommand<CompleteRootOutcome>> {
@@ -139,7 +170,7 @@ impl ReadyRootPush {
         let session = self.owner.session();
         match &self.command {
             RootCommand::Publish(command) => {
-                super::super::recovery::persist_full(
+                Box::pin(super::super::recovery::persist_full(
                     session,
                     command,
                     super::super::recovery::Kind::Publish,
@@ -148,11 +179,11 @@ impl ReadyRootPush {
                     store,
                     identity,
                     0,
-                )
+                ))
                 .await
             }
             RootCommand::Outcome(command) => {
-                super::super::recovery::persist_full(
+                Box::pin(super::super::recovery::persist_full(
                     session,
                     command,
                     super::super::recovery::Kind::Outcome,
@@ -161,7 +192,7 @@ impl ReadyRootPush {
                     store,
                     identity,
                     0,
-                )
+                ))
                 .await
             }
         }
