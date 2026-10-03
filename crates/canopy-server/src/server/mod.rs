@@ -49,6 +49,7 @@ use crate::{
 mod catalog_admission;
 mod discovery;
 mod lifecycle;
+mod listeners;
 pub(crate) mod peer;
 mod request_trace;
 mod residency;
@@ -168,6 +169,7 @@ struct RunningServer {
     serving: JoinHandle<std::io::Result<()>>,
     ssh_serving: Option<JoinHandle<std::io::Result<()>>>,
     tasks: TaskTracker,
+    listeners: listeners::ListenerReservations,
     local: Arc<workspace::Workspace>,
     native: crate::native_resources::NativeResources,
 }
@@ -408,7 +410,7 @@ impl RunningServer {
     async fn start(
         config: ServerConfig,
         raw_store: Arc<dyn ObjectStore>,
-        listener: Option<TcpListener>,
+        listener: Option<listeners::ReservedListener>,
     ) -> Result<Self, ServerError> {
         if let Some(listener) = &listener
             && listener.local_addr()? != config.listen
@@ -430,10 +432,17 @@ impl RunningServer {
         }
         http::validate_public_url(&config.public_url).map_err(ServerError::Http)?;
         let native = crate::native_resources::NativeResources::new(config.native_limits)?;
+        let mut listeners = listeners::ListenerReservations::default();
+        let listener = listener.map(|listener| {
+            let (socket, reservation) = listener.into_parts();
+            listeners.http = Some(reservation);
+            socket
+        });
         let data_dir = config.data_dir.clone();
         let local = Arc::new(
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
         );
+        listeners.workspace = Some(Arc::clone(&local));
         let store = Store::new(Arc::clone(&raw_store));
         storage::probe(&store, &config.store_prefix.clone().join("canopy-probe")).await?;
         let application = Arc::new(CanopyApplication::compile(build_descriptor(
@@ -478,7 +487,13 @@ impl RunningServer {
         );
         let listener = match listener {
             Some(listener) => listener,
-            None => TcpListener::bind(config.listen).await?,
+            None => {
+                let (socket, reservation) =
+                    listeners::ReservedListener::new(TcpListener::bind(config.listen).await?)?
+                        .into_parts();
+                listeners.http = Some(reservation);
+                socket
+            }
         };
         let mut config = config;
         let address = listener.local_addr()?;
@@ -491,7 +506,11 @@ impl RunningServer {
             })?;
             directory::SshKey::parse(&public)
                 .map_err(|error| ServerError::SshKey(Box::new(error)))?;
-            Some(TcpListener::bind(ssh.listen).await?)
+            let (socket, reservation) =
+                listeners::ReservedListener::new(TcpListener::bind(ssh.listen).await?)?
+                    .into_parts();
+            listeners.ssh = Some(reservation);
+            Some(socket)
         } else {
             None
         };
@@ -691,6 +710,7 @@ impl RunningServer {
             release_stop,
             serving,
             tasks,
+            listeners,
             local,
             native,
         })
