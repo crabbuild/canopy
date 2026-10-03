@@ -261,6 +261,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!(
                     "packs/publication/initialization/publish.rs"
                 ));
+                source.update(include_bytes!("packs/publication/recovery/mod.rs"));
+                source.update(include_bytes!("packs/publication/recovery/codec.rs"));
+                source.update(include_bytes!("packs/publication/recovery/registration.rs"));
+                source.update(include_bytes!("packs/publication/recovery/ready.rs"));
+                source.update(include_bytes!("packs/publication/exact.rs"));
                 source.update(include_bytes!("packs/publication/mod.rs"));
                 source.update(include_bytes!("packs/publication/codec.rs"));
                 source.update(include_bytes!("packs/publication/sql.rs"));

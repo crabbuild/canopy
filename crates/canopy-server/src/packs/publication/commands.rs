@@ -471,7 +471,7 @@ impl Command for ReapPreparation {
         }
         let now = now(context.now_ms())?;
         let operations=context.sql(&statement("DELETE FROM catalog_operations WHERE id IN (SELECT id FROM catalog_operations WHERE expires_at_ms<=?1 ORDER BY expires_at_ms,id LIMIT ?2)",vec![SqlValue::Integer(now),number(REAP_ROWS)?]))?;
-        let leases=context.sql(&statement("DELETE FROM catalog_leases WHERE (incarnation,admission_sequence) IN (SELECT l.incarnation,l.admission_sequence FROM catalog_leases l WHERE l.expires_at_ms<=?1 AND NOT EXISTS(SELECT 1 FROM catalog_operations o WHERE o.incarnation=l.incarnation AND o.admission_sequence=l.admission_sequence) ORDER BY l.expires_at_ms,l.incarnation,l.admission_sequence LIMIT ?2)",vec![SqlValue::Integer(now),number(REAP_ROWS)?]))?;
+        let leases=context.sql(&statement("DELETE FROM catalog_leases WHERE (incarnation,admission_sequence) IN (SELECT l.incarnation,l.admission_sequence FROM catalog_leases l WHERE l.expires_at_ms<=?1 AND l.recovery IS NULL AND NOT EXISTS(SELECT 1 FROM catalog_operations o WHERE o.incarnation=l.incarnation AND o.admission_sequence=l.admission_sequence) ORDER BY l.expires_at_ms,l.incarnation,l.admission_sequence LIMIT ?2)",vec![SqlValue::Integer(now),number(REAP_ROWS)?]))?;
         // This only removes obsolete facts from the current SQL state. Old
         // recovery snapshots retain their own facts. An independent attempt's
         // floor protects all later facts, including generations selected by a

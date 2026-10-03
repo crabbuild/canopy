@@ -391,6 +391,7 @@ CREATE TABLE catalog_leases (
     expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
     attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
     attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
+    recovery BLOB CHECK(recovery IS NULL OR length(recovery) BETWEEN 1 AND 1024),
     input_checkpoint BLOB CHECK(input_checkpoint IS NULL OR length(input_checkpoint) BETWEEN 1 AND 1024),
     input_checkpoint_digest BLOB CHECK(input_checkpoint_digest IS NULL OR length(input_checkpoint_digest) = 32),
     input_checkpoint_previous_digest BLOB CHECK(input_checkpoint_previous_digest IS NULL OR length(input_checkpoint_previous_digest) = 32),
@@ -431,6 +432,15 @@ WHEN (OLD.input_checkpoint IS NULL AND (NEW.input_checkpoint_revision!=0 OR NEW.
       AND NEW.input_checkpoint IS NOT OLD.input_checkpoint AND NEW.input_checkpoint_digest IS NOT OLD.input_checkpoint_digest
       AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision+1 AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_digest)))
 BEGIN SELECT RAISE(ABORT, 'creating input checkpoint requires exact append'); END;
+
+CREATE TRIGGER catalog_lease_recovery_immutable BEFORE UPDATE OF recovery ON catalog_leases
+WHEN OLD.recovery IS NOT NULL AND NEW.recovery IS NOT OLD.recovery
+BEGIN SELECT RAISE(ABORT, 'root recovery command is immutable'); END;
+-- Unknown commands retain metadata and exact bodies after custody expiry.
+-- Typed recovery/backup traversal must authorize releasing these pins.
+CREATE TRIGGER catalog_lease_recovery_retained BEFORE DELETE ON catalog_leases
+WHEN OLD.recovery IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'root recovery command is retained'); END;
 
 CREATE TABLE catalog_operations (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),

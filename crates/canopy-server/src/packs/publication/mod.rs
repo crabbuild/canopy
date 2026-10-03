@@ -72,6 +72,11 @@ pub use compaction::{
     PublishCatalogCompaction, PublishedCompaction,
 };
 mod exact;
+mod recovery;
+pub use recovery::{
+    ReadyRootRecovery, RegisterRootRecovery, RegisteredRootRecovery, RootRecoveryCertificate,
+    RootRecoveryError, RootRecoveryReply,
+};
 mod staging_service;
 pub use staging_service::{
     ReadyStaging, StagedInputsTicket, StagedPublicationFailure, StagedPublicationTicket,
@@ -232,6 +237,7 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<CompleteCatalogPush>()?;
     registry.bind_command::<CompleteRootPush>()?;
     registry.bind_command::<CompleteRootOutcome>()?;
+    registry.bind_command::<RegisterRootRecovery>()?;
     registry.bind_query::<CheckCompletedRootPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;
     registry.bind_query::<CheckCompletedCompaction>()?;

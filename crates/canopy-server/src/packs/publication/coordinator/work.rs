@@ -69,10 +69,16 @@ impl PreparedCompaction {
 pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     RootPush(ReadyRootPush),
+    RootRecovery(ReadyRootRecovery),
     PolicyPage(ReadyRefPolicyPage),
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyRootRecovery> for ReadyPublication {
+    fn from(ready: ReadyRootRecovery) -> Self {
+        Self::RootRecovery(ready)
+    }
 }
 impl From<ReadyRefPolicyPage> for ReadyPublication {
     fn from(ready: ReadyRefPolicyPage) -> Self {
@@ -124,7 +130,7 @@ impl ReadyPublication {
             Self::RootPush(ready) => ready.owner.session(),
             Self::PolicyPage(ready) => &ready.prepared.base.session,
             Self::Compaction(ready) => &ready.prepared.preparation_base().session,
-            Self::Inputs(_) | Self::Preparation(_) => return false,
+            Self::Inputs(_) | Self::Preparation(_) | Self::RootRecovery(_) => return false,
         };
         source.target == session.target
             && source.check == session.check
@@ -137,6 +143,7 @@ impl ReadyPublication {
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootPush(_) => roots::ROOT_RESERVATION,
+            Self::RootRecovery(_) => super::super::recovery::ready_reservation(),
             Self::PolicyPage(ready) => ready.reservation(),
             _ => self.class().reservation(),
         }
@@ -145,6 +152,7 @@ impl ReadyPublication {
         match self {
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootPush(ready) => Self::RootPush(ready.dispatch_copy()),
+            Self::RootRecovery(ready) => Self::RootRecovery(ready.clone()),
             Self::PolicyPage(ready) => Self::PolicyPage(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
                 owner: ready.owner.clone(),
@@ -165,6 +173,7 @@ impl ReadyPublication {
         match self {
             Self::Push(_)
             | Self::RootPush(_)
+            | Self::RootRecovery(_)
             | Self::PolicyPage(_)
             | Self::Inputs(_)
             | Self::Preparation(_) => PublicationClass::Foreground,
@@ -175,6 +184,7 @@ impl ReadyPublication {
         match self {
             Self::Push(ready) => ready.owner.capability(),
             Self::RootPush(ready) => ready.owner.capability(),
+            Self::RootRecovery(ready) => ready.capability(),
             Self::PolicyPage(ready) => ready.prepared.base.capability(),
             Self::Inputs(ready) => ready.session.capability(),
             Self::Preparation(ready) => ready.capability(),
@@ -185,6 +195,7 @@ impl ReadyPublication {
         match self {
             Self::Preparation(ready) => ready.pending(),
             Self::RootPush(ready) => ready.pending(),
+            Self::RootRecovery(ready) => ready.pending(),
             Self::PolicyPage(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
                 ready.command.evidence().clone(),
@@ -203,6 +214,7 @@ impl ReadyPublication {
             Self::Inputs(ready) => ready.dispatch(recover, fault).await,
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::RootPush(ready) => ready.dispatch(recover, fault).await,
+            Self::RootRecovery(ready) => ready.dispatch(fault).await,
             Self::PolicyPage(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => super::super::exact::invoke_guarded(
                 &client,
