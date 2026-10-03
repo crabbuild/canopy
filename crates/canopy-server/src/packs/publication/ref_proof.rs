@@ -144,6 +144,44 @@ pub(in crate::packs) fn shape(plan: &PushPlan, format: ObjectFormat) -> Result<(
     }
     Ok(())
 }
+const POLICY_QUERY_BYTES: u32 = 256 << 10;
+fn ancestry_policy_statement(update: &crate::RefUpdate) -> SqlStatement {
+    SqlStatement {
+        sql: "SELECT EXISTS(SELECT 1 FROM branch_rules WHERE reference=?1 AND enabled=1 AND fast_forward=1)".into(),
+        parameters: vec![SqlValue::Text(update.name.clone())],
+    }
+}
+/// Count the exact existing SQL wire encoding before accumulating statements.
+/// Valid long ref names must not turn a 128-row query into an oversized request.
+fn ancestry_policy_page(
+    updates: &[crate::RefUpdate],
+    start: usize,
+) -> Result<(usize, SqlBatch), CodecError> {
+    let mut prefix = BoundedEncoder::new(4)?;
+    prefix.write_count(0)?;
+    let mut used = prefix.finish().len();
+    let mut statements = Vec::new();
+    let mut end = start;
+    while end < updates.len() && statements.len() < 128 {
+        let statement = ancestry_policy_statement(&updates[end]);
+        let mut e = BoundedEncoder::new(POLICY_QUERY_BYTES)?;
+        statement.encode(&mut e)?;
+        let n = e.finish().len();
+        if used
+            .checked_add(n)
+            .is_none_or(|bytes| bytes > POLICY_QUERY_BYTES as usize)
+        {
+            break;
+        }
+        used += n;
+        statements.push(statement);
+        end += 1;
+    }
+    if statements.is_empty() {
+        return Err(CodecError::Limit);
+    }
+    Ok((end, SqlBatch { statements }))
+}
 impl PreparedCatalog {
     /// Validate targets through this prepared catalog. Ancestry is computed
     /// only for currently enabled fast-forward rules; final publication checks
@@ -215,14 +253,20 @@ impl PreparedCatalog {
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
         let mut bits = vec![0; plan.updates.len().div_ceil(8)];
         let mut walk: Option<ancestry::Walker> = None;
-        for (page, updates) in plan.updates.chunks(128).enumerate() {
+        let mut start = 0;
+        while start < plan.updates.len() {
             self.ensure_live()?;
-            let policies = sql.query(None, SqlBatch { statements: updates.iter().map(|update| SqlStatement { sql: "SELECT EXISTS(SELECT 1 FROM branch_rules WHERE reference=?1 AND enabled=1 AND fast_forward=1)".into(), parameters: vec![SqlValue::Text(update.name.clone())] }).collect() }).await.map_err(|error| RefProofError::Query(Box::new(error)))?;
+            let (end, batch) = ancestry_policy_page(&plan.updates, start)?;
+            let policies = sql
+                .query(None, batch)
+                .await
+                .map_err(|error| RefProofError::Query(Box::new(error)))?;
+            let updates = &plan.updates[start..end];
             if policies.output.len() != updates.len() {
                 return Err(RefProofError::Invalid);
             }
             for (at, (update, policy)) in updates.iter().zip(policies.output).enumerate() {
-                let index = page * 128 + at;
+                let index = start + at;
                 let required = match policy.rows.first().map(Vec::as_slice) {
                     Some([SqlValue::Integer(0)]) => false,
                     Some([SqlValue::Integer(1)]) => true,
@@ -253,6 +297,7 @@ impl PreparedCatalog {
                     }
                 }
             }
+            start = end;
         }
         self.ensure_live()?;
         Ok((plan, bits))

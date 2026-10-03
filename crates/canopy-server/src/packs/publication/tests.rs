@@ -11,6 +11,7 @@ mod native_capture;
 mod prepare;
 mod publishing;
 mod reconcile;
+mod ref_policy;
 mod ref_snapshot;
 mod refs;
 mod staging;
@@ -59,8 +60,17 @@ impl CellModule for Module {
             initial_descriptor.output_limit = 512;
             let mut initial_query = descriptor(32);
             initial_query.output_limit = 512;
-            let mut sql_query = descriptor(2);
-            sql_query.output_limit = 1 << 20;
+            let mut policy_page = descriptor(33);
+            policy_page.input_limit = REF_POLICY_PAGE_BYTES;
+            policy_page.output_limit = 128;
+            let mut policy_query = descriptor(34);
+            policy_query.output_limit = 128;
+            let mut policy_reap = descriptor(35);
+            policy_reap.output_limit = 128;
+            // Match the existing production SQL transport contract exactly.
+            // The generic 4 KiB fixture limit cannot encode even one valid
+            // 65 KiB ref name; policy construction has its own smaller bound.
+            let sql_query = crate::operation(2);
             ModuleDescriptor {
                 name: Self::NAME,
                 source_digest: Digest::from_bytes([11; 32]),
@@ -88,6 +98,8 @@ impl CellModule for Module {
                     descriptor(28),
                     descriptor(29),
                     initial_descriptor,
+                    policy_page,
+                    policy_reap,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([
@@ -99,6 +111,7 @@ impl CellModule for Module {
                     descriptor(27),
                     descriptor(30),
                     initial_query,
+                    policy_query,
                 ])),
                 workflow_definitions: &[],
                 activity_types: &[],

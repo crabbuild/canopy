@@ -233,6 +233,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/ref_proof.rs"));
                 source.update(include_bytes!("packs/publication/ref_snapshot.rs"));
                 source.update(include_bytes!("packs/publication/initialization.rs"));
+                source.update(include_bytes!("packs/publication/ref_policy/mod.rs"));
+                source.update(include_bytes!("packs/publication/ref_policy/codec.rs"));
+                source.update(include_bytes!("packs/publication/ref_policy/commands.rs"));
+                source.update(include_bytes!("packs/publication/ref_policy/prepare.rs"));
+                source.update(include_bytes!("packs/publication/ref_policy/schema.sql"));
                 source.update(include_bytes!(
                     "packs/publication/initialization/publish.rs"
                 ));

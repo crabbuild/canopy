@@ -56,6 +56,8 @@ Initialization supplies a fresh empty base for ref preparation. Production repos
 
 ## Final publication and cutover requirements
 
+Direct-ref preparation now binds current rule/context epochs and exact newest required-run dependencies through [paged policy guards](paged-ref-policy-guards.md). Pages reuse the existing catalog MAC with a separate purpose, validate at most 128 updates/256 KiB and advance their cursor atomically with dependency watches. The private guarded-snapshot factory rechecks the original plan/catalog evidence, conditional transition and fresh readiness before signing a short root proof. This remains conditional input: final admitted root/outcome publication must recheck the live guard, epoch and current authority together with its exact root CAS. Reviewed merges and production conversion remain required.
+
 The final factory must derive the base from a certified query of the current Cell ref snapshot, authenticate the complete conditional transition and bind it to exact catalog/ref intent and outcome descriptors. Preparation must bind every relevant policy and check fact, with final current-authority checks and CAS against the state those facts describe. A concurrent policy, check or ref change must refuse or trigger safe re-preparation. Recovery must reuse the same retained intent and recorded outcome without authorizing a stale worker.
 
 The admitted final transaction must atomically switch catalog and ref roots, record the exact response root and advance the durable operation outcome. It must neither carry the full plan in the 4 MiB envelope nor execute an O(update-count) SQL loop inside that transaction. Root transport alone would leave the latter bottleneck intact.

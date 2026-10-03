@@ -1,5 +1,56 @@
 use super::*;
 use crate::RefExpectation;
+
+#[test]
+fn ancestry_queries_bound_exact_wire_bytes_and_row_count() -> Result<(), CodecError> {
+    for long in [false, true] {
+        let updates: Vec<_> = (0..256)
+            .map(|i| crate::RefUpdate {
+                name: if long {
+                    format!("refs/tags/{}-{i:03}", "x".repeat(65_520))
+                } else {
+                    format!("refs/tags/{i:03}")
+                },
+                expected: None,
+                new_oid: Some(ObjectId::Sha256([7; 32])),
+            })
+            .collect();
+        if long {
+            let original = SqlBatch {
+                statements: updates[..128]
+                    .iter()
+                    .map(ancestry_policy_statement)
+                    .collect(),
+            };
+            assert!(
+                original
+                    .encode(&mut BoundedEncoder::new(crate::operation(2).input_limit)?)
+                    .is_err()
+            );
+        }
+        let mut start = 0;
+        while start < updates.len() {
+            let (end, page) = ancestry_policy_page(&updates, start)?;
+            assert_eq!(
+                end - start,
+                if long {
+                    3.min(updates.len() - start)
+                } else {
+                    128
+                }
+            );
+            let mut e = BoundedEncoder::new(POLICY_QUERY_BYTES)?;
+            page.encode(&mut e)?;
+            let bytes = e.finish();
+            assert!(bytes.len() <= POLICY_QUERY_BYTES as usize);
+            let mut d = BoundedDecoder::new(&bytes, POLICY_QUERY_BYTES)?;
+            assert_eq!(SqlBatch::decode(&mut d)?, page);
+            d.finish()?;
+            start = end;
+        }
+    }
+    Ok(())
+}
 #[test]
 fn ref_plan_digest_reuses_exact_wire_bytes_including_long_names_and_tombstones()
 -> Result<(), CodecError> {

@@ -36,6 +36,14 @@ pub use initialization::{
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
+mod ref_policy;
+pub use ref_policy::{
+    CheckRefPolicyGuard, MAX_REF_POLICY_GUARDS, MAX_REF_POLICY_WATCHES, PreparedRefPolicyGuard,
+    REF_POLICY_PAGE_BYTES, REF_POLICY_PAGE_UPDATES, ReapRefPolicyGuard, RefPolicyIntent,
+    RefPolicyLookup, RefPolicyPage, RefPolicyPreparation, RefPolicyPreparationError,
+    RefPolicyProgress, RefPolicyReap, RefPolicyReapReply, RefPolicyReply, RefRootPublicationProof,
+    RegisterRefPolicyPage,
+};
 mod publish;
 pub use publish::{PublicationReply, PublishCatalogRefs, PublishedRefs};
 mod outcome;
@@ -86,7 +94,10 @@ pub use commands::{
     ClaimPreparation, ReapPreparation, RenewPreparation,
 };
 
-pub const SCHEMA: &str = include_str!("schema.sql");
+pub const SCHEMA: &str = concat!(
+    include_str!("schema.sql"),
+    include_str!("ref_policy/schema.sql")
+);
 pub const MAX_OPERATIONS: u64 = 1024;
 pub const MAX_GENERATION_LEASES: u64 = 4096;
 /// Includes the reserved empty generation. Old eligible facts are reaped;
@@ -187,8 +198,9 @@ pub struct MaintenanceRequest {
 }
 
 /// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19/22/24..26/28/31 and query IDs 15/20/21/23/27/32, plus the existing trusted SQL
-/// query. No separate Cell or compatibility API.
+/// command IDs 11..14/16..19/22/24..26/28..29/31/33/35 and query IDs
+/// 15/20..21/23/27/30/32/34, plus the existing trusted SQL query. No separate
+/// Cell or compatibility API.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<BeginStaging>()?;
     registry.bind_command::<RenewStaging>()?;
@@ -205,6 +217,9 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RegisterCatalogAttestation>()?;
     registry.bind_command::<InitializeCatalogRefs>()?;
     registry.bind_query::<CheckInitializedCatalog>()?;
+    registry.bind_command::<RegisterRefPolicyPage>()?;
+    registry.bind_query::<CheckRefPolicyGuard>()?;
+    registry.bind_command::<ReapRefPolicyGuard>()?;
     registry.bind_command::<PublishCatalogRefs>()?;
     registry.bind_command::<CompleteCatalogPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;

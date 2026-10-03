@@ -189,7 +189,23 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
         let checkpoints=checkpoints.query_map([],|row|Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,Option<Vec<u8>>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut initial=connection.prepare("SELECT id,actor,request_digest,verification_digest,result FROM catalog_initialization")?;
         let initial=initial.query_map([],|row|Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Vec<u8>>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints,initial)).map_err(|_| Error::Command("fixture publication state"))
+        let policy=connection.query_row("SELECT (SELECT version FROM ref_policy_epoch),(SELECT watches FROM ref_policy_budget)",[],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?)))?;
+        let mut hash=blake3::Hasher::new();hash.update(b"fixture.ref-policy-state.v1\0");
+        let mut guards=connection.prepare("SELECT id,scope,token,policy_epoch,total,next,valid FROM ref_policy_guards ORDER BY id")?;
+        let mut rows=guards.query([])?;
+        while let Some(row)=rows.next()? {
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,Vec<u8>>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,u64>(3)?,row.get::<_,u64>(4)?,row.get::<_,u64>(5)?,row.get::<_,u8>(6)?);
+            hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture guard hash"))?);
+        }
+        hash.update(b"\0watches\0");
+        let mut watches=connection.prepare("SELECT guard,oid,context,context_version,run_number FROM ref_policy_watches ORDER BY guard,oid,context,context_version,run_number")?;
+        let mut rows=watches.query([])?;
+        while let Some(row)=rows.next()? {
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,Vec<u8>>(1)?,row.get::<_,String>(2)?,row.get::<_,u64>(3)?,row.get::<_,u64>(4)?);
+            hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture watch hash"))?);
+        }
+        let policy_hash=*hash.finalize().as_bytes();
+        serde_json::to_vec(&(refs,catalog,generations,pushes,checkpoints,initial,policy,policy_hash)).map_err(|_| Error::Command("fixture publication state"))
     }).await?)
 }
 fn published(reply: PublicationReply) -> Result<PublishedRefs> {
