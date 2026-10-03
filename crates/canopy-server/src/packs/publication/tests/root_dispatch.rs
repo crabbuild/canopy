@@ -82,6 +82,15 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         budget,
         request,
     } = context;
+    assert!(
+        prepared
+            .base
+            .session
+            .root_outcome_completion(store, root, budget.clone(), None)
+            .await
+            .is_err(),
+        "publishing native intent must not become a ref-free outcome"
+    );
     let operation = prepared.token().operation;
     let lookup = BeginRequest {
         repository: f.repository,

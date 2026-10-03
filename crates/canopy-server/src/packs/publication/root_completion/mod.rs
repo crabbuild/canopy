@@ -15,6 +15,9 @@ use tokio::time::timeout_at;
 
 mod codec;
 mod outcome;
+mod ref_free;
+mod result;
+pub use ref_free::{CompleteRootOutcome, RootOutcomeCompletion};
 mod prepare;
 mod publish;
 mod read;
@@ -102,6 +105,8 @@ pub enum RootCompletionPreparationError {
     Codec(#[from] CodecError),
     #[error("root completion native report failed")]
     Report(#[from] crate::push::PushError),
+    #[error("root completion session certificate failed")]
+    Session(#[source] Box<PushCompletionProofError>),
     #[error("root completion custody, plan or metadata differs")]
     Context,
 }
@@ -126,6 +131,7 @@ impl RootPushCompletion {
         self.proof.shape()?;
         let data = self.proof.certificate.data()?;
         if data.completion_digest != Some(self.outcomes.binding()?)
+            || self.outcomes.ref_generation == 0
             || data.input_checkpoint_digest.is_none()
             || [
                 self.outcomes.native,

@@ -130,33 +130,28 @@ impl Command for CompleteRootPush {
             ref_generation: input.outcomes.ref_generation,
             certificate_digest,
         });
-        let root = if ready {
-            input.outcomes.native
-        } else if replayed {
-            input.outcomes.replayed
-        } else {
-            input.outcomes.rejected
-        };
-        let completed = CompletedRootPush {
-            completion: CompletedCatalogPush {
-                response_id: input.outcomes.response_id,
-                rejected: !ready,
-                publication,
+        let terminal = result::PreparedResult::new(
+            &LeaseCheck {
+                token: data.token,
+                actor: data.actor.clone(),
             },
-            root,
-        };
-        let mut encoded_root = BoundedEncoder::new(128)?;
-        root.encode(&mut encoded_root)?;
-        let mut encoded_publication = BoundedEncoder::new(128)?;
-        if let Some(value) = publication {
-            value.encode(&mut encoded_publication)?;
-        }
+            &input.outcomes,
+            binding,
+            publication,
+            if ready {
+                result::Selection::Native
+            } else if replayed {
+                result::Selection::Replayed
+            } else {
+                result::Selection::Rejected
+            },
+            ready.then_some(input.proof.guard.plan_digest),
+            context.now_ms(),
+        )?;
         let mut encoded_catalog = BoundedEncoder::new(256)?;
         data.catalog.encode(&mut encoded_catalog)?;
         let mut encoded_refs = BoundedEncoder::new(128)?;
         input.proof.snapshot.encode(&mut encoded_refs)?;
-        let result = RootCompletionReply::Completed(Box::new(completed));
-        result.encode(&mut BoundedEncoder::new(512)?)?;
         if row.expires <= now(context.now_ms())? {
             return Ok(denied(PreparationDenial::Expired));
         }
@@ -173,27 +168,7 @@ impl Command for CompleteRootPush {
                 vec![number(value.generation)?, number(data.base.generation)?],
             ))?)?;
         }
-        let reason = if ready {
-            SqlValue::Null
-        } else {
-            SqlValue::Text(
-                if replayed {
-                    REPLAYED
-                } else {
-                    crate::push::report::REJECTED
-                }
-                .into(),
-            )
-        };
-        changed(context.sql(&statement("INSERT INTO pushes(id,actor,request_digest,response_id,completion_digest,rejected,rejection_reason,publication,publication_plan_digest,response_root) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", vec![blob(data.token.operation),SqlValue::Text(data.actor.clone()),blob(data.token.request_digest),blob(input.outcomes.response_id),blob(binding),SqlValue::Integer(i64::from(!ready)),reason,if publication.is_some(){blob(encoded_publication.finish())}else{SqlValue::Null},if ready{blob(input.proof.guard.plan_digest)}else{SqlValue::Null},blob(encoded_root.finish())]))?)?;
-        if !replayed && let Some(signed) = input.outcomes.signed {
-            changed(context.sql(&statement("INSERT INTO push_certificates(digest,push_id,actor,signer,key,size,recorded_at_ms) VALUES(?1,?2,?3,?3,?4,?5,?6)", vec![blob(signed.digest),blob(data.token.operation),SqlValue::Text(data.actor),SqlValue::Text(signed.key),number(signed.size)?,SqlValue::Integer(context.now_ms())]))?)?;
-        }
-        changed(context.sql(&statement(
-            "DELETE FROM catalog_operations WHERE id=?1",
-            vec![blob(data.token.operation)],
-        ))?)?;
-        Ok(CommandResult::Success(result))
+        Ok(CommandResult::Success(terminal.save(context)?))
     }
 }
 fn denied(reason: PreparationDenial) -> CommandResult<RootCompletionReply> {

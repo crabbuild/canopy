@@ -11,6 +11,11 @@ use cellule_runtime::Committed;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    RefFree {
+        kind: super::root_outcome::Kind,
+        fault: u8,
+        revoked: bool,
+    },
     Dispatch {
         fault: u8,
         loss: super::root_dispatch::Loss,
@@ -114,6 +119,17 @@ pub(super) async fn qualify(
     let mut d = BoundedDecoder::new(&bytes, ROOT_COMPLETION_BYTES)?;
     assert_eq!(RootPushCompletion::decode(&mut d)?, completion);
     d.finish()?;
+    // Isolate the command's generation predicate from payload/MAC mismatch:
+    // even a correctly resealed joint proof cannot carry a ref-free bundle.
+    let mut ref_free = completion.clone();
+    ref_free.outcomes.ref_generation = 0;
+    reseal_fixture(&mut ref_free)?;
+    assert!(
+        ref_free
+            .encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)
+            .is_err()
+    );
+    assert_eq!(state(&fixture.handle).await?, before);
     for choice in 0..8 {
         let mut changed = completion.clone();
         match choice {

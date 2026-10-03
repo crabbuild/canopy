@@ -41,6 +41,84 @@ pub(super) async fn retain_rejection(
     )
     .await
 }
+/// Both factories freeze the same three selected-outcome descriptors. A zero
+/// ref generation is reserved for ref-free completion, whose authority refusal
+/// is explicit HTTP failure rather than parsing an arbitrary native error body.
+pub(super) async fn freeze(
+    store: &ArtifactStore,
+    operation: [u8; 16],
+    native: NativeResultRoot,
+    original: ([u8; 16], GitHttpResponse<ArtifactDescriptor>),
+    response: GitHttpResponse,
+    certificate: Option<crate::push::VerifiedPushCertificate>,
+    ref_generation: u64,
+) -> Result<RootPushOutcomes, RootCompletionPreparationError> {
+    let signed = certificate.map(|signed| RootSignedPushFact {
+        digest: Sha256::digest(&signed.body).into(),
+        key: signed.key,
+        size: signed.body.len() as u64,
+    });
+    let original = NativeOutcomeRoot::upload(
+        store,
+        operation,
+        OutcomeRecord {
+            native,
+            body_operation: original.0,
+            response: original.1,
+        },
+    )
+    .await?;
+    let (rejected, replayed) = if ref_generation == 0 {
+        drop(response);
+        (
+            explicit_rejection(store, operation, native, crate::push::report::REJECTED).await?,
+            explicit_rejection(store, operation, native, REPLAYED).await?,
+        )
+    } else {
+        (
+            retain_rejection(
+                store,
+                operation,
+                native,
+                &response,
+                crate::push::report::REJECTED,
+            )
+            .await?,
+            retain_rejection(store, operation, native, &response, REPLAYED).await?,
+        )
+    };
+    Ok(RootPushOutcomes {
+        response_id: uuid::Uuid::new_v4().into_bytes(),
+        ref_generation,
+        native: original,
+        rejected,
+        replayed,
+        signed,
+    })
+}
+async fn explicit_rejection(
+    store: &ArtifactStore,
+    operation: [u8; 16],
+    native: NativeResultRoot,
+    reason: &str,
+) -> Result<NativeOutcomeRoot, RootCompletionPreparationError> {
+    let body =
+        native_result::retain_body(store, operation, format!("{reason}\n").into_bytes()).await?;
+    NativeOutcomeRoot::upload(
+        store,
+        operation,
+        OutcomeRecord {
+            native,
+            body_operation: operation,
+            response: GitHttpResponse {
+                status: 409,
+                headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+                body,
+            },
+        },
+    )
+    .await
+}
 impl OutcomeRecord {
     fn validate(&self) -> Result<(), CodecError> {
         self.native.validate()?;

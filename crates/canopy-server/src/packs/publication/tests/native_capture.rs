@@ -101,6 +101,67 @@ fn native_receive_root_dispatch_preserves_known_commits_and_refuses_absence_afte
     }
     Ok(())
 }
+#[tokio::test]
+async fn native_receive_root_outcome_preserves_failed_and_empty_results_without_catalog_work()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        native_receive(
+            false,
+            CompletionMode::RefFree {
+                kind,
+                fault: 0,
+                revoked: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_outcome_recovers_exact_commands_after_absence_lost_reply_and_panic()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        for fault in 1..=3 {
+            native_receive(
+                false,
+                CompletionMode::RefFree {
+                    kind,
+                    fault,
+                    revoked: false,
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_outcome_records_write_refusal_and_requires_current_replay_read_access()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        for fault in 1..=3 {
+            native_receive(
+                false,
+                CompletionMode::RefFree {
+                    kind,
+                    fault,
+                    revoked: true,
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -108,6 +169,11 @@ async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     Ok(())
 }
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
+    let ref_free = if let CompletionMode::RefFree { kind, .. } = mode {
+        Some(kind)
+    } else {
+        None
+    };
     let fixture = Fixture::new(format).await?;
     let store = Arc::new(ArtifactStore::new(
         Arc::new(InMemory::new()),
@@ -187,9 +253,23 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             changes.push(update(&name, None, Some(tip)));
         }
     }
+    if ref_free == Some(super::root_outcome::Kind::Empty) {
+        body.clear();
+    }
     let command_bytes = body.len() + 4;
     body.extend_from_slice(b"0000");
-    body.extend_from_slice(&std::fs::read(pack_path)?);
+    if ref_free != Some(super::root_outcome::Kind::Empty) {
+        body.extend_from_slice(&std::fs::read(pack_path)?);
+    }
+    if ref_free == Some(super::root_outcome::Kind::HookRefusal) {
+        let hook = backend.git_dir().join("hooks/pre-receive");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
     let encoded = crate::git_gateway::preflight::EncodedPush::new(
         GitHttpRequest {
             method: "POST".into(),
@@ -287,7 +367,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
                 &upload_store,
                 &request_checkpoint,
                 PushCompletionRequest {
-                    plan: Some(plan(changes)),
+                    plan: ref_free.is_none().then(|| plan(changes)),
                     response,
                     options: Vec::new(),
                     certificate: None,
@@ -313,12 +393,21 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         .await
         .map_err(|error| format!("capture: {error:?}"))?;
     assert_eq!(response.status, 200);
-    assert!(
-        response
-            .body
-            .windows(b"ok refs/heads/main".len())
-            .any(|bytes| bytes == b"ok refs/heads/main")
-    );
+    if ref_free == Some(super::root_outcome::Kind::HookRefusal) {
+        assert!(
+            response
+                .body
+                .windows(b"ng refs/heads/main".len())
+                .any(|bytes| bytes == b"ng refs/heads/main")
+        );
+    } else if ref_free.is_none() {
+        assert!(
+            response
+                .body
+                .windows(b"ok refs/heads/main".len())
+                .any(|bytes| bytes == b"ok refs/heads/main")
+        );
+    }
     // Small native receives must remain pack/index pairs, not loose bodies.
     assert_eq!(
         std::fs::read_dir(backend.git_dir().join("objects"))?.count(),
@@ -326,10 +415,14 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     );
     assert!(input_certificate.wire_request()?.is_some());
     assert!(input_certificate.native_result()?.is_some());
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].operation, initial.token.artifact_operation);
-    assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
-    assert_ne!(inputs[0].index.manifest_digest, [0; 32]);
+    if ref_free.is_some() {
+        assert!(inputs.is_empty());
+    } else {
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].operation, initial.token.artifact_operation);
+        assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
+        assert_ne!(inputs[0].index.manifest_digest, [0; 32]);
+    }
     let checkpoint = ticket
         .register_inputs(input_certificate.clone(), identity()?)
         .map_err(|(error, _)| error)?;
@@ -373,15 +466,17 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             assert!(command_bytes > 4096);
             assert!(request.body.packet_prefix(4096).await.is_err());
         }
-        assert!(
-            request
-                .body
-                .packet_prefix(command_bytes)
-                .await
-                .map_err(|error| StagingError::Input(Box::new(error)))?
-                .windows(b"refs/heads/main".len())
-                .any(|part| part == b"refs/heads/main")
-        );
+        if ref_free != Some(super::root_outcome::Kind::Empty) {
+            assert!(
+                request
+                    .body
+                    .packet_prefix(command_bytes)
+                    .await
+                    .map_err(|error| StagingError::Input(Box::new(error)))?
+                    .windows(b"refs/heads/main".len())
+                    .any(|part| part == b"refs/heads/main")
+            );
+        }
         context
             .reopen_native_result(&recover_store, &recover_root, &recover_disk, None)
             .await
@@ -394,6 +489,36 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     assert_eq!(recovered.response, response);
     drop(response);
     cleaned(work_root.path(), &disk).await?;
+    if let CompletionMode::RefFree {
+        kind,
+        fault,
+        revoked,
+    } = mode
+    {
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        Box::pin(super::root_outcome::qualify(
+            super::root_outcome::Context {
+                fixture: &fixture,
+                store: &store,
+                staging: &coordinator,
+                ticket: &ticket,
+                root: work_root.path(),
+                budget: disk.clone(),
+                request: recovered,
+            },
+            kind,
+            fault,
+            revoked,
+        ))
+        .await?;
+        cleaned(work_root.path(), &disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
     let physical_root = Arc::new(tempfile::TempDir::new()?);
     let physical_disk = DiskBudget::new(256 << 20);
     let mut verifier = PhysicalVerifier::download(

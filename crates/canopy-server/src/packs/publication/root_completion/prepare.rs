@@ -49,48 +49,16 @@ impl PreparedCatalog {
                     .await?;
                 let ref_generation = proof.snapshot.read(&store).await?.generation;
                 let record = native.read(&store).await?;
-                // No public annotation can supply ownership facts: the witness was
-                // recovered from registered custody and current scoped key lookup.
-                let signed = request.certificate.map(|signed| RootSignedPushFact {
-                    digest: Sha256::digest(&signed.body).into(),
-                    key: signed.key,
-                    size: signed.body.len() as u64,
-                });
-                let operation = self.token().artifact_operation;
-                let original = NativeOutcomeRoot::upload(
+                let outcomes = outcome::freeze(
                     &store,
-                    operation,
-                    OutcomeRecord {
-                        native,
-                        body_operation: record.operation,
-                        response: record.response,
-                    },
-                )
-                .await?;
-                let rejected = outcome::retain_rejection(
-                    &store,
-                    operation,
+                    self.token().artifact_operation,
                     native,
-                    &request.response,
-                    crate::push::report::REJECTED,
-                )
-                .await?;
-                let replayed = outcome::retain_rejection(
-                    &store,
-                    operation,
-                    native,
-                    &request.response,
-                    REPLAYED,
-                )
-                .await?;
-                let outcomes = RootPushOutcomes {
-                    response_id: uuid::Uuid::new_v4().into_bytes(),
+                    (record.operation, record.response),
+                    request.response,
+                    request.certificate,
                     ref_generation,
-                    native: original,
-                    rejected,
-                    replayed,
-                    signed,
-                };
+                )
+                .await?;
                 // Freeze may outlast an ACL/check/config change or checkpoint
                 // update. Recheck both authorities after every artifact is durable.
                 inputs::verify_digest(&self.base, digest).await?;

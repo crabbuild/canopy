@@ -20,8 +20,8 @@ pub enum RootPushReadyError {
 /// Regenerating a completion allocates a different response ID and is not retry.
 #[must_use]
 pub struct ReadyRootPush {
-    pub(super) prepared: Arc<PreparedCatalog>,
-    pub(super) command: PreparedCommand<CompleteRootPush>,
+    pub(super) owner: PushPreparation,
+    command: RootCommand,
 }
 impl PreparedCatalog {
     pub async fn ready_root_push(
@@ -46,12 +46,63 @@ impl PreparedCatalog {
             .map_err(|error| RootPushReadyError::Command(Box::new(error)))?;
         self.ensure_live()?;
         Ok(ReadyRootPush {
-            prepared: self.clone(),
-            command,
+            owner: PushPreparation::Catalog(self.clone()),
+            command: RootCommand::Publish(command),
         })
     }
 }
+impl PreparationSession {
+    pub async fn ready_root_outcome(
+        self: &Arc<Self>,
+        identity: MutationIdentity,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        directory: &Path,
+        budget: DiskBudget,
+        signers: Option<&DirectoryCell>,
+    ) -> Result<ReadyRootPush, RootPushReadyError> {
+        let input = self
+            .root_outcome_completion(store, directory, budget, signers)
+            .await
+            .map_err(|error| RootPushReadyError::Preparation(Box::new(error)))?;
+        input.encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)?;
+        self.live_lease()?;
+        let command = self
+            .client
+            .prepare_command::<CompleteRootOutcome>(&self.target, identity, input)
+            .await
+            .map_err(|error| RootPushReadyError::Command(Box::new(error)))?;
+        self.live_lease()?;
+        Ok(ReadyRootPush {
+            owner: PushPreparation::Outcome(self.clone()),
+            command: RootCommand::Outcome(command),
+        })
+    }
+}
+#[derive(Clone)]
+enum RootCommand {
+    Publish(PreparedCommand<CompleteRootPush>),
+    Outcome(PreparedCommand<CompleteRootOutcome>),
+}
+impl RootCommand {
+    fn evidence(&self) -> &cellule_runtime::PendingMutation {
+        match self {
+            Self::Publish(command) => command.evidence(),
+            Self::Outcome(command) => command.evidence(),
+        }
+    }
+}
 impl ReadyRootPush {
+    pub(super) fn dispatch_copy(&self) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            command: self.command.clone(),
+        }
+    }
+    pub(super) fn pending(&self) -> PublicationError {
+        PublicationError::RootPush(InvocationError::Pending(Box::new(
+            self.command.evidence().clone(),
+        )))
+    }
     #[cfg(test)]
     pub(in crate::packs::publication) fn evidence_for_test(
         &self,
@@ -59,14 +110,26 @@ impl ReadyRootPush {
         self.command.evidence().clone()
     }
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
-        let client = self.prepared.base.capability().0.clone();
-        super::super::exact::invoke_guarded(&client, self.command, recover, 512, fault, move || {
-            self.prepared
-                .ensure_live()
+        let client = self.owner.capability().0.clone();
+        let guard = move || {
+            self.owner
+                .session()
+                .live_lease()
+                .map(|_| ())
                 .map_err(|_| Error::Command("inactive immutable root preparation"))
-        })
-        .await
-        .map(PublicationOutcome::RootPush)
-        .map_err(PublicationError::RootPush)
+        };
+        let outcome = match self.command {
+            RootCommand::Publish(command) => {
+                super::super::exact::invoke_guarded(&client, command, recover, 512, fault, guard)
+                    .await
+            }
+            RootCommand::Outcome(command) => {
+                super::super::exact::invoke_guarded(&client, command, recover, 512, fault, guard)
+                    .await
+            }
+        };
+        outcome
+            .map(PublicationOutcome::RootPush)
+            .map_err(PublicationError::RootPush)
     }
 }
