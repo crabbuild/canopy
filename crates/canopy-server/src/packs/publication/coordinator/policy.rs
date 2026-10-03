@@ -75,6 +75,36 @@ impl std::fmt::Display for RefPolicyRefusalFailure {
 }
 impl std::error::Error for RefPolicyRefusalFailure {}
 impl ReadyRefPolicyPage {
+    /// Convert only after this exact original page/refusal bundle is registered.
+    /// The shared session and intent survive admission failure and uncertainty.
+    pub fn bind_recovery(
+        self,
+        registered: RegisteredRootRecovery,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<ReadyBoundRecovery, Box<RecoveryBindingFailure<Self>>> {
+        if !registered.matches_original(
+            super::super::recovery::Kind::Policy,
+            self.command.evidence(),
+            self.refusal
+                .as_ref()
+                .and_then(|ready| ready.refusal_command())
+                .map(|command| command.evidence()),
+            &self.prepared.base.session,
+            store,
+        ) {
+            return Err(Box::new(RecoveryBindingFailure {
+                original: self,
+                registered,
+            }));
+        }
+        Ok(ReadyBoundRecovery::new(
+            PushPreparation::Catalog(self.prepared),
+            Some(self.intent),
+            false,
+            registered,
+            store,
+        ))
+    }
     /// Register both original SDK identities before page submission. A known
     /// settled predecessor is required before this attempt can advance its pin.
     pub async fn persist_recovery(

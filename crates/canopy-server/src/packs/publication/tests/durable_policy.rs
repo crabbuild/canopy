@@ -5,7 +5,7 @@ use super::*;
 use crate::packs::metadata::tests::limits;
 use cellule_runtime::Resolution;
 
-pub(super) async fn qualify(context: Context<'_>, refusal_case: bool) -> Result {
+pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write: bool) -> Result {
     let Context {
         fixture: f,
         prepared,
@@ -144,16 +144,45 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool) -> Result 
             assert!(matches!(value.output, RefPolicyReply::Registered(progress) if progress.valid));
             head = registered;
         }
-        let guard = intent.ready(&prepared).await?;
-        let mut root_identity = identity()?;
-        root_identity.expires_at_ms = first_identity.expires_at_ms;
-        let ready = prepared
-            .ready_root_push(root_identity, &guard, root, budget.clone(), limits(), None)
+        if late_write {
+            let context = Context {
+                fixture: f,
+                prepared: prepared.clone(),
+                store,
+                staging,
+                ticket,
+                root,
+                budget: budget.clone(),
+                request,
+            };
+            let (registered, result) = Box::pin(late_write_case(
+                &context, &session, &intent, &head, &refusal,
+            ))
             .await?;
-        head = ready
-            .persist_recovery_after(store, identity()?, &head)
-            .await?;
-        head.dispatch(&f.client(), store).await?
+            head = registered;
+            result
+        } else {
+            let guard = intent.ready(&prepared).await?;
+            let mut root_identity = identity()?;
+            root_identity.expires_at_ms = first_identity.expires_at_ms;
+            let owner = prepared.clone();
+            let directory = root.to_path_buf();
+            let disk = budget.clone();
+            let ready = ticket
+                .spawn_bound(move |_| async move {
+                    owner
+                        .ready_root_push(root_identity, &guard, &directory, disk, limits(), None)
+                        .await
+                        .map_err(|error| StagingError::Input(Box::new(error)))
+                })?
+                .wait()
+                .await
+                .map_err(|error| format!("owned durable positive root: {error:?}"))?;
+            head = ready
+                .persist_recovery_after(store, identity()?, &head)
+                .await?;
+            head.dispatch(&f.client(), store).await?
+        }
     };
     // Return the same settled page through its retained predecessor frame.
     if let Some(expected) = &saved_first {
@@ -189,7 +218,7 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool) -> Result 
         client.resolve(&first_evidence).await?,
         Resolution::Expired
     ));
-    if !refusal_case {
+    if !refusal_case && !late_write {
         assert!(matches!(
             client.resolve(&head_evidence).await?,
             Resolution::Expired
@@ -206,6 +235,20 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool) -> Result 
         (&actual.output, actual.receipt),
         (&expected.output, expected.receipt)
     );
+    if late_write {
+        let lookup = BeginRequest {
+            repository: f.repository,
+            operation: check.token.operation,
+            request_digest: check.token.request_digest,
+            actor: check.actor.clone(),
+            lease_ms: DEFAULT_LEASE_MS,
+        };
+        assert!(matches!(
+            replay_root_push_response(&client, &f.target, lookup, Some(actual.receipt), store)
+                .await,
+            Err(RootPushReplayError::Denied(PreparationDenial::Unauthorized))
+        ));
+    }
     if let Some(expected) = saved_first {
         let PublicationOutcome::PolicyPage(actual) =
             first.dispatch_any(&client, store, &flag).await?
@@ -290,4 +333,87 @@ async fn query_failure(
     assert_eq!(queue.stats().await.admitted, 0);
     assert!(queue.close_and_drain().await.is_empty());
     Ok(())
+}
+
+async fn late_write_case(
+    context: &Context<'_>,
+    session: &Arc<PreparationSession>,
+    intent: &RefPolicyPreparation,
+    head: &RegisteredRootRecovery,
+    refusal: &ReadyRootPush,
+) -> Result<(
+    RegisteredRootRecovery,
+    cellule_runtime::Committed<RootCompletionReply>,
+)> {
+    let Context {
+        fixture: f,
+        prepared,
+        store,
+        root,
+        budget,
+        ..
+    } = context;
+    let check = &session.check;
+    let guard = intent.ready(prepared).await?;
+    let owner = prepared.clone();
+    let original = session.clone();
+    let artifacts = (*store).clone();
+    let directory = root.to_path_buf();
+    let disk = budget.clone();
+    let positive_identity = identity()?;
+    let negative_identity = identity()?;
+    // The lifecycle owns expensive preparation. Awaiting its typed result
+    // keeps the original factory/custody checks without nesting the complete
+    // native receive fixture on the producer's poll stack.
+    let worker = context.ticket.spawn_bound(move |_| async move {
+        let publishing = owner
+            .ready_root_push(
+                positive_identity,
+                &guard,
+                &directory,
+                disk.clone(),
+                limits(),
+                None,
+            )
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let refusal = original
+            .ready_root_refusal(negative_identity, &artifacts, &directory, disk, None)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        Ok((publishing, refusal))
+    })?;
+    let (publishing, different_refusal) = worker
+        .wait()
+        .await
+        .map_err(|error| format!("late-write candidates: {error:?}"))?;
+    edit(
+        f,
+        "UPDATE repository_identity SET owner='replacement' WHERE singleton=1",
+    )
+    .await?;
+    for candidate in [&publishing, &different_refusal] {
+        assert!(
+            matches!(candidate.persist_recovery_after(store, identity()?, head).await,
+                    Err(RootRecoveryError::Registration(error))
+                    if matches!(&*error, InvocationError::Rejected(value)
+                        if value.output == RootRecoveryReply::Denied(PreparationDenial::Unauthorized)))
+        );
+    }
+    assert_eq!(
+        RegisteredRootRecovery::load(&f.client(), &f.target, store, check)
+            .await?
+            .ok_or("canonical page after refused candidates")?
+            .evidence(),
+        head.evidence()
+    );
+    let registered = refusal
+        .persist_recovery_after(store, identity()?, head)
+        .await?;
+    let result = registered.dispatch(&f.client(), store).await?;
+    assert!(
+        matches!(&result.output, RootCompletionReply::Completed(value)
+                if value.completion.rejected && value.completion.publication.is_none())
+    );
+    Ok((registered, result))
 }

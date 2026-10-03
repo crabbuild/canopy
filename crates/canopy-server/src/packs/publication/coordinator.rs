@@ -28,6 +28,8 @@ mod policy;
 pub use policy::{ReadyRefPolicyPage, RefPolicyReadyError, RefPolicyRefusalFailure};
 mod roots;
 pub use roots::{ReadyRootPush, RootPushReadyError};
+mod recovery;
+pub use recovery::{ReadyBoundRecovery, RecoveryBindingFailure};
 mod preparation;
 pub use preparation::{
     PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,

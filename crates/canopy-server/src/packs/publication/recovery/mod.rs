@@ -140,6 +140,26 @@ pub struct RegisteredRootRecovery {
     certificate: RootRecoveryCertificate,
 }
 impl RegisteredRootRecovery {
+    pub(in crate::packs::publication) fn matches_original(
+        &self,
+        kind: Kind,
+        primary: &PendingMutation,
+        refusal: Option<&PendingMutation>,
+        session: &PreparationSession,
+        store: &ArtifactStore,
+    ) -> bool {
+        self.record.kind == kind
+            && self.record.check == session.check
+            && self.evidence() == primary
+            && self
+                .bundle
+                .refusal
+                .as_ref()
+                .map(|saved| saved.snapshot.evidence())
+                == refusal
+            && primary.target() == &session.target
+            && target_matches(primary.target(), store, &session.check).is_ok()
+    }
     pub fn evidence(&self) -> &PendingMutation {
         self.bundle.primary.snapshot.evidence()
     }
@@ -213,13 +233,21 @@ impl RegisteredRootRecovery {
         client: &CellClient,
         store: &ArtifactStore,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
+        self.dispatch_root(client, store, None).await
+    }
+    async fn dispatch_root(
+        &self,
+        client: &CellClient,
+        store: &ArtifactStore,
+        original: Option<&PreparationSession>,
+    ) -> Result<Committed<RootCompletionReply>, PublicationError> {
         let result = match self.record.kind {
             Kind::Publish => {
-                self.dispatch_command::<CompleteRootPush>(client, store, false)
+                self.dispatch_command::<CompleteRootPush>(client, store, false, original)
                     .await
             }
             Kind::Outcome => {
-                self.dispatch_command::<CompleteRootOutcome>(client, store, false)
+                self.dispatch_command::<CompleteRootOutcome>(client, store, false, original)
                     .await
             }
             Kind::Policy => Err(AttemptError::Invocation(InvocationError::NotStarted(
@@ -237,14 +265,24 @@ impl RegisteredRootRecovery {
         store: &ArtifactStore,
         refusing: &std::sync::atomic::AtomicBool,
     ) -> Result<PublicationOutcome, PublicationError> {
+        self.dispatch_bound(client, store, refusing, None).await
+    }
+    pub(super) async fn dispatch_bound(
+        &self,
+        client: &CellClient,
+        store: &ArtifactStore,
+        refusing: &std::sync::atomic::AtomicBool,
+        original: Option<&PreparationSession>,
+    ) -> Result<PublicationOutcome, PublicationError> {
         if self.record.kind != Kind::Policy {
-            return self
-                .dispatch(client, store)
-                .await
-                .map(PublicationOutcome::RootPush);
+            let result = match original {
+                Some(original) => self.dispatch_root(client, store, Some(original)).await,
+                None => self.dispatch(client, store).await,
+            };
+            return result.map(PublicationOutcome::RootPush);
         }
         let result = self
-            .dispatch_command::<RegisterRefPolicyPage>(client, store, false)
+            .dispatch_command::<RegisterRefPolicyPage>(client, store, false, original)
             .await;
         let refused = match &result {
             Ok(value) => {
@@ -285,7 +323,7 @@ impl RegisteredRootRecovery {
                 .snapshot
                 .evidence();
             return match self
-                .dispatch_command::<CompleteRootOutcome>(client, store, true)
+                .dispatch_command::<CompleteRootOutcome>(client, store, true, original)
                 .await
             {
                 Ok(value) => phase::normalize_root(Ok(value))
@@ -333,6 +371,7 @@ impl RegisteredRootRecovery {
         client: &CellClient,
         store: &ArtifactStore,
         refusal: bool,
+        original: Option<&PreparationSession>,
     ) -> Result<Committed<C::Output>, AttemptError<C::Output>> {
         if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);
@@ -351,40 +390,102 @@ impl RegisteredRootRecovery {
                 )));
             }
         };
-        let session = match PreparationSession::open(
-            client.clone(),
-            self.evidence().target().clone(),
-            self.record.check.clone(),
-            None,
-        )
-        .await
-        {
-            Ok(session) => session,
+        let refusal_only = match self.refusal_only(&command, refusal) {
+            Ok(value) => value,
             Err(error) => {
                 if let Some(known) = self.known::<C>(client, store, refusal).await? {
                     return Ok(known);
                 }
                 return Err(AttemptError::Invocation(InvocationError::NotStarted(
                     Error::Facility {
-                        name: "publication recovery custody",
+                        name: "original refusal purpose",
                         source: Box::new(error),
                     },
                 )));
+            }
+        };
+        // An original authenticated refusal cannot publish. The command still
+        // checks actual owner, live operation/pin, expiry and exact checkpoint;
+        // opening a new Write-dependent session would prevent revocation from
+        // ever reaching its already frozen terminal negative result.
+        // Live bound work already owns the original session. Replacing it
+        // would change both fencing semantics and refusal behavior: the final
+        // transaction must still be able to select rejection after ACL loss.
+        // Standalone recovery reacquires custody for positive work.
+        let session = if refusal_only || original.is_some() {
+            None
+        } else {
+            match PreparationSession::open(
+                client.clone(),
+                self.evidence().target().clone(),
+                self.record.check.clone(),
+                None,
+            )
+            .await
+            {
+                Ok(session) => Some(session),
+                Err(error) => {
+                    if let Some(known) = self.known::<C>(client, store, refusal).await? {
+                        return Ok(known);
+                    }
+                    return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                        Error::Facility {
+                            name: "publication recovery custody",
+                            source: Box::new(error),
+                        },
+                    )));
+                }
             }
         };
         // A command can settle while body I/O or custody acquisition is in flight.
         if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);
         }
-        session.live_lease().map_err(|error| {
-            InvocationError::NotStarted(Error::Facility {
-                name: "publication recovery guard",
-                source: Box::new(error),
-            })
-        })?;
+        if let Some(session) = session {
+            session.live_lease().map_err(|error| {
+                InvocationError::NotStarted(Error::Facility {
+                    name: "publication recovery guard",
+                    source: Box::new(error),
+                })
+            })?;
+        }
+        if let Some(original) = original
+            && let Err(error) = original.live_lease()
+        {
+            // A retained known receipt wins even if fencing raced with body
+            // loading or fresh custody. Proven absence keeps the original
+            // lifecycle fence/clock; a newly opened session cannot replace it.
+            if let Some(known) = self.known::<C>(client, store, refusal).await? {
+                return Ok(known);
+            }
+            return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                Error::Facility {
+                    name: "original publication custody",
+                    source: Box::new(error),
+                },
+            )));
+        }
         Box::pin(command.execute())
             .await
             .map_err(AttemptError::Invocation)
+    }
+    fn refusal_only<C: Command>(
+        &self,
+        command: &PreparedCommand<C>,
+        refusal: bool,
+    ) -> Result<bool, CodecError> {
+        if self.record.kind != Kind::Outcome && !refusal {
+            return Ok(false);
+        }
+        if C::MODULE != CompleteRootOutcome::MODULE || C::ID != CompleteRootOutcome::ID {
+            return Err(CodecError::Invalid("refusal command purpose differs"));
+        }
+        // Restore has already checked the original body digest and SDK
+        // contract. Inspect its authenticated selection constraint unchanged.
+        let mut d = BoundedDecoder::new(command.input_bytes(), ROOT_COMPLETION_BYTES)?;
+        let input = RootOutcomeCompletion::decode(&mut d)?;
+        d.finish()?;
+        Ok(input.refusal)
     }
     fn saved(&self, refusal: bool) -> Result<&SavedCommand, RootRecoveryError> {
         if refusal {
