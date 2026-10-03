@@ -1440,87 +1440,98 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Publish,
             Wait(Instant),
         }
-        let wake = job.changed.notified();
-        tokio::pin!(wake);
-        wake.as_mut().enable();
         let next = {
-            let mut l = job.local.lock().expect("staging local");
-            let token = l
-                .bound
-                .as_ref()
-                .map(|s| s.lease.token)
-                .or_else(|| l.lease.map(|s| s.token))
-                .expect("active preparation lease");
-            let check = LeaseCheck {
-                token,
-                actor: job.actor.clone(),
-            };
-            let now = Instant::now();
-            let due = l
-                .deadline
-                .checked_sub(Duration::from_millis(inner.limits.renew_before_ms))
-                .unwrap_or(now);
-            let checkpoint = job
-                .checkpoint
-                .lock()
-                .expect("staging checkpoint")
-                .as_ref()
-                .filter(|slot| {
-                    slot.request
+            let wake = job.changed.notified();
+            tokio::pin!(wake);
+            wake.as_mut().enable();
+            let next = {
+                let mut l = job.local.lock().expect("staging local");
+                let token = l
+                    .bound
+                    .as_ref()
+                    .map(|s| s.lease.token)
+                    .or_else(|| l.lease.map(|s| s.token))
+                    .expect("active preparation lease");
+                let check = LeaseCheck {
+                    token,
+                    actor: job.actor.clone(),
+                };
+                let now = Instant::now();
+                let due = l
+                    .deadline
+                    .checked_sub(Duration::from_millis(inner.limits.renew_before_ms))
+                    .unwrap_or(now);
+                let checkpoint = job
+                    .checkpoint
+                    .lock()
+                    .expect("staging checkpoint")
+                    .as_ref()
+                    .filter(|slot| {
+                        slot.request
+                            .lock()
+                            .expect("staging checkpoint request")
+                            .is_some()
+                    })
+                    .cloned();
+                let stopped_page = l.stop
+                    && l.workers == 0
+                    && job
+                        .publication
                         .lock()
-                        .expect("staging checkpoint request")
-                        .is_some()
-                })
-                .cloned();
-            let stopped_page = l.stop
-                && l.workers == 0
-                && job
-                    .publication
-                    .lock()
-                    .expect("staging publication")
-                    .as_ref()
-                    .is_some_and(|ticket| {
-                        ticket.is_policy_page() && matches!(ticket.state(), PublicationState::Held)
-                    });
-            if l.fenced || now >= l.deadline.min(l.lifetime) || stopped_page {
-                Next::Fence
-            } else if l.stop && !l.finishing && l.workers == 0 && checkpoint.is_none() {
-                Next::Stop
-            } else if l.bound.is_none()
-                && l.seal
-                && l.workers == 0
-                && !l.stop
-                && checkpoint.is_none()
-            {
-                Next::Bind(check)
-            } else if l.finishing
-                && l.workers == 0
-                && checkpoint.is_none()
-                && job
-                    .publication
-                    .lock()
-                    .expect("staging publication")
-                    .as_ref()
-                    .is_some_and(PublicationTicket::is_root_refusal)
-            {
-                // A pre-frozen refusal cannot ACK or publish. Let its final
-                // transaction check custody rather than requiring fresh Write
-                // for a renewal after that permission has been revoked.
-                Next::Publish
-            } else if l.renew || now >= due {
-                l.renew = false;
-                if l.bound.is_some() {
-                    Next::BoundRenew(check)
+                        .expect("staging publication")
+                        .as_ref()
+                        .is_some_and(|ticket| {
+                            ticket.is_policy_page()
+                                && matches!(ticket.state(), PublicationState::Held)
+                        });
+                if l.fenced || now >= l.deadline.min(l.lifetime) || stopped_page {
+                    Next::Fence
+                } else if l.stop && !l.finishing && l.workers == 0 && checkpoint.is_none() {
+                    Next::Stop
+                } else if l.bound.is_none()
+                    && l.seal
+                    && l.workers == 0
+                    && !l.stop
+                    && checkpoint.is_none()
+                {
+                    Next::Bind(check)
+                } else if l.finishing
+                    && l.workers == 0
+                    && checkpoint.is_none()
+                    && job
+                        .publication
+                        .lock()
+                        .expect("staging publication")
+                        .as_ref()
+                        .is_some_and(PublicationTicket::is_root_refusal)
+                {
+                    // A pre-frozen refusal cannot ACK or publish. Let its final
+                    // transaction check custody rather than requiring fresh Write
+                    // for a renewal after that permission has been revoked.
+                    Next::Publish
+                } else if l.renew || now >= due {
+                    l.renew = false;
+                    if l.bound.is_some() {
+                        Next::BoundRenew(check)
+                    } else {
+                        Next::Renew(check)
+                    }
+                } else if let Some(registration) = checkpoint {
+                    Next::Checkpoint(registration)
+                } else if l.finishing && l.workers == 0 {
+                    Next::Publish
                 } else {
-                    Next::Renew(check)
+                    Next::Wait(due.min(l.lifetime))
                 }
-            } else if let Some(registration) = checkpoint {
-                Next::Checkpoint(registration)
-            } else if l.finishing && l.workers == 0 {
-                Next::Publish
-            } else {
-                Next::Wait(due.min(l.lifetime))
+            };
+            if let Next::Wait(deadline) = next {
+                tokio::select! { _ = wake => {}, _ = sleep_until(deadline) => {} }
+                continue;
             }
+            // The outer waiter must be dropped before observation/draining
+            // registers its own waiter, or notify_one can wake an unused future
+            // and leave an accepted recovery request asleep indefinitely.
+            next
         };
         match next {
             Next::Publish => {
@@ -1595,9 +1606,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 fence_and_drain(&inner, &job, StagingError::Inactive).await;
                 return;
             }
-            Next::Wait(deadline) => {
-                tokio::select! { _ = wake => {}, _ = sleep_until(deadline) => {} }
-            }
+            Next::Wait(_) => unreachable!("wait handled before dropping scheduler waiter"),
             Next::Checkpoint(registration) => {
                 job.status.send_replace(StagingState::RegisteringInputs);
                 let (proof, identity) = registration

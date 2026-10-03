@@ -11,8 +11,18 @@ use cellule_runtime::Committed;
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    StagedDurableFence,
+    StagedDurableRevoked {
+        root: bool,
+    },
+    StagedDurable {
+        fault: u8,
+        refusal: bool,
+        late_write: bool,
+    },
     DurablePolicy {
         refusal: bool,
+        late_write: bool,
     },
     PolicyRefusalDispatch {
         fault: u8,

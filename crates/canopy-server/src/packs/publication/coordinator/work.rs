@@ -70,10 +70,16 @@ pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     RootPush(ReadyRootPush),
     RootRecovery(ReadyRootRecovery),
+    BoundRecovery(ReadyBoundRecovery),
     PolicyPage(ReadyRefPolicyPage),
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyBoundRecovery> for ReadyPublication {
+    fn from(ready: ReadyBoundRecovery) -> Self {
+        Self::BoundRecovery(ready)
+    }
 }
 impl From<ReadyRootRecovery> for ReadyPublication {
     fn from(ready: ReadyRootRecovery) -> Self {
@@ -118,9 +124,11 @@ impl From<ReadyPreparation> for ReadyPublication {
 impl ReadyPublication {
     pub(in crate::packs::publication) fn is_policy_page(&self) -> bool {
         matches!(self, Self::PolicyPage(_))
+            || matches!(self, Self::BoundRecovery(ready) if ready.ready.is_policy_page())
     }
     pub(in crate::packs::publication) fn is_root_refusal(&self) -> bool {
         matches!(self, Self::RootPush(ready) if ready.refusal)
+            || matches!(self, Self::BoundRecovery(ready) if ready.refusal)
     }
     /// Final work must share the lifecycle's exact session fence and clock.
     /// Equal SQL tokens from an independently opened session are insufficient.
@@ -128,6 +136,7 @@ impl ReadyPublication {
         let source = match self {
             Self::Push(ready) => ready.owner.session(),
             Self::RootPush(ready) => ready.owner.session(),
+            Self::BoundRecovery(ready) => ready.owner.session(),
             Self::PolicyPage(ready) => &ready.prepared.base.session,
             Self::Compaction(ready) => &ready.prepared.preparation_base().session,
             Self::Inputs(_) | Self::Preparation(_) | Self::RootRecovery(_) => return false,
@@ -144,6 +153,7 @@ impl ReadyPublication {
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootPush(_) => roots::ROOT_RESERVATION,
             Self::RootRecovery(ready) => ready.reservation(),
+            Self::BoundRecovery(ready) => ready.ready.reservation(),
             Self::PolicyPage(ready) => ready.reservation(),
             _ => self.class().reservation(),
         }
@@ -153,6 +163,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootPush(ready) => Self::RootPush(ready.dispatch_copy()),
             Self::RootRecovery(ready) => Self::RootRecovery(ready.clone()),
+            Self::BoundRecovery(ready) => Self::BoundRecovery(ready.clone()),
             Self::PolicyPage(ready) => Self::PolicyPage(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
                 owner: ready.owner.clone(),
@@ -174,6 +185,7 @@ impl ReadyPublication {
             Self::Push(_)
             | Self::RootPush(_)
             | Self::RootRecovery(_)
+            | Self::BoundRecovery(_)
             | Self::PolicyPage(_)
             | Self::Inputs(_)
             | Self::Preparation(_) => PublicationClass::Foreground,
@@ -185,6 +197,7 @@ impl ReadyPublication {
             Self::Push(ready) => ready.owner.capability(),
             Self::RootPush(ready) => ready.owner.capability(),
             Self::RootRecovery(ready) => ready.capability(),
+            Self::BoundRecovery(ready) => ready.owner.capability(),
             Self::PolicyPage(ready) => ready.prepared.base.capability(),
             Self::Inputs(ready) => ready.session.capability(),
             Self::Preparation(ready) => ready.capability(),
@@ -196,6 +209,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => ready.pending(),
             Self::RootPush(ready) => ready.pending(),
             Self::RootRecovery(ready) => ready.pending(),
+            Self::BoundRecovery(ready) => ready.ready.pending(),
             Self::PolicyPage(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
                 ready.command.evidence().clone(),
@@ -215,6 +229,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::RootPush(ready) => ready.dispatch(recover, fault).await,
             Self::RootRecovery(ready) => ready.dispatch(fault).await,
+            Self::BoundRecovery(ready) => ready.dispatch(fault).await,
             Self::PolicyPage(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => super::super::exact::invoke_guarded(
                 &client,
