@@ -70,11 +70,17 @@ pub enum ReadyPublication {
     Push(ReadyCatalogPush),
     RootPush(ReadyRootPush),
     RootRecovery(ReadyRootRecovery),
+    TerminalRelease(Box<ReadyTerminalRelease>),
     BoundRecovery(ReadyBoundRecovery),
     PolicyPage(ReadyRefPolicyPage),
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyTerminalRelease> for ReadyPublication {
+    fn from(ready: ReadyTerminalRelease) -> Self {
+        Self::TerminalRelease(Box::new(ready))
+    }
 }
 impl From<ReadyBoundRecovery> for ReadyPublication {
     fn from(ready: ReadyBoundRecovery) -> Self {
@@ -139,7 +145,10 @@ impl ReadyPublication {
             Self::BoundRecovery(ready) => ready.owner.session(),
             Self::PolicyPage(ready) => &ready.prepared.base.session,
             Self::Compaction(ready) => &ready.prepared.preparation_base().session,
-            Self::Inputs(_) | Self::Preparation(_) | Self::RootRecovery(_) => return false,
+            Self::Inputs(_)
+            | Self::Preparation(_)
+            | Self::RootRecovery(_)
+            | Self::TerminalRelease(_) => return false,
         };
         source.target == session.target
             && source.check == session.check
@@ -163,6 +172,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootPush(ready) => Self::RootPush(ready.dispatch_copy()),
             Self::RootRecovery(ready) => Self::RootRecovery(ready.clone()),
+            Self::TerminalRelease(ready) => Self::TerminalRelease(ready.clone()),
             Self::BoundRecovery(ready) => Self::BoundRecovery(ready.clone()),
             Self::PolicyPage(ready) => Self::PolicyPage(ready.dispatch_copy()),
             Self::Push(ready) => Self::Push(ReadyCatalogPush {
@@ -189,7 +199,7 @@ impl ReadyPublication {
             | Self::PolicyPage(_)
             | Self::Inputs(_)
             | Self::Preparation(_) => PublicationClass::Foreground,
-            Self::Compaction(_) => PublicationClass::Maintenance,
+            Self::Compaction(_) | Self::TerminalRelease(_) => PublicationClass::Maintenance,
         }
     }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
@@ -197,6 +207,7 @@ impl ReadyPublication {
             Self::Push(ready) => ready.owner.capability(),
             Self::RootPush(ready) => ready.owner.capability(),
             Self::RootRecovery(ready) => ready.capability(),
+            Self::TerminalRelease(ready) => ready.capability(),
             Self::BoundRecovery(ready) => ready.owner.capability(),
             Self::PolicyPage(ready) => ready.prepared.base.capability(),
             Self::Inputs(ready) => ready.session.capability(),
@@ -209,6 +220,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => ready.pending(),
             Self::RootPush(ready) => ready.pending(),
             Self::RootRecovery(ready) => ready.pending(),
+            Self::TerminalRelease(ready) => ready.pending(),
             Self::BoundRecovery(ready) => ready.ready.pending(),
             Self::PolicyPage(ready) => ready.pending(),
             Self::Push(ready) => PublicationError::Push(InvocationError::Pending(Box::new(
@@ -229,6 +241,7 @@ impl ReadyPublication {
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::RootPush(ready) => ready.dispatch(recover, fault).await,
             Self::RootRecovery(ready) => ready.dispatch(fault).await,
+            Self::TerminalRelease(ready) => ready.dispatch(recover, fault).await,
             Self::BoundRecovery(ready) => ready.dispatch(fault).await,
             Self::PolicyPage(ready) => ready.dispatch(recover, fault).await,
             Self::Push(ready) => super::super::exact::invoke_guarded(
@@ -279,10 +292,13 @@ pub enum PublicationOutcome {
     PolicyPage(Committed<RefPolicyReply>),
     Compaction(Committed<CompactionReply>),
     Inputs(RegisteredNativeInputs),
+    TerminalRelease(Committed<TerminalReleaseReply>),
     Preparation(PreparationCommandOutcome),
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("terminal recovery release: {0}")]
+    TerminalRelease(#[source] InvocationError<TerminalReleaseReply>),
     #[error("durable publication phase could not be observed: {source}")]
     Recovery {
         evidence: Box<cellule_runtime::PendingMutation>,
@@ -320,6 +336,7 @@ impl PublicationError {
             Self::Preparation(error) => kind(error),
             Self::Inputs(error) => kind(error),
             Self::Compaction(error) => kind(error),
+            Self::TerminalRelease(error) => kind(error),
         }
     }
     pub(super) fn uncertain(&self) -> bool {
@@ -337,6 +354,7 @@ impl PublicationError {
             Self::Preparation(error) => unknown(error),
             Self::Inputs(error) => unknown(error),
             Self::Compaction(error) => unknown(error),
+            Self::TerminalRelease(error) => unknown(error),
         }
     }
 }

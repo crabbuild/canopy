@@ -46,6 +46,9 @@ pub struct RecoveryScanStats {
     pub submitted: u64,
     pub recovered: u64,
     pub settled: u64,
+    /// Retirement admissions and original-command retries (cumulative visits).
+    pub release_submitted: u64,
+    pub release_recovered: u64,
     /// Settled intermediate pages/denied roots require producer continuation.
     pub continuation: u64,
     pub deferred: u64,
@@ -77,6 +80,40 @@ impl RecoverySupervisor {
         coordinator: PublicationCoordinator,
         limits: RecoveryScanLimits,
     ) -> Result<Self, RootRecoveryError> {
+        Self::start_inner(client, target, store, coordinator, limits, None)
+    }
+    /// The service supplies current repository administration and actual owner
+    /// custody. Closed attempts release through the same fair maintenance queue;
+    /// original uncertainty stays charged even after its pin disappears.
+    pub fn start_retiring(
+        client: CellClient,
+        target: CellTarget,
+        store: ArtifactStore,
+        coordinator: PublicationCoordinator,
+        limits: RecoveryScanLimits,
+        maintenance: MaintenanceRequest,
+    ) -> Result<Self, RootRecoveryError> {
+        if maintenance.repository != store.repository() {
+            return Err(RootRecoveryError::Context);
+        }
+        maintenance.encode(&mut BoundedEncoder::new(4096)?)?;
+        Self::start_inner(
+            client,
+            target,
+            store,
+            coordinator,
+            limits,
+            Some(maintenance),
+        )
+    }
+    fn start_inner(
+        client: CellClient,
+        target: CellTarget,
+        store: ArtifactStore,
+        coordinator: PublicationCoordinator,
+        limits: RecoveryScanLimits,
+        maintenance: Option<MaintenanceRequest>,
+    ) -> Result<Self, RootRecoveryError> {
         limits.validate()?;
         if !coordinator.matches_target(&target)
             || crate::repository_target(target.tenant(), target.application(), store.repository())?
@@ -93,6 +130,7 @@ impl RecoverySupervisor {
                 target,
                 store,
                 coordinator,
+                maintenance,
             },
             sql,
             limits,
@@ -173,6 +211,7 @@ struct Scan {
     target: CellTarget,
     store: ArtifactStore,
     coordinator: PublicationCoordinator,
+    maintenance: Option<MaintenanceRequest>,
 }
 impl Scan {
     async fn visit(
@@ -218,6 +257,40 @@ impl Scan {
             && (!journal.refused(&registered.record)? || journal.refusal.is_some())
         {
             stats.settled = stats.settled.saturating_add(1);
+            if journal.terminal(&registered.record)?.is_some()
+                && let Some(maintenance) = &self.maintenance
+            {
+                let identity =
+                    crate::server::mutation_identity().map_err(|source| Error::Facility {
+                        name: "terminal retirement identity",
+                        source: Box::new(source),
+                    })?;
+                let ready = registered
+                    .ready_terminal_release(
+                        self.client.clone(),
+                        &self.store,
+                        maintenance.clone(),
+                        identity,
+                    )
+                    .await?;
+                match self.coordinator.submit(ready).await {
+                    Ok(_) => stats.release_submitted = stats.release_submitted.saturating_add(1),
+                    Err(failure) => match failure.reason {
+                        PublicationScheduleError::Capacity
+                        | PublicationScheduleError::Duplicate
+                        | PublicationScheduleError::Closed => {
+                            stats.deferred = stats.deferred.saturating_add(1)
+                        }
+                        reason => {
+                            return Err(Error::Facility {
+                                name: "terminal retirement admission",
+                                source: Box::new(reason),
+                            }
+                            .into());
+                        }
+                    },
+                }
+            }
             if journal.may_advance(&registered.record)? {
                 stats.continuation = stats.continuation.saturating_add(1);
             }
@@ -260,6 +333,20 @@ async fn run(
     loop {
         if *stopping.borrow() {
             return stats;
+        }
+        if scan.maintenance.is_some() {
+            match scan.coordinator.recover_terminal_releases().await {
+                Ok(recovered) => {
+                    stats.release_recovered = stats.release_recovered.saturating_add(recovered)
+                }
+                Err(source) => stats.failed(
+                    Error::Facility {
+                        name: "terminal retirement recovery",
+                        source: Box::new(source),
+                    }
+                    .into(),
+                ),
+            }
         }
         match page(&sql, after, limits.page).await {
             Ok(keys) => {

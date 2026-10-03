@@ -74,9 +74,10 @@ pub use compaction::{
 mod exact;
 mod recovery;
 pub use recovery::{
-    ReadyRootRecovery, RecoveryScanLimits, RecoveryScanStats, RecoverySupervisor,
-    RegisterRootRecovery, RegisteredRootRecovery, RootRecoveryCertificate, RootRecoveryError,
-    RootRecoveryReply,
+    ReadyRootRecovery, ReadyTerminalRelease, RecoveryScanLimits, RecoveryScanStats,
+    RecoverySupervisor, RegisterRootRecovery, RegisteredRootRecovery, ReleaseTerminalRecovery,
+    RootRecoveryCertificate, RootRecoveryError, RootRecoveryReply, TerminalReleaseCertificate,
+    TerminalReleaseInput, TerminalReleaseReply,
 };
 mod staging_service;
 pub use staging_service::{
@@ -239,6 +240,7 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<CompleteRootPush>()?;
     registry.bind_command::<CompleteRootOutcome>()?;
     registry.bind_command::<RegisterRootRecovery>()?;
+    registry.bind_command::<ReleaseTerminalRecovery>()?;
     registry.bind_query::<CheckCompletedRootPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;
     registry.bind_query::<CheckCompletedCompaction>()?;

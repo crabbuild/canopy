@@ -25,6 +25,7 @@ mod root_outcome;
 mod staged_durable;
 mod staging;
 mod staging_service;
+mod terminal_retention;
 use cellule_ltx::{CellReplica, CellStorageLayout, Limits};
 use cellule_runtime::{
     ApplicationId, BuildDescriptor, CellClient, CellRuntime, CellTarget, Digest, InvocationError,
@@ -91,6 +92,8 @@ impl CellModule for Module {
             // The generic 4 KiB fixture limit cannot encode even one valid
             // 65 KiB ref name; policy construction has its own smaller bound.
             let sql_query = crate::operation(2);
+            let mut release = descriptor(40);
+            release.output_limit = 128;
             ModuleDescriptor {
                 name: Self::NAME,
                 source_digest: Digest::from_bytes([11; 32]),
@@ -123,6 +126,7 @@ impl CellModule for Module {
                     root_completion,
                     root_outcome,
                     recovery,
+                    release,
                     ref_descriptor,
                 ])),
                 queries: Box::leak(Box::new([

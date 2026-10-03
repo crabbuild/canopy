@@ -3,8 +3,8 @@ use super::*;
 use canopy_object_storage::artifact::ArtifactRead;
 use cellule_runtime::{CellClient, CellTarget, InvocationError, Receipt};
 
-pub(super) const SAVED: &str = "SELECT actor,request_digest,response_id,completion_digest,rejected,publication,response_root FROM pushes WHERE id=?1";
-pub(super) fn saved(
+pub(in crate::packs::publication) const SAVED: &str = "SELECT actor,request_digest,response_id,completion_digest,rejected,publication,response_root FROM pushes WHERE id=?1";
+pub(in crate::packs::publication) fn saved(
     sets: &[SqlResultSet],
     actor: &str,
     digest: [u8; 32],

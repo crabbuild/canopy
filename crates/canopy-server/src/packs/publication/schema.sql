@@ -67,6 +67,11 @@ CREATE TABLE pushes (
     options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 65536),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     completion_digest BLOB CHECK(completion_digest IS NULL OR length(completion_digest) = 32),
+    -- Closed attempts keep their original recovery headers and phase here,
+    -- independently of a preparation floor or creating-input lease.
+    recovery BLOB CHECK(recovery IS NULL OR (typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024)),
+    recovery_phase BLOB CHECK(recovery_phase IS NULL OR (typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048)),
+    recovery_release BLOB CHECK(recovery_release IS NULL OR (typeof(recovery_release)='blob' AND length(recovery_release) BETWEEN 1 AND 1024)),
     response_root BLOB CHECK(response_root IS NULL OR (typeof(response_root)='blob' AND length(response_root) BETWEEN 1 AND 128)),
     rejected INTEGER CHECK(rejected IN (0, 1)),
     rejection_reason TEXT,
@@ -78,6 +83,9 @@ CREATE TABLE pushes (
     CHECK((response_id IS NULL) = (rejected IS NULL)),
     CHECK((response_id IS NULL) = (completion_digest IS NULL)),
     CHECK(response_root IS NULL OR response_id IS NOT NULL),
+    CHECK((recovery IS NULL) = (recovery_phase IS NULL)),
+    CHECK((recovery IS NULL) = (recovery_release IS NULL)),
+    CHECK(recovery IS NULL OR response_root IS NOT NULL),
     CHECK(rejected IS NOT 1 OR publication IS NULL)
 ) WITHOUT ROWID;
 CREATE TRIGGER push_publication_immutable BEFORE UPDATE OF publication,publication_plan_digest ON pushes
@@ -100,6 +108,10 @@ BEGIN SELECT RAISE(ABORT, 'root completion is immutable'); END;
 CREATE TRIGGER push_root_completion_retained BEFORE DELETE ON pushes
 WHEN OLD.response_root IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'root completion must be retained'); END;
+
+CREATE TRIGGER push_recovery_archive_immutable BEFORE UPDATE OF recovery,recovery_phase,recovery_release ON pushes
+WHEN OLD.recovery IS NOT NULL AND (NEW.recovery IS NOT OLD.recovery OR NEW.recovery_phase IS NOT OLD.recovery_phase OR NEW.recovery_release IS NOT OLD.recovery_release)
+BEGIN SELECT RAISE(ABORT, 'closed recovery is immutable'); END;
 
 CREATE TABLE push_certificates (
     digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
@@ -450,7 +462,10 @@ BEGIN SELECT RAISE(ABORT, 'publication recovery requires exact phase append'); E
 -- Unknown commands retain metadata and exact bodies after custody expiry.
 -- Typed recovery/backup traversal must authorize releasing these pins.
 CREATE TRIGGER catalog_lease_recovery_retained BEFORE DELETE ON catalog_leases
-WHEN OLD.recovery IS NOT NULL
+WHEN OLD.recovery IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM pushes p WHERE p.id=OLD.operation AND p.response_root IS NOT NULL
+        AND p.recovery IS OLD.recovery AND p.recovery_phase IS OLD.recovery_phase
+        AND p.recovery_release IS NOT NULL)
 BEGIN SELECT RAISE(ABORT, 'root recovery command is retained'); END;
 
 CREATE TABLE catalog_operations (

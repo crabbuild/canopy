@@ -12,7 +12,19 @@ pub(super) struct Recorded {
     result: Vec<u8>,
 }
 impl Recorded {
-    fn decode_reply<T: WireValue>(&self) -> Result<T, CodecError> {
+    pub(super) fn new(sequence: u64, rejected: bool, result: Vec<u8>) -> Result<Self, CodecError> {
+        let value = Self {
+            sequence,
+            rejected,
+            result,
+        };
+        value.encode(&mut BoundedEncoder::new(1024)?)?;
+        Ok(value)
+    }
+    pub(super) fn rejected(&self) -> bool {
+        self.rejected
+    }
+    pub(super) fn decode_reply<T: WireValue>(&self) -> Result<T, CodecError> {
         let mut d = BoundedDecoder::new(&self.result, 512)?;
         let result = T::decode(&mut d)?;
         d.finish()?;
@@ -320,7 +332,7 @@ impl RegisteredRootRecovery {
         let sql =
             SqlCell::<RepositoryModule>::new(client.clone(), self.evidence().target().clone())?;
         let result = sql.query(None, SqlBatch { statements: vec![
-            SqlStatement { sql: "SELECT recovery,recovery_phase FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2".into(), parameters: vec![blob(self.token().owner.incarnation.as_bytes()), number(self.token().attempt)?] },
+            SqlStatement { sql: "SELECT recovery,recovery_phase FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 UNION ALL SELECT recovery,recovery_phase FROM pushes WHERE id=?3 AND recovery IS NOT NULL AND NOT EXISTS(SELECT 1 FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2)".into(), parameters: vec![blob(self.token().owner.incarnation.as_bytes()), number(self.token().attempt)?, blob(self.token().operation)] },
             SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1".into(), parameters: vec![] },
         ] }).await.map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
         let Some([SqlValue::Blob(bytes), saved]) = rows(&result.output)?.first().map(Vec::as_slice)

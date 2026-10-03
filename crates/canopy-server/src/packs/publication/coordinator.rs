@@ -543,6 +543,47 @@ impl PublicationCoordinator {
             tokio::spawn(supervise(Arc::clone(&self.inner)));
         }
     }
+    /// The retirement supervisor may recover only factory-owned terminal
+    /// release commands. A committed release has removed its pin, so lease
+    /// discovery alone cannot find this still charged original command.
+    pub(in crate::packs::publication) async fn recover_terminal_releases(
+        &self,
+    ) -> Result<u64, PublicationScheduleError> {
+        let jobs: Vec<_> = {
+            let state = self.inner.state.lock().await;
+            state
+                .jobs
+                .values()
+                .filter(|job| {
+                    job.class == PublicationClass::Maintenance
+                        && matches!(*job.status.borrow(), PublicationState::Uncertain(_))
+                })
+                .cloned()
+                .collect()
+        };
+        // Bounded by the existing reserved maintenance admission slots. Never
+        // retain a command-body copy, replace an identity or retry compaction.
+        let mut recovered = 0;
+        for job in jobs {
+            let release = matches!(
+                &*job.ready.lock().await,
+                Some(ReadyPublication::TerminalRelease(_))
+            );
+            if !release {
+                continue;
+            }
+            let ticket = PublicationTicket {
+                inner: Arc::clone(&self.inner),
+                job,
+            };
+            match self.recover(&ticket).await {
+                Ok(()) => recovered += 1,
+                Err(PublicationScheduleError::NotUncertain) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(recovered)
+    }
     /// Stop new work and wait for dispatched commands (without cancellation).
     /// Held activation/discard and recovery remain available after closing.
     /// Close the producer lifecycle first: this does not activate held proofs.
@@ -706,6 +747,15 @@ impl PublicationTicket {
             // The original observer may have requested recovery meanwhile.
             Err(PublicationScheduleError::NotUncertain) => Ok(false),
             Err(error) => Err(error),
+        }
+    }
+    #[cfg(test)]
+    pub(in crate::packs::publication) async fn terminal_release_for_test(
+        &self,
+    ) -> Option<ReadyTerminalRelease> {
+        match &*self.job.ready.lock().await {
+            Some(ReadyPublication::TerminalRelease(ready)) => Some((**ready).clone()),
+            _ => None,
         }
     }
     pub async fn recover(&self) -> Result<(), PublicationScheduleError> {
