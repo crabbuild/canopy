@@ -2,6 +2,12 @@
 
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
+Current cutover review: [draft PR #34](https://github.com/crabbuild/canopy/pull/34),
+directly against `main`. GitHub reports no merge conflicts at publication;
+CI is pending. It remains a draft until the incomplete production conversion
+and release requirements below are verified. Older local/unpublished checkpoint
+notes describe their historical states, not the current publication state.
+
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
