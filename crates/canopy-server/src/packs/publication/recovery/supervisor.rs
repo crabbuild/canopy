@@ -1,6 +1,7 @@
 //! Service-owned restart discovery over the existing independent attempt pins.
 //! No local outbox, new identity or caller-supplied actor is used. The original
 //! receiver still decides custody; discovery never adopts an old owner fence.
+use super::super::scan::ScanControl;
 use super::*;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, task::JoinHandle};
@@ -68,7 +69,7 @@ impl RecoveryScanStats {
 /// retain its unresolved tickets and their original admission reservations.
 #[must_use]
 pub struct RecoverySupervisor {
-    stop: watch::Sender<bool>,
+    control: ScanControl,
     stats: watch::Receiver<RecoveryScanStats>,
     task: Option<JoinHandle<RecoveryScanStats>>,
 }
@@ -78,10 +79,18 @@ impl RecoverySupervisor {
         target: CellTarget,
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
-        limits: RecoveryScanLimits,
+        settings: RecoveryScanSettings,
         authority: PreparationAuthority,
     ) -> Result<Self, RootRecoveryError> {
-        Self::start_inner(client, target, store, coordinator, limits, authority, None)
+        Self::start_inner(
+            client,
+            target,
+            store,
+            coordinator,
+            settings,
+            authority,
+            None,
+        )
     }
     /// The service supplies current repository administration and actual owner
     /// custody. Closed attempts release through the same fair maintenance queue;
@@ -91,7 +100,7 @@ impl RecoverySupervisor {
         target: CellTarget,
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
-        limits: RecoveryScanLimits,
+        settings: RecoveryScanSettings,
         authority: PreparationAuthority,
         maintenance: MaintenanceRequest,
     ) -> Result<Self, RootRecoveryError> {
@@ -104,7 +113,7 @@ impl RecoverySupervisor {
             target,
             store,
             coordinator,
-            limits,
+            settings,
             authority,
             Some(maintenance),
         )
@@ -114,11 +123,11 @@ impl RecoverySupervisor {
         target: CellTarget,
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
-        limits: RecoveryScanLimits,
+        settings: RecoveryScanSettings,
         authority: PreparationAuthority,
         maintenance: Option<MaintenanceRequest>,
     ) -> Result<Self, RootRecoveryError> {
-        limits.validate()?;
+        settings.validate()?;
         if !authority.matches(&target)
             || !coordinator.matches_target(&target)
             || crate::repository_target(target.tenant(), target.application(), store.repository())?
@@ -127,9 +136,9 @@ impl RecoverySupervisor {
             return Err(RootRecoveryError::Context);
         }
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
-        let (stop, stopping) = watch::channel(false);
+        let control = ScanControl::default();
         let (updates, stats) = watch::channel(RecoveryScanStats::default());
-        let task = tokio::spawn(run(
+        let task = settings.spawn(run(
             Scan {
                 client,
                 target,
@@ -139,27 +148,33 @@ impl RecoverySupervisor {
                 maintenance,
             },
             sql,
-            limits,
-            stopping,
+            settings.clone(),
+            control.clone(),
             updates,
         ));
         Ok(Self {
-            stop,
+            control,
             stats,
             task: Some(task),
         })
+    }
+    pub(crate) async fn pause(&self) {
+        self.control.pause().await;
+    }
+    pub(crate) fn resume(&self) {
+        self.control.resume();
     }
     pub fn stats(&self) -> RecoveryScanStats {
         self.stats.borrow().clone()
     }
     pub async fn shutdown(mut self) -> Result<RecoveryScanStats, tokio::task::JoinError> {
-        self.stop.send_replace(true);
+        self.control.stop();
         self.task.take().expect("owned restart scanner").await
     }
 }
 impl Drop for RecoverySupervisor {
     fn drop(&mut self) {
-        self.stop.send_replace(true);
+        self.control.stop();
     }
 }
 
@@ -339,15 +354,29 @@ impl Scan {
 async fn run(
     scan: Scan,
     sql: SqlCell<RepositoryModule>,
-    limits: RecoveryScanLimits,
-    mut stopping: watch::Receiver<bool>,
+    settings: RecoveryScanSettings,
+    control: ScanControl,
     updates: watch::Sender<RecoveryScanStats>,
 ) -> RecoveryScanStats {
     let mut stats = RecoveryScanStats::default();
     let mut after = Cursor::default();
     loop {
-        if *stopping.borrow() {
+        let Some(round) = control.enter(&settings).await else {
             return stats;
+        };
+        let permit = match settings.acquire().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                stats.deferred = stats.deferred.saturating_add(1);
+                updates.send_replace(stats.clone());
+                drop(round);
+                settings.delay(&control).await;
+                continue;
+            }
+        };
+        if control.interrupted(&settings) {
+            drop((permit, round));
+            continue;
         }
         if scan.maintenance.is_some() {
             match scan.coordinator.recover_terminal_releases().await {
@@ -363,14 +392,14 @@ async fn run(
                 ),
             }
         }
-        match page(&sql, after, limits.page).await {
+        match page(&sql, after, settings.limits.page).await {
             Ok(keys) => {
                 if keys.is_empty() {
                     after = Cursor::default();
                     stats.passes = stats.passes.saturating_add(1);
                 }
                 for key in keys {
-                    if *stopping.borrow() {
+                    if control.interrupted(&settings) {
                         break;
                     }
                     stats.scanned = stats.scanned.saturating_add(1);
@@ -382,13 +411,11 @@ async fn run(
             }
             Err(error) => stats.failed(error),
         }
+        // Publish the completed round before releasing its quiescence guard:
+        // a successful pause also makes its diagnostics stable.
         updates.send_replace(stats.clone());
-        tokio::select! {
-            _ = tokio::time::sleep(limits.interval) => {},
-            changed = stopping.changed() => {
-                if changed.is_err() || *stopping.borrow() { return stats; }
-            }
-        }
+        drop((permit, round));
+        settings.delay(&control).await;
     }
 }
 

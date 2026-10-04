@@ -111,9 +111,10 @@ impl CanopyServer {
 }
 
 impl RunningServer {
-    async fn shutdown(mut self) -> Result<(), ServerError> {
+    pub(super) async fn shutdown(mut self) -> Result<(), ServerError> {
         self.native.close();
         self.maintenance_stop.cancel();
+        self.repositories.recovery_scans.close();
         self.ingress_stop.cancel();
         let serving = self.serving.await;
         let ssh_serving = if let Some(task) = self.ssh_serving {
@@ -124,6 +125,7 @@ impl RunningServer {
         self.listeners.stop_ingress();
         self.tasks.close();
         self.tasks.wait().await;
+        self.repositories.drain_recovery().await;
         // Detached native reapers and blocking verifiers outlive their request
         // observers. Keep Cell authority, heartbeat and workspace until every
         // admitted owner releases its claim. Uncertain drain stays pending.

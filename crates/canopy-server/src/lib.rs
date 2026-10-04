@@ -175,6 +175,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("deployment/mod.rs"));
                 source.update(include_bytes!("deployment/root.rs"));
                 source.update(include_bytes!("server/mod.rs"));
+                source.update(include_bytes!("server/lifecycle.rs"));
+                source.update(include_bytes!("admission.rs"));
                 source.update(include_bytes!("server/workspace/mod.rs"));
                 source.update(include_bytes!("../../canopy-git-format/src/lib.rs"));
                 source.update(include_bytes!(
@@ -268,6 +270,9 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/custody/dispatch.rs"));
                 source.update(include_bytes!("packs/publication/preparation_receipt.rs"));
                 source.update(include_bytes!("packs/publication/coordinator.rs"));
+                source.update(include_bytes!("packs/publication/coordinator/budget.rs"));
+                source.update(include_bytes!("packs/publication/scan.rs"));
+                source.update(include_bytes!("packs/publication/custody/scan.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/policy.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/roots.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/work.rs"));
@@ -290,6 +295,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/registry.rs"));
                 source.update(include_bytes!("server/catalog_initialization.rs"));
                 source.update(include_bytes!("server/residency/mod.rs"));
+                source.update(include_bytes!("server/residency/recovery.rs"));
                 source.update(include_bytes!("server/peer.rs"));
                 source.update(include_bytes!("packs/publication/codec.rs"));
                 source.update(include_bytes!("packs/publication/sql.rs"));

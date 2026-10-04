@@ -653,6 +653,16 @@ impl PublicationCoordinator {
             wake.await;
         }
     }
+    /// Eviction closes only an already empty queue. Busy/uncertain owners keep
+    /// their admission and may resume discovery without replacing commands.
+    pub(crate) async fn close_if_idle(&self) -> bool {
+        let mut state = self.inner.state.lock().await;
+        if state.worker || !state.jobs.is_empty() {
+            return false;
+        }
+        state.closed = true;
+        true
+    }
     /// Service-internal lookup after its caller loses a ticket. This is not an
     /// externally authorized product query; use completed-request replay there.
     pub async fn pending(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
@@ -719,7 +729,7 @@ impl PublicationCoordinator {
         (release, start)
     }
     #[cfg(test)]
-    pub(super) fn fault_for_test(&self, fault: u8) {
+    pub(crate) fn fault_for_test(&self, fault: u8) {
         self.inner
             .fault
             .store(fault, std::sync::atomic::Ordering::Release);

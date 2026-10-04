@@ -1,4 +1,5 @@
 //! Bounded keyset discovery; existing maintenance admission owns exact stops.
+use super::super::scan::ScanControl;
 use super::*;
 use std::sync::Arc;
 use tokio::{sync::watch, task::JoinHandle};
@@ -22,7 +23,7 @@ impl CustodyScanStats {
 }
 #[must_use]
 pub struct CustodySupervisor {
-    stop: watch::Sender<bool>,
+    control: ScanControl,
     stats: watch::Receiver<CustodyScanStats>,
     task: Option<JoinHandle<CustodyScanStats>>,
 }
@@ -31,17 +32,17 @@ impl CustodySupervisor {
         client: CellClient,
         target: CellTarget,
         coordinator: PublicationCoordinator,
-        limits: RecoveryScanLimits,
+        settings: RecoveryScanSettings,
         authority: PreparationAuthority,
     ) -> Result<Self, CustodyError> {
-        if limits.validate().is_err() {
+        if settings.validate().is_err() {
             return Err(CustodyError::InvalidScanLimits);
         }
         if !authority.matches(&target) || coordinator.target() != &target {
             return Err(CustodyError::Context);
         }
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
-        let (stop, stopping) = watch::channel(false);
+        let control = ScanControl::default();
         let (updates, stats) = watch::channel(CustodyScanStats::default());
         let scan = Scan {
             client,
@@ -49,24 +50,30 @@ impl CustodySupervisor {
             coordinator,
             authority,
         };
-        let task = tokio::spawn(run(scan, sql, limits, stopping, updates));
+        let task = settings.spawn(run(scan, sql, settings.clone(), control.clone(), updates));
         Ok(Self {
-            stop,
+            control,
             stats,
             task: Some(task),
         })
+    }
+    pub(crate) async fn pause(&self) {
+        self.control.pause().await;
+    }
+    pub(crate) fn resume(&self) {
+        self.control.resume();
     }
     pub fn stats(&self) -> CustodyScanStats {
         self.stats.borrow().clone()
     }
     pub async fn shutdown(mut self) -> Result<CustodyScanStats, tokio::task::JoinError> {
-        self.stop.send_replace(true);
+        self.control.stop();
         self.task.take().expect("custody scan owner").await
     }
 }
 impl Drop for CustodySupervisor {
     fn drop(&mut self) {
-        self.stop.send_replace(true);
+        self.control.stop();
     }
 }
 struct Scan {
@@ -152,28 +159,42 @@ async fn page(
 async fn run(
     scan: Scan,
     sql: SqlCell<RepositoryModule>,
-    limits: RecoveryScanLimits,
-    mut stopping: watch::Receiver<bool>,
+    settings: RecoveryScanSettings,
+    control: ScanControl,
     updates: watch::Sender<CustodyScanStats>,
 ) -> CustodyScanStats {
     let mut stats = CustodyScanStats::default();
     let mut after = [0; 16];
     loop {
-        if *stopping.borrow() {
+        let Some(round) = control.enter(&settings).await else {
             return stats;
+        };
+        let permit = match settings.acquire().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                stats.deferred = stats.deferred.saturating_add(1);
+                updates.send_replace(stats.clone());
+                drop(round);
+                settings.delay(&control).await;
+                continue;
+            }
+        };
+        if control.interrupted(&settings) {
+            drop((permit, round));
+            continue;
         }
         match scan.coordinator.recover_custody_stops().await {
             Ok(recovered) => stats.recovered = stats.recovered.saturating_add(recovered),
             Err(_) => stats.failed(CustodyError::Context),
         }
-        match page(&sql, after, limits.page).await {
+        match page(&sql, after, settings.limits.page).await {
             Ok(keys) => {
                 if keys.is_empty() {
                     after = [0; 16];
                     stats.passes = stats.passes.saturating_add(1);
                 }
                 for key in keys {
-                    if *stopping.borrow() {
+                    if control.interrupted(&settings) {
                         break;
                     }
                     stats.scanned = stats.scanned.saturating_add(1);
@@ -186,10 +207,10 @@ async fn run(
             }
             Err(error) => stats.failed(error),
         }
+        // Publish the completed round before releasing its quiescence guard:
+        // a successful pause also makes its diagnostics stable.
         updates.send_replace(stats.clone());
-        tokio::select! {
-            _ = tokio::time::sleep(limits.interval) => {},
-            changed = stopping.changed() => { if changed.is_err() || *stopping.borrow() { return stats; } }
-        }
+        drop((permit, round));
+        settings.delay(&control).await;
     }
 }

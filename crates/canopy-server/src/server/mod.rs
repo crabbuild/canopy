@@ -68,6 +68,8 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("packed repository recovery failed")]
+    CatalogRecovery(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("packed repository initialization failed")]
     CatalogInitialization(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("invalid SSH host key")]
@@ -175,6 +177,7 @@ struct RunningServer {
     listeners: listeners::ListenerReservations,
     local: Arc<workspace::Workspace>,
     native: crate::native_resources::NativeResources,
+    repositories: Arc<RepositoryManager>,
 }
 
 pub(crate) struct RepositoryManager {
@@ -201,6 +204,8 @@ pub(crate) struct RepositoryManager {
     transfers: AccountAdmission,
     tasks: TaskTracker,
     maintenance_stop: CancellationToken,
+    publication_budget: crate::packs::publication::PublicationBudget,
+    recovery_scans: crate::packs::publication::RecoveryScanBudget,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -643,6 +648,15 @@ impl RunningServer {
                 ),
                 tasks: tasks.clone(),
                 maintenance_stop: maintenance_stop.clone(),
+                publication_budget: crate::packs::publication::PublicationBudget::new(
+                    crate::packs::publication::PublicationLimits::default(),
+                )
+                .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                recovery_scans: crate::packs::publication::RecoveryScanBudget::new(
+                    8,
+                    tasks.clone(),
+                )
+                .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
             });
             let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;
@@ -677,6 +691,7 @@ impl RunningServer {
         let ingress_stop = CancellationToken::new();
         let ssh_serving = match (ssh_config, ssh_listener) {
             (Some(config), Some(listener)) => {
+                let manager = Arc::clone(&manager);
                 let stop = ingress_stop.clone();
                 let tasks = tasks.clone();
                 let release = release_stop.clone();
@@ -717,6 +732,7 @@ impl RunningServer {
             listeners,
             local,
             native,
+            repositories: manager,
         })
     }
 }

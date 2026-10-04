@@ -268,10 +268,10 @@ async fn denied_initial_attempt_retires_only_after_claim_and_keeps_its_receipt_a
         f.target.clone(),
         (*store).clone(),
         queue.clone(),
-        RecoveryScanLimits {
+        f.scans(RecoveryScanLimits {
             page: 1,
             interval: Duration::from_secs(1),
-        },
+        }),
         f.authority(),
         admin.clone(),
     )?;
@@ -463,10 +463,10 @@ async fn automatic_initialization_retirement_recovers_uncertainty_after_pin_disa
         f.target.clone(),
         (*store).clone(),
         queue.clone(),
-        RecoveryScanLimits {
+        f.scans(RecoveryScanLimits {
             page: 1,
             interval: Duration::from_secs(1),
-        },
+        }),
         f.authority(),
         maintenance(&f.handle, f.repository).await?,
     )?;
@@ -502,10 +502,10 @@ async fn automatic_initialization_retirement_recovers_uncertainty_after_pin_disa
         f.target.clone(),
         (*store).clone(),
         queue.clone(),
-        RecoveryScanLimits {
+        f.scans(RecoveryScanLimits {
             page: 1,
             interval: Duration::from_secs(1),
-        },
+        }),
         f.authority(),
         maintenance(&f.handle, f.repository).await?,
     )?;

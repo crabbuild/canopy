@@ -54,6 +54,7 @@ mod outcome;
 pub use outcome::OutcomeCertificate;
 mod completion;
 mod coordinator;
+mod scan;
 pub use completion::{
     CatalogCompletionReply, CatalogPushCompletion, CatalogPushResponseError, CheckCompletedPush,
     CompleteCatalogPush, CompletedCatalogPush, CompletionCatalogProof, PushCompletionProofError,
@@ -69,6 +70,7 @@ pub use coordinator::{
     ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError, RefPolicyRefusalFailure,
     RegisteredNativeInputs, RootPushReadyError,
 };
+pub use scan::{RecoveryScanBudget, RecoveryScanSettings};
 mod commands;
 mod compaction;
 pub use compaction::{

@@ -6,6 +6,55 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Resident recovery lifecycle under final qualification
+
+The production repository manager now retains one recovery coordinator plus root
+and custody scanners for each initialized local resident, sharing node command
+and read-round budgets. Scans are tracked by the existing server task tracker.
+They pause without abandoning an owned query/artifact read and resume on the same
+cursor when a busy coordinator refuses eviction. Idle coordinators close under
+their admission lock; scans and Git maintenance join before Cell release and
+workspace deletion. Runtime idle generation is refreshed after joining reads.
+Release errors retain the runtime-handle refresh path. Remote routes have no
+local recovery scanner. Partial worker startup explicitly joins its first worker.
+See the [resident contract](design/resident-publication-recovery.md).
+
+Shutdown owns bounded concurrent per-repository drains, so one producer-held
+command cannot delay another repository's exact recovery. Uncertain tickets keep
+their original identity, command, receipt and admission. Held proofs stay owned
+by their producer. Neither an observer timeout nor budget closure permits early
+Cell shutdown, heartbeat withdrawal or workspace cleanup. The new scan, budget
+and server lifecycle source files are included in RepositoryModule's code digest.
+
+The final-source library run executes 618 unique cases: **613 pass and five
+fail**, with exit 101 retained. All 324 publication cases, seven startup cases
+and four real production recovery families pass; two nested subprocess summaries
+are excluded. The failing set remains exactly the five unconverted legacy
+`objects` readers. Warnings-denied workspace/all-target Clippy passes in 28.72
+seconds. Nine additional workspace/lifecycle cases pass in 3.62 seconds,
+including cancelled prebound startup; their command takes 43.49 seconds with
+compilation. Combined coverage is 627 unique cases executed, 622 pass and five
+fail. Focused cases are not counted again. The server build passes in 29.38
+seconds, formatting in 1.14 seconds, and static/diff checks pass with 451 frozen
+source/schema/manifest files including 439 Rust files, 148 local documentation
+links, exact SDK pins and unchanged protected index/archive. Evidence is
+`/tmp/canopy-resident-recovery-validation.json`.
+
+Retained draft diagnostics include sibling-module shutdown/target visibility
+errors, the regression's immediate uncertainty observation, and Clippy's
+`int_plus_one` rejection. The test uses its actual repository target and observes
+the later terminal result without requesting recovery; the comparison now uses
+`>` without addition/overflow. No diagnostic is treated as a passing run. No
+compatibility table or green-result substitution is introduced.
+
+Full producer/reader/final-DDL conversion, admitted custody-history frames/exact
+lookup, certified serving generation ownership, retained-input takeover/adoption,
+scanner panic/restart and provider/owner-loss campaigns, typed GC/backup/isolated
+restore, OS containment, native acceleration/physical rewrite/fair continuous
+maintenance, signed completion/cold clone, file attribution and full-history plus
+10,000-developer capacity qualification remain mandatory. This branch remains
+local, unpublished and unreleasable.
+
 ## Shared node publication budget
 
 Repository dispatchers now require an explicit `PublicationBudget`, reusing the
@@ -46,10 +95,10 @@ Clippy (25.83 seconds), the server build (32.10 seconds), formatting/diff,
 141 local documentation links, exact SDK pins and protected index/archive
 checks pass. Evidence is `/tmp/canopy-node-publication-validation.json`.
 
-This is a necessary admission primitive, not completed production integration.
-The resident repository manager must own one shared budget and retain/drain its
-recovery services before Cell release or workspace deletion. General scanner
-ownership, query/I/O admission and that production wiring remain open. The wire
+At the preceding `4d67294` checkpoint this was an admission primitive without
+production wiring. The resident recovery increment above now supplies the shared
+owner, read-round admission and release/drain lifecycle. Integration of every
+remaining production consumer and provider/resource qualification remain open. The wire
 credits do not qualify whole-process heap/RSS, native descendants, provider
 traffic or capacity. The full producer/reader/final-schema cutover, admitted
 history archival/exact lookup, retained-input adoption, certified serving

@@ -443,7 +443,7 @@ async fn custody_scan_uses_bounded_indexed_pages_and_revisits_corruption_without
         f.client(),
         f.target.clone(),
         queue.clone(),
-        limits,
+        f.scans(limits),
         f.authority(),
     )?;
     timeout(Duration::from_secs(10), async {
@@ -485,10 +485,10 @@ async fn custody_scan_uses_bounded_indexed_pages_and_revisits_corruption_without
                 f.client(),
                 f.target.clone(),
                 queue.clone(),
-                RecoveryScanLimits {
+                f.scans(RecoveryScanLimits {
                     page: invalid,
                     ..limits
-                },
+                }),
                 f.authority()
             )
             .is_err()
@@ -584,10 +584,10 @@ async fn custody_scan_recovers_exact_maintenance_commands_after_their_pending_ke
                 f.client(),
                 f.target.clone(),
                 queue.clone(),
-                RecoveryScanLimits {
+                f.scans(RecoveryScanLimits {
                     page: 1,
                     interval: Duration::from_millis(100),
-                },
+                }),
                 f.authority(),
             )?;
             let invocation = timeout(Duration::from_secs(10), async {
@@ -747,10 +747,10 @@ async fn custody_stop_cannot_be_blocked_by_its_own_uncertain_preparation_and_fen
             f.client(),
             f.target.clone(),
             queue.clone(),
-            RecoveryScanLimits {
+            f.scans(RecoveryScanLimits {
                 page: 1,
                 interval: Duration::from_millis(10),
-            },
+            }),
             f.authority(),
         )?;
         timeout(Duration::from_secs(10), async {

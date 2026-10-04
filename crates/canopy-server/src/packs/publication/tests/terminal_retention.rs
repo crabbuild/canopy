@@ -404,7 +404,7 @@ pub(super) async fn archive(
             f.target.clone(),
             store.clone(),
             queue.clone(),
-            limits,
+            f.scans(limits),
             f.authority(),
             admin.clone(),
         )?;
@@ -445,7 +445,7 @@ pub(super) async fn archive(
                 f.target.clone(),
                 store.clone(),
                 queue.clone(),
-                limits,
+                f.scans(limits),
                 f.authority(),
                 admin.clone(),
             )?;
@@ -457,7 +457,7 @@ pub(super) async fn archive(
             f.target.clone(),
             store.clone(),
             queue.clone(),
-            limits,
+            f.scans(limits),
             f.authority(),
             admin.clone(),
         )?;

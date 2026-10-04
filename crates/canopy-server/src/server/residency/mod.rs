@@ -28,6 +28,8 @@ use crate::{
     http::GitHttpApi,
     repository_target,
 };
+mod recovery;
+use recovery::RecoveryServices;
 
 pub(super) struct LoadedRepository {
     repository: Arc<RepositoryCell>,
@@ -41,6 +43,20 @@ pub(super) struct LoadedRepository {
     local: bool,
     state: ResidencyState,
     slot: Arc<OwnedSemaphorePermit>,
+    recovery: Option<Arc<RecoveryServices>>,
+    maintenance: Option<MaintenanceWorker>,
+}
+struct MaintenanceWorker {
+    stop: tokio_util::sync::CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+impl MaintenanceWorker {
+    async fn shutdown(self) {
+        self.stop.cancel();
+        if let Err(error) = self.task.await {
+            tracing::error!(?error, "repository Git maintenance failed during drain");
+        }
+    }
 }
 
 enum EvictionAction {
@@ -198,7 +214,12 @@ impl RepositoryManager {
             // Remote cache ownership is disposable. Reacquire idle/expired Cell
             // authority locally before binding a new route after owner loss.
             let removed = self.loaded.lock().await.remove(&entry.repository_id);
-            reclaimed = removed.map(|repository| repository.slot);
+            if let Some(mut repository) = removed {
+                if let Some(maintenance) = repository.maintenance.take() {
+                    maintenance.shutdown().await;
+                }
+                reclaimed = Some(repository.slot);
+            }
         }
         let state = self
             .loaded
@@ -207,6 +228,7 @@ impl RepositoryManager {
             .get(&entry.repository_id)
             .map(|repository| repository.state);
         match state {
+            Some(ResidencyState::Releasing) => return Err(Error::CellDraining.into()),
             Some(ResidencyState::Released) => {
                 reclaimed = Some(self.cleanup_released(entry.repository_id).await?);
             }
@@ -349,6 +371,28 @@ impl RepositoryManager {
             .await
             .map_err(ServerError::CatalogInitialization)?;
         }
+        let start = self
+            .loaded
+            .lock()
+            .await
+            .get(&entry.repository_id)
+            .filter(|repository| repository.local && repository.recovery.is_none())
+            .map(|repository| {
+                (
+                    Arc::clone(&repository.repository),
+                    repository.client.clone(),
+                )
+            });
+        if let Some((repository, client)) = start {
+            let recovery =
+                Arc::new(RecoveryServices::start(self, entry, &repository, client).await?);
+            self.loaded
+                .lock()
+                .await
+                .get_mut(&entry.repository_id)
+                .ok_or(ServerError::Repository("loaded repository is absent"))?
+                .recovery = Some(recovery);
+        }
         let mut loaded = self.loaded.lock().await;
         let existing = loaded
             .get_mut(&entry.repository_id)
@@ -426,7 +470,7 @@ impl RepositoryManager {
                     let Ok(transition) = self.transition_lock(id).await.try_lock_owned() else {
                         continue;
                     };
-                    if matches!(action, EvictionAction::Release { .. }) {
+                    if !matches!(action, EvictionAction::Cleanup) {
                         loaded
                             .get_mut(&id)
                             .ok_or(ServerError::Repository("eviction candidate is absent"))?
@@ -465,7 +509,34 @@ impl RepositoryManager {
                 }
                 .into());
             };
-            let (cell, generation) = match action {
+            let recovery = self
+                .loaded
+                .lock()
+                .await
+                .get(&id)
+                .and_then(|repository| repository.recovery.as_ref().map(Arc::clone));
+            if let Some(recovery) = recovery
+                && !recovery.quiesce().await
+            {
+                self.loaded
+                    .lock()
+                    .await
+                    .get_mut(&id)
+                    .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                    .state = ResidencyState::Serving;
+                rejected.insert(id);
+                continue;
+            }
+            let maintenance = self
+                .loaded
+                .lock()
+                .await
+                .get_mut(&id)
+                .and_then(|repository| repository.maintenance.take());
+            if let Some(maintenance) = maintenance {
+                maintenance.shutdown().await;
+            }
+            let (cell, _) = match action {
                 EvictionAction::DropRemote => {
                     let removed = self.loaded.lock().await.remove(&id);
                     return removed
@@ -474,6 +545,35 @@ impl RepositoryManager {
                 }
                 EvictionAction::Cleanup => return self.cleanup_released(id).await,
                 EvictionAction::Release { cell, generation } => (cell, generation),
+            };
+            // The quiesced reads may have changed the runtime's idle generation
+            // since candidate selection. Reobserve actual settled authority;
+            // never substitute our earlier inventory or manufacture a handle.
+            let refreshed = match self.node.idle_transfer_candidates().await {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    self.loaded
+                        .lock()
+                        .await
+                        .get_mut(&id)
+                        .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                        .state = ResidencyState::RefreshHandle;
+                    return Err(error.into());
+                }
+            };
+            let generation = refreshed
+                .into_iter()
+                .find(|(candidate, _, _, _)| *candidate == cell)
+                .map(|(_, generation, _, _)| generation);
+            let Some(generation) = generation else {
+                self.loaded
+                    .lock()
+                    .await
+                    .get_mut(&id)
+                    .ok_or(ServerError::Repository("eviction candidate is absent"))?
+                    .state = ResidencyState::RefreshHandle;
+                rejected.insert(id);
+                continue;
             };
             let mut result = self
                 .node
@@ -567,8 +667,9 @@ impl RepositoryManager {
         let pin = Arc::new(());
         let weak_gateway = Arc::downgrade(&gateway);
         let weak_pin = Arc::downgrade(&pin);
-        let stop = self.maintenance_stop.clone();
-        self.tasks.spawn(async move {
+        let stop = self.maintenance_stop.child_token();
+        let maintenance_stop = stop.clone();
+        let task = self.tasks.spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             interval.tick().await;
@@ -578,11 +679,10 @@ impl RepositoryManager {
                     _ = interval.tick() => {},
                 }
                 let (Some(gateway), Some(_pin)) = (weak_gateway.upgrade(), weak_pin.upgrade()) else { return; };
-                tokio::select! {
-                    () = stop.cancelled() => return,
-                    result = gateway.maintain() => {
-                        if let Err(error) = result { tracing::warn!(error = ?error, "background Git maintenance failed; previous cache retained"); }
-                    }
+                // Stop between owned rounds. Cancellation does not abandon
+                // cache/provider work after eviction has selected this owner.
+                if let Err(error) = gateway.maintain().await {
+                    tracing::warn!(error = ?error, "background Git maintenance failed; previous cache retained");
                 }
             }
         });
@@ -598,6 +698,11 @@ impl RepositoryManager {
             local,
             state: ResidencyState::Serving,
             slot,
+            recovery: None,
+            maintenance: Some(MaintenanceWorker {
+                stop: maintenance_stop,
+                task,
+            }),
         })
     }
 

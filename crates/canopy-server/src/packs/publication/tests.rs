@@ -144,8 +144,12 @@ struct Fixture {
     runtime: CellRuntime,
     handle: CellHandle,
     publication_budget: PublicationBudget,
+    scan_budget: RecoveryScanBudget,
 }
 impl Fixture {
+    fn scans(&self, limits: RecoveryScanLimits) -> RecoveryScanSettings {
+        self.scan_budget.settings(limits, "owner")
+    }
     fn authority(&self) -> PreparationAuthority {
         PreparationAuthority::local(self.layout.clone(), self.target.clone())
     }
@@ -221,6 +225,7 @@ impl Fixture {
                 maintenance_in_flight: 4,
                 ..PublicationLimits::default()
             })?,
+            scan_budget: RecoveryScanBudget::new(8, tokio_util::task::TaskTracker::new())?,
         })
     }
     fn client(&self) -> CellClient {

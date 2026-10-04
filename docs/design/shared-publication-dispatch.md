@@ -48,8 +48,11 @@ Configuration requires room for another foreground account, nonzero reserved mai
 Create one `PublicationBudget` from the existing `PublicationLimits` profile and
 pass clones to every node-local `PublicationCoordinator::new(target, limits,
 budget)`. There is no constructor that supplies an independent budget implicitly.
-The production repository owner must create and retain that shared instance;
-the mandatory argument alone does not prove that production has reused it.
+The selected production repository manager creates and retains that shared
+instance for its resident recovery coordinators. See the
+[resident lifecycle](resident-publication-recovery.md). All remaining producer
+and reader integration must reuse this owner; a mandatory constructor argument
+alone does not establish whole-service integration.
 
 The node ledger charges the private ready value's account, class and exact wire
 reservation after repository admission succeeds. It bounds the sum of held,
@@ -86,8 +89,12 @@ This is resource admission, not a durable outcome owner or artifact retention
 authority. The production service must retain coordinators and returned uncertain
 tickets, explicitly stop scanners, drain workers and resolve exact originals
 before releasing the Cell or deleting its workspace. Idle scanners must not
-prevent repository eviction indefinitely. Actual production scanner ownership,
-that shared-instance wiring and shutdown/eviction qualification remain open.
+prevent repository eviction indefinitely. The selected resident recovery owner
+now pauses/joins scanners and Git maintenance before release, rejects busy
+coordinators without abandoning originals, and drains repository recovery before
+node authority/workspace cleanup. Production startup/eviction/shutdown regression
+evidence and its limits are in the [resident contract](resident-publication-recovery.md).
+The full producer/reader conversion and capacity qualification remain open.
 
 ## Held ownership and fair starts
 
