@@ -39,6 +39,8 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("closed initialization graph failed")]
+    Initialization(#[from] super::initialization::InitializationVerificationError),
     #[error("closed native audit graph failed")]
     Audit(#[from] NativeResultError),
     #[error("terminal release command preparation failed")]

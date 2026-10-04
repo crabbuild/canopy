@@ -284,6 +284,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/registry.rs"));
                 source.update(include_bytes!("server/catalog_initialization.rs"));
                 source.update(include_bytes!("server/residency/mod.rs"));
+                source.update(include_bytes!("server/peer.rs"));
                 source.update(include_bytes!("packs/publication/codec.rs"));
                 source.update(include_bytes!("packs/publication/sql.rs"));
                 source.update(include_bytes!("packs/publication/schema.sql"));

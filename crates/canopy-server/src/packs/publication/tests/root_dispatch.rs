@@ -91,7 +91,8 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             .is_err(),
         "publishing native intent must not become a ref-free outcome"
     );
-    let operation = prepared.token().operation;
+    let token = prepared.token();
+    let operation = token.operation;
     let lookup = BeginRequest {
         repository: f.repository,
         operation,
@@ -322,7 +323,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 response(observer.root_response(store).await?).await?,
                 expected
             );
-            assert_eq!(f.counts().await?, (0, 2));
+            assert_eq!(f.counts_for(token).await?, (0, 1));
             let saved = f
                 .client()
                 .query::<CheckCompletedRootPush>(&f.target, Some(committed.receipt), lookup.clone())
@@ -336,7 +337,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 PublicationError::RootPush(InvocationError::NotStarted(_))
             ));
             assert!(observer.root_response(store).await.is_err());
-            assert_eq!(f.counts().await?, (1, 2));
+            assert_eq!(f.counts_for(token).await?, (1, 1));
             assert!(
                 f.client()
                     .query::<CheckCompletedRootPush>(&f.target, None, lookup.clone())

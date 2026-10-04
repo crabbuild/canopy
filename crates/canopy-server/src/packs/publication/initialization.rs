@@ -1,14 +1,69 @@
 //! Fresh empty catalog/ref publication. No SQL-ref conversion or decoded-root
 //! signing adapter exists: only a privately assembled empty catalog can mint it.
 use super::*;
-use crate::packs::ref_state::{RefSnapshotError, RefStateSnapshot};
+use crate::packs::{
+    catalog::CatalogSnapshot,
+    directory::snapshot::DirectorySnapshot,
+    ref_state::{RefSnapshotError, RefStateSnapshot},
+};
 use cellule_runtime::{InvocationError, primitives::sql::SqlCell};
 use tokio::time::timeout_at;
 
-mod publish;
+pub(in crate::packs::publication) mod publish;
 pub use publish::{CheckInitializedCatalog, InitializeCatalogRefs};
 pub const INITIALIZATION_BYTES: u32 = 2048;
 const INITIAL_HEAD: &str = "refs/heads/main";
+
+#[derive(Debug, thiserror::Error)]
+pub enum InitializationVerificationError {
+    #[error("initialization fact encoding failed")]
+    Codec(#[from] CodecError),
+    #[error("initialization catalog metadata failed")]
+    Catalog(#[from] crate::packs::directory::index::IndexError),
+    #[error("initialization ref metadata failed")]
+    Refs(#[from] RefSnapshotError),
+    #[error("initialization is not the certified empty state")]
+    Context,
+}
+
+/// Verify the complete constant-size initial graph, including its typed empty
+/// leaves. Both route activation and retirement use the same checks.
+pub(crate) async fn verify_empty(
+    fact: GenerationFact,
+    store: &canopy_object_storage::artifact::ArtifactStore,
+    format: ObjectFormat,
+) -> Result<
+    (
+        StoredCatalog,
+        crate::packs::directory::snapshot::StoredSnapshot,
+        RefStateSnapshotRoot,
+    ),
+    InitializationVerificationError,
+> {
+    initial_fact(&fact)?;
+    let catalog = fact
+        .catalog
+        .ok_or(InitializationVerificationError::Context)?;
+    let refs = fact.refs.ok_or(InitializationVerificationError::Context)?;
+    if catalog.repository != store.repository() || catalog.format != format {
+        return Err(InitializationVerificationError::Context);
+    }
+    let snapshot = CatalogSnapshot::download(store, catalog).await?;
+    let directory = DirectorySnapshot::download(store, snapshot.directory).await?;
+    let state = refs.read(store).await?;
+    if snapshot.sources.is_some()
+        || !directory.level_zero.is_empty()
+        || directory.levels.iter().any(Option::is_some)
+        || state.repository != store.repository()
+        || state.format != format
+        || state.generation != 0
+        || state.root.is_some()
+        || state.default_branch != INITIAL_HEAD
+    {
+        return Err(InitializationVerificationError::Context);
+    }
+    Ok((catalog, snapshot.directory, refs))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitializationPreparationError {

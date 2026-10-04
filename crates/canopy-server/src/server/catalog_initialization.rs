@@ -2,14 +2,14 @@
 use crate::{
     ObjectFormat, RepositoryCell, RepositoryModule,
     packs::{
-        catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes, CatalogSnapshot},
-        directory::snapshot::DirectorySnapshot,
+        catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes},
         metadata::MetadataLimits,
         publication::{
             BeginPreparation, BeginRequest, CatalogPreparation, CheckInitializedCatalog,
             ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
-            LeaseRequest, PreparationBaseResolver, PreparationDenial, PreparationReply,
-            PreparationToken, PublicationError, RegisteredRootRecovery,
+            LeaseRequest, MaintenanceRequest, PreparationBaseResolver, PreparationDenial,
+            PreparationReply, PreparationToken, PublicationError, RegisteredRootRecovery,
+            TerminalReleaseReply,
         },
     },
 };
@@ -57,33 +57,7 @@ async fn verify(
     store: &ArtifactStore,
     format: ObjectFormat,
 ) -> Result<(), Failure> {
-    if fact.generation != 1 || fact.certificate.is_none() {
-        return Err(Error::Command("invalid repository initialization fact").into());
-    }
-    let stored = fact
-        .catalog
-        .ok_or(Error::Command("initial catalog absent"))?;
-    if stored.repository != store.repository() || stored.format != format {
-        return Err(Error::Command("initial catalog context differs").into());
-    }
-    let catalog = CatalogSnapshot::download(store, stored).await?;
-    let directory = DirectorySnapshot::download(store, catalog.directory).await?;
-    let refs = fact
-        .refs
-        .ok_or(Error::Command("initial refs absent"))?
-        .read(store)
-        .await?;
-    if catalog.sources.is_some()
-        || !directory.level_zero.is_empty()
-        || directory.levels.iter().any(Option::is_some)
-        || refs.repository != store.repository()
-        || refs.format != format
-        || refs.generation != 0
-        || refs.root.is_some()
-        || refs.default_branch != "refs/heads/main"
-    {
-        return Err(Error::Command("initial catalog is not the certified empty state").into());
-    }
+    crate::packs::publication::verify_initial_catalog(fact, store, format).await?;
     Ok(())
 }
 
@@ -93,12 +67,13 @@ async fn verify(
 pub(super) async fn ensure(
     repository: &RepositoryCell,
     client: CellClient,
-    owner: &str,
+    maintenance: MaintenanceRequest,
     provider: Arc<dyn ObjectStore>,
     workspace: &Path,
     budget: DiskBudget,
     pending: bool,
 ) -> Result<(), Failure> {
+    let owner = maintenance.actor.as_str();
     let input = request(repository, owner);
     let target = &repository.target;
     let store = Arc::new(ArtifactStore::new(provider, repository.id));
@@ -107,7 +82,7 @@ pub(super) async fn ensure(
         .await?
         .output
     {
-        return verify(fact, &store, repository.object_format).await;
+        return verify_and_retire(repository, &client, &store, &input, fact, &maintenance).await;
     }
     if !pending {
         return Err(Error::Command("ready repository has no certified initialization").into());
@@ -115,13 +90,15 @@ pub(super) async fn ensure(
     let started_at = std::time::Instant::now();
     let recovered =
         RegisteredRootRecovery::load_initialization(&client, target, &store, &input).await?;
-    let claim = if let Some(recovered) = recovered {
+    let claim = if let Some(ref recovered) = recovered {
         match recovered.recover_initialization(&client, &store).await {
             Ok(committed) => {
                 let InitializationReply::Initialized(fact) = committed.output else {
                     return Err(Error::Command("invalid recovered initialization reply").into());
                 };
-                return verify(*fact, &store, repository.object_format).await;
+                verify(*fact, &store, repository.object_format).await?;
+                retire(recovered, client, &store, &maintenance).await?;
+                return Ok(());
             }
             Err(PublicationError::Initialization(InvocationError::Rejected(ref value)))
                 if matches!(
@@ -185,16 +162,27 @@ pub(super) async fn ensure(
                 if matches!(&error, InvocationError::Rejected(value)
                 if value.output == PreparationReply::Denied(PreparationDenial::Conflict))
                     && let Some(fact) = client
-                        .query::<CheckInitializedCatalog>(target, None, input)
+                        .query::<CheckInitializedCatalog>(target, None, input.clone())
                         .await?
                         .output
                 {
-                    return verify(fact, &store, repository.object_format).await;
+                    return verify_and_retire(
+                        repository,
+                        &client,
+                        &store,
+                        &input,
+                        fact,
+                        &maintenance,
+                    )
+                    .await;
                 }
                 return Err(error.into());
             }
         }
     };
+    if let Some(recovered) = recovered {
+        retire(&recovered, client.clone(), &store, &maintenance).await?;
+    }
     let PreparationReply::Granted(lease) = started.output else {
         return Err(Error::Command("repository initialization admission denied").into());
     };
@@ -241,7 +229,48 @@ pub(super) async fn ensure(
         return Err(Error::Command("repository initialization publication denied").into());
     };
     verify(*fact, &store, repository.object_format).await?;
+    retire(&registered, client, &store, &maintenance).await?;
     tracing::debug!(repository = %hex::encode(repository.id), elapsed_seconds = started_at.elapsed().as_secs_f64(), "certified repository catalog initialized");
+    Ok(())
+}
+
+async fn verify_and_retire(
+    repository: &RepositoryCell,
+    client: &CellClient,
+    store: &ArtifactStore,
+    input: &BeginRequest,
+    fact: GenerationFact,
+    maintenance: &MaintenanceRequest,
+) -> Result<(), Failure> {
+    verify(fact, store, repository.object_format).await?;
+    if let Some(recovered) =
+        RegisteredRootRecovery::load_initialization(client, &repository.target, store, input)
+            .await?
+    {
+        retire(&recovered, client.clone(), store, maintenance).await?;
+    }
+    Ok(())
+}
+
+async fn retire(
+    registered: &RegisteredRootRecovery,
+    client: CellClient,
+    store: &ArtifactStore,
+    maintenance: &MaintenanceRequest,
+) -> Result<(), Failure> {
+    let result = registered
+        .ready_terminal_release(
+            client,
+            store,
+            maintenance.clone(),
+            super::mutation_identity()?,
+        )
+        .await?
+        .complete()
+        .await?;
+    if result.output != TerminalReleaseReply::Released {
+        return Err(Error::Command("initialization retirement denied").into());
+    }
     Ok(())
 }
 

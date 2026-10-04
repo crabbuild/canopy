@@ -456,7 +456,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             .await?
             .finish()
             .await?;
-        let (command, _) = super::initialization::registered(
+        let (command, registered) = super::initialization::registered(
             &fixture,
             &empty,
             empty.empty_ref_initialization().await?,
@@ -464,6 +464,17 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         )
         .await?;
         command.execute().await?;
+        // Match actual startup before building later native policy work.
+        registered
+            .ready_terminal_release(
+                fixture.client(),
+                &store,
+                super::terminal_retention::maintenance(&fixture.handle, fixture.repository).await?,
+                identity()?,
+            )
+            .await?
+            .complete()
+            .await?;
         drop(empty);
         cleaned(root.path(), &budget).await?;
     }

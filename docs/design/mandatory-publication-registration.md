@@ -25,6 +25,7 @@ Use recovery purpose `canopy.publication-command-recovery.v4\0` and these comman
 | CompleteRootPush | 36 | 2 |
 | CompleteRootOutcome | 38 | 3 |
 | RegisterRootRecovery | 39 | 4 |
+| ReleaseTerminalRecovery | 40 | 2 |
 
 Keep the existing record and artifact structures. Do not add a compatibility decoder or an unregistered execution fallback.
 
@@ -38,7 +39,7 @@ Pending startup queries the current indexed operation/pin binding before issuing
 
 Cold initialization performs no new preparation or native work. After authoritative SDK absence it restores the exact original bytes and lets the final receiver atomically check actual owner, Admin, live pin, certificate/checkpoint and pristine roots. Requiring a fresh Write-dependent session first would prevent an expired or revoked original from recording its definitive denial. Live bound dispatch still checks its original shared clock/fence. Known journal outcomes retain their original sequence and receipt even after SDK expiry, owner loss, permission revocation and body loss; they grant no current write or read capability.
 
-This closes final-command registration and reconstruction only. Exact initial Begin/Claim/Renew and failure before final registration still need durable integration. Initialization has no native push response/audit graph, so push terminal retirement cannot release its pin. Its generation-zero recovery pin remains retained until typed initialization retirement is implemented; that floor prevents generation collection and is a release blocker. Include the immutable initialization roots, command metadata and receipts in typed collection, backup and isolated restore.
+This closes final-command registration and reconstruction only. Exact initial Begin/Claim/Renew and failure before final registration still need durable integration. The local typed [terminal retirement protocol](terminal-publication-retention.md) now verifies its complete empty catalog/directory/ref graph and moves the same original certificate/journal/release receipt into the shared immutable archive before deleting the exact pin. Positive startup discovers the original closed attempt through the immutable initialization fact’s exact pin identity and retires it before serving. A denied initialization retires only after its active binding closes; a successor keeps its independent pin. Unknown attempts remain protected. Background-service reconstruction of older orphan attempts remains part of complete startup integration. Include the immutable initialization roots, command metadata and receipts in typed collection, backup and isolated restore.
 
 ## Remaining implementation sequence
 

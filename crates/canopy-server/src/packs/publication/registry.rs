@@ -116,6 +116,7 @@ mod tests {
                 512,
             ),
             (39, RegisterRootRecovery::CODEC_VERSION, 4096, 4096),
+            (40, ReleaseTerminalRecovery::CODEC_VERSION, 4096, 128),
         ] {
             let operation = descriptor
                 .commands

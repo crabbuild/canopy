@@ -172,7 +172,15 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
                         .get::<_, i64>(0))?,
                 0
             );
-            assert_eq!(connection.query_row("SELECT count(*) FROM catalog_leases WHERE generation=0 AND recovery IS NOT NULL AND recovery_phase IS NOT NULL AND recovery_phase_revision=1", [], |row| row.get::<_, i64>(0))?, 1);
+            assert_eq!(connection.query_row("SELECT count(*) FROM catalog_leases WHERE generation=0 AND recovery IS NOT NULL", [], |row| row.get::<_, i64>(0))?, 0);
+            assert_eq!(
+                connection.query_row(
+                    "SELECT count(*) FROM catalog_recovery_receipts",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                1
+            );
             let allocation = connection.query_row(
                 "SELECT artifact_sequence FROM repository_identity WHERE singleton=1",
                 [],

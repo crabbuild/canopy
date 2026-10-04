@@ -8,6 +8,7 @@ mod durable_recovery;
 mod frontier;
 mod initialization;
 mod initialization_recovery;
+mod initialization_retirement;
 mod inputs;
 mod mandatory_registration;
 mod namespaces;
@@ -198,6 +199,18 @@ impl Fixture {
     }
     async fn counts(&self) -> Result<(u64, u64)> {
         counts(&self.handle).await
+    }
+    async fn counts_for(&self, token: PreparationToken) -> Result<(u64, u64)> {
+        let bytes = self.handle.query(0, 16, move |connection| {
+            let parameters = rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt];
+            let operations: u64 = connection.query_row("SELECT count(*) FROM catalog_operations WHERE incarnation=?1 AND admission_sequence=?2", parameters, |row| row.get(0))?;
+            let leases: u64 = connection.query_row("SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", parameters, |row| row.get(0))?;
+            Ok([operations.to_be_bytes(), leases.to_be_bytes()].concat())
+        }).await?;
+        Ok((
+            u64::from_be_bytes(bytes[..8].try_into()?),
+            u64::from_be_bytes(bytes[8..].try_into()?),
+        ))
     }
     // Trusted fixture injection only. Production generation facts require the
     // complete catalog verifier and fenced publisher; a digest is not a proof.

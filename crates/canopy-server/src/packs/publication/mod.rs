@@ -31,9 +31,10 @@ pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
 pub(in crate::packs) mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
 mod initialization;
+pub(crate) use initialization::verify_empty as verify_initial_catalog;
 pub use initialization::{
     CheckInitializedCatalog, INITIALIZATION_BYTES, InitialRefProof, InitializationPreparationError,
-    InitializationReply, InitializeCatalogRefs,
+    InitializationReply, InitializationVerificationError, InitializeCatalogRefs,
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};

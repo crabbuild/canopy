@@ -1,8 +1,8 @@
 //! A closed attempt transfers the same recovery certificate/journal into its
-//! immutable selected-push row before releasing its independent preparation pin.
+//! immutable shared receipt row before releasing its independent preparation pin.
 use super::*;
 
-const DOMAIN: &[u8] = b"canopy.terminal-recovery-release.v1\0";
+const DOMAIN: &[u8] = b"canopy.terminal-recovery-release.v2\0";
 const RELEASE_BYTES: u32 = 4096;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalReleaseCertificate(CertificateEnvelope);
@@ -40,6 +40,7 @@ pub(in crate::packs::publication) fn descriptor(
     e.write_text(match kind {
         ArtifactKind::InputRoot => "input-root",
         ArtifactKind::InputBody => "input-body",
+        ArtifactKind::CatalogNode => "catalog-node",
         _ => return Err(RootRecoveryError::Context),
     })?;
     artifact(&mut e, value)?;
@@ -119,17 +120,91 @@ impl WireValue for TerminalReleaseReply {
     }
 }
 
-impl phase::Journal {
-    pub(super) fn terminal(
+pub(super) enum Terminal {
+    Push(Box<CompletedRootPush>),
+    Initialization(InitializationReply),
+}
+impl Terminal {
+    fn selected_statement(&self, operation: [u8; 16]) -> SqlStatement {
+        SqlStatement {
+            sql: match self {
+                Self::Push(_) => super::super::root_completion::read::SAVED,
+                Self::Initialization(_) => super::super::initialization::publish::SAVED,
+            }
+            .into(),
+            parameters: vec![blob(operation)],
+        }
+    }
+    fn matches_selected(&self, result: &[SqlResultSet], check: &LeaseCheck) -> Result<bool, Error> {
+        Ok(match self {
+            Self::Push(terminal) => {
+                super::super::root_completion::read::saved(
+                    result,
+                    &check.actor,
+                    check.token.request_digest,
+                )? == Some(**terminal)
+            }
+            Self::Initialization(InitializationReply::Initialized(fact)) => {
+                super::super::initialization::publish::selected(result, check)? == Some(**fact)
+            }
+            // A known negative is the original phase knowledge. A later attempt
+            // may initialize this logical operation, without rewriting that denial.
+            Self::Initialization(InitializationReply::Denied(_)) => true,
+        })
+    }
+    async fn closed_graph(
         &self,
-        record: &Record,
-    ) -> Result<Option<CompletedRootPush>, CodecError> {
+        store: &ArtifactStore,
+        hash: &mut blake3::Hasher,
+    ) -> Result<(), RootRecoveryError> {
+        match self {
+            Self::Push(terminal) => {
+                super::super::root_completion::closed_graph(store, terminal.root, hash).await?
+            }
+            Self::Initialization(reply) => {
+                hash.update(&encoded(reply, 512)?);
+                if let InitializationReply::Initialized(fact) = reply {
+                    let format = fact.catalog.ok_or(RootRecoveryError::Context)?.format;
+                    let (catalog, directory, refs) =
+                        super::super::initialization::verify_empty(**fact, store, format).await?;
+                    descriptor(
+                        hash,
+                        catalog.operation,
+                        ArtifactKind::CatalogNode,
+                        catalog.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        directory.operation,
+                        ArtifactKind::CatalogNode,
+                        directory.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        refs.operation(),
+                        ArtifactKind::InputRoot,
+                        refs.artifact(),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+impl phase::Journal {
+    pub(super) fn terminal(&self, record: &Record) -> Result<Option<Terminal>, CodecError> {
         // Validation is required even when only a primary result is selected.
         self.may_advance(record)?;
         if record.kind == Kind::Initialization {
-            // Initial catalog roots have no native push response/audit graph.
-            // Keep their recovery pin until typed initialization retirement.
-            return Ok(None);
+            return self
+                .primary
+                .as_ref()
+                .map(|value| {
+                    value
+                        .decode_reply::<InitializationReply>()
+                        .map(Terminal::Initialization)
+                })
+                .transpose();
         }
         let result = if record.kind == Kind::Policy {
             if !self.refused(record)? {
@@ -143,12 +218,24 @@ impl phase::Journal {
             .map(|value| value.decode_reply::<RootCompletionReply>())
             .transpose()?
         {
-            Some(RootCompletionReply::Completed(value)) => Ok(Some(*value)),
+            Some(RootCompletionReply::Completed(value)) => Ok(Some(Terminal::Push(value))),
             _ => Ok(None),
         }
     }
 }
 impl RegisteredRootRecovery {
+    pub(super) async fn attempt_closed(
+        &self,
+        client: &CellClient,
+    ) -> Result<bool, RootRecoveryError> {
+        let sql =
+            SqlCell::<RepositoryModule>::new(client.clone(), self.evidence().target().clone())?;
+        let result = sql.query(None, statement(
+            "SELECT 1 FROM catalog_operations WHERE incarnation=?1 AND admission_sequence=?2 LIMIT 1",
+            vec![blob(self.token().owner.incarnation.as_bytes()), number(self.token().attempt)?],
+        )).await.map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
+        Ok(rows(&result.output)?.is_empty())
+    }
     /// Complete typed header/history and selected audit verification precedes
     /// minting the release proof. A historical/intermediate/unknown capability
     /// cannot release a pin. This proof authorizes no provider deletion.
@@ -167,6 +254,9 @@ impl RegisteredRootRecovery {
         let terminal = journal
             .terminal(&self.record)?
             .ok_or(RootRecoveryError::Context)?;
+        if !self.attempt_closed(&client).await? {
+            return Err(RootRecoveryError::Context);
+        }
         let sql =
             SqlCell::<RepositoryModule>::new(client.clone(), self.evidence().target().clone())?;
         let row = sql
@@ -174,10 +264,7 @@ impl RegisteredRootRecovery {
                 None,
                 SqlBatch {
                     statements: vec![
-                        SqlStatement {
-                            sql: super::super::root_completion::read::SAVED.into(),
-                            parameters: vec![blob(self.token().operation)],
-                        },
+                        terminal.selected_statement(self.token().operation),
                         SqlStatement {
                             sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1"
                                 .into(),
@@ -192,12 +279,7 @@ impl RegisteredRootRecovery {
             )
             .await
             .map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
-        if super::super::root_completion::read::saved(
-            &row.output,
-            &self.record.check.actor,
-            self.token().request_digest,
-        )? != Some(terminal)
-        {
+        if !terminal.matches_selected(&row.output, &self.record.check)? {
             return Err(RootRecoveryError::Context);
         }
         let seed = super::super::attestation::seed(
@@ -250,7 +332,7 @@ impl RegisteredRootRecovery {
             )?;
             record = next;
         }
-        super::super::root_completion::closed_graph(store, terminal.root, &mut hash).await?;
+        terminal.closed_graph(store, &mut hash).await?;
         let proof = Proof {
             recovery: self.certificate.clone(),
             phase: *blake3::hash(&encoded(&journal, 2048)?).as_bytes(),
@@ -349,7 +431,7 @@ pub struct ReleaseTerminalRecovery;
 impl Command for ReleaseTerminalRecovery {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 40;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = TerminalReleaseInput;
     type Output = TerminalReleaseReply;
     fn execute(
@@ -402,21 +484,18 @@ impl Command for ReleaseTerminalRecovery {
         let Some(terminal) = terminal else {
             return deny(PreparationDenial::Conflict);
         };
-        let selected = context.sql(&statement(
-            super::super::root_completion::read::SAVED,
-            vec![blob(record.check.token.operation)],
-        ))?;
-        if super::super::root_completion::read::saved(
-            &selected,
-            &record.check.actor,
-            record.check.token.request_digest,
-        )? != Some(terminal)
-        {
+        let selected = context.sql(&SqlBatch {
+            statements: vec![terminal.selected_statement(record.check.token.operation)],
+        })?;
+        if !terminal.matches_selected(&selected, &record.check)? {
             return deny(PreparationDenial::Conflict);
         }
+        // Closing an older denied initialization must not delete the currently
+        // claimed attempt of the same logical operation. The exact pin is the
+        // authority boundary; a successor's independent namespace remains live.
         let active = context.sql(&statement(
-            "SELECT 1 FROM catalog_operations WHERE id=?1 LIMIT 1",
-            vec![blob(record.check.token.operation)],
+            "SELECT 1 FROM catalog_operations WHERE incarnation=?1 AND admission_sequence=?2 LIMIT 1",
+            vec![blob(record.check.token.owner.incarnation.as_bytes()), number(record.check.token.attempt)?],
         ))?;
         if !rows(&active)?.is_empty() {
             return deny(PreparationDenial::Conflict);
@@ -430,7 +509,7 @@ impl Command for ReleaseTerminalRecovery {
             stamp: Stamp::of(&evidence),
             result: phase::Recorded::new(context.sequence(), false, encoded(&reply, 128)?)?,
         };
-        let changed=context.sql(&statement("UPDATE pushes SET recovery=?1,recovery_phase=?2,recovery_release=?3 WHERE id=?4 AND recovery IS NULL AND response_root IS NOT NULL",vec![blob(certificate),blob(saved),blob(encoded(&released,1024)?),blob(record.check.token.operation)]))?;
+        let changed=context.sql(&statement("INSERT INTO catalog_recovery_receipts(incarnation,admission_sequence,operation,recovery,recovery_phase,recovery_release) VALUES(?1,?2,?3,?4,?5,?6)",vec![blob(record.check.token.owner.incarnation.as_bytes()),number(record.check.token.attempt)?,blob(record.check.token.operation),blob(certificate),blob(saved),blob(encoded(&released,1024)?)]))?;
         if changed.first().is_none_or(|set| set.rows_affected != 1) {
             return Err(Error::Command("terminal archive CAS failed"));
         }
@@ -451,9 +530,8 @@ impl RegisteredRootRecovery {
     ) -> Result<Option<Self>, RootRecoveryError> {
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
         let result=sql.query(None,SqlBatch{statements:vec![
-            SqlStatement{sql:"SELECT recovery,recovery_phase FROM pushes WHERE id=?1 AND recovery IS NOT NULL".into(),parameters:vec![blob(check.token.operation)]},
+            SqlStatement{sql:"SELECT recovery,recovery_phase FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2 AND operation=?3".into(),parameters:vec![blob(check.token.owner.incarnation.as_bytes()),number(check.token.attempt)?,blob(check.token.operation)]},
             SqlStatement{sql:"SELECT push_cert_seed FROM repository_identity WHERE singleton=1 AND repository_id=?1".into(),parameters:vec![blob(check.token.repository)]},
-            SqlStatement{sql:super::super::root_completion::read::SAVED.into(),parameters:vec![blob(check.token.operation)]},
         ]}).await.map_err(|error|RootRecoveryError::Query(Box::new(error)))?;
         let Some([SqlValue::Blob(bytes), saved]) = rows(&result.output)?.first().map(Vec::as_slice)
         else {
@@ -476,12 +554,16 @@ impl RegisteredRootRecovery {
         let terminal = phase::journal(saved, &record)?
             .terminal(&record)?
             .ok_or(RootRecoveryError::Context)?;
-        if super::super::root_completion::read::saved(
-            result.output.get(2..).ok_or(RootRecoveryError::Context)?,
-            &check.actor,
-            check.token.request_digest,
-        )? != Some(terminal)
-        {
+        let selected = sql
+            .query(
+                None,
+                SqlBatch {
+                    statements: vec![terminal.selected_statement(check.token.operation)],
+                },
+            )
+            .await
+            .map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
+        if !terminal.matches_selected(&selected.output, check)? {
             return Err(RootRecoveryError::Context);
         }
         let bundle = record.root.read::<Bundle>(store, ROOT_BYTES).await?;
@@ -494,6 +576,20 @@ impl RegisteredRootRecovery {
     }
 }
 impl ReadyTerminalRelease {
+    /// The repository's tracked cold-transition task retains this command
+    /// through cancellation, just as it retains the initial publication.
+    pub(crate) async fn complete(
+        self,
+    ) -> Result<Committed<TerminalReleaseReply>, PublicationError> {
+        let evidence = Box::new(self.command.evidence().clone());
+        let PublicationOutcome::TerminalRelease(result) = self.dispatch(false, 0).await? else {
+            return Err(PublicationError::Recovery {
+                evidence,
+                source: Box::new(RootRecoveryError::Context),
+            });
+        };
+        Ok(result)
+    }
     #[cfg(test)]
     pub(in crate::packs::publication) fn with_client_for_test(
         mut self,
@@ -525,8 +621,8 @@ impl ReadyTerminalRelease {
             .query(
                 None,
                 statement(
-                    "SELECT recovery_release FROM pushes WHERE id=?1",
-                    vec![blob(self.check.token.operation)],
+                    "SELECT recovery_release FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2 AND operation=?3",
+                    vec![blob(self.check.token.owner.incarnation.as_bytes()), number(self.check.token.attempt)?, blob(self.check.token.operation)],
                 ),
             )
             .await

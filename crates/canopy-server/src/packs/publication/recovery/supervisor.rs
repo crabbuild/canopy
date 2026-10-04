@@ -260,6 +260,10 @@ impl Scan {
             if journal.terminal(&registered.record)?.is_some()
                 && let Some(maintenance) = &self.maintenance
             {
+                if !registered.attempt_closed(&self.client).await? {
+                    stats.deferred = stats.deferred.saturating_add(1);
+                    return Ok(());
+                }
                 let identity =
                     crate::server::mutation_identity().map_err(|source| Error::Facility {
                         name: "terminal retirement identity",

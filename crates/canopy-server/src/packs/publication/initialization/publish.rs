@@ -20,20 +20,50 @@ fn verification(
     hash.update(&e.finish());
     Ok(*hash.finalize().as_bytes())
 }
+pub(in crate::packs::publication) const SAVED: &str = "SELECT actor,request_digest,verification_digest,result FROM catalog_initialization WHERE id=?1";
+
+pub(in crate::packs::publication) fn selected(
+    outcome: &[SqlResultSet],
+    check: &LeaseCheck,
+) -> Result<Option<GenerationFact>, Error> {
+    let Some(
+        [
+            SqlValue::Text(actor),
+            request,
+            digest,
+            SqlValue::Blob(bytes),
+        ],
+    ) = rows(outcome)?.first().map(Vec::as_slice)
+    else {
+        if rows(outcome)?.is_empty() {
+            return Ok(None);
+        }
+        return Err(Error::Command("invalid initialization lookup"));
+    };
+    if *actor != check.actor || fixed::<32>(request)? != check.token.request_digest {
+        return Ok(None);
+    }
+    Ok(Some(saved(
+        bytes,
+        check.token.repository,
+        None,
+        fixed(digest)?,
+    )?))
+}
+
 fn saved(
     bytes: &[u8],
     repository: [u8; 16],
-    format: ObjectFormat,
+    format: Option<ObjectFormat>,
     digest: [u8; 32],
 ) -> Result<GenerationFact, CodecError> {
     let mut d = BoundedDecoder::new(bytes, 512)?;
     let fact = GenerationFact::decode(&mut d)?;
     d.finish()?;
     initial_fact(&fact)?;
-    if fact
-        .catalog
-        .is_none_or(|root| root.repository != repository || root.format != format)
-    {
+    if fact.catalog.is_none_or(|root| {
+        root.repository != repository || format.is_some_and(|format| root.format != format)
+    }) {
         return Err(CodecError::Invalid("invalid initialization result"));
     }
     if verification(
@@ -106,7 +136,7 @@ fn initialize(
             Box::new(saved(
                 bytes,
                 data.token.repository,
-                data.catalog.format,
+                Some(data.catalog.format),
                 fixed(digest)?,
             )?),
         )));
@@ -188,7 +218,7 @@ fn initialize(
         "UPDATE catalog_state SET generation=1 WHERE singleton=1 AND generation=0",
         vec![],
     ))?)?;
-    changed(context.sql(&statement("INSERT INTO catalog_initialization(singleton,id,actor,request_digest,verification_digest,result) VALUES(1,?1,?2,?3,?4,?5)", vec![blob(data.token.operation),SqlValue::Text(data.actor),blob(data.token.request_digest),blob(verified_roots),blob(encoded.finish())]))?)?;
+    changed(context.sql(&statement("INSERT INTO catalog_initialization(singleton,id,actor,request_digest,verification_digest,result,incarnation,admission_sequence) VALUES(1,?1,?2,?3,?4,?5,?6,?7)", vec![blob(data.token.operation),SqlValue::Text(data.actor),blob(data.token.request_digest),blob(verified_roots),blob(encoded.finish()),blob(data.token.owner.incarnation.as_bytes()),number(data.token.attempt)?]))?)?;
     changed(context.sql(&statement(
         "DELETE FROM catalog_operations WHERE id=?1",
         vec![blob(data.token.operation)],
@@ -249,7 +279,7 @@ impl Query for CheckInitializedCatalog {
         Ok(Some(saved(
             bytes,
             input.repository,
-            format,
+            Some(format),
             fixed(digest)?,
         )?))
     }

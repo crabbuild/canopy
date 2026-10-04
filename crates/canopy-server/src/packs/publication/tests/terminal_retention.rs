@@ -364,8 +364,8 @@ pub(super) async fn archive(
         .query(0, 128, move |db| {
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM pushes WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |r| r.get::<_, u64>(0)
                 )?,
                 0
@@ -461,8 +461,8 @@ pub(super) async fn archive(
         assert!(stats.release_recovered > 0);
         assert_eq!(stats.failures, 0);
         if fault != 1 {
-            // A retired push has no pin. Any independent initialization pin
-            // remains settled and must not admit another publication/release.
+            // A retired push has no pin. Other settled intermediate heads
+            // must not admit another publication or release.
             assert_eq!(stats.scanned, stats.settled);
             assert_eq!(stats.submitted, 0);
         }
@@ -486,8 +486,8 @@ pub(super) async fn archive(
     );
     handle.query(0, 128, move |db| {
         assert_eq!(db.query_row("SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |r| r.get::<_, u64>(0))?, 0);
-        assert_eq!(db.query_row("SELECT count(*) FROM pushes WHERE recovery IS NOT NULL AND recovery_phase IS NOT NULL AND recovery_release IS NOT NULL", [], |r| r.get::<_, u64>(0))?, 1);
-        for sql in ["UPDATE pushes SET recovery=NULL,recovery_phase=NULL,recovery_release=NULL WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_phase=x'01' WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_release=x'01' WHERE recovery IS NOT NULL", "DELETE FROM pushes WHERE recovery IS NOT NULL"] {
+        assert_eq!(db.query_row("SELECT count(*) FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |r| r.get::<_, u64>(0))?, 1);
+        for sql in ["UPDATE catalog_recovery_receipts SET recovery=NULL,recovery_phase=NULL,recovery_release=NULL WHERE recovery IS NOT NULL", "UPDATE catalog_recovery_receipts SET recovery_phase=x'01' WHERE recovery IS NOT NULL", "UPDATE catalog_recovery_receipts SET recovery_release=x'01' WHERE recovery IS NOT NULL", "DELETE FROM catalog_recovery_receipts WHERE recovery IS NOT NULL"] {
             assert!(db.execute(sql, []).is_err(), "{sql}");
         }
         Ok(Vec::new())

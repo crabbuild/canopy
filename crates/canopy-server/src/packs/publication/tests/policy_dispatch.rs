@@ -329,7 +329,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                     assert_eq!(body, rejected.body);
                     assert_eq!(body.windows(3).filter(|part| *part == b"ng ").count(), 257);
                     assert!(!body.windows(3).any(|part| part == b"ok "));
-                    assert_eq!(f.counts().await?, (0, 2));
+                    assert_eq!(f.counts_for(prepared.token()).await?, (0, 1));
                     roots_unchanged(&before, &state(&f.handle).await?)?;
                 }
                 PublicationState::Finished(Err(error)) => {
@@ -344,7 +344,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                     ));
                     assert_denied_page(f, &evidence, loss).await?;
                     assert!(observer.root_response(store).await.is_err());
-                    assert_eq!(f.counts().await?, (1, 2));
+                    assert_eq!(f.counts_for(prepared.token()).await?, (1, 1));
                     roots_unchanged(&before, &state(&f.handle).await?)?;
                 }
                 other => return Err(format!("unexpected policy result {other:?}").into()),
@@ -477,7 +477,7 @@ async fn complete(
     }
     assert_eq!(body, expected.body);
     // Initialization and the native attempt each retain an independent pin.
-    assert_eq!(f.counts().await?, (0, 2));
+    assert_eq!(f.counts_for(prepared.token()).await?, (0, 1));
     f.handle
         .query(0, 1024, |db| {
             assert_eq!(

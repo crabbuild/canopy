@@ -41,9 +41,21 @@ async fn rooted(format: ObjectFormat) -> Result<(Fixture, Graph)> {
         .finish()
         .await?;
     let proof = empty.empty_ref_initialization().await?;
-    let (command, _) =
+    let (command, registered) =
         super::initialization::registered(&fixture, &empty, proof, identity()?).await?;
     command.execute().await?;
+    // Match production startup: the completed initial fact keeps its metadata
+    // and original receipt, while its generation-zero pin is retired.
+    registered
+        .ready_terminal_release(
+            fixture.client(),
+            &store,
+            super::terminal_retention::maintenance(&fixture.handle, fixture.repository).await?,
+            identity()?,
+        )
+        .await?
+        .complete()
+        .await?;
     drop(empty);
     cleaned(root.path(), &budget).await?;
     let graph = fixture::attempt(&fixture, provider, store).await?;

@@ -2,8 +2,8 @@
 use super::*;
 
 impl RegisteredRootRecovery {
-    /// Discover only the current initialization attempt, using the indexed
-    /// operation/lease binding. Historical metadata grants knowledge, not Write.
+    /// Discover the current or successfully closed initialization pin, using
+    /// exact indexed operation/lease and immutable outcome bindings. Historical metadata grants knowledge, not Write.
     pub async fn load_initialization(
         client: &CellClient,
         target: &CellTarget,
@@ -18,9 +18,12 @@ impl RegisteredRootRecovery {
         }
         let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
         let observed = sql.query(None, statement(
-            "SELECT o.incarnation,o.admission_sequence FROM catalog_operations o JOIN catalog_leases l ON l.incarnation=o.incarnation AND l.admission_sequence=o.admission_sequence WHERE o.id=?1 AND o.actor=?2 AND o.request_digest=?3 AND o.generation=0 AND l.recovery IS NOT NULL",
+            "SELECT o.incarnation,o.admission_sequence FROM catalog_operations o JOIN catalog_leases l ON l.incarnation=o.incarnation AND l.admission_sequence=o.admission_sequence WHERE o.id=?1 AND o.actor=?2 AND o.request_digest=?3 AND o.generation=0 AND l.recovery IS NOT NULL UNION ALL SELECT l.incarnation,l.admission_sequence FROM catalog_initialization i JOIN catalog_leases l ON l.incarnation=i.incarnation AND l.admission_sequence=i.admission_sequence WHERE i.id=?1 AND i.actor=?2 AND i.request_digest=?3 AND l.generation=0 AND l.recovery IS NOT NULL",
             vec![blob(input.operation),SqlValue::Text(input.actor.clone()),blob(input.request_digest)]
         )).await.map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
+        if rows(&observed.output)?.len() > 1 {
+            return Err(RootRecoveryError::Context);
+        }
         let Some([incarnation, sequence]) = rows(&observed.output)?.first().map(Vec::as_slice)
         else {
             if rows(&observed.output)?.is_empty() {
