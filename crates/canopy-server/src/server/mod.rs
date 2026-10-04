@@ -47,6 +47,7 @@ use crate::{
 };
 
 mod catalog_admission;
+mod catalog_initialization;
 mod discovery;
 mod lifecycle;
 mod listeners;
@@ -67,6 +68,8 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("packed repository initialization failed")]
+    CatalogInitialization(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("invalid SSH host key")]
     SshKey(#[source] Box<directory::SshKeyError>),
     #[error("Cellule runtime failed")]

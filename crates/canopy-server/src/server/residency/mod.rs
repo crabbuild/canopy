@@ -31,6 +31,7 @@ use crate::{
 
 pub(super) struct LoadedRepository {
     repository: Arc<RepositoryCell>,
+    client: CellClient,
     gateway: Arc<GitGateway>,
     name: String,
     router: Router,
@@ -266,7 +267,7 @@ impl RepositoryManager {
                     SqlCellSpec {
                         target: &target,
                         module: RepositoryModule::NAME,
-                        schema: include_str!("../../schema.sql"),
+                        schema: crate::REPOSITORY_SCHEMA,
                         destination: directory.join("repository.sqlite"),
                     },
                     self.session,
@@ -302,8 +303,13 @@ impl RepositoryManager {
             .await
             .get(&entry.repository_id)
             .filter(|repository| !repository.initialized)
-            .map(|repository| Arc::clone(&repository.repository));
-        if let Some(repository) = initialize {
+            .map(|repository| {
+                (
+                    Arc::clone(&repository.repository),
+                    repository.client.clone(),
+                )
+            });
+        if let Some((repository, client)) = initialize {
             // Keep the acquired Cell through an uncertain initialization result.
             // A later request retries setup before any fast-path route is exposed.
             if entry.state == RepositoryState::Pending {
@@ -321,6 +327,17 @@ impl RepositoryManager {
                     "repository owner differs from directory",
                 ));
             }
+            super::catalog_initialization::ensure(
+                &repository,
+                client,
+                &entry.owner,
+                Arc::clone(&self.external_store),
+                self.local.path(),
+                self.disk_budget.clone(),
+                entry.state == RepositoryState::Pending,
+            )
+            .await
+            .map_err(ServerError::CatalogInitialization)?;
         }
         let mut loaded = self.loaded.lock().await;
         let existing = loaded
@@ -516,7 +533,7 @@ impl RepositoryManager {
         slot: Arc<OwnedSemaphorePermit>,
     ) -> Result<LoadedRepository, ServerError> {
         let application = self.node.application_handle::<CanopyApplication>(
-            client,
+            client.clone(),
             self.tenant,
             self.application,
         )?;
@@ -561,6 +578,7 @@ impl RepositoryManager {
         });
         Ok(LoadedRepository {
             repository,
+            client,
             gateway,
             name: entry.name.clone(),
             router,

@@ -67,37 +67,10 @@ impl CellModule for Module {
             publish_descriptor.input_limit = 4 << 20;
             let mut complete_descriptor = descriptor(19);
             complete_descriptor.input_limit = 4 << 20;
-            let mut initial_descriptor = descriptor(31);
-            initial_descriptor.input_limit = INITIALIZATION_BYTES;
-            initial_descriptor.output_limit = 512;
-            let mut initial_query = descriptor(32);
-            initial_query.output_limit = 512;
-            let mut policy_page = descriptor(33);
-            policy_page.codec_version = RegisterRefPolicyPage::CODEC_VERSION;
-            policy_page.input_limit = REF_POLICY_PAGE_BYTES;
-            policy_page.output_limit = 128;
-            let mut policy_query = descriptor(34);
-            policy_query.output_limit = 128;
-            let mut policy_reap = descriptor(35);
-            policy_reap.output_limit = 128;
-            let mut root_completion = descriptor(36);
-            root_completion.codec_version = CompleteRootPush::CODEC_VERSION;
-            root_completion.input_limit = ROOT_COMPLETION_BYTES;
-            root_completion.output_limit = 512;
-            let mut root_outcome = descriptor(38);
-            root_outcome.codec_version = CompleteRootOutcome::CODEC_VERSION;
-            root_outcome.input_limit = ROOT_COMPLETION_BYTES;
-            root_outcome.output_limit = 512;
-            let mut root_lookup = descriptor(37);
-            root_lookup.output_limit = 512;
-            let mut recovery = descriptor(39);
-            recovery.codec_version = RegisterRootRecovery::CODEC_VERSION;
-            // Match the existing production SQL transport contract exactly.
-            // The generic 4 KiB fixture limit cannot encode even one valid
-            // 65 KiB ref name; policy construction has its own smaller bound.
-            let sql_query = crate::operation(2);
-            let mut release = descriptor(40);
-            release.output_limit = 128;
+            let mut commands = super::registry::COMMANDS.to_vec();
+            commands.extend([publish_descriptor, complete_descriptor, ref_descriptor]);
+            let mut queries = super::registry::QUERIES.to_vec();
+            queries.push(descriptor(20));
             ModuleDescriptor {
                 name: Self::NAME,
                 source_digest: Digest::from_bytes([11; 32]),
@@ -109,42 +82,8 @@ impl CellModule for Module {
                     sql: SCHEMA,
                     digest: Digest::from_bytes(*blake3::hash(SCHEMA.as_bytes()).as_bytes()),
                 }])),
-                commands: Box::leak(Box::new([
-                    descriptor(11),
-                    descriptor(12),
-                    descriptor(13),
-                    descriptor(14),
-                    descriptor(16),
-                    descriptor(17),
-                    publish_descriptor,
-                    complete_descriptor,
-                    descriptor(22),
-                    descriptor(24),
-                    descriptor(25),
-                    descriptor(26),
-                    descriptor(28),
-                    descriptor(29),
-                    initial_descriptor,
-                    policy_page,
-                    policy_reap,
-                    root_completion,
-                    root_outcome,
-                    recovery,
-                    release,
-                    ref_descriptor,
-                ])),
-                queries: Box::leak(Box::new([
-                    sql_query,
-                    descriptor(15),
-                    descriptor(20),
-                    descriptor(21),
-                    descriptor(23),
-                    descriptor(27),
-                    descriptor(30),
-                    initial_query,
-                    policy_query,
-                    root_lookup,
-                ])),
+                commands: Box::leak(commands.into_boxed_slice()),
+                queries: Box::leak(queries.into_boxed_slice()),
                 workflow_definitions: &[],
                 activity_types: &[],
                 namespaces: Box::leak(Box::new([NamespaceDescriptor {
@@ -159,9 +98,12 @@ impl CellModule for Module {
         })
     }
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+        cellule_runtime::primitives::sql::register_sql::<RepositoryModule>(registry)?;
         super::register(registry)?;
-        registry.bind_command::<refs::FixtureRefs>()?;
-        registry.bind_query::<cellule_runtime::primitives::sql::SqlBatchQuery<RepositoryModule>>()
+        registry.bind_command::<PublishCatalogRefs>()?;
+        registry.bind_command::<CompleteCatalogPush>()?;
+        registry.bind_query::<CheckCompletedPush>()?;
+        registry.bind_command::<refs::FixtureRefs>()
     }
 }
 struct Fixture {

@@ -1,6 +1,6 @@
 //! Fenced preparation and retained generation facts in the Repository Cell.
-//! The fresh schema is selected with the final producer/reader hard cutover;
-//! these commands are not registered on the legacy repository serving path.
+//! Production and qualification share the same bounded packed operation registry.
+//! The remaining producer/reader conversion is an unreleasable local cutover.
 use super::{catalog::StoredCatalog, ref_state::RefStateSnapshotRoot};
 use crate::{
     ObjectFormat, RepositoryModule,
@@ -14,6 +14,7 @@ use cellule_runtime::{
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
     registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
 };
+pub(crate) mod registry;
 mod session;
 pub use session::PreparationSession;
 mod base;
@@ -214,10 +215,8 @@ pub struct MaintenanceRequest {
     pub owner: OwnerFence,
 }
 
-/// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19/22/24..26/28..29/31/33/35 and query IDs
-/// 15/20..21/23/27/30/32/34, plus the existing trusted SQL query. No separate
-/// Cell or compatibility API.
+/// Bind the packed production contract. Inline publication/completion adapters
+/// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<BeginStaging>()?;
     registry.bind_command::<RenewStaging>()?;
@@ -237,8 +236,6 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RegisterRefPolicyPage>()?;
     registry.bind_query::<CheckRefPolicyGuard>()?;
     registry.bind_command::<ReapRefPolicyGuard>()?;
-    registry.bind_command::<PublishCatalogRefs>()?;
-    registry.bind_command::<CompleteCatalogPush>()?;
     registry.bind_command::<CompleteRootPush>()?;
     registry.bind_command::<CompleteRootOutcome>()?;
     registry.bind_command::<RegisterRootRecovery>()?;
@@ -246,7 +243,6 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_query::<CheckCompletedRootPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;
     registry.bind_query::<CheckCompletedCompaction>()?;
-    registry.bind_query::<CheckCompletedPush>()?;
     registry.bind_query::<CheckPreparationFrontier>()?;
     registry.bind_query::<CheckPreparation>()
 }

@@ -84,22 +84,10 @@ pub(crate) fn replica_limits(database: u64, capture: u64) -> cellule_ltx::Limits
     }
 }
 
-const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 9] = [
-    operation(1),
-    operation_with_codec(3, 4),
-    operation_with_codec(4, 6),
-    OperationDescriptor {
-        input_limit: object_batch::INPUT_LIMIT,
-        ..operation_with_codec(5, 5)
-    },
-    operation_with_codec(6, 3),
-    operation_with_codec(7, 2),
-    operation_with_codec(8, 2),
-    operation_with_codec(9, 4),
-    operation_with_codec(10, 2),
-];
-const QUERIES: [OperationDescriptor; 1] = [operation(2)];
+/// Fresh packed schema shared by release migrations and actual Cell activation.
+pub const REPOSITORY_SCHEMA: &str = packs::publication::SCHEMA;
+const SCHEMA: &str = REPOSITORY_SCHEMA;
+use packs::publication::registry::{COMMANDS, QUERIES};
 
 const fn operation(id: u32) -> OperationDescriptor {
     operation_with_codec(id, 1)
@@ -287,6 +275,9 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/exact.rs"));
                 source.update(include_bytes!("packs/publication/mod.rs"));
+                source.update(include_bytes!("packs/publication/registry.rs"));
+                source.update(include_bytes!("server/catalog_initialization.rs"));
+                source.update(include_bytes!("server/residency/mod.rs"));
                 source.update(include_bytes!("packs/publication/codec.rs"));
                 source.update(include_bytes!("packs/publication/sql.rs"));
                 source.update(include_bytes!("packs/publication/schema.sql"));
@@ -352,14 +343,7 @@ impl CellModule for RepositoryModule {
 
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
-        registry.bind_command::<FinalizePush>()?;
-        registry.bind_command::<push::CompletePush>()?;
-        registry.bind_command::<object_batch::PutObjects>()?;
-        registry.bind_command::<graph::CertifyObjects>()?;
-        registry.bind_command::<ancestry::CertifyAncestry>()?;
-        registry.bind_command::<branch_rules::command::SetBranchRule>()?;
-        registry.bind_command::<pulls::merge::command::MergePull>()?;
-        registry.bind_command::<pulls::candidates::command::PrepareCandidate>()
+        packs::publication::register(registry)
     }
 }
 
