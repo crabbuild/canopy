@@ -288,3 +288,5 @@ async fn production_shutdown_keeps_publication_cell_heartbeat_and_workspace_unti
     }
     Ok(())
 }
+
+mod browser;

@@ -12,6 +12,8 @@ use std::sync::Mutex;
 use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 mod body;
+mod edges;
+pub use edges::{MAX_EDGE_PARENTS, ServingEdgePage};
 mod handoff;
 mod reads;
 mod refs;
@@ -468,6 +470,11 @@ impl ServingPin {
     }
 }
 impl Inner {
+    fn child(self: &Arc<Self>) -> Arc<Active> {
+        let mut state = self.state.lock().expect("serving workers");
+        state.active += 1;
+        Arc::new(Active(Arc::clone(self)))
+    }
     async fn catalog(&self) -> Result<Arc<CatalogReader>, ServingReadError> {
         let mut reader = self.reader.lock().await;
         if reader.is_none() {

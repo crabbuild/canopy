@@ -9,6 +9,7 @@ use tokio::time::{Duration, timeout};
 use tokio_util::task::TaskTracker;
 mod body;
 mod custody;
+mod edges;
 mod lifecycle;
 mod pool;
 mod refs;

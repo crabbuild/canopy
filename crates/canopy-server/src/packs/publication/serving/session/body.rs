@@ -33,11 +33,7 @@ impl ServingPin {
             }
             // This is a child of an already admitted worker. Closing refuses new
             // workers but must not invalidate native drain ownership of this one.
-            let owner = {
-                let mut state = inner.state.lock().expect("serving workers");
-                state.active += 1;
-                Arc::new(Active(Arc::clone(&inner)))
-            };
+            let owner = inner.child();
             Ok(Some(inner.context.files.body(object, limit, owner).await?))
         })
         .await

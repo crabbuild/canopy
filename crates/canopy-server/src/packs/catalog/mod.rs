@@ -118,3 +118,6 @@ impl CatalogSnapshot {
 
 #[cfg(test)]
 pub(in crate::packs) mod tests;
+
+#[cfg(test)]
+pub(crate) mod serving_fixture;

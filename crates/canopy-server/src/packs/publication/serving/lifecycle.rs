@@ -125,6 +125,13 @@ impl ServingSnapshot {
     ) -> Result<Vec<Option<crate::packs::metadata::ObjectHeader>>, ServingReadError> {
         self.pin.headers(self.actor.clone(), ids).await
     }
+    pub async fn edges_page(
+        &self,
+        ids: &[crate::ObjectId],
+        after: Option<(crate::ObjectId, crate::ObjectId)>,
+    ) -> Result<ServingEdgePage, ServingReadError> {
+        self.pin.edges_page(self.actor.clone(), ids, after).await
+    }
     pub async fn body(
         &self,
         oid: crate::ObjectId,

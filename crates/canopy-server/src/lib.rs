@@ -307,6 +307,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving/session.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/reads.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/body.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/edges.rs"));
+                source.update(include_bytes!("git_read/mod.rs"));
+                source.update(include_bytes!("git_read/browse.rs"));
+                source.update(include_bytes!("git_read/graph.rs"));
+                source.update(include_bytes!("git_read/trees.rs"));
+                source.update(include_bytes!("git_read/patch/mod.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/refs.rs"));
                 source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
                 source.update(include_bytes!("packs/publication/serving/pool.rs"));

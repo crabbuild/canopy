@@ -3,7 +3,7 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published ref-reader head `b89d929`, GitHub reports
+directly against `main`. At the preceding published body-reader head `b1bd813`, GitHub reports
 no merge conflicts; both Rust CI runs fail on the same five unconverted
 legacy `objects` readers and both harness checks pass. The PR is currently marked
 ready for review, but production conversion and release requirements remain
@@ -13,6 +13,59 @@ notes describe their historical states, not the current publication state.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Certified browser objects and ancestry checkpoint
+
+Local directory, file, tag and first-parent history views now borrow one accepted
+joint catalog generation for the whole request. Object presence, kind and size
+come from certified headers; bounded canonical bodies come from the shared
+verified native pack service. The reader no longer queries legacy `objects`,
+`object_closure`, `object_edges` or `commit_parents` tables. The existing raw path,
+mode, pagination and preview behavior remains. Zero/absent revision IDs return
+missing; wrong-format IDs reject as invalid.
+
+Comparison files, patches and previews also use this snapshot for their objects
+and merge-base graph. The new typed edge page accepts at most 128 sorted parent
+IDs and returns at most 512 edges with a tuple continuation. Preferred metadata
+queries run on admitted blocking work retaining a child physical guard. The
+shared private read contract rechecks current access/owner/lease and retains
+workers after observer cancellation. Ancestry filters commit edges, consumes all
+pages and keeps the existing bounded graph budget without a native process per
+commit. Equal tips still require certified commit membership. Live pull/review/
+thread editorial metadata and ref authority remain unconverted.
+
+Six new families exercise real HTTP reads in both object formats, 32-entry tree
+and history continuation, annotated tags, raw non-UTF-8 and literal paths,
+executable files, symlinks, gitlinks, bounded/binary previews, patches, merge bases,
+cached generation isolation, access revocation, and canceled suspended-provider
+work. A native 532-parent merge verifies a relevant parent beyond the first
+512-edge page. Fixtures physically verify actual native packs and metadata;
+their joint catalog facts and editorial records are installed by trusted SQL to
+isolate consumers. They do not qualify live producer/publication or capacity.
+
+All 112 focused cases pass (35.01 seconds test runtime;
+120.624 seconds command including compilation). Warnings-denied
+workspace/all-target Clippy passes in 31.581 seconds.
+The workspace library runs 695 unique cases:
+690 pass and the same five legacy object readers fail. All
+387 publication cases pass. Nine selected portable
+workspace/lifecycle cases pass, giving 704 unique Rust
+cases, 699 passes and five failures; focused reruns and
+nested subprocess summaries are excluded from that count. Build, formatting,
+diff checks and all 96 Python harness tests pass. The driver preserves library
+exit 101. Linux-only fork cases were not executed locally.
+Commands, source fingerprint and log digests are in
+[browser evidence](evidence/serving-certified-browser-20261004.json).
+The frozen inventory has 482 source/schema/manifest files,
+including 468 Rust files. Exact SDK pins and protected original
+index/archive remain unchanged.
+
+Next priorities are certified cache hydration and the five remaining legacy
+reader failures, followed by owned HTTP/SSH/generated producers and actual
+owner-aware remote routes. Complete-history native workspaces, efficient bounded
+batch reads/cold I/O, physical owner adoption, custody archival, final DDL,
+GC/backup/restore, OS containment, native maintenance, signed completion,
+attribution and full-history/10,000-SDE capacity qualification remain mandatory.
 
 ## Certified native object body checkpoint
 
@@ -50,8 +103,9 @@ executed locally. Commands, source fingerprint and log digests are retained in
 inventory contains 478 source/schema/manifest files, including 464 Rust files.
 Exact SDK pins and protected original index/archive remain unchanged.
 
-Browser/tree/file/history/graph consumers and remote routes still require
-conversion to this API. Streaming larger bodies, a complete graph workspace for
+At this historical body checkpoint, browser/tree/file/history/graph consumers
+and remote routes still required conversion; the newer browser checkpoint above
+converts local object and comparison ancestry consumers. Streaming larger bodies, a complete graph workspace for
 native history, persistent batch scheduling and cold-pack I/O optimization remain
 open. One private source pack is not necessarily a complete Git history workspace.
 Full producer/reader conversion, physical owner adoption, custody archival,

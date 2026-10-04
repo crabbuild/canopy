@@ -120,19 +120,8 @@ impl Reader {
         // Only certified objects are browseable. Staged push bytes do not become
         // visible through a guessed OID before their complete graph is verified.
         for _ in 0..16 {
-            let rows = self.repository.sql.query(None,SqlBatch {statements:vec![SqlStatement {
-                sql:"SELECT o.kind FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1".into(), parameters:vec![SqlValue::Blob(target.to_vec())],
-            }]}).await?;
-            let Some([SqlValue::Text(kind)]) = rows
-                .output
-                .first()
-                .and_then(|s| s.rows.first())
-                .map(Vec::as_slice)
-            else {
-                return Err(ReadError::Missing);
-            };
-            match kind.as_str() {
-                "commit" => {
+            match self.header(target).await?.object.kind {
+                ObjectKind::Commit => {
                     let body = self.body(target, ObjectKind::Commit).await?;
                     let admission = Arc::clone(&self.admission);
                     return tokio::task::spawn_blocking(move || {
@@ -141,7 +130,7 @@ impl Reader {
                     })
                     .await?;
                 }
-                "tag" => {
+                ObjectKind::Tag => {
                     let body = self.body(target, ObjectKind::Tag).await?;
                     let first = body
                         .split(|b| *b == b'\n')
@@ -168,6 +157,7 @@ impl Reader {
     ) -> Result<Directory, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let path = if encoded_path.is_empty() {
             Vec::new()
         } else {
@@ -224,6 +214,7 @@ impl Reader {
     ) -> Result<File, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let path = path(encoded_path)?;
         let commit = self.commit(oid(revision)?).await?;
         let entry = self
@@ -263,6 +254,7 @@ impl Reader {
     ) -> Result<History, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let mut target = Some(oid(revision)?);
         let mut commits = Vec::new();
         while let Some(current) = target {

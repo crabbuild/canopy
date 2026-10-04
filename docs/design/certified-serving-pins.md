@@ -6,8 +6,8 @@ adds a bounded serving-pin receiver and an owned metadata-read capability. This
 is a foundation for production reader conversion. A service-owned producer now
 acquires, retains, renews and drains one generation independently of its callers;
 the production manager now creates a bounded resident pool and exposes its
-borrow through `RepositoryCell::serving_snapshot`. Existing product/native/body/
-stream consumers still require conversion to this capability.
+borrow through `RepositoryCell::serving_snapshot`. Local browser and comparison object reads now use this capability. Remaining
+product/native/stream consumers and remote routes still require conversion.
 The branch remains unreleasable until that conversion and the full cutover gates
 are complete.
 
@@ -114,7 +114,7 @@ bounded physical-read slot after read admission closes. A released, rebound or
 missing row fails handoff; duplicate physical ownership is rejected.
 
 `ServingSnapshot` carries a private borrow guard and exposes only the generation
-fact and admitted metadata headers. Clones share that guard until the last clone
+fact and admitted headers, bodies, refs and typed graph pages. Clones share that guard until the last clone
 drops. Closing a producer refuses new borrows while existing borrows retain their
 generation and continue renewal. Renewal is scheduled at one third of the
 conservatively observed remaining lease; this is a scheduling policy, not a
@@ -362,8 +362,8 @@ owner fence.
 
 The resident pool now integrates `ServingOwner` and its accepted acquisition
 handoff with manager residency. Command reconstruction alone does not establish
-physical ownership. The next serving layer must carry that
-ownership through native work, object bodies and response streams. Actual
+physical ownership. Native bodies and local browser/comparison reads now carry that ownership.
+Remaining transfer producers must carry it through complete response streams. Actual
 eviction and shutdown already own pool drain. A close must join all producers and
 workers before Cell/workspace/artifact release.
 
@@ -384,7 +384,7 @@ Consumer conversion must preserve these boundaries:
    administrator authority and publication admission remain usable. Only then
    may the node tracker/publication budget close and resident recovery/Cell/
    workspace drain finish. The current shutdown path enforces this ordering;
-   native/body/stream consumers still need to carry the snapshot guard.
+   remaining native/stream consumers still need to carry the snapshot guard.
 4. Actual process fencing and restored-owner adoption must precede releasing an
    abandoned pin. A historical lease or an expired deadline is insufficient.
    Quota recovery must use that authenticated lifecycle rather than reaping SQL
@@ -443,8 +443,8 @@ reads. Native cache statistics expose live/cached files, cache hits and complete
 downloads. Authorization and conservative lease checks still run before and
 after work through the common serving read contract.
 
-This API is a prerequisite for browser, graph and transfer conversion. Existing
-browser body/commit consumers and remote routes still require conversion; it is
+This API is a prerequisite for browser, graph and transfer conversion. Local
+browser body/commit consumers now use it; remote routes still require conversion; it is
 not evidence of completed native streaming, OS containment, publication or
 large-repository capacity. Pack reuse reduces repeated downloads, but each
 bounded body currently starts a native batch process. Shared persistent readers
@@ -457,3 +457,48 @@ must hydrate the required graph through certified source selection and retain
 all physical inputs through their owned lifetime. Cold load still reads and
 verifies a full pack/index pair; these tests establish reuse and bounded ownership,
 not a cold-read latency guarantee for multi-gigabyte packs.
+
+
+## Certified browser objects and typed ancestry
+
+A local browser tree, file or first-parent history request borrows one accepted
+joint generation for its whole view. Annotated tags, commit/tree parsing, sizes
+and file previews read only certified headers and verified native bodies through
+that snapshot. The selected catalog determines presence even when a reused pack
+contains more objects. The public 32-entry pages, literal raw-byte paths, mode
+handling and 256 KiB preview bound remain. Wrong-format inputs reject as invalid;
+zero or absent commit IDs return missing rather than a storage failure.
+
+Comparison files, previews and patches also borrow one generation for their
+object and ancestry reads. `ServingSnapshot::edges_page` accepts one to 128
+strictly sorted unique nonzero IDs in the repository format. It returns at most
+512 typed edges and headers for the parents visited, including explicit absent
+headers. A `(parent, child)` cursor resumes within a parent and then advances to
+later requested IDs; it must identify a parent in the same requested set.
+Continuation headers may repeat the cursor parent. An exact-full page returns a
+conservative continuation and can require one final empty read. These pages are
+not ordered Git parent lists; commit bodies retain ordered parents for history.
+
+Edge source selection uses the accepted preferred metadata, never legacy Cell
+object/parent tables. Local immutable SQLite edge queries run off the executor
+with a child physical guard. The common admitted read checks access, actual owner
+and conservative deadline before and after work. Observer cancellation detaches
+the tracked worker; generation release still waits for its real provider/query
+completion. Edges and headers use the same shared authenticated file/index cache.
+
+Merge-base traversal expands groups of at most 128 certified commits, consumes
+all edge continuations, and excludes tree edges by expected kind. It rejects
+missing/non-commit roots, including equal tips, and retains the existing bounds
+of 100,000 commits and 250,000 parent edges. Best common ancestors are computed on
+owned bounded graph data. It starts no native process per traversed commit.
+Current pull/review/thread metadata authorization still reads its existing Cell
+records and live legacy ref rows; their producer/authority conversion is open.
+This checkpoint does not establish a fully converted pull lifecycle.
+
+Production HTTP tests use native packs physically verified into metadata shards,
+then trusted installation of the joint catalog fact. They exercise both object
+formats, raw paths, directory/history continuation, modes, tags, file previews,
+merge comparisons and a 532-parent native merge whose relevant parent is beyond
+the first edge page. Suspended-provider and revocation tests qualify edge-worker
+ownership and cached authorization. This isolates consumer behavior and is not
+end-to-end live producer publication, cold latency or large-team qualification.

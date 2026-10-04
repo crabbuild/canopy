@@ -8,7 +8,10 @@ use crate::packs::{
 };
 use object_store::ObjectStore;
 
-async fn catalog(f: &Fixture, provider: Arc<dyn ObjectStore>) -> Result<(Prepared, StoredCatalog)> {
+pub(super) async fn catalog(
+    f: &Fixture,
+    provider: Arc<dyn ObjectStore>,
+) -> Result<(Prepared, StoredCatalog)> {
     let store = Arc::new(ArtifactStore::new(provider.clone(), f.repository));
     let (base, _, _) = super::super::prepare::opened(f, [71; 16], store.clone()).await?;
     let native =
@@ -31,7 +34,7 @@ async fn catalog(f: &Fixture, provider: Arc<dyn ObjectStore>) -> Result<(Prepare
     f.install_generation(2, stored, fact.refs).await?;
     Ok((native, stored))
 }
-fn serving_context(
+pub(super) fn serving_context(
     f: &Fixture,
     store: Arc<ArtifactStore>,
     root: &tempfile::TempDir,
