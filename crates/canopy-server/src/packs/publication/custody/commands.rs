@@ -30,7 +30,7 @@ impl Command for RegisterCustodyIntent {
             }
             let old = previous.intent.header()?;
             if old.step >= header.step
-                || previous.phase.is_none()
+                || !previous.closed()
                 || old.step.checked_add(1) != Some(header.step)
                 || header.previous != Some(*blake3::hash(&previous.intent.encoded()?).as_bytes())
                 || old.actor != header.actor
@@ -59,7 +59,7 @@ impl Command for RegisterCustodyIntent {
             return deny(PreparationDenial::Unauthorized);
         }
         let pending = context.sql(&statement(
-            "SELECT count(*) FROM (SELECT operation FROM catalog_custody_commands WHERE phase IS NULL LIMIT ?1)",
+            "SELECT count(*) FROM (SELECT operation FROM catalog_custody_commands WHERE phase IS NULL AND stopped IS NULL LIMIT ?1)",
             vec![number(MAX_OPERATIONS)?],
         ))?;
         let Some([SqlValue::Integer(pending)]) = rows(&pending)?.first().map(Vec::as_slice) else {
@@ -106,7 +106,7 @@ impl Command for ExecuteCustody {
         if header.stamp != Stamp::of(&evidence)
             || header.incarnation != evidence.incarnation()
             || saved.intent.request()? != request
-            || saved.phase.is_some()
+            || saved.closed()
         {
             return Err(Error::Command(
                 "custody command differs from its original intent",
@@ -142,7 +142,7 @@ impl Command for ExecuteCustody {
             .transpose()?
             .unwrap_or(SqlValue::Null);
         super::super::publish::changed(context.sql(&statement(
-            "UPDATE catalog_custody_commands SET phase=?1,granted_incarnation=?5,granted_attempt=?6 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL",
+            "UPDATE catalog_custody_commands SET phase=?1,granted_incarnation=?5,granted_attempt=?6 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL AND stopped IS NULL",
             vec![SqlValue::Blob(encode(&phase, 1024)?),blob(operation),number(u64::from(request.step))?,SqlValue::Blob(saved.intent.encoded()?),grant_incarnation,grant_attempt],
         ))?)?;
         // Trusted denials commit the original phase alongside SDK acceptance;

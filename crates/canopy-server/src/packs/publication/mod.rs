@@ -103,8 +103,10 @@ pub use root_completion::{
 mod admission_receipt;
 mod custody;
 pub use custody::{
-    CustodyAction, CustodyError, CustodyIntent, CustodyReply, CustodyRequest, ExecuteCustody,
-    PreparedCustody, RegisterCustodyIntent, RegisteredCustody,
+    CustodyAction, CustodyError, CustodyIntent, CustodyReply, CustodyRequest, CustodyScanStats,
+    CustodyStopFact, CustodyStopInput, CustodyStopOutcome, CustodyStopReply, CustodySupervisor,
+    ExecuteCustody, PreparedCustody, ReadyCustodyStop, RegisterCustodyIntent, RegisteredCustody,
+    StopCustodyIntent,
 };
 mod preparation_receipt;
 pub use preparation_receipt::{PreparationAdmission, PreparationReceiptError};
@@ -231,6 +233,7 @@ pub struct MaintenanceRequest {
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RegisterCustodyIntent>()?;
     registry.bind_command::<ExecuteCustody>()?;
+    registry.bind_command::<StopCustodyIntent>()?;
     registry.bind_command::<RegisterStagedInputs>()?;
     registry.bind_query::<CheckStagedInputs>()?;
     registry.bind_query::<CheckStaging>()?;

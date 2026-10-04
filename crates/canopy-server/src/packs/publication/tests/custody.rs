@@ -508,7 +508,7 @@ async fn corrupted_metadata_blocks_sdk_fallback_and_journal_queries_are_indexed(
             let mut all = String::new();
             for sql in [
                 "EXPLAIN QUERY PLAN SELECT intent,phase FROM catalog_custody_commands WHERE operation=zeroblob(16) ORDER BY step DESC LIMIT 1",
-                "EXPLAIN QUERY PLAN SELECT operation FROM catalog_custody_commands WHERE phase IS NULL LIMIT 1024",
+                "EXPLAIN QUERY PLAN SELECT operation FROM catalog_custody_commands WHERE phase IS NULL AND stopped IS NULL LIMIT 1024",
                 "EXPLAIN QUERY PLAN SELECT intent,phase FROM catalog_custody_commands INDEXED BY catalog_custody_grants WHERE operation=zeroblob(16) AND granted_incarnation=zeroblob(16) AND granted_attempt=1 ORDER BY step DESC LIMIT 1",
             ] {
                 let mut statement = db.prepare(sql)?;

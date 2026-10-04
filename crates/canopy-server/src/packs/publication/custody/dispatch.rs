@@ -70,6 +70,9 @@ impl OwnedCustody {
         let target = self.evidence().target();
         if let Some(saved) = load(client, target, header.operation, Some(header.step)).await? {
             return if saved.intent == self.prepared.intent {
+                if let Some(fact) = saved.stop_fact() {
+                    return Err(CustodyError::Stopped(Box::new(fact)));
+                }
                 Ok(saved)
             } else {
                 Err(CustodyError::Context)

@@ -13,8 +13,15 @@ use cellule_runtime::{
 mod codec;
 mod commands;
 mod dispatch;
+mod scan;
+mod stop;
 pub use commands::{ExecuteCustody, RegisterCustodyIntent};
 pub(super) use dispatch::{OwnedCustody, RESERVATION};
+pub use scan::{CustodyScanStats, CustodySupervisor};
+pub use stop::{
+    CustodyStopFact, CustodyStopInput, CustodyStopOutcome, CustodyStopReply, ReadyCustodyStop,
+    StopCustodyIntent,
+};
 
 const INPUT_BYTES: u32 = 1024;
 const INTENT_BYTES: u32 = 4096;
@@ -160,6 +167,14 @@ pub enum CustodyError {
     Unsettled(Box<PendingMutation>),
     #[error("custody command head differs")]
     Context,
+    #[error("custody original was retired without an execution result")]
+    Stopped(Box<CustodyStopFact>),
+    #[error("custody owner observation failed")]
+    Owner(#[source] Box<PreparationBaseError>),
+    #[error("custody stop preparation failed")]
+    StopPreparation(#[source] Box<InvocationError<CustodyStopReply>>),
+    #[error("invalid custody scan limits")]
+    InvalidScanLimits,
 }
 
 impl CustodyError {
@@ -173,7 +188,11 @@ impl CustodyError {
                 &**error,
                 InvocationError::Pending(_) | InvocationError::InvalidPublishedResult { .. }
             ),
-            Self::Clock(_) => false,
+            Self::Clock(_)
+            | Self::Stopped(_)
+            | Self::Owner(_)
+            | Self::InvalidScanLimits
+            | Self::StopPreparation(_) => false,
             // Failure to authenticate or observe metadata is never proof of
             // absence. Keep the owned original until its disposition is known.
             Self::Query(_)
@@ -196,6 +215,7 @@ pub struct PreparedCustody {
 pub struct RegisteredCustody {
     intent: CustodyIntent,
     phase: Option<Recorded>,
+    stopped: Option<stop::StopRecord>,
 }
 
 fn encode(value: &impl WireValue, limit: u32) -> Result<Vec<u8>, CodecError> {
@@ -228,11 +248,11 @@ fn seed_statement() -> SqlStatement {
 fn row_statement(operation: [u8; 16], step: Option<u32>) -> SqlStatement {
     match step {
         Some(step) => SqlStatement {
-            sql: "SELECT step,incarnation,request_id,intent,phase FROM catalog_custody_commands WHERE operation=?1 AND step=?2".into(),
+            sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 AND step=?2".into(),
             parameters: vec![blob(operation), SqlValue::Integer(i64::from(step))],
         },
         None => SqlStatement {
-            sql: "SELECT step,incarnation,request_id,intent,phase FROM catalog_custody_commands WHERE operation=?1 ORDER BY step DESC LIMIT 1".into(),
+            sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 ORDER BY step DESC LIMIT 1".into(),
             parameters: vec![blob(operation)],
         },
     }
@@ -251,6 +271,7 @@ fn from_sets(
         request_id,
         SqlValue::Blob(bytes),
         phase,
+        stopped,
     ] = row.as_slice()
     else {
         return Err(Error::Command("invalid custody command row"));
@@ -274,7 +295,15 @@ fn from_sets(
     if let Some(phase) = &phase {
         codec::validate_phase(phase, &intent.request()?)?;
     }
-    Ok(Some(RegisteredCustody { intent, phase }))
+    let stopped = stop::record(stopped, &intent, &seed)?;
+    if phase.is_some() && stopped.is_some() {
+        return Err(Error::Command("custody execution and retirement coexist"));
+    }
+    Ok(Some(RegisteredCustody {
+        intent,
+        phase,
+        stopped,
+    }))
 }
 async fn load(
     client: &CellClient,
@@ -314,7 +343,7 @@ impl PreparedCustody {
             {
                 return Err(CustodyError::Context);
             }
-            if head.phase.is_none() {
+            if !head.closed() {
                 return Err(CustodyError::Unsettled(Box::new(head.evidence().clone())));
             }
             (
@@ -436,6 +465,15 @@ impl RegisteredCustody {
     pub fn settled(&self) -> bool {
         self.phase.is_some()
     }
+    /// Logical closure is separate from an original execution result.
+    pub fn closed(&self) -> bool {
+        self.phase.is_some() || self.stopped.is_some()
+    }
+    pub fn stop_fact(&self) -> Option<CustodyStopFact> {
+        self.stopped
+            .as_ref()
+            .map(|record| record.fact(self.evidence().target()))
+    }
     pub async fn recover_preparation(
         &self,
         client: &CellClient,
@@ -479,6 +517,9 @@ impl RegisteredCustody {
             .ok_or(Error::Command("custody intent disappeared"))?;
             if current.intent != self.intent {
                 return Err(Error::Command("custody recovery binding differs"));
+            }
+            if current.stopped.is_some() {
+                return Err(Error::Command("custody original retired without execution"));
             }
             if let Some(phase) = current.phase {
                 return Ok(Some(phase.committed(evidence)?));
@@ -555,7 +596,7 @@ pub(super) fn restart_matches(
     staging: bool,
 ) -> cellule_runtime::Result<bool> {
     let sets = context.sql(&SqlBatch { statements: vec![SqlStatement {
-        sql: "SELECT step,incarnation,request_id,intent,phase FROM catalog_custody_commands INDEXED BY catalog_custody_grants WHERE operation=?1 AND granted_incarnation=?2 AND granted_attempt=?3 ORDER BY step DESC LIMIT 1".into(),
+        sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands INDEXED BY catalog_custody_grants WHERE operation=?1 AND granted_incarnation=?2 AND granted_attempt=?3 ORDER BY step DESC LIMIT 1".into(),
         parameters: vec![blob(check.token.operation), blob(check.token.owner.incarnation.as_bytes()), number(check.token.attempt)?],
     }, seed_statement()] })?;
     let Some(saved) = from_sets(&sets, context.target(), check.token.operation)? else {

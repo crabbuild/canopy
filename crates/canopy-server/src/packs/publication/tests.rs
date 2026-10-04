@@ -4,6 +4,7 @@ mod compaction;
 mod completion;
 mod coordinator;
 mod custody;
+mod custody_stop;
 mod durable_policy;
 mod durable_recovery;
 mod frontier;

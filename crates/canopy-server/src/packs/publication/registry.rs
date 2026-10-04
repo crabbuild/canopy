@@ -23,7 +23,7 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 15] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 16] = [
     crate::operation(1),
     command::<AbortPreparation>(4096, 4096),
     command::<ReapPreparation>(4096, 4096),
@@ -39,6 +39,7 @@ pub(crate) const COMMANDS: [OperationDescriptor; 15] = [
     command::<ReleaseTerminalRecovery>(4096, 128),
     command::<RegisterCustodyIntent>(4096, 4096),
     command::<ExecuteCustody>(1024, 512),
+    command::<StopCustodyIntent>(1024, 128),
 ];
 pub(crate) const QUERIES: [OperationDescriptor; 9] = [
     crate::operation(2),
@@ -79,7 +80,9 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec![1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42]
+            vec![
+                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43
+            ]
         );
         assert_eq!(
             descriptor
@@ -112,6 +115,7 @@ mod tests {
             (40, ReleaseTerminalRecovery::CODEC_VERSION, 4096, 128),
             (41, RegisterCustodyIntent::CODEC_VERSION, 4096, 4096),
             (42, ExecuteCustody::CODEC_VERSION, 1024, 512),
+            (43, StopCustodyIntent::CODEC_VERSION, 1024, 128),
         ] {
             let operation = descriptor
                 .commands

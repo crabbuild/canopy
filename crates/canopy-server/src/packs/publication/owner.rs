@@ -41,6 +41,15 @@ impl PreparationAuthority {
         target: &CellTarget,
         expected: OwnerFence,
     ) -> Result<(), PreparationBaseError> {
+        if self.observe(target).await? != expected {
+            return Err(PreparationBaseError::Inactive);
+        }
+        Ok(())
+    }
+    pub(super) async fn observe(
+        &self,
+        target: &CellTarget,
+    ) -> Result<OwnerFence, PreparationBaseError> {
         if !self.matches(target) {
             return Err(PreparationBaseError::Context);
         }
@@ -62,9 +71,6 @@ impl PreparationAuthority {
                 control.value().owner_fence()
             }
         };
-        if actual != expected {
-            return Err(PreparationBaseError::Inactive);
-        }
-        Ok(())
+        Ok(actual)
     }
 }

@@ -147,12 +147,14 @@ impl ReadyPreparation {
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
         (&self.inner.client, &self.inner.target, &self.inner.check)
     }
-    pub(super) fn pending(&self) -> PublicationError {
-        let evidence = match &self.inner.exact {
+    pub(super) fn evidence(&self) -> &cellule_runtime::PendingMutation {
+        match &self.inner.exact {
             ExactPreparation::Claim(command) => command.evidence(),
             ExactPreparation::Renew { command, .. } => command.evidence(),
-        };
-        PublicationError::Preparation(InvocationError::Pending(Box::new(evidence.clone())))
+        }
+    }
+    pub(super) fn pending(&self) -> PublicationError {
+        PublicationError::Preparation(InvocationError::Pending(Box::new(self.evidence().clone())))
     }
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
         let inner = *self.inner;
@@ -173,9 +175,16 @@ impl ReadyPreparation {
                 Ok(())
             })
             .await
-            .map_err(|source| PublicationError::Custody {
-                evidence: Box::new(command.evidence().clone()),
-                source: Box::new(source),
+            .map_err(|source| {
+                if matches!(&source, CustodyError::Stopped(_))
+                    && let Some(session) = &existing
+                {
+                    session.fence();
+                }
+                PublicationError::Custody {
+                    evidence: Box::new(command.evidence().clone()),
+                    source: Box::new(source),
+                }
             })?;
         let result = super::super::custody::project(result, |reply| match reply {
             CustodyReply::Preparation(reply) => Some(reply),

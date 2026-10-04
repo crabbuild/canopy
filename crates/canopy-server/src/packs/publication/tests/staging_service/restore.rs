@@ -24,7 +24,7 @@ async fn head(
 ) -> Result<(PendingMutation, Option<Committed<CustodyReply>>)> {
     head_expiring(f, kind, execute_original, execute_original).await
 }
-async fn head_expiring(
+pub(in crate::packs::publication::tests) async fn head_expiring(
     f: &Fixture,
     kind: u8,
     execute_original: bool,

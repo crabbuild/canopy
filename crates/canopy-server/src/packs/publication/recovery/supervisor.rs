@@ -24,7 +24,7 @@ impl Default for RecoveryScanLimits {
     }
 }
 impl RecoveryScanLimits {
-    fn validate(self) -> Result<(), RootRecoveryError> {
+    pub(in crate::packs::publication) fn validate(self) -> Result<(), RootRecoveryError> {
         if self.page == 0
             || self.page > MAX_PAGE
             || self.interval < Duration::from_millis(10)

@@ -556,15 +556,18 @@ CREATE TABLE catalog_custody_commands (
     request_id BLOB NOT NULL CHECK(typeof(request_id)='blob' AND length(request_id)=16),
     intent BLOB NOT NULL CHECK(typeof(intent)='blob' AND length(intent) BETWEEN 1 AND 4096),
     phase BLOB CHECK(phase IS NULL OR (typeof(phase)='blob' AND length(phase) BETWEEN 1 AND 1024)),
+    stopped BLOB CHECK(stopped IS NULL OR (typeof(stopped)='blob' AND length(stopped) BETWEEN 1 AND 1024)),
     granted_incarnation BLOB CHECK(granted_incarnation IS NULL OR (typeof(granted_incarnation)='blob' AND length(granted_incarnation)=16)),
     granted_attempt INTEGER CHECK(granted_attempt IS NULL OR (typeof(granted_attempt)='integer' AND granted_attempt>0)),
+    CHECK(phase IS NULL OR stopped IS NULL),
+    CHECK(stopped IS NULL OR granted_attempt IS NULL),
     CHECK((granted_incarnation IS NULL)=(granted_attempt IS NULL)),
     CHECK(phase IS NOT NULL OR granted_attempt IS NULL),
     PRIMARY KEY(operation,step),
     UNIQUE(incarnation,request_id)
 ) WITHOUT ROWID;
 CREATE INDEX catalog_custody_grants ON catalog_custody_commands(operation,granted_incarnation,granted_attempt,step DESC) WHERE granted_attempt IS NOT NULL;
-CREATE UNIQUE INDEX catalog_custody_pending ON catalog_custody_commands(operation) WHERE phase IS NULL;
+CREATE UNIQUE INDEX catalog_custody_pending ON catalog_custody_commands(operation) WHERE phase IS NULL AND stopped IS NULL;
 CREATE TRIGGER catalog_custody_identity_immutable BEFORE UPDATE OF operation,step,incarnation,request_id,intent ON catalog_custody_commands
 WHEN NEW.operation IS NOT OLD.operation OR NEW.step IS NOT OLD.step
   OR NEW.incarnation IS NOT OLD.incarnation OR NEW.request_id IS NOT OLD.request_id OR NEW.intent IS NOT OLD.intent
@@ -578,3 +581,7 @@ WHEN EXISTS(SELECT 1 FROM catalog_custody_commands WHERE operation=NEW.operation
 BEGIN SELECT RAISE(ABORT, 'custody command cannot be replaced'); END;
 CREATE TRIGGER catalog_custody_retained BEFORE DELETE ON catalog_custody_commands
 BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;
+
+CREATE TRIGGER catalog_custody_stop_immutable BEFORE UPDATE OF stopped ON catalog_custody_commands
+WHEN OLD.stopped IS NOT NULL AND NEW.stopped IS NOT OLD.stopped
+BEGIN SELECT RAISE(ABORT, 'custody retirement is immutable'); END;
