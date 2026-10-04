@@ -45,6 +45,132 @@ async fn changed_lease(ticket: &StagingTicket, old: i64) -> Result<StagingLease>
 }
 
 #[tokio::test]
+async fn staged_service_registrar_loss_retains_both_commands_through_cancellation_and_close()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [4, 5, 6] {
+            let f = Fixture::new(format).await?;
+            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            c.fault_for_test(fault);
+            let ticket = submit(&f, &c, [fault + 120; 16], "owner").await?;
+            let StagingState::Uncertain(error) = terminal(&ticket).await? else {
+                return Err("registrar loss not retained".into());
+            };
+            let (original, registrar) = ticket
+                .custody_evidence_for_test()
+                .ok_or("custody command missing")?;
+            let registrar = registrar.ok_or("registrar missing")?;
+            assert_ne!(original, registrar);
+            if fault != 6 {
+                let StagingError::Custody { evidence, source } = &*error else {
+                    return Err("registrar source lost".into());
+                };
+                assert_eq!(**evidence, original);
+                let CustodyError::Registration(source) = &**source else {
+                    return Err("wrong protocol phase".into());
+                };
+                let InvocationError::Pending(evidence) = &**source else {
+                    return Err("registrar original lost".into());
+                };
+                assert_eq!(**evidence, registrar);
+            }
+            assert!(matches!(
+                f.client().resolve(&original).await?,
+                cellule_runtime::Resolution::Absent
+            ));
+            assert_eq!(f.counts().await?, (0, 0));
+            assert_eq!(c.stats().command_bytes, super::super::custody::RESERVATION);
+            drop(ticket);
+            let retained = c
+                .pending([fault + 120; 16])
+                .ok_or("observer dropped admitted work")?;
+            assert_eq!(c.close_and_drain().await.len(), 1);
+            assert_eq!(
+                retained.custody_evidence_for_test(),
+                Some((original.clone(), Some(registrar.clone())))
+            );
+            c.recover(&retained)?;
+            assert!(matches!(terminal(&retained).await?, StagingState::Stopped));
+            let saved = RegisteredCustody::load_latest(&f.client(), &f.target, [fault + 120; 16])
+                .await?
+                .ok_or("registered original missing")?;
+            assert_eq!(saved.evidence(), &original);
+            let result = saved.recover_staging(&f.client()).await?;
+            assert!(matches!(result.output, StagingReply::Granted(_)));
+            assert!(matches!(
+                f.client().resolve(&registrar).await?,
+                cellule_runtime::Resolution::Committed(_)
+            ));
+            assert_eq!(f.counts().await?, (1, 1));
+            assert_eq!(c.stats().admitted, 0);
+            assert_eq!(c.stats().command_bytes, 0);
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn staged_service_renew_and_bind_registrar_loss_never_replaces_either_identity() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [4, 5, 6] {
+            let f = Fixture::new(format).await?;
+            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let ticket = submit(&f, &c, [fault + 130; 16], "owner").await?;
+            let staged = active(&ticket).await?;
+            c.fault_for_test(fault);
+            ticket.renew_for_test();
+            assert!(matches!(
+                terminal(&ticket).await?,
+                StagingState::Uncertain(_)
+            ));
+            let renewal = ticket
+                .custody_evidence_for_test()
+                .ok_or("renewal originals lost")?;
+            assert!(matches!(
+                f.client().resolve(&renewal.0).await?,
+                cellule_runtime::Resolution::Absent
+            ));
+            c.recover(&ticket)?;
+            assert_eq!(active(&ticket).await?.token, staged.token);
+            let registered =
+                RegisteredCustody::load_latest(&f.client(), &f.target, staged.token.operation)
+                    .await?
+                    .ok_or("renewal registration missing")?;
+            assert_eq!(registered.evidence(), &renewal.0);
+            c.fault_for_test(fault);
+            ticket.seal()?;
+            assert!(matches!(
+                terminal(&ticket).await?,
+                StagingState::Uncertain(_)
+            ));
+            let binding = ticket
+                .custody_evidence_for_test()
+                .ok_or("bind originals lost")?;
+            assert_ne!(binding, renewal);
+            c.recover(&ticket)?;
+            let StagingState::Bound(bound) = terminal(&ticket).await? else {
+                return Err("bind not recovered".into());
+            };
+            let registered =
+                RegisteredCustody::load_latest(&f.client(), &f.target, staged.token.operation)
+                    .await?
+                    .ok_or("bind registration missing")?;
+            assert_eq!(registered.evidence(), &binding.0);
+            assert_eq!(
+                registered.recover_preparation(&f.client()).await?.receipt,
+                bound.receipt
+            );
+            assert_eq!(bound.lease.token, staged.token);
+            assert_eq!(f.counts().await?, (1, 1));
+            assert!(c.close_and_drain().await.is_empty());
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing_uploads() -> Result
 {
     for (format, fault) in [
@@ -73,7 +199,10 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
             return Err("missing original Begin evidence".into());
         };
         let evidence = (**evidence).clone();
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         assert!(matches!(
             ticket.spawn(|_| async { Ok(()) }),
             Err(StagingError::Inactive)
@@ -84,7 +213,9 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
             return Err("lost acknowledgement did not follow an accepted Begin".into());
         };
         let mut decoder = BoundedDecoder::new(original.result(), 4096)?;
-        let StagingReply::Granted(lease) = StagingReply::decode(&mut decoder)? else {
+        let CustodyReply::Staging(StagingReply::Granted(lease)) =
+            CustodyReply::decode(&mut decoder)?
+        else {
             return Err("original admission was not granted".into());
         };
         decoder.finish()?;
@@ -202,7 +333,10 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
             StagingState::Uncertain(_)
         ));
         assert_eq!(coordinator.stats().admitted, 1);
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&ticket)?;
         let original = active(&ticket).await?;
         assert_eq!(original.token.artifact_operation, artifact_number(1));
@@ -231,7 +365,10 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
         let evidence = (**evidence).clone();
         let pending = timeout(Duration::from_secs(10), coordinator.close_and_drain()).await?;
         assert_eq!(pending.len(), 1);
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&pending[0])?;
         let StagingState::Bound(bound) = terminal(&pending[0]).await? else {
             return Err("bind did not resolve".into());

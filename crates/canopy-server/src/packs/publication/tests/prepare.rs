@@ -50,10 +50,7 @@ pub(super) async fn opened(
     Arc<CatalogFiles>,
     Arc<CatalogIndexes>,
 )> {
-    let started = fixture
-        .client()
-        .command::<BeginPreparation>(&fixture.target, identity()?, fixture.begin(operation))
-        .await?;
+    let started = registered_preparation(fixture, operation).await?;
     let token = lease(started.output)?.token;
     let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), fixture.format));
     let files = Arc::new(CatalogFiles::new(

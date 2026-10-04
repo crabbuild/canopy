@@ -1,10 +1,7 @@
 use super::*;
 
 async fn session(f: &Fixture, operation: [u8; 16]) -> Result<Arc<PreparationSession>> {
-    let started = f
-        .client()
-        .command::<BeginPreparation>(&f.target, identity()?, f.begin(operation))
-        .await?;
+    let started = registered_preparation(f, operation).await?;
     let lease = lease(started.output)?;
     Ok(Arc::new(
         PreparationSession::open(
@@ -47,25 +44,26 @@ async fn replay(
     kind: PreparationCommandKind,
     mutation: MutationIdentity,
 ) -> Result<cellule_runtime::Committed<PreparationReply>> {
-    Ok(match kind {
-        PreparationCommandKind::Claim => {
-            f.client()
-                .command::<ClaimPreparation>(&f.target, mutation, request_for(s))
-                .await?
-        }
-        PreparationCommandKind::Renew => {
-            f.client()
-                .command::<RenewPreparation>(&f.target, mutation, request_for(s))
-                .await?
-        }
-    })
+    let saved = RegisteredCustody::load_latest(&f.client(), &f.target, s.lease.token.operation)
+        .await?
+        .ok_or("registered command missing")?;
+    assert_eq!(saved.evidence().identity(), mutation);
+    let result = saved.recover_preparation(&f.client()).await?;
+    let PreparationReply::Granted(lease) = &result.output else {
+        return Err("unexpected replay denial".into());
+    };
+    assert_eq!(
+        lease.token == s.lease.token,
+        kind == PreparationCommandKind::Renew
+    );
+    Ok(result)
 }
 #[tokio::test]
 async fn bound_lease_commands_keep_exact_identity_and_original_floor_through_closed_uncertain_recovery()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for kind in [PreparationCommandKind::Claim, PreparationCommandKind::Renew] {
-            for fault in [1, 2, 3] {
+            for fault in [1, 2, 3, 4, 5, 6] {
                 let f = Fixture::new(format).await?;
                 let s = session(&f, [196; 16]).await?;
                 f.install_empty_root(1).await?;
@@ -81,20 +79,31 @@ async fn bound_lease_commands_keep_exact_identity_and_original_floor_through_clo
                 else {
                     return Err("lease uncertainty".into());
                 };
-                let PublicationError::Preparation(cellule_runtime::InvocationError::Pending(
-                    evidence,
-                )) = &*error
-                else {
-                    return Err("exact lease evidence".into());
+                let (evidence, registrar) = match &*error {
+                    PublicationError::Preparation(cellule_runtime::InvocationError::Pending(
+                        evidence,
+                    )) => ((**evidence).clone(), None),
+                    PublicationError::Custody { evidence, source } => {
+                        let CustodyError::Registration(source) = &**source else {
+                            return Err("wrong registrar error".into());
+                        };
+                        let InvocationError::Pending(registrar) = &**source else {
+                            return Err("registrar identity lost".into());
+                        };
+                        ((**evidence).clone(), Some((**registrar).clone()))
+                    }
+                    _ => return Err("exact lease evidence".into()),
                 };
-                let evidence = (**evidence).clone();
                 let original = match f.client().resolve(&evidence).await? {
                     cellule_runtime::Resolution::Absent => None,
                     cellule_runtime::Resolution::Committed(value) => Some(value.commit_sequence()),
                     other => return Err(format!("unexpected {other:?}").into()),
                 };
-                assert_eq!(original.is_some(), fault != 1);
-                assert_eq!(coordinator.reservations_for_test().await, (1, 8192, 1));
+                assert_eq!(original.is_some(), matches!(fault, 2 | 3));
+                assert_eq!(
+                    coordinator.reservations_for_test().await,
+                    (1, super::super::super::custody::RESERVATION, 1)
+                );
                 drop(ticket);
                 let retained = coordinator
                     .pending([196; 16])
@@ -104,6 +113,12 @@ async fn bound_lease_commands_keep_exact_identity_and_original_floor_through_clo
                 coordinator.recover(&retained).await?;
                 let outcome = changed(timeout(Duration::from_secs(10), retained.wait()).await?)?;
                 assert_eq!(outcome.kind, kind);
+                if let Some(registrar) = registrar {
+                    assert!(matches!(
+                        f.client().resolve(&registrar).await?,
+                        cellule_runtime::Resolution::Committed(_)
+                    ));
+                }
                 assert_eq!(outcome.committed, replay(&f, &s, kind, mutation).await?);
                 if let Some(sequence) = original {
                     assert_eq!(outcome.committed.receipt.commit_sequence, sequence);
@@ -397,9 +412,11 @@ async fn bound_lease_claim_after_actual_owner_restore_uses_new_fence_and_preserv
             .ok_or("restored Claim retained")?;
         coordinator.recover(&retained).await?;
         let outcome = changed(timeout(Duration::from_secs(10), retained.wait()).await?)?;
-        let replay = client
-            .command::<ClaimPreparation>(&f.target, mutation, request_for(&original))
-            .await?;
+        let original_command = RegisteredCustody::load_latest(&client, &f.target, old.operation)
+            .await?
+            .ok_or("claim journal missing")?;
+        assert_eq!(original_command.evidence().identity(), mutation);
+        let replay = original_command.recover_preparation(&client).await?;
         assert_eq!(outcome.committed, replay);
         let current = outcome.session.map_err(|e| e.to_string())?;
         let next = current.live_lease()?.0;

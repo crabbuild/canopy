@@ -50,13 +50,7 @@ pub(super) async fn claim(
     Ok(c.submit(ready).map_err(|(e, _)| e)?)
 }
 async fn new_token(f: &Fixture, op: [u8; 16]) -> Result<PreparationToken> {
-    Ok(lease(
-        f.client()
-            .command::<BeginPreparation>(&f.target, identity()?, f.begin(op))
-            .await?
-            .output,
-    )?
-    .token)
+    Ok(lease(registered_preparation(f, op).await?.output)?.token)
 }
 #[tokio::test]
 async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_through_close()
@@ -168,7 +162,10 @@ async fn bound_service_renewal_retains_exact_absent_lost_and_panicked_commands_t
                 other => return Err(format!("unexpected {other:?}").into()),
             };
             assert_eq!(sequence.is_some(), fault != 1);
-            assert_eq!(c.stats().command_bytes, 8192);
+            assert_eq!(
+                c.stats().command_bytes,
+                super::super::super::custody::RESERVATION
+            );
             drop(ticket);
             let retained = c.pending([204; 16]).ok_or("renewal lost")?;
             assert_eq!(c.close_and_drain().await.len(), 1);
@@ -232,17 +229,11 @@ async fn bound_service_claim_retains_exact_identity_and_new_namespace_through_cl
             };
             assert_ne!(bound.lease.token, old);
             assert_ne!(bound.lease.token.artifact_operation, old.artifact_operation);
-            let replay = f
-                .client()
-                .command::<ClaimPreparation>(
-                    &f.target,
-                    mutation,
-                    LeaseRequest {
-                        check: check(old),
-                        lease_ms: DEFAULT_LEASE_MS,
-                    },
-                )
-                .await?;
+            let saved = RegisteredCustody::load_latest(&f.client(), &f.target, old.operation)
+                .await?
+                .ok_or("claim intent missing")?;
+            assert_eq!(saved.evidence().identity(), mutation);
+            let replay = saved.recover_preparation(&f.client()).await?;
             assert_eq!(bound.receipt, replay.receipt);
             assert_eq!(bound.lease, lease(replay.output)?);
             let cellule_runtime::Resolution::Committed(value) =
@@ -551,7 +542,10 @@ async fn bound_service_checkpoint_shares_renewal_order_exact_recovery_and_origin
                 return Err("checkpoint evidence".into());
             };
             let evidence = (**evidence).clone();
-            assert_eq!(c.stats().command_bytes, 12 << 10);
+            assert_eq!(
+                c.stats().command_bytes,
+                super::super::super::custody::RESERVATION + 4096
+            );
             if fault == 2 {
                 super::super::publishing::edit(
                     &f,
@@ -655,16 +649,11 @@ async fn bound_service_restored_owner_claim_retains_old_pin_and_owns_new_session
         };
         assert_ne!(bound.lease.token.owner, old.owner);
         assert_ne!(bound.lease.token.artifact_operation, old.artifact_operation);
-        let replay = client
-            .command::<ClaimPreparation>(
-                &f.target,
-                mutation,
-                LeaseRequest {
-                    check: check(old),
-                    lease_ms: DEFAULT_LEASE_MS,
-                },
-            )
-            .await?;
+        let saved = RegisteredCustody::load_latest(&client, &f.target, old.operation)
+            .await?
+            .ok_or("claim intent missing")?;
+        assert_eq!(saved.evidence().identity(), mutation);
+        let replay = saved.recover_preparation(&client).await?;
         assert_eq!(bound.receipt, replay.receipt);
         let old_pin = handle.query(0, 32, move |conn| { Ok(conn.query_row("SELECT generation FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", rusqlite::params![old.owner.incarnation.as_bytes().as_slice(), old.attempt as i64], |row| row.get::<_, i64>(0))?.to_be_bytes().to_vec()) }).await?;
         assert_eq!(old_pin.as_slice(), 0i64.to_be_bytes());

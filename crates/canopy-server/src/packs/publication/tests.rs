@@ -309,6 +309,22 @@ fn identity() -> std::io::Result<MutationIdentity> {
         expires_at_ms: now + 60_000,
     })
 }
+async fn registered_preparation(
+    f: &Fixture,
+    operation: [u8; 16],
+) -> Result<cellule_runtime::Committed<PreparationReply>> {
+    Ok(PreparedCustody::prepare(
+        &f.client(),
+        &f.target,
+        CustodyAction::BeginPreparation(f.begin(operation)),
+        identity()?,
+    )
+    .await?
+    .register(&f.client(), identity()?)
+    .await?
+    .recover_preparation(&f.client())
+    .await?)
+}
 fn lease(reply: PreparationReply) -> Result<PreparationLease> {
     match reply {
         PreparationReply::Granted(lease) => Ok(*lease),
@@ -1030,9 +1046,7 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
                 .await?;
         fixture.install_catalog(1, native.stored).await?;
         let client = fixture.client();
-        let started = client
-            .command::<BeginPreparation>(&fixture.target, identity()?, fixture.begin([36; 16]))
-            .await?;
+        let started = registered_preparation(&fixture, [36; 16]).await?;
         let granted = lease(started.output)?;
         let budget = DiskBudget::new(128 << 20);
         let files = Arc::new(CatalogFiles::new(
@@ -1079,7 +1093,17 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             Err(ClosureError::Integrity)
         ));
         let renewal = identity()?;
-        resolver.renew(renewal, DEFAULT_LEASE_MS).await?;
+        let coordinator =
+            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let ticket = coordinator
+            .submit(resolver.ready_renew(renewal, DEFAULT_LEASE_MS).await?)
+            .await?;
+        let PublicationState::Finished(Ok(PublicationOutcome::Preparation(outcome))) =
+            ticket.wait().await
+        else {
+            return Err("renewal did not finish".into());
+        };
+        outcome.session.map_err(|e| e.to_string())?;
         fixture
             .handle
             .execute(
@@ -1099,10 +1123,20 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             .await?;
         // The exact renewal RPC replays success, but the subsequent fresh query
         // sees expiry. It cannot restart a local deadline from the old reply.
+        let replay = coordinator
+            .submit(resolver.restore_renewal().await?)
+            .await?;
+        let PublicationState::Finished(Ok(PublicationOutcome::Preparation(replayed))) =
+            replay.wait().await
+        else {
+            return Err("renewal replay did not finish".into());
+        };
+        assert_eq!(replayed.committed, outcome.committed);
         assert!(matches!(
-            resolver.renew(renewal, DEFAULT_LEASE_MS).await,
-            Err(PreparationBaseError::Inactive)
+            &replayed.session,
+            Err(error) if matches!(&**error, PreparationBaseError::Inactive)
         ));
+        assert!(coordinator.close_and_drain().await.is_empty());
         assert!(matches!(
             resolver.resolve(base, &ids).await,
             Err(ClosureError::LeaseExpired)

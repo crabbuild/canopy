@@ -168,14 +168,21 @@ async fn initial_preparation_receipt_cold_owner_and_sdk_expiry_preserve_actual_r
         let input = f.begin([220; 16]);
         let mut mutation = identity()?;
         mutation.expires_at_ms = mutation.issued_at_ms + 1000;
-        let command = f
-            .client()
-            .prepare_command::<BeginPreparation>(&f.target, mutation, input.clone())
-            .await?;
+        let command = PreparedCustody::prepare(
+            &f.client(),
+            &f.target,
+            CustodyAction::BeginPreparation(input.clone()),
+            mutation,
+        )
+        .await?;
         let evidence = command.evidence().clone();
-        // Discard the transport response and every prepared factory before
-        // destroying SQLite. Only the logical record remains discoverable.
-        let original = command.execute().await?;
+        // Discard every factory after acceptance; cold Claim starts from the
+        // mandatory registered predecessor, never a raw command adapter.
+        let original = command
+            .register(&f.client(), identity()?)
+            .await?
+            .recover_preparation(&f.client())
+            .await?;
         let old = lease(original.output.clone())?;
         let (runtime, handle, client) =
             super::durable_recovery::restore_owner(&f, &check(old.token)).await?;

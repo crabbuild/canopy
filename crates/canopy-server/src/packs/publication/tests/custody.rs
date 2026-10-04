@@ -33,6 +33,87 @@ async fn expire(identity: MutationIdentity) -> Result {
 }
 
 #[tokio::test]
+async fn owned_registrar_loss_preserves_both_originals_and_recovers_without_new_namespace() -> Result
+{
+    use crate::packs::publication::custody::OwnedCustody;
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [4, 5, 6] {
+            let f = Fixture::new(format).await?;
+            let operation = [fault + 180; 16];
+            let owned = OwnedCustody::prepare(
+                &f.client(),
+                &f.target,
+                CustodyAction::BeginPreparation(f.begin(operation)),
+                identity()?,
+            )
+            .await?;
+            let original = owned.evidence().clone();
+            let registrar = owned
+                .registration_evidence()
+                .ok_or("registrar missing")?
+                .clone();
+            assert_ne!(original, registrar);
+            let dispatch = owned.clone();
+            let client = f.client();
+            let result =
+                tokio::spawn(
+                    async move { dispatch.invoke(&client, false, fault, || Ok(())).await },
+                )
+                .await;
+            if fault == 6 {
+                assert!(result.is_err_and(|error| error.is_panic()));
+            } else {
+                let Err(CustodyError::Registration(error)) = result? else {
+                    return Err("registrar fault did not preserve uncertainty".into());
+                };
+                let InvocationError::Pending(evidence) = *error else {
+                    return Err("registrar fault returned terminal evidence".into());
+                };
+                assert_eq!(*evidence, registrar);
+            }
+            assert_eq!(owned.evidence(), &original);
+            assert_eq!(owned.registration_evidence(), Some(&registrar));
+            assert_eq!(f.counts().await?, (0, 0));
+            assert!(matches!(
+                f.client().resolve(&original).await?,
+                Resolution::Absent
+            ));
+            let registered =
+                RegisteredCustody::load_latest(&f.client(), &f.target, operation).await?;
+            assert_eq!(registered.is_some(), fault != 4);
+            if let Some(registered) = registered {
+                assert_eq!(registered.evidence(), &original);
+            }
+            let committed = owned.invoke(&f.client(), true, 0, || Ok(())).await??;
+            assert_eq!(
+                token(&committed.output)?.artifact_operation,
+                artifact_number(1)
+            );
+            assert_eq!(f.counts().await?, (1, 1));
+            assert!(matches!(
+                f.client().resolve(&registrar).await?,
+                Resolution::Committed(_)
+            ));
+            drop(owned);
+            let restored = OwnedCustody::restore(&f.client(), &f.target, operation).await?;
+            assert_eq!(restored.evidence(), &original);
+            assert!(restored.registration_evidence().is_none());
+            // Recorded knowledge precedes a fresh execution guard; recovery
+            // must not execute another Begin or allocate another namespace.
+            let replay = restored
+                .invoke(&f.client(), true, 0, || {
+                    Err(Error::Command("fresh custody denied"))
+                })
+                .await??;
+            assert_eq!(replay, committed);
+            assert_eq!(f.counts().await?, (1, 1));
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn intent_precedes_namespace_and_refuses_unregistered_or_losing_execution() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;

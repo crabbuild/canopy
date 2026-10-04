@@ -266,6 +266,11 @@ pub enum PublicationOutcome {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("publication custody intent failed")]
+    Custody {
+        evidence: Box<cellule_runtime::PendingMutation>,
+        source: Box<CustodyError>,
+    },
     #[error("repository initialization publication: {0}")]
     Initialization(#[source] InvocationError<InitializationReply>),
     #[error("terminal recovery release: {0}")]
@@ -300,6 +305,8 @@ impl PublicationError {
             }
         }
         match self {
+            Self::Custody { source, .. } if source.uncertain() => "pending",
+            Self::Custody { .. } => "not_started",
             Self::Recovery { .. } => "pending",
             Self::Initialization(error) => kind(error),
             Self::Push(error) => kind(error),
@@ -319,6 +326,7 @@ impl PublicationError {
             )
         }
         match self {
+            Self::Custody { source, .. } => source.uncertain(),
             Self::Recovery { .. } => true,
             Self::Initialization(error) => unknown(error),
             Self::Push(error) => unknown(error),

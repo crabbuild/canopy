@@ -65,7 +65,10 @@ async fn bound_final_waits_for_exact_renewal_and_adopted_checkpoint_recovery_bef
                     assert!(matches!(error.as_ref(), StagingError::Checkpoint(_)));
                 }
                 assert!(matches!(observer.state(), PublicationState::Held));
-                assert_eq!(c.stats().command_bytes, 12 << 10);
+                assert_eq!(
+                    c.stats().command_bytes,
+                    super::super::super::custody::RESERVATION + 4096
+                );
                 assert_eq!(p.stats().await.held, 1);
                 assert_eq!(c.close_and_drain().await.len(), 1);
                 assert_eq!(p.close_and_drain().await.len(), 1);
@@ -250,7 +253,10 @@ async fn exact_case(format: ObjectFormat, fault: u8, expired: bool) -> Result {
         other => return Err(format!("unexpected resolution {other:?}").into()),
     };
     assert_eq!(original.is_some(), fault != 1);
-    assert_eq!(c.stats().command_bytes, 8 << 10);
+    assert_eq!(
+        c.stats().command_bytes,
+        super::super::super::custody::RESERVATION
+    );
     assert_eq!(p.stats().await.command_bytes, 8 << 20);
     if expired {
         tokio::time::pause();

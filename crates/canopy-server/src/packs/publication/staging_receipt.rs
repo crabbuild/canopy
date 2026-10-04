@@ -5,7 +5,7 @@ use super::{
     recovery::phase::Recorded,
     *,
 };
-use cellule_runtime::{CellClient, CellTarget, Committed, MutationIdentity, PendingMutation};
+use cellule_runtime::{CellClient, CellTarget, MutationIdentity};
 
 #[derive(Clone)]
 pub(super) struct Staging;
@@ -81,12 +81,6 @@ impl StagingAdmission {
             identity,
         )
         .await
-    }
-    pub(super) fn original(
-        &self,
-        evidence: &PendingMutation,
-    ) -> Result<Option<Committed<StagingReply>>, StagingReceiptError> {
-        self.0.original(evidence)
     }
 }
 pub(super) fn save(

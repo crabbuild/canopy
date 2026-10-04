@@ -583,7 +583,10 @@ async fn request_checkpoint_append_recovers_exact_uncertain_registration_and_old
                 .register_inputs(next.clone(), identity()?)
                 .is_err()
         );
-        assert_eq!(request.coordinator.stats().command_bytes, 12 << 10);
+        assert_eq!(
+            request.coordinator.stats().command_bytes,
+            super::super::super::custody::RESERVATION + 4096
+        );
         request.coordinator.recover(&request.ticket)?;
         let registered = request
             .ticket

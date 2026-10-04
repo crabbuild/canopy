@@ -587,7 +587,10 @@ async fn claimed_staging_retains_exact_dispatch_after_absence_lost_ack_and_panic
         let retained = coordinator
             .pending(old.token.operation)
             .ok_or("retained claim")?;
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&retained)?;
         let StagingState::Active(next) = timeout(Duration::from_secs(10), retained.wait()).await?
         else {
@@ -859,7 +862,10 @@ async fn service_checkpoint_retains_exact_identity_after_cancellation_absence_lo
             assert!(
                 matches!(retained.wait().await, Err(e) if matches!(&*e, StagingError::Checkpoint(_)))
             );
-            assert_eq!(coordinator.stats().command_bytes, 3 * 4096);
+            assert_eq!(
+                coordinator.stats().command_bytes,
+                super::super::custody::RESERVATION + 4096
+            );
             // Closing retains unknown registrations and their charged command.
             let pending = timeout(Duration::from_secs(10), coordinator.close_and_drain()).await?;
             assert_eq!(pending.len(), 1);

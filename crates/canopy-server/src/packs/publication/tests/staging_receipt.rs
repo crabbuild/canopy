@@ -82,12 +82,19 @@ async fn initial_staging_receipt_cold_restore_requires_actual_claim_and_keeps_or
         let input = f.begin([217; 16]);
         let mut mutation = identity()?;
         mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
-        let command = f
-            .client()
-            .prepare_command::<BeginStaging>(&f.target, mutation, input.clone())
-            .await?;
+        let command = PreparedCustody::prepare(
+            &f.client(),
+            &f.target,
+            CustodyAction::BeginStaging(input.clone()),
+            mutation,
+        )
+        .await?;
         let evidence = command.evidence().clone();
-        let original = command.execute().await?;
+        let original = command
+            .register(&f.client(), identity()?)
+            .await?
+            .recover_staging(&f.client())
+            .await?;
         let StagingReply::Granted(old) = original.output else {
             return Err("missing admission".into());
         };
@@ -146,10 +153,17 @@ async fn initial_staging_receipt_survives_reaping_but_does_not_restore_expired_c
         let f = Fixture::new(format).await?;
         let mut input = f.begin([218; 16]);
         input.lease_ms = 1_000;
-        let original = f
-            .client()
-            .command::<BeginStaging>(&f.target, identity()?, input.clone())
-            .await?;
+        let original = PreparedCustody::prepare(
+            &f.client(),
+            &f.target,
+            CustodyAction::BeginStaging(input.clone()),
+            identity()?,
+        )
+        .await?
+        .register(&f.client(), identity()?)
+        .await?
+        .recover_staging(&f.client())
+        .await?;
         let StagingReply::Granted(lease) = original.output else {
             return Err("missing admission".into());
         };
@@ -253,7 +267,7 @@ async fn initial_staging_receipt_is_internal_knowledge_after_write_revocation() 
 }
 
 #[tokio::test]
-async fn initial_staging_receipt_corruption_keeps_original_evidence_and_reservation() -> Result {
+async fn staging_custody_intent_corruption_keeps_original_evidence_and_reservation() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let input = f.begin([214; 16]);
@@ -276,19 +290,15 @@ async fn initial_staging_receipt_corruption_keeps_original_evidence_and_reservat
             return Err("missing evidence".into());
         };
         let evidence = (**evidence).clone();
-        let saved = StagingAdmission::load(&f.client(), &f.target, input.operation)
+        let saved = RegisteredCustody::load_latest(&f.client(), &f.target, input.operation)
             .await?
-            .ok_or("receipt missing")?;
-        let original = saved.original(&evidence)?.ok_or("original stamp differs")?;
-        let other = f
-            .client()
-            .prepare_command::<BeginStaging>(&f.target, identity()?, input)
-            .await?;
-        assert!(saved.original(other.evidence())?.is_none());
+            .ok_or("intent missing")?;
+        assert_eq!(saved.evidence(), &evidence);
+        let original = saved.recover_staging(&f.client()).await?;
         let body = f
             .handle
-            .query(0, 2048, |db| {
-                Ok(db.query_row("SELECT initial_staging FROM pushes", [], |r| {
+            .query(0, 4096, |db| {
+                Ok(db.query_row("SELECT intent FROM catalog_custody_commands WHERE operation = x'd6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6'", [], |r| {
                     r.get::<_, Vec<u8>>(0)
                 })?)
             })
@@ -296,11 +306,11 @@ async fn initial_staging_receipt_corruption_keeps_original_evidence_and_reservat
         let mut corrupt = body.clone();
         let end = corrupt.last_mut().ok_or("empty receipt")?;
         *end ^= 1;
-        edit(&f, "DROP TRIGGER push_initial_staging_immutable").await?;
+        edit(&f, "DROP TRIGGER catalog_custody_identity_immutable").await?;
         edit(
             &f,
             &format!(
-                "UPDATE pushes SET initial_staging=x'{}'",
+                "UPDATE catalog_custody_commands SET intent=x'{}' WHERE step=0",
                 hex::encode(corrupt)
             ),
         )
@@ -311,14 +321,17 @@ async fn initial_staging_receipt_corruption_keeps_original_evidence_and_reservat
         else {
             return Err("corruption lost uncertainty".into());
         };
-        let StagingError::ReceiptRecovery {
+        let StagingError::Custody {
             evidence: retained, ..
         } = error.as_ref()
         else {
             return Err("missing receipt recovery error".into());
         };
         assert_eq!(retained.as_ref(), &evidence);
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         assert!(matches!(
             ticket.spawn(|_| async { Ok(()) }),
             Err(StagingError::Inactive)
@@ -326,7 +339,10 @@ async fn initial_staging_receipt_corruption_keeps_original_evidence_and_reservat
         assert_eq!(f.counts().await?, (1, 1));
         edit(
             &f,
-            &format!("UPDATE pushes SET initial_staging=x'{}'", hex::encode(body)),
+            &format!(
+                "UPDATE catalog_custody_commands SET intent=x'{}' WHERE step=0",
+                hex::encode(body)
+            ),
         )
         .await?;
         coordinator.recover(&ticket)?;

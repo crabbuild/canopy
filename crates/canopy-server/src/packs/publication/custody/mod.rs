@@ -12,7 +12,9 @@ use cellule_runtime::{
 };
 mod codec;
 mod commands;
+mod dispatch;
 pub use commands::{ExecuteCustody, RegisterCustodyIntent};
+pub(super) use dispatch::{OwnedCustody, RESERVATION};
 
 const INPUT_BYTES: u32 = 1024;
 const INTENT_BYTES: u32 = 4096;
@@ -142,6 +144,8 @@ impl CustodyIntent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CustodyError {
+    #[error("custody command clock failed")]
+    Clock(#[source] Box<crate::server::ServerError>),
     #[error("custody command encoding failed")]
     Codec(#[from] CodecError),
     #[error("custody command binding failed")]
@@ -158,8 +162,32 @@ pub enum CustodyError {
     Context,
 }
 
+impl CustodyError {
+    pub(super) fn uncertain(&self) -> bool {
+        match self {
+            Self::Registration(error) => matches!(
+                &**error,
+                InvocationError::Pending(_) | InvocationError::InvalidPublishedResult { .. }
+            ),
+            Self::Preparation(error) => matches!(
+                &**error,
+                InvocationError::Pending(_) | InvocationError::InvalidPublishedResult { .. }
+            ),
+            Self::Clock(_) => false,
+            // Failure to authenticate or observe metadata is never proof of
+            // absence. Keep the owned original until its disposition is known.
+            Self::Query(_)
+            | Self::Codec(_)
+            | Self::Capability(_)
+            | Self::Unsettled(_)
+            | Self::Context => true,
+        }
+    }
+}
+
 /// Retains the original SDK snapshot/body even if registration loses its reply.
 /// Registration must become discoverable before this command can execute.
+#[derive(Clone)]
 #[must_use]
 pub struct PreparedCustody {
     intent: CustodyIntent,
@@ -430,6 +458,13 @@ impl RegisteredCustody {
         &self,
         client: &CellClient,
     ) -> Result<Committed<CustodyReply>, InvocationError<CustodyReply>> {
+        self.recover_guarded(client, || Ok(())).await
+    }
+    async fn recover_guarded(
+        &self,
+        client: &CellClient,
+        before_execute: impl FnOnce() -> Result<(), Error> + Send,
+    ) -> Result<Committed<CustodyReply>, InvocationError<CustodyReply>> {
         let evidence = self.evidence();
         let recover = async {
             let header = self.intent.header()?;
@@ -466,6 +501,7 @@ impl RegisteredCustody {
             // reports acceptance. Missing application knowledge is corruption.
             return Err(InvocationError::Pending(Box::new(evidence.clone())));
         }
+        before_execute().map_err(InvocationError::NotStarted)?;
         let command = client
             .restore_command::<ExecuteCustody>(
                 self.intent.snapshot.clone(),
@@ -485,7 +521,7 @@ fn normalize(
     }
 }
 
-fn project<T>(
+pub(super) fn project<T>(
     result: Result<Committed<CustodyReply>, InvocationError<CustodyReply>>,
     output: impl FnOnce(CustodyReply) -> Option<T>,
 ) -> Result<Committed<T>, InvocationError<T>> {

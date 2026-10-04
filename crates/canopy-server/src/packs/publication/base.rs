@@ -18,8 +18,6 @@ pub enum PreparationBaseError {
     Query(#[source] Box<InvocationError<Option<PreparationLease>>>),
     #[error("authoritative preparation frontier query failed")]
     Frontier(#[source] Box<InvocationError<Option<PreparationFrontier>>>),
-    #[error("preparation renewal failed")]
-    Command(#[source] Box<InvocationError<PreparationReply>>),
     #[error("preparation catalog loading failed")]
     Catalog(#[from] IndexError),
     #[error("preparation has no active matching lease")]
@@ -192,12 +190,19 @@ impl PreparationBaseResolver {
         .await
         .map_err(|_| PreparationBaseError::Inactive)?
     }
-    pub async fn renew(
+    /// Preparation does not submit a command. The caller transfers this exact
+    /// renewal into the service-owned publication coordinator.
+    pub async fn ready_renew(
         &self,
         identity: MutationIdentity,
         lease_ms: u64,
-    ) -> Result<(), PreparationBaseError> {
-        self.session.renew(identity, lease_ms).await
+    ) -> Result<ReadyPreparation, PreparationReadyError> {
+        Arc::new(self.session.clone())
+            .ready_renew(identity, lease_ms)
+            .await
+    }
+    pub async fn restore_renewal(&self) -> Result<ReadyPreparation, PreparationReadyError> {
+        Arc::new(self.session.clone()).restore_renewal().await
     }
 }
 impl BaseResolver for PreparationBaseResolver {

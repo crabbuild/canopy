@@ -1,6 +1,6 @@
 //! Shared authoritative preparation lease; no artifact loads or scratch.
 use super::*;
-use cellule_runtime::{CellClient, CellTarget, MutationIdentity, Receipt};
+use cellule_runtime::{CellClient, CellTarget, Receipt};
 use std::{
     sync::{
         Arc, Mutex,
@@ -61,43 +61,6 @@ impl PreparationSession {
             return Err(PreparationBaseError::Inactive);
         }
         Ok((self.lease, deadline))
-    }
-    /// A recorded renewal result is never a fresh clock observation. Query
-    /// after the durability gate even when the command is exact-outcome replay.
-    pub async fn renew(
-        &self,
-        identity: MutationIdentity,
-        lease_ms: u64,
-    ) -> Result<(), PreparationBaseError> {
-        let result = self.renew_inner(identity, lease_ms).await;
-        if result.is_err() {
-            self.fenced.store(true, Ordering::Release);
-        }
-        result
-    }
-    async fn renew_inner(
-        &self,
-        identity: MutationIdentity,
-        lease_ms: u64,
-    ) -> Result<(), PreparationBaseError> {
-        if self.fenced.load(Ordering::Acquire)
-            || self.ceiling.is_some_and(|limit| Instant::now() >= limit)
-        {
-            return Err(PreparationBaseError::Inactive);
-        }
-        let committed = self
-            .client
-            .command::<RenewPreparation>(
-                &self.target,
-                identity,
-                LeaseRequest {
-                    check: self.check.clone(),
-                    lease_ms,
-                },
-            )
-            .await
-            .map_err(|error| PreparationBaseError::Command(Box::new(error)))?;
-        self.refresh(committed.receipt).await
     }
     pub(super) fn fence(&self) {
         self.fenced.store(true, Ordering::Release);
