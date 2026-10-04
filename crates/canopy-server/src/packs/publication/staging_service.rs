@@ -22,6 +22,7 @@ mod bound;
 use bound::accept_bound;
 mod publication;
 mod restore;
+mod retirement;
 pub use publication::{StagedPublicationFailure, StagedPublicationTicket};
 
 const COMMAND_BYTES: u32 = 4096;
@@ -323,6 +324,11 @@ struct ActorAdmission {
 #[derive(Default)]
 struct Admission {
     closed: bool,
+    retirement_probe: bool,
+    retirement_probes: u64,
+    retirement_failures: u64,
+    retirement_recoveries: u64,
+    retirement_restarts: u64,
     jobs: HashMap<[u8; 16], Arc<Job>>,
     actors: HashMap<String, ActorAdmission>,
 }
@@ -417,6 +423,18 @@ fn custody_guard(job: &Job) -> Result<(), Error> {
 }
 
 impl Exact {
+    fn custody_original(&self) -> Option<&OwnedCustody> {
+        match self {
+            Self::Restored(c)
+            | Self::Begin(c)
+            | Self::Claim(c)
+            | Self::Renew(c)
+            | Self::Bind(c)
+            | Self::BoundClaim(c)
+            | Self::BoundRenew(c) => Some(c),
+            Self::Checkpoint(_) | Self::BoundCheckpoint(_) => None,
+        }
+    }
     fn pending(&self) -> StagingError {
         match self {
             Self::Restored(c) => StagingError::Restoration(Box::new(InvocationError::Pending(
@@ -566,6 +584,12 @@ pub struct StagingStats {
     pub uncertain: usize,
     pub command_bytes: u64,
     pub closed: bool,
+    /// Read-only exact-original probes, outside the command wire reservation.
+    pub retirement_probes: u64,
+    pub retirement_failures: u64,
+    pub retirement_recoveries: u64,
+    pub retirement_restarts: u64,
+    pub retirement_running: bool,
 }
 impl StagingCoordinator {
     pub fn new(
@@ -723,6 +747,11 @@ impl StagingCoordinator {
                 })
                 .sum(),
             closed: a.closed,
+            retirement_probes: a.retirement_probes,
+            retirement_failures: a.retirement_failures,
+            retirement_recoveries: a.retirement_recoveries,
+            retirement_restarts: a.retirement_restarts,
+            retirement_running: a.retirement_probe,
         }
     }
     /// Stop admission and renew while accepted workers drain. Uncertain exact
@@ -1179,6 +1208,46 @@ impl StagingTicket {
         })
     }
     #[cfg(test)]
+    pub(super) async fn renew_with_identity_for_test(
+        &self,
+        identity: MutationIdentity,
+    ) -> Result<(), StagingError> {
+        let (token, bound) = {
+            let local = self.job.local.lock().expect("staging local");
+            if local.fenced {
+                return Err(StagingError::Inactive);
+            }
+            match &local.bound {
+                Some(session) => (session.live_lease()?.0.token, true),
+                None => (local.lease.ok_or(StagingError::NotReady)?.token, false),
+            }
+        };
+        let lease = LeaseRequest {
+            check: LeaseCheck {
+                token,
+                actor: self.job.actor.clone(),
+            },
+            lease_ms: self.inner.limits.lease_ms,
+        };
+        let action = if bound {
+            CustodyAction::RenewPreparation(lease)
+        } else {
+            CustodyAction::RenewStaging(lease)
+        };
+        let command =
+            OwnedCustody::prepare(&self.job.client, &self.job.target, action, identity).await?;
+        let mut exact = self.job.exact.lock().expect("staging exact");
+        assert!(exact.is_none(), "test renewal replaced an original");
+        *exact = Some(if bound {
+            Exact::BoundRenew(command)
+        } else {
+            Exact::Renew(command)
+        });
+        drop(exact);
+        self.job.changed.notify_one();
+        Ok(())
+    }
+    #[cfg(test)]
     pub(super) fn renew_for_test(&self) {
         self.job.local.lock().expect("staging local").renew = true;
         self.job.changed.notify_one();
@@ -1404,6 +1473,9 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
         job.status
             .send_replace(StagingState::Uncertain(Arc::new(exact.pending())));
         inner.drained.notify_waiters();
+        if exact.custody_original().is_some() {
+            retirement::start(Arc::clone(&inner));
+        }
         await_recovery(&job).await;
         recover = true;
     }
@@ -1454,6 +1526,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             let fault = inner.fault.swap(0, std::sync::atomic::Ordering::AcqRel);
             #[cfg(not(test))]
             let fault = 0;
+            let custody = command.custody_original().is_some();
             let pending = command.pending();
             let result =
                 tokio::spawn(command.execute(job.client.clone(), Arc::clone(&job), recover, fault))
@@ -1471,6 +1544,9 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     job.status
                         .send_replace(StagingState::Uncertain(Arc::new(error)));
                     inner.drained.notify_waiters();
+                    if custody {
+                        retirement::start(Arc::clone(&inner));
+                    }
                     await_recovery(&job).await;
                     recover = true;
                     continue;

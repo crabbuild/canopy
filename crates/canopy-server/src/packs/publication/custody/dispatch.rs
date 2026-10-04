@@ -13,7 +13,48 @@ pub(in crate::packs::publication) struct OwnedCustody {
     prepared: PreparedCustody,
     registration: Option<PreparedCommand<RegisterCustodyIntent>>,
 }
+/// A read probe retains no original command body or registrar. Its exact
+/// fingerprint prevents a later logical successor from hiding this ordinal.
+#[derive(Clone)]
+pub(in crate::packs::publication) struct CustodyStopProbe {
+    target: CellTarget,
+    operation: [u8; 16],
+    step: u32,
+    digest: [u8; 32],
+    evidence: PendingMutation,
+}
+impl CustodyStopProbe {
+    pub(in crate::packs::publication) fn evidence(&self) -> &PendingMutation {
+        &self.evidence
+    }
+    pub(in crate::packs::publication) async fn observed(
+        &self,
+        client: &CellClient,
+    ) -> Result<bool, CustodyError> {
+        let Some(saved) = load(client, &self.target, self.operation, Some(self.step)).await? else {
+            return Ok(false);
+        };
+        if *blake3::hash(&saved.intent.encoded()?).as_bytes() != self.digest
+            || saved.evidence() != &self.evidence
+        {
+            return Err(CustodyError::Context);
+        }
+        Ok(saved.stop_fact().is_some())
+    }
+}
 impl OwnedCustody {
+    pub(in crate::packs::publication) fn stop_probe(
+        &self,
+    ) -> Result<CustodyStopProbe, CustodyError> {
+        let header = self.prepared.intent.header()?;
+        Ok(CustodyStopProbe {
+            target: self.evidence().target().clone(),
+            operation: header.operation,
+            step: header.step,
+            digest: *blake3::hash(&self.prepared.intent.encoded()?).as_bytes(),
+            evidence: self.evidence().clone(),
+        })
+    }
     pub(in crate::packs::publication) async fn prepare(
         client: &CellClient,
         target: &CellTarget,

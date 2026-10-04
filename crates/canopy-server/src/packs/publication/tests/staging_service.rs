@@ -1,6 +1,7 @@
 mod bound;
 mod publication;
 pub(super) mod restore;
+mod retirement;
 use super::*;
 use tokio::{
     sync::oneshot,

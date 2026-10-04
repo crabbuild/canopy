@@ -613,13 +613,20 @@ async fn custody_scan_recovers_exact_maintenance_commands_after_their_pending_ke
                 .stop_fact()
                 .ok_or("stopped original")?;
             assert!(fact.receipt.commit_sequence > 0);
-            // An already admitted uncertain staging owner observes typed closure
-            // on explicit recovery; it never receives a fabricated original reply.
-            staging.recover(&stage)?;
-            assert!(matches!(
-                timeout(Duration::from_secs(10), stage.wait_terminal()).await?,
-                StagingState::Fenced(_)
-            ));
+            // No waiter or manual recovery is needed to observe logical closure.
+            timeout(Duration::from_secs(5), async {
+                while !matches!(stage.state(), StagingState::Fenced(_)) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await?;
+            let StagingState::Fenced(error) = stage.state() else {
+                return Err("retired stage not fenced".into());
+            };
+            assert!(
+                matches!(&*error, StagingError::Custody { evidence: original, source }
+                if **original == evidence && matches!(&**source, CustodyError::Stopped(_)))
+            );
             assert_eq!(stage.restored_evidence(), Some(&evidence));
             assert!(stage.restored_outcome().is_none());
             assert_eq!(staging.stats().command_bytes, 0);
