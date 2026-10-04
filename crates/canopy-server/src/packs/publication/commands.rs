@@ -224,7 +224,7 @@ pub struct ClaimPreparation;
 impl Command for ClaimPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 12;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = LeaseRequest;
     type Output = PreparationReply;
     fn execute(
@@ -242,7 +242,9 @@ impl Command for ClaimPreparation {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
         let Some(existing) = load(context, check.token)? else {
-            if !super::preparation_receipt::restart_matches(context, &check)? {
+            if !super::preparation_receipt::restart_matches(context, &check)?
+                && !super::custody::restart_matches(context, &check, false)?
+            {
                 return Ok(denied(PreparationDenial::Missing));
             }
             let begin = BeginRequest {

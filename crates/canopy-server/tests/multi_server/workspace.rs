@@ -135,7 +135,7 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
         let target = canopy_server::repository_target(tenant, application, *repository.as_bytes())?;
         server.shutdown().await?;
         let root = repository_root(&layout, &target, &files.path().join("original.sqlite")).await?;
-        let (catalog, refs, allocation, admission) = {
+        let (catalog, refs, allocation, admission, custody) = {
             let connection = root.connection()?;
             for table in [
                 "objects",
@@ -193,7 +193,21 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
                 })?;
             assert!(!admission.is_empty());
             assert!(admission.len() <= 1024);
-            (catalog, refs, allocation, admission)
+            let custody: (Vec<u8>, Vec<u8>) = connection.query_row(
+                "SELECT intent,phase FROM catalog_custody_commands WHERE step=0",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert!(custody.0.len() <= 4096 && custody.1.len() <= 1024);
+            assert_eq!(
+                connection.query_row(
+                    "SELECT count(*) FROM catalog_custody_commands",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                1
+            );
+            (catalog, refs, allocation, admission, custody)
         };
         drop(root);
         let mut decoder = BoundedDecoder::new(&catalog, 256)?;
@@ -241,6 +255,22 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
         let root = repository_root(&layout, &target, &files.path().join("restored.sqlite")).await?;
         {
             let connection = root.connection()?;
+            assert_eq!(
+                connection.query_row(
+                    "SELECT intent,phase FROM catalog_custody_commands WHERE step=0",
+                    [],
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                )?,
+                custody
+            );
+            assert_eq!(
+                connection.query_row(
+                    "SELECT count(*) FROM catalog_custody_commands",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                1
+            );
             assert_eq!(
                 connection.query_row("SELECT initial_preparation FROM pushes", [], |row| row
                     .get::<_, Vec<u8>>(0))?,

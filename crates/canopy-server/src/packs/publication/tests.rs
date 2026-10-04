@@ -3,6 +3,7 @@ mod attestation;
 mod compaction;
 mod completion;
 mod coordinator;
+mod custody;
 mod durable_policy;
 mod durable_recovery;
 mod frontier;
@@ -72,6 +73,21 @@ impl CellModule for Module {
             complete_descriptor.input_limit = 4 << 20;
             let mut commands = super::registry::COMMANDS.to_vec();
             commands.extend([publish_descriptor, complete_descriptor, ref_descriptor]);
+            // Raw domain receivers qualify their invariants here. Production
+            // binds only the mandatory registered custody envelope.
+            for (id, codec) in [
+                (BeginPreparation::ID, BeginPreparation::CODEC_VERSION),
+                (ClaimPreparation::ID, ClaimPreparation::CODEC_VERSION),
+                (RenewPreparation::ID, RenewPreparation::CODEC_VERSION),
+                (BeginStaging::ID, BeginStaging::CODEC_VERSION),
+                (ClaimStaging::ID, ClaimStaging::CODEC_VERSION),
+                (RenewStaging::ID, RenewStaging::CODEC_VERSION),
+                (BindStaging::ID, BindStaging::CODEC_VERSION),
+            ] {
+                let mut domain = descriptor(id);
+                domain.codec_version = codec;
+                commands.push(domain);
+            }
             let mut queries = super::registry::QUERIES.to_vec();
             queries.push(descriptor(20));
             ModuleDescriptor {
@@ -103,6 +119,13 @@ impl CellModule for Module {
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         cellule_runtime::primitives::sql::register_sql::<RepositoryModule>(registry)?;
         super::register(registry)?;
+        registry.bind_command::<BeginPreparation>()?;
+        registry.bind_command::<ClaimPreparation>()?;
+        registry.bind_command::<RenewPreparation>()?;
+        registry.bind_command::<BeginStaging>()?;
+        registry.bind_command::<ClaimStaging>()?;
+        registry.bind_command::<RenewStaging>()?;
+        registry.bind_command::<BindStaging>()?;
         registry.bind_command::<PublishCatalogRefs>()?;
         registry.bind_command::<CompleteCatalogPush>()?;
         registry.bind_query::<CheckCompletedPush>()?;

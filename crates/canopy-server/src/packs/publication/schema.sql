@@ -545,3 +545,36 @@ BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
 CREATE TRIGGER push_certificate_chunks_not_replaced BEFORE INSERT ON push_certificate_chunks
 WHEN EXISTS(SELECT 1 FROM push_certificate_chunks WHERE push_id=NEW.push_id AND part=NEW.part)
 BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+-- Bounded exact-command metadata exists before any upload namespace is granted.
+-- One unresolved head per logical request. Rows represent custody transitions,
+-- never Git objects, and historical grants are not generation retention roots.
+CREATE TABLE catalog_custody_commands (
+    operation BLOB NOT NULL CHECK(typeof(operation)='blob' AND length(operation)=16),
+    step INTEGER NOT NULL CHECK(typeof(step)='integer' AND step BETWEEN 0 AND 65535),
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    request_id BLOB NOT NULL CHECK(typeof(request_id)='blob' AND length(request_id)=16),
+    intent BLOB NOT NULL CHECK(typeof(intent)='blob' AND length(intent) BETWEEN 1 AND 4096),
+    phase BLOB CHECK(phase IS NULL OR (typeof(phase)='blob' AND length(phase) BETWEEN 1 AND 1024)),
+    granted_incarnation BLOB CHECK(granted_incarnation IS NULL OR (typeof(granted_incarnation)='blob' AND length(granted_incarnation)=16)),
+    granted_attempt INTEGER CHECK(granted_attempt IS NULL OR (typeof(granted_attempt)='integer' AND granted_attempt>0)),
+    CHECK((granted_incarnation IS NULL)=(granted_attempt IS NULL)),
+    CHECK(phase IS NOT NULL OR granted_attempt IS NULL),
+    PRIMARY KEY(operation,step),
+    UNIQUE(incarnation,request_id)
+) WITHOUT ROWID;
+CREATE INDEX catalog_custody_grants ON catalog_custody_commands(operation,granted_incarnation,granted_attempt,step DESC) WHERE granted_attempt IS NOT NULL;
+CREATE UNIQUE INDEX catalog_custody_pending ON catalog_custody_commands(operation) WHERE phase IS NULL;
+CREATE TRIGGER catalog_custody_identity_immutable BEFORE UPDATE OF operation,step,incarnation,request_id,intent ON catalog_custody_commands
+WHEN NEW.operation IS NOT OLD.operation OR NEW.step IS NOT OLD.step
+  OR NEW.incarnation IS NOT OLD.incarnation OR NEW.request_id IS NOT OLD.request_id OR NEW.intent IS NOT OLD.intent
+BEGIN SELECT RAISE(ABORT, 'custody command identity is immutable'); END;
+CREATE TRIGGER catalog_custody_phase_immutable BEFORE UPDATE OF phase,granted_incarnation,granted_attempt ON catalog_custody_commands
+WHEN OLD.phase IS NOT NULL AND (NEW.phase IS NOT OLD.phase OR NEW.granted_incarnation IS NOT OLD.granted_incarnation OR NEW.granted_attempt IS NOT OLD.granted_attempt)
+BEGIN SELECT RAISE(ABORT, 'custody command result is immutable'); END;
+CREATE TRIGGER catalog_custody_not_replaced BEFORE INSERT ON catalog_custody_commands
+WHEN EXISTS(SELECT 1 FROM catalog_custody_commands WHERE operation=NEW.operation AND step=NEW.step)
+  OR EXISTS(SELECT 1 FROM catalog_custody_commands WHERE incarnation=NEW.incarnation AND request_id=NEW.request_id)
+BEGIN SELECT RAISE(ABORT, 'custody command cannot be replaced'); END;
+CREATE TRIGGER catalog_custody_retained BEFORE DELETE ON catalog_custody_commands
+BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;

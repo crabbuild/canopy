@@ -5,11 +5,11 @@ use crate::{
         catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes},
         metadata::MetadataLimits,
         publication::{
-            BeginPreparation, BeginRequest, CatalogPreparation, CheckInitializedCatalog,
-            CheckPreparation, ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact,
-            InitializationReply, LeaseCheck, LeaseRequest, MaintenanceRequest,
-            PreparationAdmission, PreparationBaseResolver, PreparationDenial, PreparationReply,
-            PreparationToken, PublicationError, RegisteredRootRecovery, TerminalReleaseReply,
+            BeginRequest, CatalogPreparation, CheckInitializedCatalog, CheckPreparation,
+            CustodyAction, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
+            LeaseRequest, MaintenanceRequest, PreparationBaseResolver, PreparationDenial,
+            PreparationReply, PreparationToken, PreparedCustody, PublicationError,
+            RegisteredCustody, RegisteredRootRecovery, TerminalReleaseReply,
         },
     },
 };
@@ -50,6 +50,32 @@ fn request(repository: &RepositoryCell, owner: &str) -> BeginRequest {
         actor: owner.into(),
         lease_ms: DEFAULT_LEASE_MS,
     }
+}
+
+fn initialization_custody(action: &CustodyAction, input: &BeginRequest) -> bool {
+    match action {
+        CustodyAction::BeginPreparation(request) => request == input,
+        CustodyAction::ClaimPreparation(request) | CustodyAction::RenewPreparation(request) => {
+            let check = &request.check;
+            check.actor == input.actor
+                && check.token.repository == input.repository
+                && check.token.operation == input.operation
+                && check.token.request_digest == input.request_digest
+        }
+        _ => false,
+    }
+}
+async fn custody_command(
+    client: &CellClient,
+    target: &cellule_runtime::CellTarget,
+    action: CustodyAction,
+) -> Result<cellule_runtime::Committed<PreparationReply>, Failure> {
+    let prepared =
+        PreparedCustody::prepare(client, target, action, super::mutation_identity()?).await?;
+    let registered = prepared
+        .register(client, super::mutation_identity()?)
+        .await?;
+    Ok(registered.recover_preparation(client).await?)
 }
 
 async fn verify(
@@ -118,98 +144,70 @@ pub(super) async fn ensure(
     } else {
         None
     };
-    let started = if let Some(check) = claim {
-        client
-            .command::<ClaimPreparation>(
-                target,
-                super::mutation_identity()?,
-                LeaseRequest {
-                    check,
-                    lease_ms: DEFAULT_LEASE_MS,
-                },
-            )
-            .await?
-    } else if let Some(admission) =
-        PreparationAdmission::load(&client, target, input.operation).await?
-    {
-        if admission.request() != &input {
-            return Err(Error::Command("initialization admission context differs").into());
-        }
-        let original = admission.lease();
-        let check = LeaseCheck {
-            token: original.token,
-            actor: owner.into(),
-        };
-        // The first accepted Begin is permanent knowledge. Its recorded clock
-        // grants no custody; query the exact original attempt under today's
-        // authority before reusing it. Never submit another Begin to replace
-        // the known receipt merely because a transport observer disappeared.
-        let current = if original.token.owner == maintenance.owner {
-            client
-                .query::<CheckPreparation>(target, Some(admission.receipt()), check.clone())
-                .await?
-                .output
-        } else {
-            None
-        };
-        if let Some(current) = current {
-            if current.token != original.token
-                || current.base != original.base
-                || current.format != original.format
-            {
-                return Err(Error::Command("initialization admission result differs").into());
-            }
-            cellule_runtime::Committed {
-                output: PreparationReply::Granted(Box::new(original)),
-                receipt: admission.receipt(),
-            }
-        } else {
-            // An explicit Claim can recover a reaped original admission. If a
-            // different successor exists, Claim refuses this old token rather
-            // than treating that successor as the original command's result.
-            client
-                .command::<ClaimPreparation>(
-                    target,
-                    super::mutation_identity()?,
-                    LeaseRequest {
-                        check,
-                        lease_ms: DEFAULT_LEASE_MS,
-                    },
-                )
-                .await?
-        }
+    // Discover the exact latest custody phase before constructing another SDK
+    // identity. Both accepted and denied Begin/Claim/Renew survive process loss.
+    let custody = RegisteredCustody::load_latest(&client, target, input.operation).await?;
+    let refused_attempt = claim.as_ref().map(|check| check.token);
+    let action = if let Some(check) = claim {
+        CustodyAction::ClaimPreparation(LeaseRequest {
+            check,
+            lease_ms: DEFAULT_LEASE_MS,
+        })
     } else {
-        match client
-            .command::<BeginPreparation>(target, super::mutation_identity()?, input.clone())
+        CustodyAction::BeginPreparation(input.clone())
+    };
+    let result = if let Some(ref custody) = custody {
+        if !initialization_custody(&custody.action()?, &input) {
+            return Err(Error::Command("initialization custody context differs").into());
+        }
+        custody
+            .recover_preparation(&client)
             .await
-        {
-            Ok(started) => started,
-            Err(InvocationError::Rejected(rejected))
-                if matches!(
+            .map_err(|error| Box::new(error) as Failure)
+    } else {
+        custody_command(&client, target, action.clone()).await
+    };
+    let started = match result {
+        Ok(started) => started,
+        Err(error) => {
+            let error = match error.downcast::<InvocationError<PreparationReply>>() {
+                Ok(error) => *error,
+                Err(error) => return Err(error),
+            };
+            if let InvocationError::Rejected(ref rejected) = error
+                && matches!(
                     rejected.output,
                     PreparationReply::Denied(PreparationDenial::Stale | PreparationDenial::Expired)
-                ) =>
+                )
             {
-                // Claim only after a known domain refusal. Read the exact old
-                // binding; the Claim receiver verifies its pin and actual owner.
-                let check = prior_attempt(&client, repository, &input, rejected.receipt).await?;
-                client
-                    .command::<ClaimPreparation>(
-                        target,
-                        super::mutation_identity()?,
-                        LeaseRequest {
-                            check,
-                            lease_ms: DEFAULT_LEASE_MS,
-                        },
-                    )
-                    .await?
-            }
-            Err(error) => {
-                // A logical initialization can win between the first query and
-                // Begin. Only a known conflict may use that exact retained result;
-                // uncertain command evidence stays an error, never fresh admission.
-                if matches!(&error, InvocationError::Rejected(value)
-                if value.output == PreparationReply::Denied(PreparationDenial::Conflict))
+                let prior = custody
+                    .as_ref()
+                    .map(RegisteredCustody::action)
+                    .transpose()?
+                    .unwrap_or(action);
+                let check = match prior {
+                    CustodyAction::ClaimPreparation(request)
+                    | CustodyAction::RenewPreparation(request) => request.check,
+                    CustodyAction::BeginPreparation(_) => {
+                        prior_attempt(&client, repository, &input, rejected.receipt).await?
+                    }
+                    _ => {
+                        return Err(Error::Command("initialization custody purpose differs").into());
+                    }
+                };
+                custody_command(
+                    &client,
+                    target,
+                    CustodyAction::ClaimPreparation(LeaseRequest {
+                        check,
+                        lease_ms: DEFAULT_LEASE_MS,
+                    }),
+                )
+                .await?
+            } else {
+                // Only a known conflict can observe a winning initialization.
+                // Unknown/expired SDK evidence never authorizes a new Begin.
+                if matches!(&error, InvocationError::Rejected(value) if value.output == PreparationReply::Denied(PreparationDenial::Conflict))
                     && let Some(fact) = client
                         .query::<CheckInitializedCatalog>(target, None, input.clone())
                         .await?
@@ -228,6 +226,43 @@ pub(super) async fn ensure(
                 return Err(error.into());
             }
         }
+    };
+    let PreparationReply::Granted(ref original) = started.output else {
+        return Err(Error::Command("initialization custody grant absent").into());
+    };
+    // A historical result is knowledge only. Fresh custody and the actual owner
+    // are required before using its token; never restart its recorded clock.
+    let check = LeaseCheck {
+        token: original.token,
+        actor: owner.into(),
+    };
+    let current =
+        if original.token.owner == maintenance.owner && refused_attempt != Some(original.token) {
+            client
+                .query::<CheckPreparation>(target, Some(started.receipt), check.clone())
+                .await?
+                .output
+        } else {
+            None
+        };
+    let started = if let Some(current) = current {
+        if current.token != original.token
+            || current.base != original.base
+            || current.format != original.format
+        {
+            return Err(Error::Command("initialization custody result differs").into());
+        }
+        started
+    } else {
+        custody_command(
+            &client,
+            target,
+            CustodyAction::ClaimPreparation(LeaseRequest {
+                check,
+                lease_ms: DEFAULT_LEASE_MS,
+            }),
+        )
+        .await?
     };
     if let Some(recovered) = recovered {
         retire(&recovered, client.clone(), &store, &maintenance).await?;

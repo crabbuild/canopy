@@ -23,19 +23,12 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 20] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 15] = [
     crate::operation(1),
-    command::<BeginPreparation>(4096, 4096),
-    command::<ClaimPreparation>(4096, 4096),
-    command::<RenewPreparation>(4096, 4096),
     command::<AbortPreparation>(4096, 4096),
     command::<ReapPreparation>(4096, 4096),
     command::<RegisterCatalogAttestation>(4096, 4096),
     command::<PublishCatalogCompaction>(4096, 4096),
-    command::<BeginStaging>(4096, 4096),
-    command::<RenewStaging>(4096, 4096),
-    command::<BindStaging>(4096, 4096),
-    command::<ClaimStaging>(4096, 4096),
     command::<RegisterStagedInputs>(4096, 4096),
     command::<InitializeCatalogRefs>(INITIALIZATION_BYTES, 512),
     command::<RegisterRefPolicyPage>(REF_POLICY_PAGE_BYTES, 128),
@@ -44,6 +37,8 @@ pub(crate) const COMMANDS: [OperationDescriptor; 20] = [
     command::<CompleteRootOutcome>(ROOT_COMPLETION_BYTES, 512),
     command::<RegisterRootRecovery>(4096, 4096),
     command::<ReleaseTerminalRecovery>(4096, 128),
+    command::<RegisterCustodyIntent>(4096, 4096),
+    command::<ExecuteCustody>(1024, 512),
 ];
 pub(crate) const QUERIES: [OperationDescriptor; 9] = [
     crate::operation(2),
@@ -84,9 +79,7 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec![
-                1, 11, 12, 13, 14, 16, 17, 22, 24, 25, 26, 28, 29, 31, 33, 35, 36, 38, 39, 40
-            ]
+            vec![1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42]
         );
         assert_eq!(
             descriptor
@@ -117,6 +110,8 @@ mod tests {
             ),
             (39, RegisterRootRecovery::CODEC_VERSION, 4096, 4096),
             (40, ReleaseTerminalRecovery::CODEC_VERSION, 4096, 128),
+            (41, RegisterCustodyIntent::CODEC_VERSION, 4096, 4096),
+            (42, ExecuteCustody::CODEC_VERSION, 1024, 512),
         ] {
             let operation = descriptor
                 .commands

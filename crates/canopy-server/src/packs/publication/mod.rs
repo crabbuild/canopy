@@ -99,6 +99,11 @@ pub use root_completion::{
     RootSignedPushFact, replay_root_push_response,
 };
 mod admission_receipt;
+mod custody;
+pub use custody::{
+    CustodyAction, CustodyError, CustodyIntent, CustodyReply, CustodyRequest, ExecuteCustody,
+    PreparedCustody, RegisterCustodyIntent, RegisteredCustody,
+};
 mod preparation_receipt;
 pub use preparation_receipt::{PreparationAdmission, PreparationReceiptError};
 mod staging_receipt;
@@ -222,16 +227,11 @@ pub struct MaintenanceRequest {
 /// Bind the packed production contract. Inline publication/completion adapters
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
-    registry.bind_command::<BeginStaging>()?;
-    registry.bind_command::<RenewStaging>()?;
-    registry.bind_command::<BindStaging>()?;
-    registry.bind_command::<ClaimStaging>()?;
+    registry.bind_command::<RegisterCustodyIntent>()?;
+    registry.bind_command::<ExecuteCustody>()?;
     registry.bind_command::<RegisterStagedInputs>()?;
     registry.bind_query::<CheckStagedInputs>()?;
     registry.bind_query::<CheckStaging>()?;
-    registry.bind_command::<BeginPreparation>()?;
-    registry.bind_command::<ClaimPreparation>()?;
-    registry.bind_command::<RenewPreparation>()?;
     registry.bind_command::<AbortPreparation>()?;
     registry.bind_command::<ReapPreparation>()?;
     registry.bind_command::<RegisterCatalogAttestation>()?;

@@ -359,6 +359,12 @@ pub(super) async fn restore_owner(
     f: &Fixture,
     check: &LeaseCheck,
 ) -> Result<(CellRuntime, CellHandle, CellClient)> {
+    restore_owner_fence(f, check.token.owner).await
+}
+pub(super) async fn restore_owner_fence(
+    f: &Fixture,
+    old: OwnerFence,
+) -> Result<(CellRuntime, CellHandle, CellClient)> {
     f.handle.drain().await?;
     f.runtime.shutdown().await?;
     let old_sqlite = f.root.path().join("a.sqlite");
@@ -395,7 +401,7 @@ pub(super) async fn restore_owner(
             },
         )
         .await?;
-    assert!(handle.owner_fence().epoch > check.token.owner.epoch);
+    assert!(handle.owner_fence().epoch > old.epoch);
     let client = CellClient::local(f.registry.clone(), handle.clone());
     Ok((runtime, handle, client))
 }
