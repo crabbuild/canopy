@@ -300,6 +300,10 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving/commands.rs"));
                 source.update(include_bytes!("packs/publication/serving/command_owner.rs"));
                 source.update(include_bytes!("packs/publication/serving/session.rs"));
+                source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/handoff.rs"
+                ));
                 source.update(include_bytes!("packs/publication/serving/ownership.rs"));
                 source.update(include_bytes!("packs/publication/serving/schema.sql"));
                 source.update(include_bytes!("packs/publication/registry.rs"));

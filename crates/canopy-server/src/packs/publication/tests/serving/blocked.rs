@@ -9,14 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Semaphore;
 
 #[derive(Debug)]
-struct Gate {
+pub(super) struct Gate {
     store: InMemory,
-    armed: AtomicBool,
-    entered: Semaphore,
-    proceed: Semaphore,
+    pub(super) armed: AtomicBool,
+    pub(super) entered: Semaphore,
+    pub(super) proceed: Semaphore,
 }
 impl Gate {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             store: InMemory::new(),
             armed: AtomicBool::new(false),

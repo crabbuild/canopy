@@ -19,8 +19,9 @@ pub use serving::{
     AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_OWNERS,
     MAX_SERVING_PINS, ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
     RenewServingRequest, SelectServingGeneration, ServingCheck, ServingContext, ServingDenial,
-    ServingDrainProof, ServingLease, ServingPin, ServingReadBudget, ServingReadError,
-    ServingReleaseReply, ServingReply, ServingSelection, ServingToken,
+    ServingDrainObserver, ServingDrainProof, ServingLease, ServingOwner, ServingOwnerError,
+    ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingReadBudget, ServingReadError,
+    ServingReleaseReply, ServingReply, ServingSelection, ServingSnapshot, ServingToken,
 };
 mod owner;
 pub(crate) mod registry;

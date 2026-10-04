@@ -3,8 +3,9 @@
 Serving readers need an authorized immutable catalog/ref snapshot whose retained
 artifacts cannot disappear while an owned worker is suspended. The implementation
 adds a bounded serving-pin receiver and an owned metadata-read capability. This
-is a foundation for production reader conversion; the production manager does
-not yet acquire, renew, cache or hand off these pins to its serving consumers.
+is a foundation for production reader conversion. A service-owned producer now
+acquires, retains, renews and drains one generation independently of its callers;
+the production manager does not yet pool or hand these owners to its consumers.
 The branch remains unreleasable until that conversion and the full cutover gates
 are complete.
 
@@ -72,8 +73,8 @@ original. The ready value, held admission, dispatch and uncertain recovery share
 that same guard. Closing the pin waits until a proven unexecuted held command is
 discarded or the exact original reaches a known disposition. Cancellation of an
 observer cannot release it. The production owner must retain and activate/discard
-held tickets and drive uncertain recovery; this primitive is not a complete
-resident pin pool or automatic renewal supervisor.
+held tickets and drive uncertain recovery. `ServingOwner` now performs that
+ownership and automatic renewal; a resident generation pool is still required.
 
 The existing bounded custody scanner also visits serving heads and can retire an
 expired unexecuted original. A stop records logical closure and never invents an
@@ -83,6 +84,71 @@ and results. Settled history is still stored in SQL and requires the planned
 admitted immutable history frames and exact lookup to bound long-term growth.
 
 ## Capability construction and admitted reads
+
+### Owned producer and accepted acquisition handoff
+
+`ServingOwner::start` obtains bounded owner admission before spawning a private
+supervisor. The supervisor retains its proposed SDK identity, factory plan,
+original prepared command and any held ticket outside the restartable worker.
+It activates held originals and resolves uncertainty through their exact
+evidence. Registration/execution transport loss, worker panic and caller loss
+cannot replace an admitted original with a fresh acquisition or renewal.
+
+Before publishing a successful acquisition to borrowers, the producer calls
+`ReadyServingCommand::retain_acquisition`. Only an original local acquisition
+can use that handoff; a restored journal command or a renewal cannot. The probe
+loads the acquisition's exact ordinal, authenticates its recorded acceptance and
+checks its original admission sequence. It then reserves the existing exclusive
+physical owner, verifies the still-retained exact SQL pin and historical
+generation, and brackets that observation with actual owner checks. A later
+renewal must not hide the acquisition ordinal. No absent or denied command is
+executed by this probe, and no receipt DTO becomes a physical capability.
+
+Accepted acquisition knowledge remains available after lease expiry or Read
+revocation. This permits retention and authenticated cleanup rather than fresh
+I/O: every serving operation still checks current access, exact pin, actual
+owner and a conservative lease deadline. Cleanup may use the administrator's
+bounded physical-read slot after read admission closes. A released, rebound or
+missing row fails handoff; duplicate physical ownership is rejected.
+
+`ServingSnapshot` carries a private borrow guard and exposes only the generation
+fact and admitted metadata headers. Clones share that guard until the last clone
+drops. Closing a producer refuses new borrows while existing borrows retain their
+generation and continue renewal. Renewal is scheduled at one third of the
+conservatively observed remaining lease; this is a scheduling policy, not a
+guarantee that an overloaded or fenced owner can renew. Read revocation, expiry
+or known renewal denial closes new borrowing. Physical roots remain retained.
+
+After the last borrow, the owner stops producing renewals, joins actual pin
+workers and prepares the authenticated exact release. Uncertain releases keep
+their original. Only a settled denial allows a new release proof to be prepared
+after administrator access is restored. Neither a denied release nor an
+observer timeout counts as drain. The last producer handle initiates closure;
+`ServingDrainObserver` joins its real completion without keeping admission open.
+The supervisor and physical pin outlive detached observers. Loss of authority
+can keep cleanup pending; physical fencing/adoption remains mandatory work.
+
+Owner, snapshot and physical-I/O admissions each use the configured 2–64 node
+limit and half-cap account share, with separate semaphores. Owner admission
+covers the producer's entire lifetime, including a built original before queue
+admission. Snapshot admission covers waiting and returned borrow lifetimes.
+Long-lived snapshots therefore cannot exhaust the separate physical-I/O slots.
+Read budgets must be shared once per node; repository-scoped artifact/index
+clients must be shared across the resident's generations. Producer tasks use a
+private tracker so their drain can be joined explicitly; production
+must stop and join them before closing the node tracker or publication budget.
+
+Thirteen focused lifecycle families pass on macOS/Rust 1.98.0. They cover both
+formats, six registrar/execution fault modes, five producer restart points,
+borrowed renewal and clone lifetime, deterministic lost-ack/revocation ordering,
+denied registration/release, closed read admission, original-ordinal handoff,
+independent contexts' physical exclusion, canceled observers and blocked actual
+artifact-provider I/O. They qualify this component, not resident pooling,
+process fencing/adoption, production reader conversion or large-team capacity.
+The owner fixtures use certified initialized empty catalogs and missing-object
+lookups. Full nonempty native/body/history reads require their own production
+conversion and qualification; suspended real provider I/O proves drain ownership,
+not full-repository serving performance.
 
 `ServingContext` is explicit trusted configuration: real CellClient/target,
 actual PreparationAuthority, shared CatalogIndexes/CatalogFiles, shared node
@@ -183,14 +249,35 @@ owner fence.
 
 ## Production integration and qualification gates
 
-The next serving layer must integrate these exact acquisition and renewal
-commands into a resident producer and hand off retained capabilities before
-observers can detach. Command reconstruction alone does not establish this
-physical ownership handoff. Cache/coalesce a bounded set of active generation
+The next serving layer must integrate `ServingOwner` and its accepted acquisition
+handoff into production residency. Command reconstruction alone does not
+establish physical ownership. Cache/coalesce a bounded set of active generation
 owners per repository rather than allocating a pin per browser/SDE. Carry that
 ownership through native work, object bodies and response streams; integrate
 its drain into actual eviction and shutdown. A close must join all producers and
 workers before Cell/workspace/artifact release.
+
+Production integration must preserve these boundaries:
+
+1. `RepositoryManager` owns the node read budget. Each local resident owns one
+   repository-scoped context and bounded generation pool, sharing its index/file
+   caches. Coalesce acquisitions rather than constructing a producer per viewer.
+   Query 48 observes a head; acquisition selects and retains its actual accepted
+   fact atomically. A head race must not associate a producer with an earlier
+   observation's generation. Product reads bind to the accepted joint fact.
+2. Eviction pauses acquisition/renewal producers and new borrows before reserving
+   exact drain admission. A pause handshake must account for built/held/uncertain
+   originals; merely toggling a boolean cannot establish an idle coordinator.
+   Refusal resumes the same owners. One blocked old-generation worker must not
+   serialize unrelated live-generation renewal.
+3. Shutdown stops borrowing and joins all generation producers while Cell,
+   administrator authority and publication admission remain usable. Only then
+   may the node tracker/publication budget close and resident recovery/Cell/
+   workspace drain finish. The current shutdown path is not yet wired this way.
+4. Actual process fencing and restored-owner adoption must precede releasing an
+   abandoned pin. A historical lease or an expired deadline is insufficient.
+   Quota recovery must use that authenticated lifecycle rather than reaping SQL
+   roots based on expiry.
 
 Regression families exercise Read/public access, joint initialization, original
 acquisition replay after release, token scope, revocation, expiry, monotone

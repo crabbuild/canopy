@@ -11,6 +11,7 @@ use cellule_runtime::{Committed, InvocationError, Receipt, primitives::sql::SqlC
 use std::sync::Mutex;
 use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+mod handoff;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServingReadError {
@@ -45,6 +46,8 @@ pub struct ServingReadBudget {
 }
 struct Budget {
     admission: AccountAdmission,
+    owners: AccountAdmission,
+    snapshots: AccountAdmission,
     tasks: TaskTracker,
     stop: CancellationToken,
 }
@@ -60,6 +63,16 @@ impl ServingReadBudget {
                     "node serving reads",
                     "account serving reads",
                 ),
+                owners: AccountAdmission::new(
+                    usize::from(limit),
+                    "node serving owners",
+                    "account serving owners",
+                ),
+                snapshots: AccountAdmission::new(
+                    usize::from(limit),
+                    "node serving snapshots",
+                    "account serving snapshots",
+                ),
                 tasks,
                 stop: CancellationToken::new(),
             }),
@@ -71,6 +84,7 @@ impl ServingReadBudget {
 }
 /// Trusted service configuration. No decoded catalog or lease DTO supplies
 /// closure authority: open reobserves the registered pin through this client.
+#[derive(Clone)]
 pub struct ServingContext {
     client: CellClient,
     target: CellTarget,
@@ -81,6 +95,45 @@ pub struct ServingContext {
     administrator: String,
 }
 impl ServingContext {
+    pub(super) fn client_for_owner(&self) -> CellClient {
+        self.client.clone()
+    }
+    pub(super) fn authority_for_owner(&self) -> PreparationAuthority {
+        self.authority.clone()
+    }
+    pub(super) async fn admit_owner(
+        &self,
+        actor: &str,
+    ) -> Result<crate::admission::AdmissionPermit, ServingReadError> {
+        if self.budget.inner.stop.is_cancelled() {
+            return Err(ServingReadError::Inactive);
+        }
+        Ok(self
+            .budget
+            .inner
+            .owners
+            .acquire(ReadIdentity::Account(actor))
+            .await?)
+    }
+    pub(super) async fn admit_snapshot(
+        &self,
+        actor: &Option<String>,
+    ) -> Result<crate::admission::AdmissionPermit, ServingReadError> {
+        if self.budget.inner.stop.is_cancelled() {
+            return Err(ServingReadError::Inactive);
+        }
+        let actor = actor
+            .as_deref()
+            .map_or(ReadIdentity::Anonymous, ReadIdentity::Account);
+        actor.validate()?;
+        Ok(self.budget.inner.snapshots.acquire(actor).await?)
+    }
+    pub(super) fn tasks(&self) -> TaskTracker {
+        self.budget.inner.tasks.clone()
+    }
+    pub(super) fn target_for_handoff(&self) -> CellTarget {
+        self.target.clone()
+    }
     pub fn new(
         client: CellClient,
         target: CellTarget,
@@ -145,6 +198,12 @@ struct ReleaseCommand {
     digest: [u8; 32],
 }
 impl ServingPin {
+    pub(super) async fn authorize(
+        &self,
+        actor: Option<String>,
+    ) -> Result<Instant, ServingReadError> {
+        Ok(self.inner.observe(actor).await?.1)
+    }
     pub async fn open(
         context: ServingContext,
         token: ServingToken,

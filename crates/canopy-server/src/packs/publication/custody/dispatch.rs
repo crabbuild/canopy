@@ -54,6 +54,41 @@ impl CustodyStopProbe {
     }
 }
 impl OwnedCustody {
+    /// Observe only this exact accepted ordinal. This must never execute an
+    /// absent original or substitute the latest renewal's receipt.
+    pub(in crate::packs::publication) async fn serving_grant(
+        &self,
+        client: &CellClient,
+    ) -> Result<ServingLease, CustodyError> {
+        let header = self.prepared.intent.header()?;
+        if !matches!(self.action()?, CustodyAction::AcquireServing(_)) {
+            return Err(CustodyError::Context);
+        }
+        let saved = load(
+            client,
+            self.evidence().target(),
+            header.key(),
+            Some(header.step),
+        )
+        .await?
+        .ok_or(CustodyError::Context)?;
+        if saved.intent != self.prepared.intent || saved.stopped.is_some() {
+            return Err(CustodyError::Context);
+        }
+        let phase = saved.phase.ok_or(CustodyError::Context)?;
+        let committed = phase.committed::<CustodyReply>(self.evidence())?;
+        match committed.output {
+            CustodyReply::Serving(ServingReply::Granted(lease))
+                if !phase.rejected()
+                    && lease.token.repository == header.repository
+                    && lease.token.reader == header.operation
+                    && lease.token.admission_sequence == committed.receipt.commit_sequence =>
+            {
+                Ok(*lease)
+            }
+            _ => Err(CustodyError::Context),
+        }
+    }
     pub(in crate::packs::publication) fn stop_probe(
         &self,
     ) -> Result<CustodyStopProbe, CustodyError> {

@@ -9,6 +9,9 @@ pub struct ReadyServingCommand {
     target: CellTarget,
     request: BeginRequest,
     original: Arc<OwnedCustody>,
+    // Only the original local acquisition can hand off physical ownership.
+    // Restored journal knowledge and renewals cannot recreate it.
+    local_acquisition: bool,
     // Renewal is owned physical work from preparation until known disposition.
     _guard: Option<Arc<super::session::Active>>,
 }
@@ -39,6 +42,7 @@ impl ReadyServingCommand {
             target,
             request,
             original: Arc::new(original),
+            local_acquisition: true,
             _guard: None,
         })
     }
@@ -61,6 +65,7 @@ impl ReadyServingCommand {
             target,
             request: context,
             original: Arc::new(original),
+            local_acquisition: false,
             _guard: Some(guard),
         })
     }
@@ -83,11 +88,24 @@ impl ReadyServingCommand {
             target,
             request,
             original: Arc::new(original),
+            local_acquisition: false,
             _guard: None,
         })
     }
     pub fn evidence(&self) -> &PendingMutation {
         self.original.evidence()
+    }
+    /// Retain this accepted local acquisition even if its lease expired or the
+    /// requesting account lost Read. Every I/O still checks fresh Read/expiry;
+    /// this handoff permits safe physical ownership and authenticated cleanup.
+    pub async fn retain_acquisition(
+        &self,
+        context: ServingContext,
+    ) -> Result<ServingPin, ServingReadError> {
+        if !self.local_acquisition || self.target != context.target_for_handoff() {
+            return Err(ServingReadError::Context);
+        }
+        ServingPin::retain_original(context, self.original.clone()).await
     }
     pub(in crate::packs::publication) fn reservation(&self) -> u64 {
         RESERVATION
@@ -98,6 +116,7 @@ impl ReadyServingCommand {
             target: self.target.clone(),
             request: self.request.clone(),
             original: self.original.clone(),
+            local_acquisition: self.local_acquisition,
             _guard: self._guard.clone(),
         }
     }

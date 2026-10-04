@@ -2,15 +2,72 @@
 
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
-Current cutover review: [draft PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. GitHub reports no merge conflicts at publication;
-CI is pending. It remains a draft until the incomplete production conversion
-and release requirements below are verified. Older local/unpublished checkpoint
+Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
+directly against `main`. At the preceding published head `2012f86`, GitHub reports
+no merge conflicts; both Rust CI runs fail on the same five unconverted
+legacy `objects` readers and both harness checks pass. The PR is currently marked
+ready for review, but production conversion and release requirements remain
+incomplete. Older local/unpublished checkpoint
 notes describe their historical states, not the current publication state.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Owned serving lifecycle checkpoint
+
+`ServingOwner` now owns acquisition, accepted-original physical handoff,
+automatic renewal and exact release independently of request observers. Its
+private restart supervisor retains factory identities, original commands and
+held/uncertain tickets. Snapshot clones share a private borrow lifetime;
+closure refuses new borrows and renews existing ones until their last guard
+drops. Physical provider work drains before release, including work detached by
+observer cancellation. A known denied release retains ownership and permits a
+new proof only after the denied original has settled. Read revocation after a
+lost acquisition acknowledgement still retains and authentically drains the
+accepted pin. No lease expiry, timeout or logical denial deletes physical roots.
+
+The accepted handoff authenticates the exact original acquisition ordinal and
+current retained pin/generation under actual owner checks. Restored commands,
+renewals, absent/denied executions and independent duplicate physical owners
+cannot mint that handoff. Owner, snapshot and physical-I/O budgets are separate,
+bounded node/account shares; a snapshot cannot consume every I/O slot. The new
+production files participate in the RepositoryModule code digest. See the
+[serving contract](design/certified-serving-pins.md).
+
+Thirteen focused families pass in 8.29 seconds after compilation, including six
+transport fault modes, five producer restart points, clone renewal, deterministic
+recovery/revocation, canceled release observation and blocked actual provider
+I/O. Their initialized empty catalogs qualify lifecycle ownership, not full
+nonempty native/body/history serving or capacity.
+
+Final frozen-source library qualification executes 664 unique cases: **659 pass
+and five fail**, with exit 101 retained. All 370 publication, seven startup and
+four resident-recovery families pass. Two nested subprocess summaries are
+excluded and focused cases are not counted twice. Nine selected portable
+workspace/lifecycle cases also pass, including canceled prebound startup.
+Combined coverage is 673 unique cases, 668 pass and five fail. Every failure is
+one of the five unconverted legacy `objects` readers. Warnings-denied
+workspace/all-target Clippy passes in 29.19 seconds, the server build in 37.26
+seconds, formatting in 1.15 seconds, and all 96 Python harness tests pass.
+The freeze includes 468 Rust/SQL/manifest files, including 454 Rust files and
+the design SQL fixture. The [persisted evidence](evidence/serving-owner-20261004.json)
+records the actual failures, commands and source fingerprint. Library failure
+remains exit 101; the validation driver also finishes 101 after completing its
+other checks. Initial driver prefix/platform assertion mistakes are recorded
+separately, and successful completed commands are reused rather than rerun.
+Linux-only fork cases were not executed locally; their latest prior CI does not
+qualify this new source.
+
+Highest next priorities are the bounded resident generation pool, shared
+node budgets and repository-scoped contexts, eviction/shutdown joining before publication-budget and
+Cell/workspace closure, and conversion of every authoritative reader and
+HTTP/SSH/generated producer. Physical fencing/adoption and quota recovery,
+admitted immutable custody history/exact lookup, final DDL, typed collection,
+backup/restore, fault campaigns, OS containment, native acceleration/physical
+rewrite/fair maintenance, signed completion/cold clone, file attribution and
+full-history plus 10,000-developer capacity qualification remain mandatory.
+This checkpoint does not complete the full goal or make the branch releasable.
 
 ## Resident recovery lifecycle checkpoint
 

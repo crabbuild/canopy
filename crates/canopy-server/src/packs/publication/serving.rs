@@ -6,7 +6,12 @@ mod codec;
 mod command_owner;
 mod commands;
 pub use command_owner::ReadyServingCommand;
+mod lifecycle;
 mod ownership;
+pub use lifecycle::{
+    ServingDrainObserver, ServingOwner, ServingOwnerError, ServingOwnerPhase, ServingOwnerStats,
+    ServingSnapshot,
+};
 pub use ownership::MAX_SERVING_OWNERS;
 mod session;
 pub use commands::{
