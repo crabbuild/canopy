@@ -9,6 +9,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | If you need to… | Read | What you will find |
 | --- | --- | --- |
 | Understand the server and try a local deployment | [Project README](../README.md) and [bounded deployment](../deploy/README.md) | Configuration, runtime commands, resource boundary and recovery procedures |
+| Understand the system design | [Canopy design](../DESIGN.md) | Goals, invariants, Cellule integration, control flows, failures, resource ownership and tradeoffs |
 | Decide which Git operations work | [Git compatibility](git-compatibility.md) | Stock-client evidence, restrictions and provider qualification commands |
 | Implement an API or storage change | [Persisted contracts](contracts.md) | Identity, authorization, protocol, durability and HTTP behavior |
 | Find the right Rust crate | [Rust workspace](workspace.md) | Crate ownership, dependencies and build commands |
@@ -28,7 +29,7 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 
 ## Understand where data lives
 
-For the full component map and request, push, read and recovery flows, open the [Canopy and Cellule architecture atlas](../diagram/canopy-architecture/README.md). It includes nine diagrams with standalone SVG/PNG exports and separates the active serving architecture from incomplete packed-storage integration.
+Read the root [Canopy design document](../DESIGN.md) for authority boundaries and request, push, read and recovery flows. Its [architecture gallery](../diagram/canopy-architecture/index.html) includes nine diagrams with standalone SVG/PNG exports and separates the active serving architecture from incomplete packed-storage integration.
 
 The Directory Cell resolves names and accounts. Each repository has its own Repository Cell, which owns the durable Git and collaboration state. Native Git uses a disposable cache for wire protocols. Large Git blobs and Git LFS bodies live in immutable object-store objects referenced by the repository's SQLite state.
 
