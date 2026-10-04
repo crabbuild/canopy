@@ -1,6 +1,7 @@
 use super::*;
 use crate::packs::publication::{
-    PublicationCoordinator, PublicationLimits, PublicationOutcome, PublicationState,
+    PublicationBudget, PublicationCoordinator, PublicationLimits, PublicationOutcome,
+    PublicationState,
 };
 use crate::{CanopyApplication, build_descriptor, repository_target};
 use cellule_app::{ApplicationHandle, CellApplication, CompiledApplication};
@@ -41,6 +42,7 @@ struct Fixture {
     layout: CellStorageLayout,
     replica: CellReplica,
     application: Arc<CompiledApplication>,
+    publication_budget: PublicationBudget,
 }
 impl Fixture {
     async fn new(format: ObjectFormat) -> TestResult<Self> {
@@ -121,6 +123,7 @@ impl Fixture {
             layout,
             replica,
             application,
+            publication_budget: PublicationBudget::new(PublicationLimits::default())?,
         })
     }
     fn input(&self) -> BeginRequest {
@@ -162,6 +165,7 @@ impl Fixture {
         let queue = PublicationCoordinator::new(
             self.repository.target.clone(),
             PublicationLimits::default(),
+            self.publication_budget.clone(),
         )?;
         let ready = original
             .ready_stop(

@@ -143,6 +143,7 @@ struct Fixture {
     registry: Arc<Registry>,
     runtime: CellRuntime,
     handle: CellHandle,
+    publication_budget: PublicationBudget,
 }
 impl Fixture {
     fn authority(&self) -> PreparationAuthority {
@@ -211,6 +212,15 @@ impl Fixture {
             registry,
             runtime,
             handle,
+            publication_budget: PublicationBudget::new(PublicationLimits {
+                operations: 128,
+                per_actor: 32,
+                command_bytes: 512 << 20,
+                in_flight: 16,
+                maintenance_operations: 16,
+                maintenance_in_flight: 4,
+                ..PublicationLimits::default()
+            })?,
         })
     }
     fn client(&self) -> CellClient {
@@ -1098,8 +1108,11 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             Err(ClosureError::Integrity)
         ));
         let renewal = identity()?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let ticket = coordinator
             .submit(resolver.ready_renew(renewal, DEFAULT_LEASE_MS).await?)
             .await?;

@@ -190,7 +190,11 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
         }
     }
     let ready = ready.bind_recovery(registered, store)?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     p.fault_for_test(fault);
     let observer = ticket.publish(&p, ready)?;
     drop(observer);

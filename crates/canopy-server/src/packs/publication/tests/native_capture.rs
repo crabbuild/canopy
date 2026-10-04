@@ -972,8 +972,11 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         .wait()
         .await
         .map_err(|error| format!("native receive stage: {error:?}"))?;
-    let publications =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let publications = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let observer = ticket.publish(&publications, ready)?;
     let completed =
         super::coordinator::finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;

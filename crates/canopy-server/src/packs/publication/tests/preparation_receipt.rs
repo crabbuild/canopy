@@ -205,8 +205,11 @@ async fn initial_preparation_receipt_cold_owner_and_sdk_expiry_preserve_actual_r
                 .await,
             PreparationDenial::Stale,
         );
-        let coordinator =
-            PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let ticket = coordinator
             .submit(
                 known

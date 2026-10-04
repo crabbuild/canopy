@@ -1,3 +1,4 @@
+mod budget;
 mod held;
 mod preparation;
 use super::*;
@@ -131,8 +132,11 @@ async fn canceled_observer_does_not_cancel_admitted_native_publication_or_releas
             limits(),
         ))
         .await?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let (release, entered) = coordinator.pause_for_test().await;
         let ticket = coordinator.submit(ready).await?;
         timeout(Duration::from_secs(5), entered).await??;
@@ -189,6 +193,7 @@ async fn admission_accounts_for_running_and_queued_work_without_losing_rejected_
             maintenance_in_flight: 1,
             foreground_burst: 3,
         },
+        fixture.publication_budget.clone(),
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let mut attempts = Vec::new();
@@ -259,6 +264,7 @@ async fn admission_accounts_for_running_and_queued_work_without_losing_rejected_
             uuid::Uuid::new_v4().into_bytes(),
         )?,
         PublicationLimits::default(),
+        fixture.publication_budget.clone(),
     )?;
     let failure = foreign
         .submit(attempts[2].3.take().ok_or("ready")?)
@@ -311,8 +317,11 @@ async fn unknown_absent_lost_ack_and_worker_panic_recover_exact_native_command()
             limits(),
         ))
         .await?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         coordinator.fault_for_test(fault);
         let ticket = coordinator.submit(ready).await?;
         drop(prepared);
@@ -360,6 +369,13 @@ async fn unknown_absent_lost_ack_and_worker_panic_recover_exact_native_command()
             .ok_or("uncertain input lost")?;
         let drained = coordinator.close_and_drain().await;
         assert_eq!(drained.len(), 1);
+        fixture.publication_budget.close();
+        let node = fixture.publication_budget.stats();
+        assert_eq!(
+            (node.foreground, node.command_bytes, node.accounts),
+            (1, 8 << 20, 1)
+        );
+        assert_eq!(node.foreground_dispatch, 0);
         let before = replay_push_response(
             &fixture.client(),
             &fixture.target,
@@ -388,6 +404,17 @@ async fn unknown_absent_lost_ack_and_worker_panic_recover_exact_native_command()
         ));
         assert_eq!(coordinator.reservations_for_test().await, (0, 0, 0));
         assert!(weak.upgrade().is_none());
+        let node = fixture.publication_budget.stats();
+        assert_eq!(
+            (
+                node.foreground,
+                node.command_bytes,
+                node.accounts,
+                node.foreground_dispatch
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(node.closed);
         assert_eq!(
             coordinator.recover(&retained).await,
             Err(PublicationScheduleError::NotUncertain)
@@ -443,6 +470,7 @@ async fn stale_ready_command_has_durable_conflict_then_reconciliation_can_reente
             maintenance_in_flight: 1,
             ..PublicationLimits::default()
         },
+        fixture.publication_budget.clone(),
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let a_ticket = coordinator.submit(a_ready).await?;
@@ -515,8 +543,11 @@ async fn queued_publication_still_evaluates_current_authorization() -> Result {
         limits(),
     ))
     .await?;
-    let coordinator =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let coordinator = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let ticket = coordinator.submit(ready).await?;
     entered.await?;
@@ -551,6 +582,7 @@ async fn bounded_dispatch_allows_another_command_to_progress_before_first_outcom
             maintenance_in_flight: 1,
             ..PublicationLimits::default()
         },
+        fixture.publication_budget.clone(),
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let ready = Box::pin(first.0.ready_push(
@@ -622,8 +654,11 @@ async fn oversized_inline_completion_fails_before_dispatch_while_inventory_stays
         limits(),
     ))
     .await?;
-    let coordinator =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let coordinator = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let ticket = coordinator.submit(ready).await?;
     finished(ticket.wait().await)?;
     assert!(coordinator.close_and_drain().await.is_empty());

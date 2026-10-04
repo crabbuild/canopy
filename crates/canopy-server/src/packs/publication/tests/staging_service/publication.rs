@@ -35,8 +35,11 @@ async fn bound_final_waits_for_exact_renewal_and_adopted_checkpoint_recovery_bef
                     StagingLimits::default(),
                     f.authority(),
                 )?;
-                let p =
-                    PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+                let p = PublicationCoordinator::new(
+                    f.target.clone(),
+                    PublicationLimits::default(),
+                    f.publication_budget.clone(),
+                )?;
                 let ticket = super::bound::claim(&f, &c, original.lease.token, identity()?).await?;
                 assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
                 let session = ticket.bound_session()?;
@@ -129,7 +132,11 @@ async fn bound_final_publication_drains_retained_work_and_due_renewal_through_cl
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
-        let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let p = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let ticket = super::bound::bind(&f, &c, [231; 16], "owner").await?;
         let session = ticket.bound_session()?;
         let input = ready(&session).await?;
@@ -230,7 +237,11 @@ async fn exact_case(format: ObjectFormat, fault: u8, expired: bool) -> Result {
         },
         f.authority(),
     )?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let ticket = super::bound::bind(&f, &c, [232; 16], "owner").await?;
     let session = ticket.bound_session()?;
     p.fault_for_test(fault);
@@ -344,7 +355,11 @@ async fn bound_final_ceiling_discards_held_proof_and_drops_result_before_worker_
         },
         f.authority(),
     )?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let ticket = super::bound::bind(&f, &c, [233; 16], "owner").await?;
     let session = ticket.bound_session()?;
     let input = ready(&session).await?;
@@ -388,7 +403,11 @@ async fn bound_final_refusals_keep_exact_ready_and_require_shared_session_and_fi
 {
     let f = Fixture::new(ObjectFormat::Sha256).await?;
     let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let ticket = super::bound::bind(&f, &c, [234; 16], "owner").await?;
     let session = ticket.bound_session()?;
     let unrelated = Arc::new(
@@ -422,6 +441,7 @@ async fn bound_final_refusals_keep_exact_ready_and_require_shared_session_and_fi
             f.repository,
         )?,
         PublicationLimits::default(),
+        f.publication_budget.clone(),
     )?;
     let failure = ticket
         .publish(&foreign, ready(&session).await?)
@@ -466,7 +486,11 @@ async fn bound_final_queued_transport_rechecks_ceiling_before_initial_execution(
         },
         f.authority(),
     )?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let ticket = super::bound::bind(&f, &c, [236; 16], "owner").await?;
     let session = ticket.bound_session()?;
     let (release, entered) = p.pause_for_test().await;
@@ -499,7 +523,11 @@ async fn bound_final_observes_shared_coordinator_recovery_without_losing_lifecyc
 -> Result {
     let f = Fixture::new(ObjectFormat::Sha256).await?;
     let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let ticket = super::bound::bind(&f, &c, [237; 16], "owner").await?;
     let session = ticket.bound_session()?;
     p.fault_for_test(2);

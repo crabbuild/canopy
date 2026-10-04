@@ -36,6 +36,8 @@ mod preparation;
 pub use preparation::{
     PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,
 };
+mod budget;
+pub use budget::{PublicationBudget, PublicationBudgetStats};
 mod work;
 use work::MAINTENANCE_RESERVATION;
 pub use work::{
@@ -102,6 +104,14 @@ impl PublicationLimits {
 pub struct ReadyCatalogPush {
     owner: PushPreparation,
     command: PreparedCommand<CompleteCatalogPush>,
+}
+#[cfg(test)]
+impl ReadyCatalogPush {
+    pub(in crate::packs::publication) fn evidence_for_test(
+        &self,
+    ) -> cellule_runtime::PendingMutation {
+        self.command.evidence().clone()
+    }
 }
 #[derive(Clone)]
 enum PushPreparation {
@@ -249,6 +259,7 @@ struct Job {
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
+    budget: std::sync::Mutex<Option<budget::BudgetPermit>>,
 }
 struct Work {
     job: Arc<Job>,
@@ -340,6 +351,7 @@ struct State {
 struct Inner {
     target: CellTarget,
     limits: PublicationLimits,
+    budget: PublicationBudget,
     state: Mutex<State>,
     drained: Notify,
     changed: Notify,
@@ -385,15 +397,19 @@ impl PublicationCoordinator {
     pub(in crate::packs::publication) fn target(&self) -> &CellTarget {
         &self.inner.target
     }
+    /// Every repository dispatcher on a node must receive the same budget.
+    /// Repository limits remain additional caps, not independent node shares.
     pub fn new(
         target: CellTarget,
         limits: PublicationLimits,
+        budget: PublicationBudget,
     ) -> Result<Self, PublicationScheduleError> {
         limits.validate()?;
         Ok(Self {
             inner: Arc::new(Inner {
                 target,
                 limits,
+                budget,
                 state: Mutex::new(State::default()),
                 drained: Notify::new(),
                 changed: Notify::new(),
@@ -468,7 +484,9 @@ impl PublicationCoordinator {
                 .get(&request.actor)
                 .map_or(0, |counts| counts[at])
                 >= limits.per_actor
-            || state.bytes[at] > byte_limit - reservation
+            || byte_limit
+                .checked_sub(reservation)
+                .is_none_or(|remaining| state.bytes[at] > remaining)
         {
             Some(PublicationScheduleError::Capacity)
         } else {
@@ -477,6 +495,14 @@ impl PublicationCoordinator {
         if let Some(reason) = reason {
             return Err(Box::new(PublicationAdmissionFailure { reason, ready }));
         }
+        let budget = match self
+            .inner
+            .budget
+            .reserve(class, &request.actor, reservation)
+        {
+            Ok(permit) => permit,
+            Err(reason) => return Err(Box::new(PublicationAdmissionFailure { reason, ready })),
+        };
         let read = ReadContext {
             client: client.clone(),
             target: target.clone(),
@@ -499,6 +525,7 @@ impl PublicationCoordinator {
             .0,
             read,
             admitted: Instant::now(),
+            budget: std::sync::Mutex::new(Some(budget)),
         });
         state.actors.entry(job.actor.clone()).or_default()[at] += 1;
         state.counts[at] += 1;
@@ -876,6 +903,9 @@ fn enqueue(state: &mut State, job: &Arc<Job>, recover: bool) {
     );
 }
 fn release(state: &mut State, job: &Job) {
+    // Both callers drop retained proof/body ownership before making either
+    // the repository or node reservation reusable. Ticket DTOs may survive.
+    job.budget.lock().expect("publication budget permit").take();
     state.jobs.remove(&(job.operation, job.custody_stop));
     let count = state
         .actors
@@ -967,6 +997,7 @@ async fn run(inner: Arc<Inner>) {
     }
 }
 async fn dispatch(inner: Arc<Inner>, work: Work) -> DispatchResult {
+    let _dispatch = inner.budget.dispatch(work.job.class, &work.job.actor).await;
     #[cfg(test)]
     {
         // Do not hold the hook's mutex across a wait: other dispatched jobs

@@ -61,12 +61,13 @@ pub use completion::{
 };
 pub use coordinator::{
     CompactionReadyError, NativeInputReadyError, PreparationCommandKind, PreparationCommandOutcome,
-    PreparationReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
-    PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
-    PublicationState, PublicationStats, PublicationTicket, ReadyBoundRecovery,
-    ReadyCatalogCompaction, ReadyCatalogPush, ReadyInitialization, ReadyNativeInputs,
-    ReadyPreparation, ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
-    RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
+    PreparationReadyError, PublicationAdmissionFailure, PublicationBudget, PublicationBudgetStats,
+    PublicationClass, PublicationCoordinator, PublicationError, PublicationLimits,
+    PublicationOutcome, PublicationScheduleError, PublicationState, PublicationStats,
+    PublicationTicket, ReadyBoundRecovery, ReadyCatalogCompaction, ReadyCatalogPush,
+    ReadyInitialization, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
+    ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError, RefPolicyRefusalFailure,
+    RegisteredNativeInputs, RootPushReadyError,
 };
 mod commands;
 mod compaction;

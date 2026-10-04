@@ -532,8 +532,11 @@ async fn bound_preparation_claim_adopts_exact_input_root_without_copying_nodes()
         adopted.token()?.artifact_operation,
         prior.token()?.artifact_operation
     );
-    let publisher =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let publisher = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let ready = session.ready_inputs(identity()?, adopted.clone()).await?;
     let registered = publisher.submit(ready).await?;
     let PublicationState::Finished(Ok(PublicationOutcome::Inputs(result))) =

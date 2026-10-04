@@ -20,7 +20,10 @@ ReadyPreparation::claim and PreparationSession::ready_renew retain original type
 
 `PublicationOutcome` distinguishes committed inline push, immutable root push, policy page, compaction, input checkpoint and bound preparation results. RegisteredNativeInputs preserves the original registration outcome and separately reports fresh checkpoint/bound-session custody; a failed observation fences the shared session without erasing a commit. `PublicationError` preserves the corresponding typed Cellule invocation error, evidence and rejected receipt. `PublicationState` includes held, queued, running, uncertain, finished and proven unexecuted discarded states. `ticket.class()` identifies the class. `ticket.response()` accepts only a completed inline push outcome; `ticket.root_response(store)` requires a completed root push and performs a current authorized query at its original receipt before streaming authenticated bytes. Neither a completed DTO nor a caller-supplied root grants access. Other result kinds refuse both response methods; compactions, input checkpoints and bound preparation commands never become HTTP push responses. These APIs replace the previous push-only outcome shape; there is no compatibility adapter.
 
-## Bounded class and account admission
+## Repository class and account admission
+
+These are repository limits. The constructor also requires a shared node budget,
+which applies an additional aggregate cap across repository coordinators.
 
 | Default | Bound |
 | --- | --- |
@@ -40,6 +43,52 @@ Each job records its private factory's reservation; mixed foreground checkpoint/
 
 Configuration requires room for another foreground account, nonzero reserved maintenance slots, checked byte headroom, a burst in 1–32, and a valid maintenance concurrency bound. With multiple durability waits, maintenance cannot use every slot. A one-wait profile permits one maintenance wait; fair class starts then share that serialized dispatch slot. Invalid profiles reject before a coordinator is created.
 
+## Shared node admission and transport
+
+Create one `PublicationBudget` from the existing `PublicationLimits` profile and
+pass clones to every node-local `PublicationCoordinator::new(target, limits,
+budget)`. There is no constructor that supplies an independent budget implicitly.
+The production repository owner must create and retain that shared instance;
+the mandatory argument alone does not prove that production has reused it.
+
+The node ledger charges the private ready value's account, class and exact wire
+reservation after repository admission succeeds. It bounds the sum of held,
+queued, running and uncertain originals across repositories. Any node refusal
+returns the original ready value without consuming repository credits or
+changing the SDK identity. Foreground and maintenance have independent operation
+and byte shares. With the default profile, node foreground admission has 28
+slots and 256 MiB minus 32 KiB; maintenance has four slots and 32 KiB. Node
+foreground account admission is at most eight; maintenance account admission is
+at most two, leaving room for another account even when one actor administers
+many repositories. Account maps exist only while charged jobs exist.
+
+Transport has separate class and account gates. With the default profile, six
+foreground and two maintenance dispatches can be active; an account can occupy
+at most three foreground and one maintenance gate. An account acquires its own
+gate before the node class gate, so its waiting jobs cannot hold global capacity
+needed by another account. Both class lanes must have at least two slots; node
+maintenance admission must also have at least two operations. Repository profiles
+can still serialize local work. Repository FIFO/account rotation and class burst
+scheduling remain in the existing queue; node gates provide bounded concurrency
+and account headroom, not a global class-burst, CPU-time or I/O-fairness promise.
+
+The node transport gate is acquired before making the dispatch body copy and
+held through the exact invocation/recovery future. Returning an uncertain result
+releases transport capacity while keeping original command credits. A known
+terminal result or proven held discard drops retained command/proof resources
+before releasing node and repository credits. Observer cancellation releases
+neither charge. `PublicationBudget::close` refuses new reservations but leaves
+gates usable by already admitted activation and exact recovery; it does not
+cancel or drain repository workers. `stats` exposes charged class/account/byte
+occupancy, acquired class transport gates and admission closure.
+
+This is resource admission, not a durable outcome owner or artifact retention
+authority. The production service must retain coordinators and returned uncertain
+tickets, explicitly stop scanners, drain workers and resolve exact originals
+before releasing the Cell or deleting its workspace. Idle scanners must not
+prevent repository eviction indefinitely. Actual production scanner ownership,
+that shared-instance wiring and shutdown/eviction qualification remain open.
+
 ## Held ownership and fair starts
 
 try_reserve admits a charged Held job synchronously without execution. It returns the original ready value on capacity, contention, duplicate, target or closure refusal. activate joins the existing fair queue once; discard_held succeeds only before activation, dropping resources before credits. Both remain usable after close for existing admission. close_and_drain returns held and uncertain jobs still charged. See the [final lifecycle handoff](final-publication-lifecycle.md) for worker/renewal/checkpoint ordering and observation-only final tickets.
@@ -56,7 +105,7 @@ A terminal result drops dispatch/retained proof ownership before releasing class
 
 ## Integration and evidence
 
-Keep one coordinator and geometric planner per repository. Obtain a fresh admitted query-derived maintenance base, call the [geometric planner](geometric-directory-maintenance.md), wrap the verified result in an Arc and call `ready_compaction`, then `submit`. Observe or recover the exact ticket before releasing uncertain inputs. Obtain a fresh frontier for the next preparation. Integrate process admission, fair CPU/I/O shares, renewal/reaping, owner-loss reconstruction and complete retained-root inventory before selecting production handlers.
+Keep one coordinator and geometric planner per repository, with one shared publication budget owned by the node. Obtain a fresh admitted query-derived maintenance base, call the [geometric planner](geometric-directory-maintenance.md), wrap the verified result in an Arc and call `ready_compaction`, then `submit`. Observe or recover the exact ticket before releasing uncertain inputs. Obtain a fresh frontier for the next preparation. Integrate process admission, fair CPU/I/O shares, renewal/reaping, owner-loss reconstruction and complete retained-root inventory before selecting production handlers.
 
 Tests exercise class/account admission, retained failure values, duplicate logical IDs, maintenance concurrency while foreground completes, canceled observers, current admin revocation, and SHA-1/SHA-256 absent/lost-acknowledgement/panic recovery with original receipts and exactly one logical outcome. The existing push dispatcher tests remain in place with typed-result assertions. The geometric native fixture now prepares and publishes repeatedly through this shared dispatcher until ingress and level debt drain, checking canonical/source/version identity, unchanged refs and old-reader access.
 

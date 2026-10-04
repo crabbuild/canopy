@@ -66,7 +66,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     );
     let refusal_evidence = refusal.evidence_for_test();
     let operation = prepared.token().operation;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let before = state(&f.handle).await?;
     let mut head = None;
     let mut offset = 0;

@@ -40,7 +40,11 @@ async fn restart_scan_seeks_bounded_keys_and_revisits_corrupt_pins_without_starv
         assert!(details.iter().all(|value| !value.contains("TEMP B-TREE")), "{details:?}");
         Ok(Vec::new())
     }).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let store = ArtifactStore::new(Arc::new(InMemory::new()), f.repository);
     let service = RecoverySupervisor::start(
         f.client(),
@@ -141,7 +145,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         // identity binding before bundle I/O; the later valid head still runs.
         edit(f, "INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,expires_at_ms,recovery) SELECT zeroblob(16),1,zeroblob(16),x'0000000000000001',randomblob(16),0,recovery FROM catalog_leases WHERE recovery IS NOT NULL LIMIT 1").await?;
     }
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(fault);
     let (release, entered) = queue.pause_for_test().await;
     let service = RecoverySupervisor::start(
@@ -215,7 +223,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
     // Destroy local SQL and factory state. A new owner's scanner recognizes
     // the settled head without dispatching or claiming an old-owner command.
     let (runtime, _, client) = super::durable_recovery::restore_owner(f, &check).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let service = RecoverySupervisor::start(
         client.clone(),
         f.target.clone(),
@@ -262,7 +274,11 @@ pub(super) async fn advanced_head(
     original: &RegisteredRootRecovery,
     expected: &cellule_runtime::Committed<RefPolicyReply>,
 ) -> Result {
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(2);
     let observer = queue
         .submit(

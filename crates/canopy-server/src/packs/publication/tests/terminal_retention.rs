@@ -387,7 +387,11 @@ pub(super) async fn archive(
         })
         .await?;
     edit_handle(handle, "DROP TRIGGER terminal_release_late_fault").await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(if fault == 4 { 2 } else { fault });
     let limits = RecoveryScanLimits {
         page: 1,

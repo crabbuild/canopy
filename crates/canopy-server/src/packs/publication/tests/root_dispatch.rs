@@ -160,6 +160,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             f.repository,
         )?,
         PublicationLimits::default(),
+        f.publication_budget.clone(),
     )?;
     let failure = ticket
         .publish(&foreign, ready)
@@ -175,7 +176,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     assert_eq!(retained.evidence_for_test(), evidence);
     assert_eq!(foreign.stats().await.admitted, 0);
 
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     p.fault_for_test(fault);
     let (release, wait) = tokio::sync::oneshot::channel();
     let (entered, running) = tokio::sync::oneshot::channel();

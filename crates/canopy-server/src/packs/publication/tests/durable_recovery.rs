@@ -230,7 +230,11 @@ async fn qualify_ready(
             matches!(&result.output, RootCompletionReply::Completed(value) if value.completion.publication.is_some() == publishing)
         );
         let expected = original_result.ok_or("original outcome missing")?;
-        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         queue.fault_for_test(2);
         let observer = queue
             .submit(

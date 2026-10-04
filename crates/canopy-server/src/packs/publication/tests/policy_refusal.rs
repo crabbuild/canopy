@@ -97,7 +97,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     page.refusal_fault_for_test(fault);
     let registered = page.persist_recovery(store, identity()?, None).await?;
     let page = page.bind_recovery(registered, store)?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     p.fault_for_test(1);
     drop(ticket.register_policy_page(&p, page)?);
     let StagingState::Uncertain(error) = settled(ticket, true).await? else {
@@ -348,7 +352,11 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
             .await?,
     );
     let evidence = refusal.evidence_for_test();
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     for offset in [0, 128, 256] {
         let page = pending

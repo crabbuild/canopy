@@ -225,7 +225,11 @@ async fn original_initialization_receipt_survives_lost_ack_expiry_body_loss_and_
     let original = registered.evidence().clone();
     let check = check(registered.token());
     let bound = ready.bind_recovery(registered.clone(), &store)?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(2);
     let observer = queue
         .submit(bound)
@@ -289,7 +293,11 @@ async fn original_initialization_receipt_survives_lost_ack_expiry_body_loss_and_
         (result.output, result.receipt),
         (expected.output.clone(), expected.receipt)
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let observer = queue
         .submit(loaded.ready(client, (*store).clone(), f.authority())?)
         .await

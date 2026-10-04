@@ -338,6 +338,7 @@ async fn root_outcome_preserves_plain_http_errors_without_verifying_or_publishin
         let p = PublicationCoordinator::new(
             request.fixture.target.clone(),
             PublicationLimits::default(),
+            request.fixture.publication_budget.clone(),
         )?;
         let observer = request.ticket.publish(&p, ready)?;
         let PublicationState::Finished(Ok(PublicationOutcome::RootPush(committed))) =
@@ -413,6 +414,7 @@ async fn root_outcome_exact_recovery_preserves_commits_and_refuses_expired_input
             let p = PublicationCoordinator::new(
                 request.fixture.target.clone(),
                 PublicationLimits::default(),
+                request.fixture.publication_budget.clone(),
             )?;
             p.fault_for_test(fault);
             drop(request.ticket.publish(&p, ready)?);

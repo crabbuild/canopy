@@ -258,7 +258,11 @@ async fn denied_initial_attempt_retires_only_after_claim_and_keeps_its_receipt_a
             .await
             .is_err()
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let supervisor = RecoverySupervisor::start_retiring(
         f.client(),
         f.target.clone(),
@@ -448,7 +452,11 @@ async fn automatic_initialization_retirement_recovers_uncertainty_after_pin_disa
     let ready = prepared.ready_initialization(identity()?).await?;
     let saved = ready.persist_recovery(&store, identity()?).await?;
     ready.complete(&saved, &store).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(2);
     let scanner = RecoverySupervisor::start_retiring(
         f.client(),

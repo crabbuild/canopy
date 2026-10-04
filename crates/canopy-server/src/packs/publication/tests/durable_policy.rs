@@ -295,6 +295,7 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
         store,
         &expected,
         f.authority(),
+        f.publication_budget.clone(),
     ))
     .await?;
     let _released = Box::pin(super::terminal_retention::archive(
@@ -324,6 +325,7 @@ async fn query_failure(
     store: &canopy_object_storage::artifact::ArtifactStore,
     expected: &cellule_runtime::Committed<RootCompletionReply>,
     authority: PreparationAuthority,
+    budget: PublicationBudget,
 ) -> Result {
     // The service is stopped and the original outcome has settled. Hide the
     // phase table to inject a real private-query failure without changing data.
@@ -339,6 +341,7 @@ async fn query_failure(
     let queue = PublicationCoordinator::new(
         loaded.evidence().target().clone(),
         PublicationLimits::default(),
+        budget,
     )?;
     let observer = queue
         .submit(ready)

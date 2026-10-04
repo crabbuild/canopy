@@ -6,6 +6,59 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Shared node publication budget
+
+Repository dispatchers now require an explicit `PublicationBudget`, reusing the
+existing limits profile, private ready values and exact SDK command ownership.
+Clones share operation, command-byte and per-account reservations across
+repositories. Foreground and maintenance retain independent shares; maintenance
+account admission leaves room for another account. Separate account and class
+transport gates are acquired before copying the dispatch body. Account waiters
+cannot consume the node slots needed by another account. Uncertainty releases
+transport capacity but retains command credits; a known result or proven held
+discard drops retained resources before returning credits. Closing the node
+budget rejects new admission and preserves activation/recovery of originals
+already admitted. The repository queues retain their FIFO/account rotation and
+class-burst behavior. See the [dispatch contract](design/shared-publication-dispatch.md#shared-node-admission-and-transport).
+
+Six new regression families cover aggregate account/byte/class admission,
+transport headroom and FIFO progress, partial-gate cancellation, invalid/overflow
+bounds, exact returned ready identities, and actual cross-repository dispatch in
+both object formats. Existing absent/lost-reply/panic recovery now also checks
+that the node budget remains charged through closure and returns credits only
+after exact resolution. The native held-discard regression checks node credit
+return after dropping the verified proof. All 82 constructor call sites now
+supply a budget. The first draft had missing exports and three fixture ownership
+references; the first focused run had a test awaiting a later gate waiter before
+its existing FIFO predecessor. Those diagnostics are retained; the fixture now
+observes the real FIFO order without changing the implementation or capacity.
+
+Final-source macOS/Rust 1.98.0 qualification passes the focused eight-test run
+in 0.91 seconds and all 320 publication plus seven startup cases within the
+full workspace library. The library remains **failed** (exit 101): 605 pass and
+the same five unconverted `objects` readers fail, out of 610 unique cases;
+two nested subprocess summaries are excluded. Nine additional real
+workspace/lifecycle cases pass in 3.36 seconds, including prebound startup.
+The combined result is 619 unique cases executed, 614 pass and five fail;
+focused cases are not counted twice. Warnings-denied workspace/all-target
+Clippy (25.83 seconds), the server build (32.10 seconds), formatting/diff,
+447 unchanged source/schema/manifest hashes including 435 Rust files,
+141 local documentation links, exact SDK pins and protected index/archive
+checks pass. Evidence is `/tmp/canopy-node-publication-validation.json`.
+
+This is a necessary admission primitive, not completed production integration.
+The resident repository manager must own one shared budget and retain/drain its
+recovery services before Cell release or workspace deletion. General scanner
+ownership, query/I/O admission and that production wiring remain open. The wire
+credits do not qualify whole-process heap/RSS, native descendants, provider
+traffic or capacity. The full producer/reader/final-schema cutover, admitted
+history archival/exact lookup, retained-input adoption, certified serving
+ownership, typed GC/backup/isolated restore, OS containment, continuous fair
+maintenance/native acceleration/physical rewrite, signed completion/cold clone,
+file attribution and complete Linux/Kubernetes/Chromium/10,000-developer mixed
+load remain mandatory. This local checkpoint remains unpublished and
+unreleasable.
+
 ## Automatic staging retirement in progress
 
 The local staging coordinator now owns one bounded read-only probe over its admitted uncertain custody commands. Exact ordinal plus authenticated intent fingerprint finds an old stopped original even after a successor becomes the latest head. Only authenticated logical stop schedules existing exact recovery; absent commands, unavailable/corrupt private metadata and known execution phases alone retain their original reservations. Checkpoint/final commands keep separate owners. The existing fence/drain path joins running callbacks and drops retained resources before returning worker and operation admission. Observer drop and service closure do not discard this ownership. Probe failures/restarts/recovery scheduling are visible in bounded service counters. See the [lifecycle contract](design/staging-service-lifecycle.md#automatic-observation-of-custody-retirement).

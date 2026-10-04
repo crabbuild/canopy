@@ -6,8 +6,11 @@ async fn cold_original_renewal_keeps_history_but_cannot_grant_previous_owner_cus
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let original_session = session(&f, [209; 16]).await?;
-        let coordinator =
-            PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let ticket = coordinator
             .submit(
                 original_session
@@ -31,7 +34,11 @@ async fn cold_original_renewal_keeps_history_but_cannot_grant_previous_owner_cus
             )
             .await?
             .output;
-        let restored = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let restored = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let ticket = restored
             .submit(
                 ReadyPreparation::restore(client, f.target.clone(), [209; 16], f.authority())
@@ -67,7 +74,11 @@ async fn cold_takeover_fences_shared_old_session_and_restores_current_claim() ->
             shared.live_lease(),
             Err(PreparationBaseError::Inactive)
         ));
-        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let ready = ReadyPreparation::claim(
             client.clone(),
             f.target.clone(),
@@ -128,8 +139,11 @@ async fn missing_or_corrupt_owner_preserves_original_outcome_and_permanently_fen
         for corrupt in [false, true] {
             let f = Fixture::new(format).await?;
             let original_session = session(&f, [211; 16]).await?;
-            let queue =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let queue = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             let original = changed(
                 queue
                     .submit(
@@ -262,8 +276,11 @@ async fn bound_lease_commands_keep_exact_identity_and_original_floor_through_clo
                 let f = Fixture::new(format).await?;
                 let s = session(&f, [196; 16]).await?;
                 f.install_empty_root(1).await?;
-                let coordinator =
-                    PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+                let coordinator = PublicationCoordinator::new(
+                    f.target.clone(),
+                    PublicationLimits::default(),
+                    f.publication_budget.clone(),
+                )?;
                 let mutation = identity()?;
                 coordinator.fault_for_test(fault);
                 let ticket = coordinator
@@ -361,6 +378,7 @@ async fn bound_lease_ready_admission_preserves_command_and_canceled_observer_ses
             uuid::Uuid::new_v4().into_bytes(),
         )?,
         PublicationLimits::default(),
+        f.publication_budget.clone(),
     )?;
     let rejected = foreign
         .submit(prepared)
@@ -368,7 +386,11 @@ async fn bound_lease_ready_admission_preserves_command_and_canceled_observer_ses
         .err()
         .ok_or("foreign admitted")?;
     assert_eq!(rejected.reason, PublicationScheduleError::Foreign);
-    let coordinator = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let coordinator = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let ticket = coordinator.submit(rejected.ready).await?;
     timeout(Duration::from_secs(5), entered).await??;
@@ -401,7 +423,11 @@ async fn bound_lease_ready_admission_preserves_command_and_canceled_observer_ses
         .err()
         .ok_or("closed admitted")?;
     assert_eq!(refused.reason, PublicationScheduleError::Closed);
-    let other = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let other = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let retried = other.submit(refused.ready).await?;
     changed(timeout(Duration::from_secs(10), retried.wait()).await?)?;
     assert!(other.close_and_drain().await.is_empty());
@@ -416,8 +442,11 @@ async fn bound_lease_committed_recovery_keeps_receipt_when_fresh_custody_is_revo
         for mode in [0, 1, 2] {
             let f = Fixture::new(ObjectFormat::Sha256).await?;
             let s = session(&f, [198; 16]).await?;
-            let coordinator =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let coordinator = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             let mutation = identity()?;
             coordinator.fault_for_test(2);
             let ticket = coordinator
@@ -455,8 +484,11 @@ async fn bound_lease_absent_recovery_rechecks_authority_and_claim_can_recover_ex
         for mode in [0, 1, 2] {
             let f = Fixture::new(ObjectFormat::Sha1).await?;
             let s = session(&f, [199; 16]).await?;
-            let coordinator =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let coordinator = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             coordinator.fault_for_test(1);
             let ticket = coordinator
                 .submit(ready(&f, &s, kind, identity()?).await?)
@@ -542,7 +574,11 @@ async fn bound_lease_ready_rejects_invalid_context_size_duration_and_never_reviv
         .await
         .is_err()
     );
-    let coordinator = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let coordinator = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     coordinator.fault_for_test(2);
     let ticket = coordinator
         .submit(s.ready_renew(identity()?, DEFAULT_LEASE_MS).await?)
@@ -593,8 +629,11 @@ async fn bound_lease_claim_after_actual_owner_restore_uses_new_fence_and_preserv
             )
             .await?;
         let client = CellClient::local(Arc::clone(&f.registry), handle.clone());
-        let coordinator =
-            PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let mutation = identity()?;
         coordinator.fault_for_test(2);
         let ticket = coordinator

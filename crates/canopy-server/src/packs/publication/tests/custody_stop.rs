@@ -44,8 +44,11 @@ async fn stop_all_seven_expired_originals_preserves_unknown_outcomes_and_allows_
                 .ready_stop(f.client(), identity()?, &f.authority())
                 .await?;
             let stop_evidence = ready.evidence().clone();
-            let queue =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let queue = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             let ticket = queue.submit(ready).await?;
             let outcome = stopped(observed(&ticket).await?)?;
             assert_eq!(outcome.original, evidence);
@@ -213,7 +216,11 @@ async fn stop_first_writer_fact_is_immutable_and_is_not_an_unexecuted_invocation
             .await?;
         let first_receipt = first.command_for_test().execute().await?.receipt;
         let invocation = second.evidence().clone();
-        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         let outcome = stopped(observed(&queue.submit(second).await?).await?)?;
         assert_eq!(outcome.invocation, invocation);
         assert!(outcome.committed.is_none());
@@ -309,8 +316,11 @@ async fn stop_service_reply_loss_and_panic_keep_bounded_originals_through_closed
                 .ready_stop(f.client(), invocation_identity, &f.authority())
                 .await?;
             let invocation = ready.evidence().clone();
-            let queue =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let queue = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             if fault == 0 {
                 edit(
                     &f,
@@ -420,7 +430,11 @@ async fn custody_scan_uses_bounded_indexed_pages_and_revisits_corruption_without
         assert!(details.iter().all(|v|!v.contains("TEMP B-TREE")),"{details:?}");
         Ok(Vec::new())
     }).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let limits = RecoveryScanLimits {
         page: 17,
         interval: Duration::from_millis(10),
@@ -560,8 +574,11 @@ async fn custody_scan_recovers_exact_maintenance_commands_after_their_pending_ke
                 timeout(Duration::from_secs(10), stage.wait_terminal()).await?,
                 StagingState::Uncertain(_)
             ));
-            let queue =
-                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let queue = PublicationCoordinator::new(
+                f.target.clone(),
+                PublicationLimits::default(),
+                f.publication_budget.clone(),
+            )?;
             queue.fault_for_test(fault);
             let service = CustodySupervisor::start(
                 f.client(),
@@ -712,7 +729,11 @@ async fn custody_stop_cannot_be_blocked_by_its_own_uncertain_preparation_and_fen
         let mut mutation = identity()?;
         mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
         let ready = session.ready_renew(mutation, DEFAULT_LEASE_MS).await?;
-        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         queue.fault_for_test(1);
         let renewal = queue.submit(ready).await?;
         assert!(matches!(

@@ -57,7 +57,11 @@ pub(super) async fn qualify(
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     let mut terminal = None;
     for offset in [0, 128, 256] {
@@ -389,7 +393,11 @@ pub(super) async fn qualify_fence(context: Context<'_>) -> Result {
     let registered = page.persist_recovery(store, identity()?, None).await?;
     let bound = page.bind_recovery(registered, store)?;
     session.fence();
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let observer = queue
         .submit(bound)
         .await
@@ -436,7 +444,11 @@ pub(super) async fn qualify_revoked(context: Context<'_>, root_case: bool) -> Re
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     let mut observer = None;
     for offset in [0, 128, 256] {
