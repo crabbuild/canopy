@@ -2,9 +2,10 @@
 use super::*;
 use cellule_runtime::{PreparedCommand, Receipt};
 
-const DOMAIN: &[u8] = b"canopy.custody-retirement.v1\0";
+const DOMAIN: &[u8] = b"canopy.custody-retirement.v2\0";
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StopData {
+    purpose: CustodyPurpose,
     tenant: [u8; 16],
     application: [u8; 16],
     operation: [u8; 16],
@@ -18,6 +19,7 @@ impl WireValue for StopData {
             return Err(CodecError::Invalid("custody retirement context"));
         }
         e.write_bytes(DOMAIN)?;
+        e.write_u8(self.purpose.number())?;
         e.write_bytes(&self.tenant)?;
         e.write_bytes(&self.application)?;
         e.write_bytes(&self.operation)?;
@@ -31,6 +33,7 @@ impl WireValue for StopData {
             return Err(CodecError::Invalid("custody retirement purpose"));
         }
         let value = Self {
+            purpose: CustodyPurpose::parse(d.read_u8()?)?,
             tenant: crate::packs::directory::index::codec::fixed(d)?,
             application: crate::packs::directory::index::codec::fixed(d)?,
             operation: crate::packs::directory::index::codec::fixed(d)?,
@@ -162,6 +165,7 @@ pub(super) fn record(
     let header = intent.header()?;
     if value.data.tenant != header.tenant
         || value.data.application != header.application
+        || value.data.purpose != header.purpose
         || value.data.operation != header.operation
         || value.data.step != header.step
         || value.data.intent_digest != *blake3::hash(&intent.encoded()?).as_bytes()
@@ -176,7 +180,7 @@ pub struct StopCustodyIntent;
 impl Command for StopCustodyIntent {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 43;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CustodyStopInput;
     type Output = CustodyStopReply;
     fn execute(
@@ -187,7 +191,13 @@ impl Command for StopCustodyIntent {
         let data: StopData = input.certificate.data()?;
         let sets = context.sql(&SqlBatch {
             statements: vec![
-                row_statement(data.operation, Some(data.step)),
+                row_statement(
+                    CustodyKey {
+                        purpose: data.purpose,
+                        operation: data.operation,
+                    },
+                    Some(data.step),
+                ),
                 seed_statement(),
             ],
         })?;
@@ -198,7 +208,15 @@ impl Command for StopCustodyIntent {
         {
             return deny(PreparationDenial::Unauthorized);
         }
-        let Some(saved) = from_sets(&sets, context.target(), data.operation)? else {
+        let Some(saved) = from_sets(
+            &sets,
+            context.target(),
+            CustodyKey {
+                purpose: data.purpose,
+                operation: data.operation,
+            },
+        )?
+        else {
             return deny(PreparationDenial::Missing);
         };
         if data.intent_digest != *blake3::hash(&saved.intent.encoded()?).as_bytes() {
@@ -235,8 +253,8 @@ impl Command for StopCustodyIntent {
         };
         let bytes = encode(&CertificateEnvelope::seal(&record, &seed)?, 1024)?;
         super::super::publish::changed(context.sql(&statement(
-            "UPDATE catalog_custody_commands SET stopped=?1 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL AND stopped IS NULL",
-            vec![SqlValue::Blob(bytes),blob(record.data.operation), number(u64::from(record.data.step))?,SqlValue::Blob(saved.intent.encoded()?)],
+            "UPDATE catalog_custody_commands SET stopped=?1 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL AND stopped IS NULL AND purpose=?5",
+            vec![SqlValue::Blob(bytes),blob(record.data.operation), number(u64::from(record.data.step))?,SqlValue::Blob(saved.intent.encoded()?),number(u64::from(record.data.purpose.number()))?],
         ))?)?;
         Ok(CommandResult::Success(CustodyStopReply::Stopped))
     }
@@ -244,6 +262,7 @@ impl Command for StopCustodyIntent {
 
 #[derive(Clone, Debug)]
 pub struct CustodyStopOutcome {
+    pub purpose: CustodyPurpose,
     pub original: PendingMutation,
     pub invocation: PendingMutation,
     pub stop: Option<CustodyStopFact>,
@@ -254,6 +273,7 @@ pub struct CustodyStopOutcome {
 #[derive(Clone)]
 #[must_use]
 pub struct ReadyCustodyStop {
+    purpose: CustodyPurpose,
     client: CellClient,
     target: CellTarget,
     request: BeginRequest,
@@ -271,7 +291,7 @@ impl RegisteredCustody {
     ) -> Result<ReadyCustodyStop, CustodyError> {
         let target = self.evidence().target().clone();
         let header = self.intent.header()?;
-        let current = load(&client, &target, header.operation, Some(header.step))
+        let current = load(&client, &target, header.key(), Some(header.step))
             .await?
             .ok_or(CustodyError::Context)?;
         if current.intent != self.intent {
@@ -302,6 +322,7 @@ impl RegisteredCustody {
         )?;
         let intent_digest = *blake3::hash(&self.intent.encoded()?).as_bytes();
         let data = StopData {
+            purpose: header.purpose,
             tenant: header.tenant,
             application: header.application,
             operation: header.operation,
@@ -322,6 +343,7 @@ impl RegisteredCustody {
             .await
             .map_err(|error| CustodyError::Owner(Box::new(error)))?;
         Ok(ReadyCustodyStop {
+            purpose: header.purpose,
             client,
             target,
             request: BeginRequest {
@@ -339,6 +361,9 @@ impl RegisteredCustody {
     }
 }
 impl ReadyCustodyStop {
+    pub(in crate::packs::publication) fn purpose(&self) -> CustodyPurpose {
+        self.purpose
+    }
     pub fn evidence(&self) -> &PendingMutation {
         self.command.evidence()
     }
@@ -357,7 +382,10 @@ impl ReadyCustodyStop {
         let saved = load(
             &self.client,
             &self.target,
-            self.request.operation,
+            CustodyKey {
+                purpose: self.purpose,
+                operation: self.request.operation,
+            },
             Some(self.step),
         )
         .await?
@@ -432,6 +460,7 @@ impl ReadyCustodyStop {
             (saved.map(|value| value.fact(&self.target)), Some(committed))
         };
         Ok(CustodyStopOutcome {
+            purpose: self.purpose,
             original: self.original,
             invocation,
             stop,

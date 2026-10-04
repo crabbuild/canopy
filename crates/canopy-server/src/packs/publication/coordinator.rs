@@ -250,6 +250,8 @@ enum JobKind {
     Publication,
     CustodyStop,
     ServingRelease,
+    ServingCommand,
+    ServingStop,
 }
 struct Job {
     operation: [u8; 16],
@@ -676,7 +678,26 @@ impl PublicationCoordinator {
     }
     /// Retirement has a separate bounded key kind, never a fabricated operation.
     pub async fn pending_custody_stop(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
-        self.pending_kind(operation, JobKind::CustodyStop).await
+        self.pending_custody_stop_for(CustodyPurpose::Creating, operation)
+            .await
+    }
+    pub(in crate::packs::publication) async fn pending_custody_stop_for(
+        &self,
+        purpose: CustodyPurpose,
+        operation: [u8; 16],
+    ) -> Option<PublicationTicket> {
+        self.pending_kind(
+            operation,
+            if purpose == CustodyPurpose::Serving {
+                JobKind::ServingStop
+            } else {
+                JobKind::CustodyStop
+            },
+        )
+        .await
+    }
+    pub async fn pending_serving_command(&self, reader: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_kind(reader, JobKind::ServingCommand).await
     }
     /// Read-retention release cannot collide with a creating request's ID.
     pub async fn pending_serving_release(&self, reader: [u8; 16]) -> Option<PublicationTicket> {
@@ -1065,7 +1086,14 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
             && value.stop.is_some()
             && let Some(original) = state
                 .jobs
-                .get(&(job.operation, JobKind::Publication))
+                .get(&(
+                    job.operation,
+                    if value.purpose == CustodyPurpose::Serving {
+                        JobKind::ServingCommand
+                    } else {
+                        JobKind::Publication
+                    },
+                ))
                 .cloned()
             && matches!(*original.status.borrow(), PublicationState::Uncertain(_))
         {
@@ -1074,7 +1102,7 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
                 .lock()
                 .await
                 .as_ref()
-                .and_then(ReadyPublication::preparation_original)
+                .and_then(ReadyPublication::custody_original)
                 .is_some_and(|evidence| *evidence == value.original);
             if matches {
                 original.status.send_replace(PublicationState::Queued);

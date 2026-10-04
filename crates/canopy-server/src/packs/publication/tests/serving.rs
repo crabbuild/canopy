@@ -7,6 +7,7 @@ use cellule_ltx::DiskBudget;
 use cellule_runtime::{Committed, PreparedCommand};
 use tokio::time::{Duration, timeout};
 use tokio_util::task::TaskTracker;
+mod custody;
 
 async fn initialize(f: &Fixture, store: Arc<ArtifactStore>) -> Result<GenerationFact> {
     let (prepared, root, budget) = Box::pin(empty(f, [241; 16], store.clone())).await?;

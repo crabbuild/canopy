@@ -22,6 +22,9 @@ impl ReadyStaging {
             // Bind has no requested renewal duration. This synthetic value is
             // admission metadata only, never execution bytes or a lease clock.
             CustodyAction::BindStaging(check) => context(check, DEFAULT_LEASE_MS),
+            CustodyAction::AcquireServing(_) | CustodyAction::RenewServing { .. } => {
+                return Err(StagingError::Context);
+            }
         };
         if request.operation != operation
             || crate::repository_target(target.tenant(), target.application(), request.repository)
@@ -146,7 +149,8 @@ pub(super) async fn accept(inner: &Inner, job: &Job, value: Committed<CustodyRep
                 }
             }
         }
-        CustodyReply::Staging(StagingReply::Denied(_))
+        CustodyReply::Serving(_)
+        | CustodyReply::Staging(StagingReply::Denied(_))
         | CustodyReply::Preparation(PreparationReply::Denied(_)) => {
             fence_and_drain(inner, job, StagingError::Context).await;
             false

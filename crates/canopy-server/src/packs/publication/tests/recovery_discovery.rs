@@ -345,7 +345,7 @@ async fn resident_scanners_pause_independently_and_resume_live_indexed_discovery
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         edit(&f, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<30) INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,expires_at_ms,recovery) SELECT zeroblob(16),x,zeroblob(16),x'0000000000000001',randomblob(16),0,x'01' FROM n").await?;
-        edit(&f, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<30) INSERT INTO catalog_custody_commands(operation,step,incarnation,request_id,intent) SELECT CAST(printf('%016d',x) AS BLOB),0,zeroblob(16),CAST(printf('%016d',x) AS BLOB),x'01' FROM n").await?;
+        edit(&f, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<30) INSERT INTO catalog_custody_commands(purpose,operation,step,incarnation,request_id,intent) SELECT 0, CAST(printf('%016d',x) AS BLOB),0,zeroblob(16),CAST(printf('%016d',x) AS BLOB),x'01' FROM n").await?;
         let queue = PublicationCoordinator::new(
             f.target.clone(),
             PublicationLimits::default(),

@@ -23,7 +23,7 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 19] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 17] = [
     crate::operation(1),
     command::<AbortPreparation>(4096, 4096),
     command::<ReapPreparation>(4096, 4096),
@@ -40,8 +40,6 @@ pub(crate) const COMMANDS: [OperationDescriptor; 19] = [
     command::<RegisterCustodyIntent>(4096, 4096),
     command::<ExecuteCustody>(1024, 512),
     command::<StopCustodyIntent>(1024, 128),
-    command::<AcquireServingPin>(1024, 1024),
-    command::<RenewServingPin>(1024, 1024),
     command::<ReleaseServingPin>(1024, 128),
 ];
 pub(crate) const QUERIES: [OperationDescriptor; 10] = [
@@ -85,7 +83,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46
+                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46
             ]
         );
         assert_eq!(
@@ -120,8 +118,6 @@ mod tests {
             (41, RegisterCustodyIntent::CODEC_VERSION, 4096, 4096),
             (42, ExecuteCustody::CODEC_VERSION, 1024, 512),
             (43, StopCustodyIntent::CODEC_VERSION, 1024, 128),
-            (44, AcquireServingPin::CODEC_VERSION, 1024, 1024),
-            (45, RenewServingPin::CODEC_VERSION, 1024, 1024),
             (46, ReleaseServingPin::CODEC_VERSION, 1024, 128),
         ] {
             let operation = descriptor

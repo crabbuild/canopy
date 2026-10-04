@@ -69,6 +69,7 @@ impl PreparedCompaction {
 #[must_use]
 pub enum ReadyPublication {
     ServingRelease(ReadyServingRelease),
+    ServingCommand(Box<ReadyServingCommand>),
     Push(ReadyCatalogPush),
     RootRecovery(ReadyRootRecovery),
     TerminalRelease(Box<ReadyTerminalRelease>),
@@ -77,6 +78,11 @@ pub enum ReadyPublication {
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyServingCommand> for ReadyPublication {
+    fn from(ready: ReadyServingCommand) -> Self {
+        Self::ServingCommand(Box::new(ready))
+    }
 }
 impl From<ReadyServingRelease> for ReadyPublication {
     fn from(ready: ReadyServingRelease) -> Self {
@@ -126,14 +132,19 @@ impl From<ReadyPreparation> for ReadyPublication {
 impl ReadyPublication {
     pub(super) fn job_kind(&self) -> JobKind {
         match self {
+            Self::CustodyStop(ready) if ready.purpose() == CustodyPurpose::Serving => {
+                JobKind::ServingStop
+            }
             Self::CustodyStop(_) => JobKind::CustodyStop,
+            Self::ServingCommand(_) => JobKind::ServingCommand,
             Self::ServingRelease(_) => JobKind::ServingRelease,
             _ => JobKind::Publication,
         }
     }
-    pub(super) fn preparation_original(&self) -> Option<&cellule_runtime::PendingMutation> {
+    pub(super) fn custody_original(&self) -> Option<&cellule_runtime::PendingMutation> {
         match self {
             Self::Preparation(ready) => Some(ready.evidence()),
+            Self::ServingCommand(ready) => Some(ready.evidence()),
             _ => None,
         }
     }
@@ -155,7 +166,8 @@ impl ReadyPublication {
             | Self::RootRecovery(_)
             | Self::TerminalRelease(_)
             | Self::CustodyStop(_)
-            | Self::ServingRelease(_) => return false,
+            | Self::ServingRelease(_)
+            | Self::ServingCommand(_) => return false,
         };
         source.target == session.target
             && source.check == session.check
@@ -165,6 +177,7 @@ impl ReadyPublication {
     }
     pub(super) fn reservation(&self) -> u64 {
         match self {
+            Self::ServingCommand(ready) => ready.reservation(),
             Self::Inputs(_) => inputs::INPUT_RESERVATION,
             Self::Preparation(_) => preparation::RESERVATION,
             Self::RootRecovery(ready) => ready.reservation(),
@@ -175,6 +188,7 @@ impl ReadyPublication {
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
             Self::ServingRelease(ready) => Self::ServingRelease(ready.dispatch_copy()),
+            Self::ServingCommand(ready) => Self::ServingCommand(Box::new(ready.dispatch_copy())),
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootRecovery(ready) => Self::RootRecovery(ready.clone()),
             Self::TerminalRelease(ready) => Self::TerminalRelease(ready.clone()),
@@ -198,6 +212,7 @@ impl ReadyPublication {
     pub(super) fn class(&self) -> PublicationClass {
         match self {
             Self::Push(_)
+            | Self::ServingCommand(_)
             | Self::RootRecovery(_)
             | Self::BoundRecovery(_)
             | Self::Inputs(_)
@@ -211,6 +226,7 @@ impl ReadyPublication {
     pub(super) fn context(&self) -> (&CellClient, &CellTarget, BeginRequest) {
         let (client, target, check) = match self {
             Self::ServingRelease(ready) => return ready.context(),
+            Self::ServingCommand(ready) => return ready.context(),
             Self::CustodyStop(ready) => return ready.context(),
             Self::Push(ready) => ready.owner.capability(),
             Self::RootRecovery(ready) => ready.capability(),
@@ -235,6 +251,7 @@ impl ReadyPublication {
     pub(super) fn pending(&self) -> PublicationError {
         match self {
             Self::ServingRelease(ready) => ready.pending(),
+            Self::ServingCommand(ready) => ready.pending(),
             Self::Preparation(ready) => ready.pending(),
             Self::RootRecovery(ready) => ready.pending(),
             Self::TerminalRelease(ready) => ready.pending(),
@@ -254,6 +271,10 @@ impl ReadyPublication {
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
         let client = self.context().0.clone();
         match self {
+            Self::ServingCommand(ready) => ready
+                .dispatch(recover, fault)
+                .await
+                .map(PublicationOutcome::ServingCommand),
             Self::ServingRelease(ready) => ready
                 .dispatch(recover, fault)
                 .await
@@ -308,6 +329,7 @@ impl ReadyPublication {
 #[derive(Clone, Debug)]
 pub enum PublicationOutcome {
     ServingRelease(Committed<ServingReleaseReply>),
+    ServingCommand(Committed<ServingReply>),
     Initialization(Committed<InitializationReply>),
     Push(Committed<CatalogCompletionReply>),
     RootPush(Committed<RootCompletionReply>),
@@ -323,6 +345,8 @@ pub enum PublicationOutcome {
 pub enum PublicationError {
     #[error("serving pin release: {0}")]
     ServingRelease(#[source] InvocationError<ServingReleaseReply>),
+    #[error("serving custody command: {0}")]
+    ServingCommand(#[source] InvocationError<ServingReply>),
     #[error("publication custody intent failed")]
     Custody {
         evidence: Box<cellule_runtime::PendingMutation>,
@@ -368,6 +392,7 @@ impl PublicationError {
             Self::Custody { .. } => "not_started",
             Self::Recovery { .. } => "pending",
             Self::ServingRelease(error) => kind(error),
+            Self::ServingCommand(error) => kind(error),
             Self::Initialization(error) => kind(error),
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
@@ -390,6 +415,7 @@ impl PublicationError {
             Self::Custody { source, .. } => source.uncertain(),
             Self::Recovery { .. } => true,
             Self::ServingRelease(error) => unknown(error),
+            Self::ServingCommand(error) => unknown(error),
             Self::Initialization(error) => unknown(error),
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),

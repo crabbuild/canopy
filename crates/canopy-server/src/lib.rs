@@ -295,6 +295,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving.rs"));
                 source.update(include_bytes!("packs/publication/serving/codec.rs"));
                 source.update(include_bytes!("packs/publication/serving/commands.rs"));
+                source.update(include_bytes!("packs/publication/serving/command_owner.rs"));
                 source.update(include_bytes!("packs/publication/serving/session.rs"));
                 source.update(include_bytes!("packs/publication/serving/ownership.rs"));
                 source.update(include_bytes!("packs/publication/serving/schema.sql"));

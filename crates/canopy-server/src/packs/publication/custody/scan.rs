@@ -4,7 +4,7 @@ use super::*;
 use std::sync::Arc;
 use tokio::{sync::watch, task::JoinHandle};
 
-const SEEK: &str = "SELECT operation FROM catalog_custody_commands INDEXED BY catalog_custody_pending WHERE phase IS NULL AND stopped IS NULL AND operation>?1 ORDER BY operation LIMIT ?2";
+const SEEK: &str = "SELECT purpose,operation FROM catalog_custody_commands INDEXED BY catalog_custody_pending WHERE phase IS NULL AND stopped IS NULL AND (purpose,operation)>(?1,?2) ORDER BY purpose,operation LIMIT ?3";
 #[derive(Clone, Debug, Default)]
 pub struct CustodyScanStats {
     pub passes: u64,
@@ -85,21 +85,21 @@ struct Scan {
 impl Scan {
     async fn visit(
         &self,
-        operation: [u8; 16],
+        key: CustodyKey,
         stats: &mut CustodyScanStats,
     ) -> Result<(), CustodyError> {
         // The coordinator owns accepted uncertainty even if its SQL key vanished.
         // Do not create a second retirement identity for an admitted operation.
         if self
             .coordinator
-            .pending_custody_stop(operation)
+            .pending_custody_stop_for(key.purpose, key.operation)
             .await
             .is_some()
         {
             stats.deferred = stats.deferred.saturating_add(1);
             return Ok(());
         }
-        let Some(saved) = load(&self.client, &self.target, operation, None).await? else {
+        let Some(saved) = load(&self.client, &self.target, key, None).await? else {
             return Ok(());
         };
         if saved.closed() || saved.evidence().identity().expires_at_ms > now(0)? {
@@ -127,13 +127,20 @@ impl Scan {
 }
 async fn page(
     sql: &SqlCell<RepositoryModule>,
-    after: [u8; 16],
+    after: CustodyKey,
     count: u16,
-) -> Result<Vec<[u8; 16]>, CustodyError> {
+) -> Result<Vec<CustodyKey>, CustodyError> {
     let result = sql
         .query(
             None,
-            statement(SEEK, vec![blob(after), number(u64::from(count))?]),
+            statement(
+                SEEK,
+                vec![
+                    number(u64::from(after.purpose.number()))?,
+                    blob(after.operation),
+                    number(u64::from(count))?,
+                ],
+            ),
         )
         .await
         .map_err(|error| CustodyError::Query(Box::new(error)))?;
@@ -144,10 +151,15 @@ async fn page(
     let mut keys = Vec::with_capacity(rows.len());
     let mut previous = after;
     for row in rows {
-        let [key] = row.as_slice() else {
+        let [SqlValue::Integer(purpose), key] = row.as_slice() else {
             return Err(CustodyError::Context);
         };
-        let key = fixed::<16>(key)?;
+        let key = CustodyKey {
+            purpose: CustodyPurpose::parse(
+                u8::try_from(*purpose).map_err(|_| CustodyError::Context)?,
+            )?,
+            operation: fixed::<16>(key)?,
+        };
         if key <= previous {
             return Err(CustodyError::Context);
         }
@@ -164,7 +176,7 @@ async fn run(
     updates: watch::Sender<CustodyScanStats>,
 ) -> CustodyScanStats {
     let mut stats = CustodyScanStats::default();
-    let mut after = [0; 16];
+    let mut after = CustodyKey::from([0; 16]);
     loop {
         let Some(round) = control.enter(&settings).await else {
             return stats;
@@ -190,7 +202,7 @@ async fn run(
         match page(&sql, after, settings.limits.page).await {
             Ok(keys) => {
                 if keys.is_empty() {
-                    after = [0; 16];
+                    after = CustodyKey::from([0; 16]);
                     stats.passes = stats.passes.saturating_add(1);
                 }
                 for key in keys {

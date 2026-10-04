@@ -17,7 +17,7 @@ fn duration(value: u64) -> Result<(), CodecError> {
     Ok(())
 }
 impl ServingToken {
-    pub(super) fn validate(&self) -> Result<(), CodecError> {
+    pub(in crate::packs::publication) fn validate(&self) -> Result<(), CodecError> {
         crate::validate_repository_id(self.repository).map_err(|_| invalid())?;
         if self.reader == [0; 16]
             || self.owner.epoch == 0
@@ -111,7 +111,7 @@ impl WireValue for RenewServingRequest {
     }
 }
 impl ServingLease {
-    pub(super) fn validate(&self) -> Result<(), CodecError> {
+    pub(in crate::packs::publication) fn validate(&self) -> Result<(), CodecError> {
         self.token.validate()?;
         self.fact.validate()?;
         if self.fact.generation != self.token.generation

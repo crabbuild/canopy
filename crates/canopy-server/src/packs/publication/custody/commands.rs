@@ -5,7 +5,7 @@ pub struct RegisterCustodyIntent;
 impl Command for RegisterCustodyIntent {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 41;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CustodyIntent;
     type Output = RootRecoveryReply;
     fn execute(
@@ -20,9 +20,9 @@ impl Command for RegisterCustodyIntent {
         let request = intent.request()?;
         let bytes = intent.encoded()?;
         let previous = context.sql(&SqlBatch {
-            statements: vec![row_statement(header.operation, None), seed_statement()],
+            statements: vec![row_statement(header.key(), None), seed_statement()],
         })?;
-        let previous = from_sets(&previous, context.target(), header.operation)?;
+        let previous = from_sets(&previous, context.target(), header.key())?;
         if let Some(previous) = &previous {
             if previous.intent == intent {
                 // Exact knowledge is idempotent even after permission/owner loss.
@@ -52,7 +52,11 @@ impl Command for RegisterCustodyIntent {
             context,
             header.repository,
             &header.actor,
-            TokenScope::Write,
+            if header.purpose == CustodyPurpose::Serving {
+                TokenScope::Read
+            } else {
+                TokenScope::Write
+            },
         )?
         .is_none()
         {
@@ -69,9 +73,9 @@ impl Command for RegisterCustodyIntent {
             return deny(PreparationDenial::Capacity);
         }
         super::super::publish::changed(context.sql(&statement(
-            "INSERT INTO catalog_custody_commands(operation,step,incarnation,request_id,intent,phase) VALUES(?1,?2,?3,?4,?5,NULL)",
+            "INSERT INTO catalog_custody_commands(operation,step,incarnation,request_id,intent,phase,purpose) VALUES(?1,?2,?3,?4,?5,NULL,?6)",
             vec![blob(header.operation),number(u64::from(header.step))?,blob(header.incarnation.as_bytes()),
-                blob(intent.snapshot.evidence().identity().request_id.as_bytes()), SqlValue::Blob(bytes)],
+                blob(intent.snapshot.evidence().identity().request_id.as_bytes()), SqlValue::Blob(bytes), number(u64::from(header.purpose.number()))?],
         ))?)?;
         Ok(CommandResult::Success(RootRecoveryReply::Registered))
     }
@@ -83,7 +87,7 @@ pub struct ExecuteCustody;
 impl Command for ExecuteCustody {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 42;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CustodyRequest;
     type Output = CustodyReply;
     fn execute(
@@ -93,11 +97,11 @@ impl Command for ExecuteCustody {
         let (_, operation, _, _) = request.action.identity();
         let sets = context.sql(&SqlBatch {
             statements: vec![
-                row_statement(operation, Some(request.step)),
+                row_statement(request.action.key(), Some(request.step)),
                 seed_statement(),
             ],
         })?;
-        let saved = from_sets(&sets, context.target(), operation)?
+        let saved = from_sets(&sets, context.target(), request.action.key())?
             .ok_or(Error::Command("custody command is not registered"))?;
         let header = saved.intent.header()?;
         let evidence = context
@@ -126,24 +130,43 @@ impl Command for ExecuteCustody {
             CustodyAction::ClaimStaging(input) => stage(ClaimStaging::execute(context, input)?),
             CustodyAction::RenewStaging(input) => stage(RenewStaging::execute(context, input)?),
             CustodyAction::BindStaging(input) => prep(BindStaging::execute(context, input)?),
+            CustodyAction::AcquireServing(input) => serving(AcquireServingPin::execute(
+                context,
+                AcquireServingRequest {
+                    repository: input.repository,
+                    reader: input.operation,
+                    actor: Some(input.actor),
+                    lease_ms: input.lease_ms,
+                },
+            )?),
+            CustodyAction::RenewServing { request, .. } => {
+                serving(RenewServingPin::execute(context, request)?)
+            }
         };
         let phase = Recorded::new(context.sequence(), output.rejected(), encode(&output, 512)?)?;
         codec::validate_phase(&phase, &request)?;
-        let token = match &output {
-            CustodyReply::Preparation(PreparationReply::Granted(lease)) => Some(lease.token),
-            CustodyReply::Staging(StagingReply::Granted(lease)) => Some(lease.token),
+        let grant = match &output {
+            CustodyReply::Preparation(PreparationReply::Granted(lease)) => {
+                Some((lease.token.owner, lease.token.attempt))
+            }
+            CustodyReply::Staging(StagingReply::Granted(lease)) => {
+                Some((lease.token.owner, lease.token.attempt))
+            }
+            CustodyReply::Serving(ServingReply::Granted(lease)) => {
+                Some((lease.token.owner, lease.token.admission_sequence))
+            }
             _ => None,
         };
-        let grant_incarnation = token.map_or(SqlValue::Null, |token| {
-            blob(token.owner.incarnation.as_bytes())
+        let grant_incarnation = grant.map_or(SqlValue::Null, |(owner, _)| {
+            blob(owner.incarnation.as_bytes())
         });
-        let grant_attempt = token
-            .map(|token| number(token.attempt))
+        let grant_attempt = grant
+            .map(|(_, attempt)| number(attempt))
             .transpose()?
             .unwrap_or(SqlValue::Null);
         super::super::publish::changed(context.sql(&statement(
-            "UPDATE catalog_custody_commands SET phase=?1,granted_incarnation=?5,granted_attempt=?6 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL AND stopped IS NULL",
-            vec![SqlValue::Blob(encode(&phase, 1024)?),blob(operation),number(u64::from(request.step))?,SqlValue::Blob(saved.intent.encoded()?),grant_incarnation,grant_attempt],
+            "UPDATE catalog_custody_commands SET phase=?1,granted_incarnation=?5,granted_attempt=?6 WHERE operation=?2 AND step=?3 AND intent=?4 AND phase IS NULL AND stopped IS NULL AND purpose=?7",
+            vec![SqlValue::Blob(encode(&phase, 1024)?),blob(operation),number(u64::from(request.step))?,SqlValue::Blob(saved.intent.encoded()?),grant_incarnation,grant_attempt,number(u64::from(header.purpose.number()))?],
         ))?)?;
         // Trusted denials commit the original phase alongside SDK acceptance;
         // the private service normalizes them back to Rejected at its boundary.
@@ -157,6 +180,12 @@ fn prep(result: CommandResult<PreparationReply>) -> CustodyReply {
 }
 fn stage(result: CommandResult<StagingReply>) -> CustodyReply {
     CustodyReply::Staging(match result {
+        CommandResult::Success(r) | CommandResult::Rejected(r) => r,
+    })
+}
+
+fn serving(result: CommandResult<ServingReply>) -> CustodyReply {
+    CustodyReply::Serving(match result {
         CommandResult::Success(r) | CommandResult::Rejected(r) => r,
     })
 }

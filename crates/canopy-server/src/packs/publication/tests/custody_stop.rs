@@ -382,7 +382,7 @@ async fn stop_service_reply_loss_and_panic_keep_bounded_originals_through_closed
 }
 
 async fn junk(f: &Fixture, count: usize) -> Result {
-    edit(f, &format!("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<{count}) INSERT INTO catalog_custody_commands(operation,step,incarnation,request_id,intent) SELECT CAST(printf('%016d',x) AS BLOB),0,zeroblob(16),CAST(printf('%016d',x) AS BLOB),x'01' FROM n")).await?;
+    edit(f, &format!("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<{count}) INSERT INTO catalog_custody_commands(purpose,operation,step,incarnation,request_id,intent) SELECT 0, CAST(printf('%016d',x) AS BLOB),0,zeroblob(16),CAST(printf('%016d',x) AS BLOB),x'01' FROM n")).await?;
     Ok(())
 }
 
@@ -424,8 +424,8 @@ async fn custody_scan_uses_bounded_indexed_pages_and_revisits_corruption_without
     let (evidence, _) = head_expiring(&f, 0, false, true).await?;
     expired(&evidence).await?;
     f.handle.query(0,4096,|db| {
-        let mut query = db.prepare("EXPLAIN QUERY PLAN SELECT operation FROM catalog_custody_commands INDEXED BY catalog_custody_pending WHERE phase IS NULL AND stopped IS NULL AND operation>?1 ORDER BY operation LIMIT ?2")?;
-        let details: Vec<String> = query.query_map(rusqlite::params![vec![0u8;16],17], |r| r.get(3))?.collect::<std::result::Result<_,_>>()?;
+        let mut query = db.prepare("EXPLAIN QUERY PLAN SELECT purpose,operation FROM catalog_custody_commands INDEXED BY catalog_custody_pending WHERE phase IS NULL AND stopped IS NULL AND (purpose,operation)>(?1,?2) ORDER BY purpose,operation LIMIT ?3")?;
+        let details: Vec<String> = query.query_map(rusqlite::params![0,vec![0u8;16],17], |r| r.get(3))?.collect::<std::result::Result<_,_>>()?;
         assert!(details.iter().any(|v|v.contains("SEARCH") && v.contains("catalog_custody_pending")),"{details:?}");
         assert!(details.iter().all(|v|!v.contains("TEMP B-TREE")),"{details:?}");
         Ok(Vec::new())

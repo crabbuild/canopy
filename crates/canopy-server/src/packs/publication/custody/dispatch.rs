@@ -19,6 +19,7 @@ pub(in crate::packs::publication) struct OwnedCustody {
 pub(in crate::packs::publication) struct CustodyStopProbe {
     target: CellTarget,
     operation: [u8; 16],
+    purpose: CustodyPurpose,
     step: u32,
     digest: [u8; 32],
     evidence: PendingMutation,
@@ -31,7 +32,17 @@ impl CustodyStopProbe {
         &self,
         client: &CellClient,
     ) -> Result<bool, CustodyError> {
-        let Some(saved) = load(client, &self.target, self.operation, Some(self.step)).await? else {
+        let Some(saved) = load(
+            client,
+            &self.target,
+            CustodyKey {
+                purpose: self.purpose,
+                operation: self.operation,
+            },
+            Some(self.step),
+        )
+        .await?
+        else {
             return Ok(false);
         };
         if *blake3::hash(&saved.intent.encoded()?).as_bytes() != self.digest
@@ -50,6 +61,7 @@ impl OwnedCustody {
         Ok(CustodyStopProbe {
             target: self.evidence().target().clone(),
             operation: header.operation,
+            purpose: header.purpose,
             step: header.step,
             digest: *blake3::hash(&self.prepared.intent.encoded()?).as_bytes(),
             evidence: self.evidence().clone(),
@@ -81,7 +93,15 @@ impl OwnedCustody {
         target: &CellTarget,
         operation: [u8; 16],
     ) -> Result<Self, CustodyError> {
-        let registered = load(client, target, operation, None)
+        Self::restore_for(client, target, CustodyPurpose::Creating, operation).await
+    }
+    pub(in crate::packs::publication) async fn restore_for(
+        client: &CellClient,
+        target: &CellTarget,
+        purpose: CustodyPurpose,
+        operation: [u8; 16],
+    ) -> Result<Self, CustodyError> {
+        let registered = load(client, target, CustodyKey { purpose, operation }, None)
             .await?
             .ok_or(CustodyError::Context)?;
         Ok(Self {
@@ -109,7 +129,7 @@ impl OwnedCustody {
     ) -> Result<RegisteredCustody, CustodyError> {
         let header = self.prepared.intent.header()?;
         let target = self.evidence().target();
-        if let Some(saved) = load(client, target, header.operation, Some(header.step)).await? {
+        if let Some(saved) = load(client, target, header.key(), Some(header.step)).await? {
             return if saved.intent == self.prepared.intent {
                 if let Some(fact) = saved.stop_fact() {
                     return Err(CustodyError::Stopped(Box::new(fact)));
@@ -138,9 +158,7 @@ impl OwnedCustody {
         // requests recovery; ordinary network loss can use a durable pointer.
         if registration_fault != 0 {
             result.map_err(|error| CustodyError::Registration(Box::new(error)))?;
-        } else if let Some(saved) =
-            load(client, target, header.operation, Some(header.step)).await?
-        {
+        } else if let Some(saved) = load(client, target, header.key(), Some(header.step)).await? {
             return if saved.intent == self.prepared.intent {
                 Ok(saved)
             } else {

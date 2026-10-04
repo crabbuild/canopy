@@ -55,6 +55,63 @@ maintenance, signed completion/cold clone, file attribution and full-history plu
 10,000-developer capacity qualification remain mandatory. This branch remains
 local, unpublished and unreleasable.
 
+## Durable serving command checkpoint
+
+Serving acquisition and renewal now use the existing durable custody journal and
+publication queue through `ReadyServingCommand`. Raw 44/45 receivers are excluded
+from production registration. Fresh command codecs 41/42/43 and authenticated
+intent/stop domains use version 2; the journal key, indexed discovery and MACs
+bind creating versus serving purpose. Registration requires Read for serving,
+while acquisition allocates no creating namespace. The original logical account
+and request digest persist through renewal. Exact known serving grants and
+denials remain immutable knowledge rather than fresh physical read authority.
+
+Renewal retains a shared physical-drain guard through factory ownership, held
+admission, dispatch and uncertainty. The queue reuses its foreground/account/node
+budgets with the existing 28 KiB custody reservation; release/stop keep their
+reserved maintenance class. Separate job kinds prevent collisions among serving
+commands, serving stops, releases and creating requests with the same real ID.
+The existing scanner visits both purposes and stops expired unexecuted originals
+without deleting accepted serving roots. The [serving contract](design/certified-serving-pins.md)
+details protocol bounds and the still-missing resident ownership handoff.
+
+Final-source macOS/Rust 1.98.0 qualification executes 640 unique workspace
+library cases: **635 pass and five fail**, with exit 101 retained. All 346
+publication, seven startup and four production resident-recovery cases pass;
+two nested subprocess summaries are excluded. The ten new serving integration
+and codec families are included in that total. Nine additional workspace and
+lifecycle cases pass in 3.60 seconds, including canceled prebound startup.
+Combined: 649 unique executed, 644 pass and five fail. The failure set remains
+exactly the five legacy `objects` readers awaiting certified-root conversion.
+
+The new families cover both formats, all six registration/execution transport
+fault modes, canceled and closed observation, held discard, atomic late/ignored
+phase rollback, recorded revocation, actual cold owner restoration after SDK
+expiry, same-ID purpose separation, page-one scanner traversal, immutable
+identity/shared pending quota, framing, role mismatch and v2-only decoding. The
+first eight-family run passed in 3.32 seconds. Preliminary enum-size, moved-test-
+guard and invalid UUID fixture diagnostics remain under the draft/pre-UUID log
+prefixes; they are not passing qualification. No compatibility fallback or lint
+suppression was introduced.
+
+Warnings-denied workspace/all-target Clippy passes in 25.42 seconds, the server
+build in 29.78 seconds and formatting in 1.07 seconds. Static/diff checks verify
+461 frozen source/schema/manifest files including 448 Rust files, 152 local doc
+links, the five SDK manifest/six lock pins, a clean SDK and unchanged protected
+original index/archive. Proof and final-source logs use the
+`/tmp/canopy-serving-custody-*` prefix. The qualification driver terminates with
+zero only after explicitly recording the failed library run and passing the
+remaining checks; this is not a green workspace test result.
+
+Production resident acquisition/renewal ownership and bounded generation pooling,
+physical handoff before detached observers, all object/ref/graph/native/stream
+consumer conversion, old-owner physical fencing/adoption/quota recovery and
+admitted immutable custody history with exact lookup remain immediate priorities.
+All full producer/final-DDL, typed GC/backup/isolated restore, OS containment,
+native acceleration/physical rewrite/fair maintenance, signed completion/cold
+clone, file attribution and full-history/10,000-SDE capacity gates remain open.
+This local branch remains unpublished and unreleasable.
+
 ## Certified serving pin foundation
 
 The [serving contract](design/certified-serving-pins.md) describes the new atomic

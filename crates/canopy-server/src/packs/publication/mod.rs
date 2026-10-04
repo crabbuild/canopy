@@ -17,9 +17,10 @@ use cellule_runtime::{
 mod serving;
 pub use serving::{
     AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_OWNERS,
-    MAX_SERVING_PINS, ReadyServingRelease, ReleaseServingPin, RenewServingPin, RenewServingRequest,
-    ServingCheck, ServingContext, ServingDenial, ServingDrainProof, ServingLease, ServingPin,
-    ServingReadBudget, ServingReadError, ServingReleaseReply, ServingReply, ServingToken,
+    MAX_SERVING_PINS, ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
+    RenewServingRequest, ServingCheck, ServingContext, ServingDenial, ServingDrainProof,
+    ServingLease, ServingPin, ServingReadBudget, ServingReadError, ServingReleaseReply,
+    ServingReply, ServingToken,
 };
 mod owner;
 pub(crate) mod registry;
@@ -113,10 +114,10 @@ pub use root_completion::{
 mod admission_receipt;
 mod custody;
 pub use custody::{
-    CustodyAction, CustodyError, CustodyIntent, CustodyReply, CustodyRequest, CustodyScanStats,
-    CustodyStopFact, CustodyStopInput, CustodyStopOutcome, CustodyStopReply, CustodySupervisor,
-    ExecuteCustody, PreparedCustody, ReadyCustodyStop, RegisterCustodyIntent, RegisteredCustody,
-    StopCustodyIntent,
+    CustodyAction, CustodyError, CustodyIntent, CustodyPurpose, CustodyReply, CustodyRequest,
+    CustodyScanStats, CustodyStopFact, CustodyStopInput, CustodyStopOutcome, CustodyStopReply,
+    CustodySupervisor, ExecuteCustody, PreparedCustody, ReadyCustodyStop, RegisterCustodyIntent,
+    RegisteredCustody, StopCustodyIntent,
 };
 mod preparation_receipt;
 pub use preparation_receipt::{PreparationAdmission, PreparationReceiptError};
@@ -242,8 +243,6 @@ pub struct MaintenanceRequest {
 /// Bind the packed production contract. Inline publication/completion adapters
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
-    registry.bind_command::<AcquireServingPin>()?;
-    registry.bind_command::<RenewServingPin>()?;
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
     registry.bind_command::<RegisterCustodyIntent>()?;

@@ -32,6 +32,56 @@ preparation floor protection independently. This is SQL fact retention, not a
 completed remote artifact collector. The final typed GC/backup/restore inventory
 must include these roots and all other reader/backup/recovery owners.
 
+## Exact acquisition and renewal custody
+
+Production acquisition and renewal run through `ReadyServingCommand` and the
+existing publication coordinator. Raw commands 44/45 remain domain receivers
+for the custody envelope and test fixtures; production does not register them.
+Commands 41/42/43 use codec version 2 with fresh schema and MAC domains. There is
+no decoder, default purpose or data migration for the old journal format.
+
+Reuse the existing custody intent, SDK snapshot/body, authenticated carrier,
+ordered predecessor, recorded phase, first-writer retirement and shared bounded
+queue. The primary key is `(purpose, operation, step)`, with distinct creating
+and serving purposes. Pending/grant indexes, exact loads, stop authentication and
+scanner keysets include purpose. The same logical ID can therefore name one
+creating request and one serving reader without joining their histories or
+coordinator jobs. An SDK request identity remains globally unique in the journal.
+Historical serving grants never restart a creating namespace.
+
+Serving intent registration requires current Read rather than Write. Acquisition
+uses the existing BeginRequest identity fields for repository, reader ID, request
+digest, service account and requested lease; it allocates no artifact namespace.
+Anonymous browsers use a pin owned by an authorized service account and remain
+subject to their own fresh Read checks. The exact record is not an anonymous
+mutation or an account-authentication shortcut. Renewal keeps the acquisition's
+logical account/digest and exact token. The domain write, recorded serving result
+and SDK acceptance commit together; late errors or ignored phase writes leave
+both the pin mutation and SDK acceptance absent.
+
+The coordinator retains both original registration and execution commands across
+absent/lost replies and panics. It uses the shared foreground class with the
+custody reservation of 28 KiB; that body does not fit the 8 KiB maintenance
+reservation. Dropping an observer or closing the queue does not free retained
+uncertainty. Known results release retained ownership before returning credits.
+Fresh physical capability construction remains separate from historical receipt
+recovery, including after actual Cell owner restoration.
+
+`ServingPin::ready_renew` acquires a physical-drain guard before preparing the
+original. The ready value, held admission, dispatch and uncertain recovery share
+that same guard. Closing the pin waits until a proven unexecuted held command is
+discarded or the exact original reaches a known disposition. Cancellation of an
+observer cannot release it. The production owner must retain and activate/discard
+held tickets and drive uncertain recovery; this primitive is not a complete
+resident pin pool or automatic renewal supervisor.
+
+The existing bounded custody scanner also visits serving heads and can retire an
+expired unexecuted original. A stop records logical closure and never invents an
+execution result or releases an accepted serving pin. Reconstruction APIs select
+the serving purpose explicitly; creating staging recovery rejects serving actions
+and results. Settled history is still stored in SQL and requires the planned
+admitted immutable history frames and exact lookup to bound long-term growth.
+
 ## Capability construction and admitted reads
 
 `ServingContext` is explicit trusted configuration: real CellClient/target,
@@ -100,14 +150,17 @@ A new owner cannot renew/release old-owner pins merely because its epoch is newe
 They remain roots until actual physical fencing/drain and an authenticated
 adoption/release protocol is implemented. Conservatively retaining abandoned
 roots preserves correctness but does not establish operational quota recovery.
-Process-loss acquisition/renewal discovery is still missing. Do not compensate
-with automatic expiry deletion or a synthetic owner fence.
+Exact acquisition/renewal command reconstruction is implemented below. Automatic
+production handoff, physical fencing/adoption and abandoned-root quota recovery
+remain required. Do not compensate with automatic expiry deletion or a synthetic
+owner fence.
 
 ## Production integration and qualification gates
 
-The next serving layer must own exact acquisition and renewal commands, preserve
-outcomes across cancellation/process loss, and hand off retained capabilities
-before observers can detach. Cache/coalesce a bounded set of active generation
+The next serving layer must integrate these exact acquisition and renewal
+commands into a resident producer and hand off retained capabilities before
+observers can detach. Command reconstruction alone does not establish this
+physical ownership handoff. Cache/coalesce a bounded set of active generation
 owners per repository rather than allocating a pin per browser/SDE. Carry that
 ownership through native work, object bodies and response streams; integrate
 its drain into actual eviction and shutdown. A close must join all producers and
@@ -117,7 +170,11 @@ Regression families exercise Read/public access, joint initialization, original
 acquisition replay after release, token scope, revocation, expiry, monotone
 renewal, generation reaping, schema quota/identity guards, blocked real provider
 I/O, observer cancellation, actual owner restoration, bounded codecs/MAC domains,
-and exact release absence/lost acknowledgement/panic. Initialization retention is
+and exact release absence/lost acknowledgement/panic. Registered acquisition and
+renewal families exercise all six registrar/execution transport fault modes,
+held/canceled observation, closed recovery, late/ignored atomic rollback,
+recorded revocation, cold owner restoration after SDK expiry, both-purpose
+page-one scanning, shared pending quota and v2-only bounded codecs. Initialization retention is
 retired through its actual registered terminal release so an unrelated floor
 cannot conceal a serving-retention bug. Trusted generation/quota SQL fixtures
 qualify receiver invariants, not native publication or team capacity.

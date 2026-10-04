@@ -75,6 +75,12 @@ impl CellModule for Module {
             complete_descriptor.input_limit = 4 << 20;
             let mut commands = super::registry::COMMANDS.to_vec();
             commands.extend([publish_descriptor, complete_descriptor, ref_descriptor]);
+            for id in [AcquireServingPin::ID, RenewServingPin::ID] {
+                let mut raw = descriptor(id);
+                raw.input_limit = 1024;
+                raw.output_limit = 1024;
+                commands.push(raw);
+            }
             // Raw domain receivers qualify their invariants here. Production
             // binds only the mandatory registered custody envelope.
             for (id, codec) in [
@@ -121,6 +127,8 @@ impl CellModule for Module {
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         cellule_runtime::primitives::sql::register_sql::<RepositoryModule>(registry)?;
         super::register(registry)?;
+        registry.bind_command::<AcquireServingPin>()?;
+        registry.bind_command::<RenewServingPin>()?;
         registry.bind_command::<BeginPreparation>()?;
         registry.bind_command::<ClaimPreparation>()?;
         registry.bind_command::<RenewPreparation>()?;

@@ -28,6 +28,8 @@ pub enum ServingReadError {
     Metadata(#[from] crate::packs::directory::index::IndexError),
     #[error("serving capability failed")]
     Capability(#[from] Error),
+    #[error("serving custody intent failed")]
+    Custody(#[source] Box<CustodyError>),
     #[error("serving encoding failed")]
     Codec(#[from] CodecError),
     #[error("serving worker failed")]
@@ -129,7 +131,7 @@ struct Workers {
     active: usize,
     released: bool,
 }
-struct Active(Arc<Inner>);
+pub(super) struct Active(Arc<Inner>);
 impl Drop for Active {
     fn drop(&mut self) {
         let mut state = self.0.state.lock().expect("serving workers");
@@ -273,6 +275,45 @@ impl ServingPin {
                 Ok(headers)
             })
             .await?
+    }
+    /// Own the exact renewal and its drain guard before yielding to a caller.
+    /// The coordinator retains both across held/unknown states and transport loss.
+    pub async fn ready_renew(
+        &self,
+        actor: String,
+        request_digest: [u8; 32],
+        identity: MutationIdentity,
+        lease_ms: u64,
+    ) -> Result<ReadyServingCommand, ServingReadError> {
+        if self.inner.context.budget.inner.stop.is_cancelled() {
+            return Err(ServingReadError::Inactive);
+        }
+        let guard = {
+            let mut state = self.inner.state.lock().expect("serving workers");
+            if state.closed {
+                return Err(ServingReadError::Inactive);
+            }
+            state.active += 1;
+            Arc::new(Active(Arc::clone(&self.inner)))
+        };
+        let ctx = &self.inner.context;
+        ctx.authority.check(&ctx.target, self.token().owner).await?;
+        ReadyServingCommand::renew(
+            ctx.client.clone(),
+            ctx.target.clone(),
+            RenewServingRequest {
+                check: ServingCheck {
+                    token: self.token(),
+                    actor: Some(actor),
+                },
+                lease_ms,
+            },
+            request_digest,
+            identity,
+            guard,
+        )
+        .await
+        .map_err(|error| ServingReadError::Custody(Box::new(error)))
     }
     /// Closing is sticky. Cancellation cannot reopen acquisition while workers
     /// or a retained original release command remain owned by this service.

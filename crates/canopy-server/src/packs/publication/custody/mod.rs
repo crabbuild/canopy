@@ -26,8 +26,42 @@ pub use stop::{
 const INPUT_BYTES: u32 = 1024;
 const INTENT_BYTES: u32 = 4096;
 const MAX_STEPS: u32 = 65_535;
-const DOMAIN: &[u8] = b"canopy.custody-command-intent.v1\0";
+const DOMAIN: &[u8] = b"canopy.custody-command-intent.v2\0";
 
+/// Creating and serving requests retain separate exact command histories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CustodyPurpose {
+    Creating,
+    Serving,
+}
+impl CustodyPurpose {
+    fn number(self) -> u8 {
+        match self {
+            Self::Creating => 0,
+            Self::Serving => 1,
+        }
+    }
+    fn parse(value: u8) -> Result<Self, CodecError> {
+        match value {
+            0 => Ok(Self::Creating),
+            1 => Ok(Self::Serving),
+            _ => Err(CodecError::Invalid("custody purpose")),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CustodyKey {
+    purpose: CustodyPurpose,
+    operation: [u8; 16],
+}
+impl From<[u8; 16]> for CustodyKey {
+    fn from(operation: [u8; 16]) -> Self {
+        Self {
+            purpose: CustodyPurpose::Creating,
+            operation,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CustodyAction {
     BeginPreparation(BeginRequest),
@@ -37,11 +71,16 @@ pub enum CustodyAction {
     ClaimStaging(LeaseRequest),
     RenewStaging(LeaseRequest),
     BindStaging(LeaseCheck),
+    AcquireServing(BeginRequest),
+    RenewServing {
+        request: RenewServingRequest,
+        request_digest: [u8; 32],
+    },
 }
 impl CustodyAction {
     fn identity(&self) -> ([u8; 16], [u8; 16], [u8; 32], &str) {
         match self {
-            Self::BeginPreparation(r) | Self::BeginStaging(r) => {
+            Self::BeginPreparation(r) | Self::BeginStaging(r) | Self::AcquireServing(r) => {
                 (r.repository, r.operation, r.request_digest, &r.actor)
             }
             Self::ClaimPreparation(r)
@@ -49,6 +88,28 @@ impl CustodyAction {
             | Self::ClaimStaging(r)
             | Self::RenewStaging(r) => identity_of(&r.check),
             Self::BindStaging(r) => identity_of(r),
+            Self::RenewServing {
+                request,
+                request_digest,
+            } => (
+                request.check.token.repository,
+                request.check.token.reader,
+                *request_digest,
+                request.check.actor.as_deref().unwrap_or(""),
+            ),
+        }
+    }
+    fn purpose(&self) -> CustodyPurpose {
+        if matches!(self, Self::AcquireServing(_) | Self::RenewServing { .. }) {
+            CustodyPurpose::Serving
+        } else {
+            CustodyPurpose::Creating
+        }
+    }
+    fn key(&self) -> CustodyKey {
+        CustodyKey {
+            purpose: self.purpose(),
+            operation: self.identity().1,
         }
     }
     fn staging(&self) -> bool {
@@ -58,7 +119,10 @@ impl CustodyAction {
         )
     }
     fn begin(&self) -> bool {
-        matches!(self, Self::BeginPreparation(_) | Self::BeginStaging(_))
+        matches!(
+            self,
+            Self::BeginPreparation(_) | Self::BeginStaging(_) | Self::AcquireServing(_)
+        )
     }
 }
 fn identity_of(check: &LeaseCheck) -> ([u8; 16], [u8; 16], [u8; 32], &str) {
@@ -74,12 +138,15 @@ fn identity_of(check: &LeaseCheck) -> ([u8; 16], [u8; 16], [u8; 32], &str) {
 pub enum CustodyReply {
     Preparation(PreparationReply),
     Staging(StagingReply),
+    Serving(ServingReply),
 }
 impl CustodyReply {
     fn rejected(&self) -> bool {
         matches!(
             self,
-            Self::Preparation(PreparationReply::Denied(_)) | Self::Staging(StagingReply::Denied(_))
+            Self::Preparation(PreparationReply::Denied(_))
+                | Self::Staging(StagingReply::Denied(_))
+                | Self::Serving(ServingReply::Denied(_))
         )
     }
 }
@@ -94,6 +161,7 @@ pub struct CustodyRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Header {
+    purpose: CustodyPurpose,
     tenant: [u8; 16],
     application: [u8; 16],
     incarnation: IncarnationId,
@@ -124,7 +192,8 @@ impl CustodyIntent {
         let request = self.request()?;
         let evidence = self.snapshot.evidence();
         let (repository, operation, digest, actor) = request.action.identity();
-        if !self.certificate.authenticated(seed)
+        if header.purpose != request.action.purpose()
+            || !self.certificate.authenticated(seed)
             || header.tenant != *target.tenant().as_bytes()
             || header.application != *target.application().as_bytes()
             || crate::repository_target(target.tenant(), target.application(), repository)?
@@ -245,23 +314,37 @@ fn seed_statement() -> SqlStatement {
         parameters: vec![],
     }
 }
-fn row_statement(operation: [u8; 16], step: Option<u32>) -> SqlStatement {
-    match step {
-        Some(step) => SqlStatement {
-            sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 AND step=?2".into(),
-            parameters: vec![blob(operation), SqlValue::Integer(i64::from(step))],
-        },
-        None => SqlStatement {
-            sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 ORDER BY step DESC LIMIT 1".into(),
-            parameters: vec![blob(operation)],
-        },
+impl Header {
+    fn key(&self) -> CustodyKey {
+        CustodyKey {
+            purpose: self.purpose,
+            operation: self.operation,
+        }
+    }
+}
+fn row_statement(key: impl Into<CustodyKey>, step: Option<u32>) -> SqlStatement {
+    let key = key.into();
+    let mut parameters = vec![
+        blob(key.operation),
+        SqlValue::Integer(i64::from(key.purpose.number())),
+    ];
+    let sql = if let Some(step) = step {
+        parameters.push(SqlValue::Integer(i64::from(step)));
+        "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 AND purpose=?2 AND step=?3"
+    } else {
+        "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands WHERE operation=?1 AND purpose=?2 ORDER BY step DESC LIMIT 1"
+    };
+    SqlStatement {
+        sql: sql.into(),
+        parameters,
     }
 }
 fn from_sets(
     sets: &[SqlResultSet],
     target: &CellTarget,
-    operation: [u8; 16],
+    key: impl Into<CustodyKey>,
 ) -> cellule_runtime::Result<Option<RegisteredCustody>> {
+    let key = key.into();
     let Some(row) = rows(sets)?.first() else {
         return Ok(None);
     };
@@ -281,7 +364,7 @@ fn from_sets(
         super::attestation::seed(sets.get(1..).ok_or(Error::Command("custody seed absent"))?)?;
     let header = intent.validate(target, &seed)?;
     if i64::from(header.step) != *step
-        || header.operation != operation
+        || header.key() != key
         || fixed::<16>(incarnation)? != *header.incarnation.as_bytes()
         || fixed::<16>(request_id)? != *intent.snapshot.evidence().identity().request_id.as_bytes()
     {
@@ -308,20 +391,21 @@ fn from_sets(
 async fn load(
     client: &CellClient,
     target: &CellTarget,
-    operation: [u8; 16],
+    key: impl Into<CustodyKey>,
     step: Option<u32>,
 ) -> Result<Option<RegisteredCustody>, CustodyError> {
+    let key = key.into();
     let sql = SqlCell::<RepositoryModule>::new(client.clone(), target.clone())?;
     let output = sql
         .query(
             None,
             SqlBatch {
-                statements: vec![row_statement(operation, step), seed_statement()],
+                statements: vec![row_statement(key, step), seed_statement()],
             },
         )
         .await
         .map_err(|error| CustodyError::Query(Box::new(error)))?;
-    Ok(from_sets(&output.output, target, operation)?)
+    Ok(from_sets(&output.output, target, key)?)
 }
 impl PreparedCustody {
     pub async fn prepare(
@@ -330,11 +414,11 @@ impl PreparedCustody {
         action: CustodyAction,
         identity: MutationIdentity,
     ) -> Result<Self, CustodyError> {
-        let (repository, operation, digest, actor) = action.identity();
+        let (repository, _, digest, actor) = action.identity();
         if crate::repository_target(target.tenant(), target.application(), repository)? != *target {
             return Err(CustodyError::Context);
         }
-        let head = load(client, target, operation, None).await?;
+        let head = load(client, target, action.key(), None).await?;
         let (step, previous) = if let Some(head) = head {
             let header = head.intent.header()?;
             if header.repository != repository
@@ -367,6 +451,7 @@ impl PreparedCustody {
         let request: CustodyRequest = decode(&body, INPUT_BYTES)?;
         let (repository, operation, request_digest, actor) = request.action.identity();
         let header = Header {
+            purpose: request.action.purpose(),
             tenant: *target.tenant().as_bytes(),
             application: *target.application().as_bytes(),
             incarnation: command.evidence().incarnation(),
@@ -422,7 +507,7 @@ impl PreparedCustody {
     ) -> Result<RegisteredCustody, CustodyError> {
         let header = self.intent.header()?;
         let target = self.evidence().target();
-        if let Some(saved) = load(client, target, header.operation, Some(header.step)).await? {
+        if let Some(saved) = load(client, target, header.key(), Some(header.step)).await? {
             return if saved.intent == self.intent {
                 Ok(saved)
             } else {
@@ -434,7 +519,7 @@ impl PreparedCustody {
         let result = client
             .command::<RegisterCustodyIntent>(target, identity, self.intent.clone())
             .await;
-        let saved = load(client, target, header.operation, Some(header.step)).await?;
+        let saved = load(client, target, header.key(), Some(header.step)).await?;
         if let Some(saved) = saved {
             if saved.intent == self.intent {
                 return Ok(saved);
@@ -455,6 +540,14 @@ impl RegisteredCustody {
         operation: [u8; 16],
     ) -> Result<Option<Self>, CustodyError> {
         load(client, target, operation, None).await
+    }
+    pub async fn load_for(
+        client: &CellClient,
+        target: &CellTarget,
+        purpose: CustodyPurpose,
+        operation: [u8; 16],
+    ) -> Result<Option<Self>, CustodyError> {
+        load(client, target, CustodyKey { purpose, operation }, None).await
     }
     pub fn evidence(&self) -> &PendingMutation {
         self.intent.snapshot.evidence()
@@ -483,6 +576,15 @@ impl RegisteredCustody {
             _ => None,
         })
     }
+    pub async fn recover_serving(
+        &self,
+        client: &CellClient,
+    ) -> Result<Committed<ServingReply>, InvocationError<ServingReply>> {
+        project(self.recover(client).await, |reply| match reply {
+            CustodyReply::Serving(reply) => Some(reply),
+            _ => None,
+        })
+    }
     pub async fn recover_staging(
         &self,
         client: &CellClient,
@@ -506,15 +608,10 @@ impl RegisteredCustody {
         let evidence = self.evidence();
         let recover = async {
             let header = self.intent.header()?;
-            let current = load(
-                client,
-                evidence.target(),
-                header.operation,
-                Some(header.step),
-            )
-            .await
-            .map_err(|_| Error::Command("custody phase query failed"))?
-            .ok_or(Error::Command("custody intent disappeared"))?;
+            let current = load(client, evidence.target(), header.key(), Some(header.step))
+                .await
+                .map_err(|_| Error::Command("custody phase query failed"))?
+                .ok_or(Error::Command("custody intent disappeared"))?;
             if current.intent != self.intent {
                 return Err(Error::Command("custody recovery binding differs"));
             }
@@ -596,7 +693,7 @@ pub(super) fn restart_matches(
     staging: bool,
 ) -> cellule_runtime::Result<bool> {
     let sets = context.sql(&SqlBatch { statements: vec![SqlStatement {
-        sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands INDEXED BY catalog_custody_grants WHERE operation=?1 AND granted_incarnation=?2 AND granted_attempt=?3 ORDER BY step DESC LIMIT 1".into(),
+        sql: "SELECT step,incarnation,request_id,intent,phase,stopped FROM catalog_custody_commands INDEXED BY catalog_custody_grants WHERE purpose=0 AND operation=?1 AND granted_incarnation=?2 AND granted_attempt=?3 ORDER BY step DESC LIMIT 1".into(),
         parameters: vec![blob(check.token.operation), blob(check.token.owner.incarnation.as_bytes()), number(check.token.attempt)?],
     }, seed_statement()] })?;
     let Some(saved) = from_sets(&sets, context.target(), check.token.operation)? else {
