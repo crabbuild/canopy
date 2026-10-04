@@ -239,6 +239,14 @@ repository handles do not keep serving admission open. Remote routes receive no
 local pool. Partial service construction explicitly joins its pool/scanner before
 returning failure. Last pool-handle loss initiates its private supervised drain.
 
+Service registration and shutdown inventory share the manager's loaded-resident
+mutex. Shutdown cancels the permanent construction barrier under that mutex
+before collecting pools. A constructor registers its lifecycle owner before
+exposing the weak repository capability, under the same mutex. A constructor
+that loses this race joins its private pool, scanners and exact recovery inside
+its already tracked residency task, then returns `CellDraining`. No unpublished
+pool can become accessible or escape the shutdown inventory and task join.
+
 Recovery quiescence pauses discovery before pool drain. Server shutdown joins
 HTTP/SSH ingress, closes and joins serving pools while Cell, heartbeat and
 publication admission remain available, then closes the node task tracker and
@@ -247,7 +255,7 @@ drain. The standalone recovery drain also enforces that ordering. A borrowed
 snapshot clone or detached real I/O cannot permit early publication-budget
 closure, Cell shutdown or workspace reuse.
 
-Six pool and two real-manager families pass as part of 55 focused serving/
+Six pool and three real-manager families pass as part of 56 focused serving/
 resident tests. They cover concurrent viewer coalescing and current access,
 canceled cold observation/lost acknowledgement, four borrowed generations and
 actual slot reuse, deterministic acquisition head races, busy/canceled exclusive
@@ -255,6 +263,11 @@ drain, blocked old provider work with independent other-generation release, weak
 repository access and real shutdown retaining publication/Cell/heartbeat/workspace
 until the last borrow. These empty/copy-root fixtures qualify ownership and
 selection semantics, not native publication throughput or full-history serving.
+The third manager case deterministically pauses a constructor before publication,
+proves that its public capability is unavailable, starts actual server shutdown,
+and verifies that workspace/publication ownership remains until rejected
+construction cleanup joins. The regression fails against the preceding weak
+association ordering and passes with the registration barrier in both formats.
 
 ## Sticky closure and exact release
 
@@ -291,8 +304,8 @@ closure waits for the guard to finish or be dropped so selected releases can
 still be admitted. Guard cancellation resumes ordinary admission but never
 cancels accepted work, returns its credits or reopens an already closed queue.
 The caller must keep serving producers paused through guard completion/drop.
-This scheduling primitive is not wired into production residency yet; production
-shutdown must also keep the node publication budget open until releases finish.
+The resident pool wires this scheduling primitive into production eviction;
+production shutdown keeps the node publication budget open until releases finish.
 
 A new owner cannot renew/release old-owner pins merely because its epoch is newer.
 They remain roots until actual physical fencing/drain and an authenticated
@@ -308,8 +321,8 @@ owner fence.
 The resident pool now integrates `ServingOwner` and its accepted acquisition
 handoff with manager residency. Command reconstruction alone does not establish
 physical ownership. The next serving layer must carry that
-ownership through native work, object bodies and response streams; integrate
-its drain into actual eviction and shutdown. A close must join all producers and
+ownership through native work, object bodies and response streams. Actual
+eviction and shutdown already own pool drain. A close must join all producers and
 workers before Cell/workspace/artifact release.
 
 Consumer conversion must preserve these boundaries:

@@ -3,7 +3,7 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published head `b21f9d7`, GitHub reports
+directly against `main`. At the preceding published pool head `02307fd`, GitHub reports
 no merge conflicts; both Rust CI runs fail on the same five unconverted
 legacy `objects` readers and both harness checks pass. The PR is currently marked
 ready for review, but production conversion and release requirements remain
@@ -13,6 +13,39 @@ notes describe their historical states, not the current publication state.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Serving construction/shutdown barrier checkpoint
+
+A deterministic regression exposed a resident constructor publishing its weak
+serving capability before registering its lifecycle owner in the manager's drain
+inventory. Shutdown could collect that inventory while construction was pending.
+Registration now precedes capability exposure under the loaded-resident mutex;
+shutdown permanently closes construction under the same mutex before collecting
+pools. A rejected constructor joins its private pool, scanners and exact recovery
+inside its existing tracked residency task before returning `CellDraining`.
+Workspace, Cell and publication ownership therefore outlive that cleanup.
+
+The regression fails against the preceding publication ordering with
+`unpublished constructor exposed serving before registered ownership`; the fixed
+case passes in both formats. All 56 focused serving/recovery families pass in
+19.40 seconds. Warnings-denied workspace/all-target Clippy passes in 31.41 seconds.
+Final frozen-source library qualification executes 673 unique cases: 668 pass
+and the same five legacy `objects` readers fail. All 376 publication, seven
+startup, four resident recovery and three resident serving cases pass. Nine
+selected portable workspace/lifecycle cases pass, giving 682 unique Rust cases,
+677 passed and five failed. Nested subprocess summaries and focused cases are
+not counted twice. This remains an incomplete release gate, with the library's
+actual exit 101 retained. Linux-only fork cases were not run locally.
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+Static qualification verifies the frozen source, exact SDK pins, protected
+original index/archive and local documentation links.
+
+The source fingerprint, commands, log digests and original failing regression
+are retained in [shutdown barrier evidence](evidence/serving-pool-shutdown-20261004.json).
+These lifecycle fixtures do not qualify full nonempty native/body/history serving,
+physical owner adoption or large-team capacity. Highest next work remains the
+authoritative reader and producer conversion listed below; all remaining release
+requirements stay open.
 
 ## Resident serving pool checkpoint
 

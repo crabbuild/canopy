@@ -207,6 +207,14 @@ pub(crate) struct RepositoryManager {
     publication_budget: crate::packs::publication::PublicationBudget,
     recovery_scans: crate::packs::publication::RecoveryScanBudget,
     serving_reads: crate::packs::publication::ServingReadBudget,
+    serving_stop: CancellationToken,
+    #[cfg(test)]
+    serving_construction_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -660,6 +668,9 @@ impl RunningServer {
                 .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
                 serving_reads: crate::packs::publication::ServingReadBudget::new(64, tasks.clone())
                     .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                serving_stop: CancellationToken::new(),
+                #[cfg(test)]
+                serving_construction_gate: Mutex::new(None),
             });
             let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;

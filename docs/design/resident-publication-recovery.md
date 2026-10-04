@@ -108,6 +108,14 @@ A producer-held command in one repository must not prevent exact recovery in
 another repository. The drain owns these futures directly; it does not detach
 another task inventory or invent a durable queue.
 
+The loaded-resident mutex is also the construction/closing barrier. Shutdown
+permanently closes serving construction under that mutex before collecting the
+registered pools. New services register their owner before exposing repository
+access under the same mutex. An unpublished constructor that loses the race
+joins its own pool, scanners and retained originals in its tracked residency
+task before returning `CellDraining`. The subsequent node task join therefore
+includes its cleanup even though it was absent from the serving inventory.
+
 Each drain joins its scanners, waits for dispatch workers and schedules recovery
 only for their retained uncertain tickets. Known resolution returns the original
 receipt and releases its existing reservation. A held final proof belongs to its
@@ -124,7 +132,8 @@ advertisement. There is no timeout that silently releases unresolved authority.
 Regression coverage includes the shared control/admission barrier, tracked
 shutdown with an owned active round, independent pause/resume of real indexed
 root and custody scanners, authentic orphan retirement, production idle eviction
-and certified restoration, preservation of busy held originals, and production
+and certified restoration, rejection/join of a constructor paused before service
+publication, preservation of busy held originals, and production
 shutdown with held and absent/lost-reply/panicked exact renewal commands across
 repositories. Both Git object formats are exercised by the production families.
 Final-source totals and retained diagnostic logs are recorded in the

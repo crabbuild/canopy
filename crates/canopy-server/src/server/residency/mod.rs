@@ -386,12 +386,29 @@ impl RepositoryManager {
         if let Some((repository, client)) = start {
             let recovery =
                 Arc::new(RecoveryServices::start(self, entry, &repository, client).await?);
-            self.loaded
-                .lock()
-                .await
-                .get_mut(&entry.repository_id)
-                .ok_or(ServerError::Repository("loaded repository is absent"))?
-                .recovery = Some(recovery);
+            #[cfg(test)]
+            if let Some((entered, proceed)) = self.serving_construction_gate.lock().await.take() {
+                let _ = entered.send(());
+                let _ = proceed.await;
+            }
+            let rejected = {
+                let mut loaded = self.loaded.lock().await;
+                if self.serving_stop.is_cancelled() {
+                    Some(ServerError::Runtime(Error::CellDraining))
+                } else if let Some(resident) = loaded.get_mut(&entry.repository_id) {
+                    resident.recovery = Some(recovery.clone());
+                    repository.attach_serving(&recovery.serving);
+                    None
+                } else {
+                    Some(ServerError::Repository("loaded repository is absent"))
+                }
+            };
+            if let Some(error) = rejected {
+                // Construction is tracked by this residency owner. Join private
+                // pools, scanners and exact recovery before completing its task.
+                recovery.drain().await;
+                return Err(error);
+            }
         }
         let mut loaded = self.loaded.lock().await;
         let existing = loaded

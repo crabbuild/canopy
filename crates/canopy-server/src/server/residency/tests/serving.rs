@@ -37,6 +37,69 @@ fn missing(format: ObjectFormat) -> ObjectId {
 }
 
 #[tokio::test]
+async fn shutdown_refuses_unpublished_serving_constructor_and_joins_it_before_workspace_release()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, files) = server().await?;
+        let manager = server.repositories.clone();
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (proceed, waiting) = tokio::sync::oneshot::channel();
+        *manager.serving_construction_gate.lock().await = Some((entered, waiting));
+        let work = manager.clone();
+        let creating = tokio::spawn(async move { work.create("late", format).await });
+        timeout(Duration::from_secs(8), observed).await??;
+        let repository = manager
+            .loaded
+            .lock()
+            .await
+            .values()
+            .find(|loaded| loaded.name == "late")
+            .ok_or("late resident absent")?
+            .repository
+            .clone();
+        // This public capability must be unavailable until its lifecycle owner
+        // is registered in the manager's drain inventory.
+        let premature = repository
+            .serving_snapshot(ReadIdentity::Account("canopy"))
+            .await;
+        let unavailable = premature.is_err();
+        drop(premature);
+        let mut shutdown = tokio::spawn(server.shutdown());
+        timeout(Duration::from_secs(8), manager.serving_stop.cancelled()).await?;
+        assert!(
+            timeout(Duration::from_millis(50), &mut shutdown)
+                .await
+                .is_err()
+        );
+        assert!(!manager.publication_budget.stats().closed);
+        assert!(
+            crate::server::workspace::Workspace::open(&files.path().join("node"))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        proceed.send(()).map_err(|_| "construction disappeared")?;
+        let result = timeout(Duration::from_secs(8), creating).await??;
+        timeout(Duration::from_secs(10), shutdown).await???;
+        assert!(
+            unavailable,
+            "unpublished constructor exposed serving before registered ownership"
+        );
+        assert!(matches!(
+            result,
+            Err(crate::server::ServerError::Runtime(
+                cellule_runtime::Error::CellDraining
+            ))
+        ));
+        assert!(
+            repository
+                .serving_snapshot(ReadIdentity::Account("canopy"))
+                .await
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn production_resident_shares_generation_and_busy_eviction_resumes_before_exact_drain()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {

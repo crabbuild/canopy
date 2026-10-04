@@ -24,6 +24,9 @@ impl RecoveryServices {
         repository: &RepositoryCell,
         client: CellClient,
     ) -> Result<Self, ServerError> {
+        if manager.serving_stop.is_cancelled() {
+            return Err(Error::CellDraining.into());
+        }
         let target = repository.target.clone();
         let authority = PreparationAuthority::node(manager.peer.clone(), target.clone());
         let maintenance = MaintenanceRequest {
@@ -101,7 +104,6 @@ impl RecoveryServices {
                 return Err(ServerError::CatalogRecovery(Box::new(error)));
             }
         };
-        repository.attach_serving(&serving);
         Ok(Self {
             coordinator,
             serving,
@@ -133,7 +135,8 @@ impl RecoveryServices {
         true
     }
 
-    async fn drain(&self) {
+    pub(super) async fn drain(&self) {
+        self.serving.close_and_drain().await;
         join(self.workers.lock().await.take()).await;
         loop {
             let pending = self.coordinator.close_and_drain().await;
@@ -169,13 +172,16 @@ async fn join(workers: Option<Workers>) {
 }
 impl RepositoryManager {
     pub(in crate::server) async fn drain_serving(&self) {
-        let services: Vec<_> = self
-            .loaded
-            .lock()
-            .await
-            .values()
-            .filter_map(|repository| repository.recovery.as_ref().map(Arc::clone))
-            .collect();
+        let services: Vec<_> = {
+            let loaded = self.loaded.lock().await;
+            // Share the publication barrier with constructor registration. A
+            // late pool cannot escape this inventory or the node tracker join.
+            self.serving_stop.cancel();
+            loaded
+                .values()
+                .filter_map(|repository| repository.recovery.as_ref().map(Arc::clone))
+                .collect()
+        };
         for service in &services {
             service.serving.close();
         }
