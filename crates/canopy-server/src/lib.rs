@@ -261,6 +261,8 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/staging_service.rs"));
                 source.update(include_bytes!("packs/publication/staging_receipt.rs"));
+                source.update(include_bytes!("packs/publication/admission_receipt.rs"));
+                source.update(include_bytes!("packs/publication/preparation_receipt.rs"));
                 source.update(include_bytes!("packs/publication/coordinator.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/policy.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/roots.rs"));

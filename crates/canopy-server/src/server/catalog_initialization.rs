@@ -6,10 +6,10 @@ use crate::{
         metadata::MetadataLimits,
         publication::{
             BeginPreparation, BeginRequest, CatalogPreparation, CheckInitializedCatalog,
-            ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
-            LeaseRequest, MaintenanceRequest, PreparationBaseResolver, PreparationDenial,
-            PreparationReply, PreparationToken, PublicationError, RegisteredRootRecovery,
-            TerminalReleaseReply,
+            CheckPreparation, ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact,
+            InitializationReply, LeaseCheck, LeaseRequest, MaintenanceRequest,
+            PreparationAdmission, PreparationBaseResolver, PreparationDenial, PreparationReply,
+            PreparationToken, PublicationError, RegisteredRootRecovery, TerminalReleaseReply,
         },
     },
 };
@@ -129,6 +129,55 @@ pub(super) async fn ensure(
                 },
             )
             .await?
+    } else if let Some(admission) =
+        PreparationAdmission::load(&client, target, input.operation).await?
+    {
+        if admission.request() != &input {
+            return Err(Error::Command("initialization admission context differs").into());
+        }
+        let original = admission.lease();
+        let check = LeaseCheck {
+            token: original.token,
+            actor: owner.into(),
+        };
+        // The first accepted Begin is permanent knowledge. Its recorded clock
+        // grants no custody; query the exact original attempt under today's
+        // authority before reusing it. Never submit another Begin to replace
+        // the known receipt merely because a transport observer disappeared.
+        let current = if original.token.owner == maintenance.owner {
+            client
+                .query::<CheckPreparation>(target, Some(admission.receipt()), check.clone())
+                .await?
+                .output
+        } else {
+            None
+        };
+        if let Some(current) = current {
+            if current.token != original.token
+                || current.base != original.base
+                || current.format != original.format
+            {
+                return Err(Error::Command("initialization admission result differs").into());
+            }
+            cellule_runtime::Committed {
+                output: PreparationReply::Granted(Box::new(original)),
+                receipt: admission.receipt(),
+            }
+        } else {
+            // An explicit Claim can recover a reaped original admission. If a
+            // different successor exists, Claim refuses this old token rather
+            // than treating that successor as the original command's result.
+            client
+                .command::<ClaimPreparation>(
+                    target,
+                    super::mutation_identity()?,
+                    LeaseRequest {
+                        check,
+                        lease_ms: DEFAULT_LEASE_MS,
+                    },
+                )
+                .await?
+        }
     } else {
         match client
             .command::<BeginPreparation>(target, super::mutation_identity()?, input.clone())

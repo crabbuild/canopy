@@ -1,6 +1,6 @@
 # Exact bound preparation command ownership
 
-Long bound preparations and owner takeover need an exact recovery path for ClaimPreparation and RenewPreparation. ReadyPreparation::claim and PreparationSession::ready_renew prepare those SDK commands before admission to the existing PublicationCoordinator. They reuse LeaseCheck, LeaseRequest, PreparationToken, independent generation pins and the same coordinator job, actor queue and command evidence. The private request is boxed so its exact command/context does not enlarge every ReadyPublication value. No schema, command ID, outbox representation or compatibility adapter is added.
+Long bound preparations and owner takeover need an exact recovery path for ClaimPreparation and RenewPreparation. ReadyPreparation::claim and PreparationSession::ready_renew prepare those SDK commands before admission to the existing PublicationCoordinator. They reuse LeaseCheck, LeaseRequest, PreparationToken, independent generation pins and the same coordinator job, actor queue and command evidence. The private request is boxed so its exact command/context does not enlarge every ReadyPublication value. This dispatcher adds no schema, command ID, outbox representation or compatibility adapter. The later [first-admission receipt](initial-preparation-receipts.md) adds one bounded field to the existing logical request row and lets Claim recover a reaped original admission; it does not make these later command snapshots durable.
 
 ## Admission and recovery
 

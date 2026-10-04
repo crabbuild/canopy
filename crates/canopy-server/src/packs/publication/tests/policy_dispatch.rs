@@ -476,12 +476,17 @@ async fn complete(
         body.extend_from_slice(&part);
     }
     assert_eq!(body, expected.body);
-    // Initialization and the native attempt each retain an independent pin.
+    // Initialization is retired; the native attempt retains its own pin.
     assert_eq!(f.counts_for(prepared.token()).await?, (0, 1));
+    let operation = prepared.token().operation;
     f.handle
-        .query(0, 1024, |db| {
+        .query(0, 1024, move |db| {
             assert_eq!(
-                db.query_row("SELECT count(*) FROM pushes", [], |r| r.get::<_, u64>(0))?,
+                db.query_row(
+                    "SELECT count(*) FROM pushes WHERE id=?1 AND response_root IS NOT NULL",
+                    [operation.as_slice()],
+                    |r| r.get::<_, u64>(0)
+                )?,
                 1
             );
             assert_eq!(

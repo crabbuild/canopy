@@ -135,7 +135,7 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
         let target = canopy_server::repository_target(tenant, application, *repository.as_bytes())?;
         server.shutdown().await?;
         let root = repository_root(&layout, &target, &files.path().join("original.sqlite")).await?;
-        let (catalog, refs, allocation) = {
+        let (catalog, refs, allocation, admission) = {
             let connection = root.connection()?;
             for table in [
                 "objects",
@@ -187,7 +187,13 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
                 |row| row.get::<_, i64>(0),
             )?;
             assert_eq!(allocation, 1);
-            (catalog, refs, allocation)
+            let admission: Vec<u8> =
+                connection.query_row("SELECT initial_preparation FROM pushes", [], |row| {
+                    row.get(0)
+                })?;
+            assert!(!admission.is_empty());
+            assert!(admission.len() <= 1024);
+            (catalog, refs, allocation, admission)
         };
         drop(root);
         let mut decoder = BoundedDecoder::new(&catalog, 256)?;
@@ -235,6 +241,11 @@ async fn new_repositories_bootstrap_the_production_packed_catalog_before_becomin
         let root = repository_root(&layout, &target, &files.path().join("restored.sqlite")).await?;
         {
             let connection = root.connection()?;
+            assert_eq!(
+                connection.query_row("SELECT initial_preparation FROM pushes", [], |row| row
+                    .get::<_, Vec<u8>>(0))?,
+                admission
+            );
             assert_eq!(
                 connection.query_row(
                     "SELECT artifact_sequence FROM repository_identity WHERE singleton=1",

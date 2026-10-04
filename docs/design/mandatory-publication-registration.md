@@ -20,7 +20,7 @@ Use recovery purpose `canopy.publication-command-recovery.v4\0` and these comman
 
 | Command | ID | Codec |
 | --- | --- | --- |
-| InitializeCatalogRefs | 31 | 2 |
+| InitializeCatalogRefs | 31 | 3 |
 | RegisterRefPolicyPage | 33 | 2 |
 | CompleteRootPush | 36 | 2 |
 | CompleteRootOutcome | 38 | 3 |
@@ -36,6 +36,8 @@ Live factories persist their exact bundle, then bind it into `ReadyBoundRecovery
 `ReadyInitialization` derives the private empty proof from its retained `PreparedCatalog`, freezes command 31 and persists the same exact SDK snapshot/body/header before dispatch. Registration command 39 pins `Kind::Initialization` in the existing attempt namespace. Matching original capabilities can bind into the existing fair publication queue. Production repository startup instead retains this same owner through its already admitted, tracked repository transition. Unknown registration never authorizes final execution.
 
 Pending startup queries the current indexed operation/pin binding before issuing Begin. A recovered positive verifies the original empty catalog/directory/ref roots. Only a known original Stale/Expired final denial permits Claim of that observed attempt; other uncertainty propagates. Ready restoration observes the retained initialization fact without creating a new attempt.
+
+Without a registered final, pending startup also recovers the [first accepted preparation admission](initial-preparation-receipts.md) before another Begin. Its original receipt is durable independently of SDK expiry, while current owner/custody are checked separately. This does not supply the missing original intent or subsequent Claim/Renew journal.
 
 Cold initialization performs no new preparation or native work. After authoritative SDK absence it restores the exact original bytes and lets the final receiver atomically check actual owner, Admin, live pin, certificate/checkpoint and pristine roots. Requiring a fresh Write-dependent session first would prevent an expired or revoked original from recording its definitive denial. Live bound dispatch still checks its original shared clock/fence. Known journal outcomes retain their original sequence and receipt even after SDK expiry, owner loss, permission revocation and body loss; they grant no current write or read capability.
 

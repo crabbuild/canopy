@@ -98,6 +98,9 @@ pub use root_completion::{
     RootOutcomeCompletion, RootPushCompletion, RootPushOutcomes, RootPushReplayError,
     RootSignedPushFact, replay_root_push_response,
 };
+mod admission_receipt;
+mod preparation_receipt;
+pub use preparation_receipt::{PreparationAdmission, PreparationReceiptError};
 mod staging_receipt;
 pub use staging_receipt::{StagingAdmission, StagingReceiptError};
 mod staging;

@@ -65,6 +65,7 @@ CREATE TABLE pushes (
     actor TEXT NOT NULL,
     request_digest BLOB NOT NULL CHECK(length(request_digest) = 32),
     initial_staging BLOB CHECK(initial_staging IS NULL OR (typeof(initial_staging)='blob' AND length(initial_staging) BETWEEN 1 AND 1024)),
+    initial_preparation BLOB CHECK(initial_preparation IS NULL OR (typeof(initial_preparation)='blob' AND length(initial_preparation) BETWEEN 1 AND 1024)),
     options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 65536),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     completion_digest BLOB CHECK(completion_digest IS NULL OR length(completion_digest) = 32),
@@ -108,6 +109,13 @@ BEGIN SELECT RAISE(ABORT, 'initial staging receipt is immutable'); END;
 CREATE TRIGGER push_initial_staging_retained BEFORE DELETE ON pushes
 WHEN OLD.initial_staging IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'initial staging receipt must be retained'); END;
+
+CREATE TRIGGER push_initial_preparation_immutable BEFORE UPDATE OF initial_preparation ON pushes
+WHEN OLD.initial_preparation IS NOT NULL AND NEW.initial_preparation IS NOT OLD.initial_preparation
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt is immutable'); END;
+CREATE TRIGGER push_initial_preparation_retained BEFORE DELETE ON pushes
+WHEN OLD.initial_preparation IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt must be retained'); END;
 
 CREATE TABLE push_certificates (
     digest BLOB PRIMARY KEY CHECK(length(digest) = 32),

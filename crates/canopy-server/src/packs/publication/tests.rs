@@ -15,6 +15,7 @@ mod namespaces;
 mod native_capture;
 mod policy_dispatch;
 mod policy_refusal;
+mod preparation_receipt;
 mod prepare;
 mod publishing;
 mod reconcile;

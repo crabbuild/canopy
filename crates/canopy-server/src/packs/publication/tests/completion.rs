@@ -143,7 +143,13 @@ pub(super) async fn counts(handle: &CellHandle) -> Result<Vec<u64>> {
             ]
             .into_iter()
             .map(|table| {
-                connection.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                // Admission-only rows are retained knowledge, not completed
+                // push/publication outcomes. Other counts still include every
+                // response/certificate/chunk written by the final transaction.
+                let sql = if table == "pushes" {
+                    "SELECT count(*) FROM pushes WHERE response_id IS NOT NULL OR publication IS NOT NULL".into()
+                } else { format!("SELECT count(*) FROM {table}") };
+                connection.query_row(&sql, [], |row| {
                     row.get::<_, u64>(0)
                 })
             })
