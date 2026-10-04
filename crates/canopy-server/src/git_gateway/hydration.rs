@@ -42,6 +42,7 @@ impl GitGateway {
     pub(super) async fn hydrate(&self, shared: &mut CachedObjects) -> Result<(), GatewayError> {
         let started = Instant::now();
         let cache = &shared.cache;
+        let _hydration = cache.hydration_guard();
         let _selection = cache.selection.lock().await;
         let cursor = &mut shared.through;
         let from_sequence = *cursor;

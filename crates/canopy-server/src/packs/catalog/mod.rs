@@ -16,6 +16,7 @@ use canopy_object_storage::artifact::{
 use std::sync::Arc;
 
 mod codec;
+pub(in crate::packs) mod graph_spool;
 mod native;
 pub use native::{NativeFileStats, NativeReadError};
 mod files;

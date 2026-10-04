@@ -57,30 +57,34 @@ pub(super) async fn assembled(
         .ok_or("blob")?
         .0
         .oid;
-    let (tip, other) = if depth == 0 {
-        (initial, initial)
-    } else {
-        history(&mut native, initial, depth).await?
-    };
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(256 << 20);
-    let mut builder = CatalogPreparation::new(root.path(), budget.clone(), base, limits()).await?;
-    let (witness, segments) = physical(&native, root.path(), budget.clone()).await?;
-    builder.begin_pack(witness)?;
-    for segment in segments {
-        builder.add_segment(segment).await?;
-    }
-    builder.finish_pack().await?;
-    Ok(Graph {
-        prepared: builder.finish().await?,
-        root,
-        budget,
-        initial,
-        tip,
-        other,
-        blob,
-        store: native.store,
+    super::prepare::renewing(fixture, &base, async {
+        let (tip, other) = if depth == 0 {
+            (initial, initial)
+        } else {
+            history(&mut native, initial, depth).await?
+        };
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(256 << 20);
+        let mut builder =
+            CatalogPreparation::new(root.path(), budget.clone(), base.clone(), limits()).await?;
+        let (witness, segments) = physical(&native, root.path(), budget.clone()).await?;
+        builder.begin_pack(witness)?;
+        for segment in segments {
+            builder.add_segment(segment).await?;
+        }
+        builder.finish_pack().await?;
+        Ok(Graph {
+            prepared: builder.finish().await?,
+            root,
+            budget,
+            initial,
+            tip,
+            other,
+            blob,
+            store: native.store,
+        })
     })
+    .await
 }
 async fn history(
     native: &mut Prepared,

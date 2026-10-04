@@ -147,6 +147,46 @@ impl CatalogFiles {
         ));
         self
     }
+    pub(in crate::packs) async fn workspace(
+        &self,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+        head: String,
+    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .workspace(owner, cleanup, head)
+            .await
+    }
+    pub(in crate::packs) async fn install_workspace(
+        &self,
+        cache: Arc<crate::git_cache::GitCache>,
+        source: super::super::sources::NativePackDescriptor,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .install(cache, source, owner)
+            .await
+    }
+    pub(in crate::packs) async fn graph_spool(
+        &self,
+        maximum: u64,
+        cache_kib: u32,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+    ) -> Result<Arc<Mutex<super::graph_spool::GraphSpool>>, MetadataError> {
+        let (root, budget) = (self.root.clone(), self.budget.clone());
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            Ok(Arc::new(Mutex::new(super::graph_spool::GraphSpool::new(
+                root, budget, maximum, cache_kib, cleanup,
+            )?)))
+        })
+        .await?
+    }
     pub(in crate::packs) async fn body(
         &self,
         object: ResolvedObject,

@@ -32,7 +32,7 @@ impl ServingPin {
             return Err(ServingReadError::Context);
         }
         let ids = ids.to_vec();
-        self.read_owned(actor, move |inner, deadline| async move {
+        self.read_owned(actor, move |inner, deadline, permit| async move {
             let reader = inner.catalog().await?;
             let mut output = ServingEdgePage {
                 headers: Vec::new(),
@@ -58,7 +58,7 @@ impl ServingPin {
                 let cursor = after
                     .filter(|(cursor, _)| *cursor == parent)
                     .map(|(_, child)| child);
-                let owner = inner.child();
+                let owner = (inner.child(), permit.clone());
                 let mut edges = tokio::task::spawn_blocking(move || {
                     let _owner = owner;
                     metadata.edges_after(parent, cursor)

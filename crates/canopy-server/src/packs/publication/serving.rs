@@ -20,8 +20,9 @@ pub use commands::{
     AcquireServingPin, CheckServingPin, ReleaseServingPin, RenewServingPin, SelectServingGeneration,
 };
 pub use session::{
-    MAX_EDGE_PARENTS, ReadyServingRelease, ResolvedServingRef, ServingContext, ServingEdgePage,
-    ServingPin, ServingReadBudget, ServingReadError,
+    MAX_EDGE_PARENTS, NativeWorkspace, ReadyServingRelease, ResolvedServingRef, ServingContext,
+    ServingEdgePage, ServingPin, ServingReadBudget, ServingReadError, WorkspaceLimits,
+    WorkspaceStats,
 };
 
 pub const MAX_SERVING_PINS: u64 = 4096;

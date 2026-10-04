@@ -350,6 +350,18 @@ async fn closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clo
             Err(ServingReadError::Inactive)
         ));
         tokio::time::sleep(Duration::from_millis(1_500)).await;
+        timeout(Duration::from_secs(8), async {
+            while owner.stats().renewals < 2 {
+                assert_eq!(
+                    owner.stats().phase,
+                    ServingOwnerPhase::Ready,
+                    "{:?}",
+                    owner.stats()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
         assert!(owner.stats().renewals >= 2, "{:?}", owner.stats());
         assert_eq!(owner.stats().token, Some(token));
         assert_eq!(snapshot.fact(), fact);

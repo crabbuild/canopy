@@ -23,6 +23,7 @@ pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
 mod artifacts;
 mod cleanup;
+mod serving_refs;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -174,12 +175,6 @@ impl GitCache {
 
     pub(crate) fn git_dir(&self) -> PathBuf {
         self.root().join("repo.git")
-    }
-
-    pub(crate) fn object_cache(self: &Arc<Self>) -> Arc<Self> {
-        self.objects
-            .as_ref()
-            .map_or_else(|| Arc::clone(self), Arc::clone)
     }
 
     pub(crate) fn hydration_guard(self: &Arc<Self>) -> HydrationGuard {

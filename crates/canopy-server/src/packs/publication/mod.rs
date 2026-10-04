@@ -17,13 +17,13 @@ use cellule_runtime::{
 mod serving;
 pub use serving::{
     AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_EDGE_PARENTS,
-    MAX_SERVING_GENERATIONS, MAX_SERVING_OWNERS, MAX_SERVING_PINS, ReadyServingCommand,
-    ReadyServingRelease, ReleaseServingPin, RenewServingPin, RenewServingRequest,
-    ResolvedServingRef, SelectServingGeneration, ServingCheck, ServingContext, ServingDenial,
-    ServingDrainObserver, ServingDrainProof, ServingEdgePage, ServingLease, ServingOwner,
-    ServingOwnerError, ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingPool,
+    MAX_SERVING_GENERATIONS, MAX_SERVING_OWNERS, MAX_SERVING_PINS, NativeWorkspace,
+    ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
+    RenewServingRequest, ResolvedServingRef, SelectServingGeneration, ServingCheck, ServingContext,
+    ServingDenial, ServingDrainObserver, ServingDrainProof, ServingEdgePage, ServingLease,
+    ServingOwner, ServingOwnerError, ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingPool,
     ServingPoolLimits, ServingReadBudget, ServingReadError, ServingReleaseReply, ServingReply,
-    ServingSelection, ServingSnapshot, ServingToken,
+    ServingSelection, ServingSnapshot, ServingToken, WorkspaceLimits, WorkspaceStats,
 };
 mod owner;
 pub(crate) mod registry;

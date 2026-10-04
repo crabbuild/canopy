@@ -125,6 +125,7 @@ pub(crate) struct GitObjectWalk {
 }
 
 impl GitObjectWalk {
+    #[cfg(test)]
     pub(crate) fn missing(
         git_dir: &Path,
         included: Vec<crate::ObjectId>,

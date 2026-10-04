@@ -1247,6 +1247,19 @@ impl StagingTicket {
         self.job.changed.notify_one();
         Ok(())
     }
+    /// Inject a short custody ceiling only after a test reaches its intended
+    /// recovery phase. The real clock and normal fence/drain path still run.
+    #[cfg(test)]
+    pub(super) fn expire_bound_for_test(&self) -> Result<Instant, StagingError> {
+        let mut local = self.job.local.lock().expect("staging local");
+        let session = local.bound.as_ref().ok_or(StagingError::NotReady)?;
+        let deadline = (Instant::now() + Duration::from_millis(100)).min(session.live_lease()?.1);
+        *session.deadline.lock().expect("bound deadline") = deadline;
+        local.deadline = deadline;
+        local.lifetime = local.lifetime.min(deadline);
+        self.job.changed.notify_one();
+        Ok(deadline)
+    }
     #[cfg(test)]
     pub(super) fn renew_for_test(&self) {
         self.job.local.lock().expect("staging local").renew = true;

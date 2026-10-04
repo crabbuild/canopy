@@ -116,6 +116,27 @@ pub struct ServingSnapshot {
     _borrow: Arc<Borrow>,
 }
 impl ServingSnapshot {
+    /// Build a complete forward closure from certified roots. Callers choosing
+    /// fetch roots must independently bind them to this snapshot's live refs.
+    pub async fn workspace(
+        &self,
+        roots: &[crate::ObjectId],
+        limits: WorkspaceLimits,
+    ) -> Result<NativeWorkspace, ServingReadError> {
+        self.pin
+            .workspace(self.actor.clone(), Some(roots), limits, self.clone())
+            .await
+    }
+    /// Build native refs and their exact forward closure from this accepted joint
+    /// generation. No live SQL refs or caller-supplied object roots are consulted.
+    pub async fn ref_workspace(
+        &self,
+        limits: WorkspaceLimits,
+    ) -> Result<NativeWorkspace, ServingReadError> {
+        self.pin
+            .workspace(self.actor.clone(), None, limits, self.clone())
+            .await
+    }
     pub fn fact(&self) -> GenerationFact {
         self.pin.fact()
     }

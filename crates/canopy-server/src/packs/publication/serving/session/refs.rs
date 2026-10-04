@@ -13,7 +13,7 @@ pub struct ResolvedServingRef {
 }
 
 impl Inner {
-    async fn ref_snapshot(&self) -> Result<&RefStateSnapshot, ServingReadError> {
+    pub(super) async fn ref_snapshot(&self) -> Result<&RefStateSnapshot, ServingReadError> {
         self.refs
             .get_or_try_init(|| async {
                 let fact = self.lease.fact;
@@ -44,7 +44,7 @@ impl ServingPin {
             return Err(ServingReadError::Context);
         }
         let reference = reference.map(RefNameKey::new).transpose()?;
-        self.read_owned(actor, move |inner, deadline| async move {
+        self.read_owned(actor, move |inner, deadline, _permit| async move {
             let snapshot = inner.ref_snapshot().await?;
             if Instant::now() >= deadline {
                 return Err(ServingReadError::Inactive);
@@ -84,7 +84,7 @@ impl ServingPin {
         let after = (!after.is_empty())
             .then(|| RefNameKey::new(after))
             .transpose()?;
-        self.read_owned(actor, move |inner, deadline| async move {
+        self.read_owned(actor, move |inner, deadline, _permit| async move {
             let snapshot = inner.ref_snapshot().await?;
             if Instant::now() >= deadline {
                 return Err(ServingReadError::Inactive);

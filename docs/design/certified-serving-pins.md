@@ -6,8 +6,10 @@ adds a bounded serving-pin receiver and an owned metadata-read capability. This
 is a foundation for production reader conversion. A service-owned producer now
 acquires, retains, renews and drains one generation independently of its callers;
 the production manager now creates a bounded resident pool and exposes its
-borrow through `RepositoryCell::serving_snapshot`. Local browser and comparison object reads now use this capability. Remaining
-product/native/stream consumers and remote routes still require conversion.
+borrow through `RepositoryCell::serving_snapshot`. Local browser and comparison object reads now use this capability. The native
+workspace conversion also routes local HTTP/SSH discovery and fetch through
+accepted joint refs and their certified forward graph. Remaining generated/write
+producers, product consumers and remote routes still require conversion.
 The branch remains unreleasable until that conversion and the full cutover gates
 are complete.
 
@@ -502,3 +504,51 @@ merge comparisons and a 532-parent native merge whose relevant parent is beyond
 the first edge page. Suspended-provider and revocation tests qualify edge-worker
 ownership and cached authorization. This isolates consumer behavior and is not
 end-to-end live producer publication, cold latency or large-team qualification.
+
+## Complete native read workspaces
+
+`ServingSnapshot::workspace` takes a bounded sorted set of certified object roots;
+its caller must independently authorize those roots. `ref_workspace` instead
+chooses every live ref directly from the retained joint ref index. It streams
+32-name pages into admitted native `packed-refs` and the graph frontier, with no
+repository-sized Rust ref map or root-count cap. Empty live refs yield an empty
+native repository. HEAD uses the same immutable ref snapshot's default branch.
+
+Construction resolves preferred object sources through the certified catalog.
+It downloads each distinct, authenticated native pack/index pair once directly
+into one unpublished cache and verifies its physical binding. It never decodes
+all blobs into loose files. A disposable admitted SQLite spool tracks frontier,
+expected types, completed membership and input deduplication. Frontier batches
+are at most 128 objects; typed edges and membership lookups are bounded to 512.
+Gitlinks do not become graph dependencies. A physical pack may include unrelated
+objects, so `contains` and bounded verified bodies use completed graph membership,
+not native pack presence. Local HTTP/SSH wants use this membership before Git
+receives them. Filters remain validated before native traversal.
+
+The spool reuses admitted SQLite growth: reserve database, journal and overhead
+before allowing additional pages, replay only rolled-back transactions, and
+refuse growth without retaining a successful prefix. Its maximum and page cache
+are explicit. Input deduplication requires identical pack/index digests, sizes
+and object count for a shared native checksum; a namespace change alone does not
+require a second physical copy.
+
+Long construction retains a producer borrow and exact pin. Bounded steps refresh
+lease/owner/access observations at most every 250 ms, and always reobserve before
+returning. Valid renewals can carry construction beyond its initial conservative
+read deadline; an expired exact pin cannot be resurrected. Ordinary short reads
+retain their existing original deadline. Cancellation detaches the observer and
+keeps provider jobs owned until real completion.
+
+Construction read admission covers the worker and its blocking/provider jobs.
+Completed workspaces release that read credit while retaining snapshot ownership,
+physical guards, native file admission and disk reservations. Subsequent reads
+acquire fresh read admission. Native subprocess owners retain the workspace
+through descendants and physical cleanup, including deferred/quarantined cache
+removal. Lease expiry alone is never physical drain.
+
+This is a correct bounded construction path, not a demonstrated hot repository
+cache or large-team capacity result. Each transfer currently constructs its own
+workspace and downloads selected inputs. Sharing/coalescing authorized generation
+workspaces, cold I/O acceleration, fair scheduling and history-sized workload
+qualification remain required. Legacy generated/write producers still have
+object-table hydration and publication paths to replace.

@@ -251,12 +251,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             Loss::Expiry => {
                 // Cellule's SQL deadlines use the real monotonic clock. Wait
                 // for this shared local ceiling without shifting Tokio time.
-                let deadline = weak
-                    .upgrade()
-                    .ok_or("root custody lost")?
-                    .base
-                    .live_lease()?
-                    .1;
+                let deadline = ticket.expire_bound_for_test()?;
                 tokio::time::sleep_until(deadline + Duration::from_millis(1)).await;
                 assert!(
                     weak.upgrade()

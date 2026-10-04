@@ -273,3 +273,15 @@ pub(crate) async fn prepare(
         large,
     })
 }
+
+/// Managed test-only Git invocation shared by native serving and HTTP fixtures.
+/// Production commands use the admitted native service and physical owners.
+pub(crate) async fn run_git(
+    path: &std::path::Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    git(path, args, input)
+        .await
+        .map_err(|error| error.to_string().into())
+}

@@ -74,6 +74,44 @@ pub(super) async fn opened(
     );
     Ok((base, files, indexes))
 }
+/// Keep fixture construction under actual service-owned custody renewals.
+/// A long native history must not consume the lease before the tested action.
+pub(super) async fn renewing<T>(
+    fixture: &Fixture,
+    base: &PreparationBaseResolver,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let coordinator = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
+    tokio::pin!(work);
+    let mut ticks = tokio::time::interval(Duration::from_secs(10));
+    ticks.tick().await;
+    let result = loop {
+        tokio::select! {
+            result = &mut work => break result,
+            _ = ticks.tick() => {
+                let renewed = async {
+                    let ready = base.ready_renew(identity()?, DEFAULT_LEASE_MS).await?;
+                    let ticket = coordinator.submit(ready).await?;
+                    match ticket.wait().await {
+                        PublicationState::Finished(Ok(PublicationOutcome::Preparation(value))) => {
+                            value.session.map_err(|error| error.to_string())?;
+                            Ok(())
+                        }
+                        other => Err(format!("fixture renewal: {other:?}").into()),
+                    }
+                }.await;
+                if let Err(error) = renewed { break Err(error); }
+            }
+        }
+    };
+    assert!(coordinator.close_and_drain().await.is_empty());
+    result
+}
+
 pub(super) async fn physical(
     prepared: &Prepared,
     root: &Path,

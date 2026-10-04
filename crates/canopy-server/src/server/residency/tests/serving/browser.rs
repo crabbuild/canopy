@@ -552,3 +552,70 @@ async fn production_certified_edge_pages_cover_wide_trees_and_parent_boundaries(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn certified_http_clone_and_discovery_use_joint_refs_without_legacy_objects() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, _files) = server().await?;
+        let (repository, native, _) = fixture(&server, format).await?;
+        let work = tempfile::TempDir::new()?;
+        let url = format!("http://{}/canopy/native-browser.git", server.address);
+        let args = [
+            "-c",
+            "http.extraHeader=Authorization: Bearer local-recovery-test",
+            "clone",
+            "--bare",
+            &url,
+            "clone.git",
+        ];
+        crate::packs::catalog::serving_fixture::run_git(work.path(), &args, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let path = work.path().join("clone.git");
+        let git = |args: Vec<String>| {
+            let path = path.clone();
+            async move {
+                let refs: Vec<_> = args.iter().map(String::as_str).collect();
+                crate::packs::catalog::serving_fixture::run_git(&path, &refs, None)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        };
+        assert_eq!(
+            String::from_utf8(git(vec!["rev-parse".into(), "HEAD".into()]).await?)?.trim(),
+            hex::encode(native.main)
+        );
+        assert_eq!(
+            String::from_utf8(
+                git(vec!["rev-list".into(), "--count".into(), "HEAD".into()]).await?
+            )?
+            .trim(),
+            "42"
+        );
+        assert_eq!(
+            git(vec!["show".into(), "HEAD:src/lib.rs".into()]).await?,
+            b"pub fn original() {}\n"
+        );
+        git(vec!["fsck".into(), "--full".into()]).await?;
+        // Guessing a physically present, certified but unreferenced tag must be
+        // rejected by the HTTP gateway before native upload-pack sees the want.
+        let line = format!("want {}\n", hex::encode(native.tag));
+        let body = format!("{:04x}{line}00000009done\n", line.len() + 4);
+        let refused = reqwest::Client::new()
+            .post(format!("{url}/git-upload-pack"))
+            .bearer_auth("local-recovery-test")
+            .header("Content-Type", "application/x-git-upload-pack-request")
+            .body(body)
+            .send()
+            .await?;
+        assert_eq!(
+            refused.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{}",
+            refused.text().await?
+        );
+        drop(repository);
+        server.shutdown().await?;
+    }
+    Ok(())
+}

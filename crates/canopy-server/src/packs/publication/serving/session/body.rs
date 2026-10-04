@@ -3,7 +3,7 @@ use super::*;
 
 /// Foreground copies are bounded independently of any object header. Streaming
 /// larger objects is a separate producer contract, never an unbounded Vec.
-const MAX_BODY_BYTES: usize = 64 << 20;
+pub(super) const MAX_BODY_BYTES: usize = 64 << 20;
 impl ServingPin {
     pub async fn body(
         &self,
@@ -17,7 +17,7 @@ impl ServingPin {
         if limit == 0 || limit > MAX_BODY_BYTES {
             return Err(ServingReadError::TooLarge);
         }
-        self.read_owned(actor, move |inner, deadline| async move {
+        self.read_owned(actor, move |inner, deadline, permit| async move {
             let reader = inner.catalog().await?;
             let Some(object) = reader
                 .lookup(oid, &*inner.context.files, &*inner.context.files)
@@ -33,7 +33,7 @@ impl ServingPin {
             }
             // This is a child of an already admitted worker. Closing refuses new
             // workers but must not invalidate native drain ownership of this one.
-            let owner = inner.child();
+            let owner: crate::git_objects::ReadOwner = Arc::new((inner.child(), permit));
             Ok(Some(inner.context.files.body(object, limit, owner).await?))
         })
         .await

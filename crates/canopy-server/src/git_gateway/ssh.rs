@@ -20,14 +20,20 @@ impl GitGateway {
         if self.access_level(actor).await?.is_none() {
             return Err(GatewayError::Unauthorized);
         }
-        // Advertisements need structure and ref/tag targets, not ordinary blobs.
-        // Retain one ref snapshot, then hydrate each request before forwarding
-        // its wants; native Git can begin object traversal as soon as it reads them.
-        let cached = self.fetch_cache(&BTreeSet::new()).await?;
-        let mut command = cached.backend.transport_command()?;
+        let snapshot = self
+            .repository
+            .serving_snapshot(ReadIdentity::Account(actor))
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        let workspace = snapshot
+            .ref_workspace(crate::packs::publication::WorkspaceLimits::default())
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        let backend = workspace.backend(self.certificate_nonce().await?);
+        let mut command = backend.transport_command()?;
         command
             .arg("upload-pack")
-            .arg(cached.backend.git_dir())
+            .arg(backend.git_dir())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -36,9 +42,8 @@ impl GitGateway {
         }
         let mut process = GitProcess::spawn(
             command,
-            (Arc::clone(&cached), admission),
-            cached
-                .backend
+            (workspace.read_owner(), admission),
+            backend
                 .cache
                 .native
                 .try_admit(crate::native_resources::NativeWork::Pack)?,
@@ -68,9 +73,7 @@ impl GitGateway {
                     };
                     remaining -= group.len();
                     let request = fetch::FetchRequest::parse(&group)?;
-                    self.validate_wants(&cached.snapshot, &request.wants)
-                        .await?;
-                    self.prepare_fetch(&cached, request).await?;
+                    Self::validate_wants(&workspace, &request.wants).await?;
                     stdin.write_all(&group).await?;
                     stdin.flush().await?;
                     if !protocol_v2 {

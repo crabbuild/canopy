@@ -219,6 +219,55 @@ impl NativeFiles {
         }
         Ok(file)
     }
+    pub(super) async fn workspace(
+        &self,
+        owner: ReadOwner,
+        cleanup: ReadOwner,
+        head: String,
+    ) -> Result<Arc<GitCache>, NativeReadError> {
+        let admission = self.admit(owner.clone(), 4096).await?;
+        let lifetime: ReadOwner = Arc::new((cleanup, admission));
+        Ok(GitCache::create_owned(
+            self.root.path().to_owned(),
+            self.budget.clone(),
+            &head,
+            self.format,
+            None,
+            self.native.clone(),
+            CacheOwnership {
+                work: Arc::new((owner, lifetime.clone())),
+                cleanup: Some(lifetime),
+            },
+        )
+        .await?)
+    }
+    pub(super) async fn install(
+        &self,
+        cache: Arc<GitCache>,
+        descriptor: NativePackDescriptor,
+        owner: ReadOwner,
+    ) -> Result<(), NativeReadError> {
+        cache
+            .download_native_owned(&self.store, descriptor, owner.clone())
+            .await?;
+        let claim = self
+            .native
+            .try_admit(crate::native_resources::NativeWork::Read)
+            .map_err(ObjectReadError::from)?;
+        tokio::task::spawn_blocking(move || {
+            let (_owner, _claim) = (owner, claim);
+            let pack = cache.git_dir().join(format!(
+                "objects/pack/pack-{}.pack",
+                hex::encode(descriptor.git_checksum)
+            ));
+            descriptor.verify_files(&pack, &pack.with_extension("idx"))?;
+            Ok::<_, IndexError>(())
+        })
+        .await??;
+        self.downloads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
     pub(super) async fn body(
         &self,
         object: ResolvedObject,

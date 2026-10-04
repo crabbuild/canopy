@@ -11,7 +11,24 @@ impl ServingPin {
     where
         T: Send + 'static,
         F: Future<Output = Result<T, ServingReadError>> + Send,
-        Work: FnOnce(Arc<Inner>, Instant) -> F + Send + 'static,
+        Work: FnOnce(Arc<Inner>, Instant, Arc<crate::AdmissionPermit>) -> F + Send + 'static,
+    {
+        self.read_session(actor, work, false).await
+    }
+
+    /// A renewable producer retains its borrow/admission and refreshes the exact
+    /// lease before each bounded I/O step. Renewal cannot resurrect an expired
+    /// pin; the final fresh observation must still prove current authority.
+    pub(super) async fn read_session<T, F, Work>(
+        &self,
+        actor: Option<String>,
+        work: Work,
+        renewable: bool,
+    ) -> Result<T, ServingReadError>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, ServingReadError>> + Send,
+        Work: FnOnce(Arc<Inner>, Instant, Arc<crate::AdmissionPermit>) -> F + Send + 'static,
     {
         if self.inner.context.budget.inner.stop.is_cancelled() {
             return Err(ServingReadError::Inactive);
@@ -40,16 +57,16 @@ impl ServingPin {
             .context
             .tasks()
             .spawn(async move {
-                let (_permit, _guard) = (permit, guard);
+                let (permit, _guard) = (Arc::new(permit), guard);
                 let (_, deadline) = inner.observe(actor.clone()).await?;
                 if Instant::now() >= deadline {
                     return Err(ServingReadError::Inactive);
                 }
                 // Observer cancellation only detaches this task. Do not time out by
                 // dropping provider work and misreporting that its roots drained.
-                let output = work(inner.clone(), deadline).await?;
-                inner.observe(actor).await?;
-                if Instant::now() >= deadline {
+                let output = work(inner.clone(), deadline, permit.clone()).await?;
+                let (_, current) = inner.observe(actor).await?;
+                if Instant::now() >= current || !renewable && Instant::now() >= deadline {
                     return Err(ServingReadError::Inactive);
                 }
                 Ok(output)

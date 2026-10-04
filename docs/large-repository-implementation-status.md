@@ -3,16 +3,76 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published body-reader head `b1bd813`, GitHub reports
-no merge conflicts; both Rust CI runs fail on the same five unconverted
-legacy `objects` readers and both harness checks pass. The PR is currently marked
-ready for review, but production conversion and release requirements remain
-incomplete. Older local/unpublished checkpoint
-notes describe their historical states, not the current publication state.
+directly against `main`. The native workspace checkpoint below replaces the
+legacy fetch reader; four legacy object-page readers still fail locally. At the
+preceding published head `cc4a963`, both actual Rust CI logs report 670 server
+passes and the same five legacy-reader failures; both harness checks pass.
+Those CI runs do not qualify this newer source. Conflict freedom is checked at
+publication independently of incomplete release gates. The PR is ready for
+review, but not ready to merge or deploy. Older checkpoint notes describe their
+historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Certified native transport workspace checkpoint
+
+Local HTTP and SSH fetch now use complete native forward workspaces from an
+accepted joint snapshot. Live refs stream from the immutable ref index in
+32-name pages, including the same default branch, without a history-sized ref
+map or the explicit-object-root cap. An admitted SQLite spool tracks typed
+frontier, completed membership and distinct physical pack inputs. Each selected
+pack/index pair is authenticated, installed once and physically verified;
+blobs remain packed. Frontier batches have at most 128 objects and edge/
+membership pages have at most 512. Physical pack presence cannot authorize an
+unreferenced want. HTTP and SSH validate every wanted OID against the retained
+refs' completed closure before forwarding it to Git.
+
+Construction retains a producer borrow and physical generation guard, refreshes
+exact lease/owner/access observations during bounded steps, and rechecks before
+returning. Renewal can carry construction past its initial read deadline; an
+expired pin cannot be resurrected. Cancellation detaches observers while actual
+provider/blocking/native work and descendants remain owned. A completed workspace
+releases construction read credit while retaining file/disk admission and its
+snapshot until physical cleanup. The two-credit regression covers that lifetime
+separation.
+
+All 17 focused cases pass (107.869 seconds command,
+13.14 seconds test runtime). They cover both object formats, actual HTTP clones,
+complete 532-parent native history, unrelated physical objects, 10,000 streamed
+ref names, admission/size/type refusals, cancellation, revocation, expired pins,
+and real drain. Fixtures physically verify native packs then install joint facts
+through trusted SQL; they qualify consumers, not live write publication. Existing
+lease tests now use service-owned renewal during expensive fixture construction,
+observed renewal milestones, and short real-clock expiry injected at the intended
+recovery phase. No production lease duration is increased.
+
+The frozen workspace library runs 708 unique cases:
+704 pass and four legacy `object_reads` cursor/rollback/byte-bound cases
+fail on `no such table: objects`. All 396 publication cases
+pass. Nine selected portable workspace/lifecycle cases pass, giving
+717 unique Rust cases, 713
+passes and four failures; focused reruns and nested subprocess summaries are not
+counted twice. Workspace/all-target Clippy with warnings denied passes
+(37.712 seconds), as do server build, formatting, diff checks and all
+96 Python harness tests. The driver preserves the actual library exit 101.
+Linux-only fork cases and the full workspace integration/provider campaign were
+not run locally. Source fingerprint, command results, log digests and earlier
+failed diagnostic runs are in
+[workspace evidence](evidence/serving-certified-workspaces-20261004.json).
+Protected original index/archive and exact SDK pins remain unchanged.
+
+Highest next priority is replacing legacy write/cache object-page readers and
+their real callers with immutable catalog/native APIs, preserving paging,
+rollback and bounded incremental-work coverage. Then finish owned HTTP/SSH/
+generated write producers, live pull/editorial ref authority and owner-aware
+remote routes. Current transfers build their own workspace and download inputs;
+coalescing authorized generation workspaces, bulk graph scheduling and cold I/O
+remain required for large-repository latency. Physical owner adoption, custody
+history/rollover, final DDL, GC/backup/restore, OS containment, native maintenance,
+signed completion, attribution and full-history/10,000-SDE capacity qualification
+remain mandatory. This checkpoint does not establish capacity or latency targets.
 
 ## Certified browser objects and ancestry checkpoint
 

@@ -195,15 +195,20 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
                 source.update(include_bytes!("git_cache/artifacts.rs"));
+                source.update(include_bytes!("git_cache/serving_refs.rs"));
                 source.update(include_bytes!("git_cache/cleanup.rs"));
                 source.update(include_bytes!("git_cache/mod.rs"));
                 source.update(include_bytes!("packs/catalog/native.rs"));
+                source.update(include_bytes!("packs/catalog/graph_spool.rs"));
                 source.update(include_bytes!("packs/catalog/files.rs"));
                 source.update(include_bytes!("native_resources.rs"));
                 source.update(include_bytes!("native_git.rs"));
                 source.update(include_bytes!("native_git/process.rs"));
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
+                source.update(include_bytes!("git_gateway/fetch.rs"));
+                source.update(include_bytes!("git_gateway/discovery.rs"));
+                source.update(include_bytes!("git_gateway/ssh.rs"));
                 source.update(include_bytes!("git_gateway/preflight.rs"));
                 source.update(include_bytes!("git_gateway/preflight/retention.rs"));
                 source.update(include_bytes!("git_gateway/branch_policy.rs"));
@@ -308,6 +313,9 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving/session/reads.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/body.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/edges.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/workspace.rs"
+                ));
                 source.update(include_bytes!("git_read/mod.rs"));
                 source.update(include_bytes!("git_read/browse.rs"));
                 source.update(include_bytes!("git_read/graph.rs"));

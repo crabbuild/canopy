@@ -576,18 +576,11 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     )
     .await?;
     let request_digest = encoded.identity().request_digest;
-    let mut staging_limits = StagingLimits::default();
-    if matches!(
-        mode,
-        CompletionMode::Dispatch {
-            loss: super::root_dispatch::Loss::Expiry,
-            ..
-        }
-    ) {
-        staging_limits.bound_lifetime_ms = 5000;
-    }
-    let coordinator =
-        StagingCoordinator::new(fixture.target.clone(), staging_limits, fixture.authority())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),

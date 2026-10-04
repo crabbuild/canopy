@@ -250,74 +250,49 @@ impl GitGateway {
             .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
             .await?;
         let request = self.decode(request, Some(MAX_FETCH_REQUEST_BYTES)).await?;
+        let snapshot = self
+            .repository
+            .serving_snapshot(actor)
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
         let capabilities = request.protocol_v2
             && request.method == "GET"
             && request.path_info == "/repo.git/info/refs"
             && url::form_urlencoded::parse(request.query.as_bytes())
                 .eq([("service".into(), "git-upload-pack".into())]);
         let response = if capabilities {
-            // Git v2 discovery advertises capabilities, not refs or objects.
-            // Native Git still owns the wire response and capability policy.
-            let head = self
-                .repository
-                .default_branch(None)
+            let head = snapshot
+                .resolve_ref(None)
                 .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                .map_err(|e| GatewayError::Cell(Box::new(e)))?;
             let backend = GitHttpBackend::initialize(
                 self.scratch_root.clone(),
                 self.disk_budget.clone(),
-                &head.output.reference,
+                &head.reference,
                 self.repository.object_format(),
                 self.native.clone(),
             )
             .await?
             .with_nonce(self.certificate_nonce().await?);
-            backend.stream(request, ()).await?
-        } else if discovery::is_ref_discovery(&request).await? {
-            if let Some(cached) = self.current_cache().await? {
-                cached.backend.stream(request, Arc::clone(&cached)).await?
-            } else {
-                let backend = self.discovery_cache(self.cell_refs().await?).await?;
-                backend.stream(request, ()).await?
-            }
+            backend.stream(request, snapshot).await?
         } else {
+            let discovery = discovery::is_ref_discovery(&request).await?;
             let fetch = fetch::FetchRequest::read(&request).await?;
-            let cached = self.fetch_cache(&fetch.wants).await?;
-            self.prepare_fetch(&cached, fetch).await?;
-            cached.backend.stream(request, Arc::clone(&cached)).await?
+            let workspace = snapshot
+                .ref_workspace(crate::packs::publication::WorkspaceLimits::default())
+                .await
+                .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+            Self::validate_wants(&workspace, &fetch.wants).await?;
+            tracing::debug!(discovery,filter=?fetch.filter,generation=workspace.fact().generation,
+                "prepared certified Git transport");
+            let backend = workspace.backend(self.certificate_nonce().await?);
+            backend.stream(request, workspace.read_owner()).await?
         };
         Ok(GitHttpResponse {
             status: response.status,
             headers: response.headers,
             body: Body::from_stream(response.body),
         })
-    }
-
-    async fn current_cache(&self) -> Result<Option<Arc<CachedRepository>>, GatewayError> {
-        // Hydration holds this mutex across storage I/O. Discovery must stay
-        // independent, so inspect only a ready snapshot and release before SQL.
-        let cached = self.cache.try_lock().ok().and_then(|cache| cache.clone());
-        let Some(cached) = cached else {
-            return Ok(None);
-        };
-        // Ref mutations, deletion/recreation and HEAD changes advance the same
-        // generation transactionally. Matching it avoids scanning every ref page.
-        let head = self
-            .repository
-            .default_branch(None)
-            .await
-            .map_err(|error| GatewayError::Cell(Box::new(error)))?
-            .output;
-        let current =
-            cached.snapshot.generation == head.generation && cached.snapshot.head == head.reference;
-        if current {
-            tracing::debug!(
-                repository = %hex::encode(self.repository.repository_id()),
-                generation = head.generation,
-                "reused Git ref snapshot"
-            );
-        }
-        Ok(current.then_some(cached))
     }
 
     async fn receive(

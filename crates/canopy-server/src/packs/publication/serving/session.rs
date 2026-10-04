@@ -13,7 +13,9 @@ use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 mod body;
 mod edges;
+mod workspace;
 pub use edges::{MAX_EDGE_PARENTS, ServingEdgePage};
+pub use workspace::{NativeWorkspace, WorkspaceLimits, WorkspaceStats};
 mod handoff;
 mod reads;
 mod refs;
@@ -340,7 +342,7 @@ impl ServingPin {
             return Err(ServingReadError::Context);
         }
         let ids = ids.to_vec();
-        self.read_owned(actor, move |inner, deadline| async move {
+        self.read_owned(actor, move |inner, deadline, _permit| async move {
             let reader = inner.catalog().await?;
             if Instant::now() >= deadline {
                 return Err(ServingReadError::Inactive);
