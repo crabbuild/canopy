@@ -8,6 +8,7 @@ mod durable_recovery;
 mod frontier;
 mod initialization;
 mod inputs;
+mod mandatory_registration;
 mod namespaces;
 mod native_capture;
 mod policy_dispatch;
@@ -72,6 +73,7 @@ impl CellModule for Module {
             let mut initial_query = descriptor(32);
             initial_query.output_limit = 512;
             let mut policy_page = descriptor(33);
+            policy_page.codec_version = RegisterRefPolicyPage::CODEC_VERSION;
             policy_page.input_limit = REF_POLICY_PAGE_BYTES;
             policy_page.output_limit = 128;
             let mut policy_query = descriptor(34);
@@ -79,16 +81,17 @@ impl CellModule for Module {
             let mut policy_reap = descriptor(35);
             policy_reap.output_limit = 128;
             let mut root_completion = descriptor(36);
+            root_completion.codec_version = CompleteRootPush::CODEC_VERSION;
             root_completion.input_limit = ROOT_COMPLETION_BYTES;
             root_completion.output_limit = 512;
             let mut root_outcome = descriptor(38);
-            root_outcome.codec_version = 2;
+            root_outcome.codec_version = CompleteRootOutcome::CODEC_VERSION;
             root_outcome.input_limit = ROOT_COMPLETION_BYTES;
             root_outcome.output_limit = 512;
             let mut root_lookup = descriptor(37);
             root_lookup.output_limit = 512;
             let mut recovery = descriptor(39);
-            recovery.codec_version = 2;
+            recovery.codec_version = RegisterRootRecovery::CODEC_VERSION;
             // Match the existing production SQL transport contract exactly.
             // The generic 4 KiB fixture limit cannot encode even one valid
             // 65 KiB ref name; policy construction has its own smaller bound.
@@ -315,8 +318,11 @@ impl Fixture {
         Ok(catalog)
     }
 }
-fn identity() -> Result<MutationIdentity> {
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+fn identity() -> std::io::Result<MutationIdentity> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(std::io::Error::other)?;
+    let now = i64::try_from(elapsed.as_millis()).map_err(std::io::Error::other)?;
     Ok(MutationIdentity {
         request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
         issued_at_ms: now,

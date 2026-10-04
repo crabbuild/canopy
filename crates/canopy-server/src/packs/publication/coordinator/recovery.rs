@@ -31,6 +31,12 @@ pub struct ReadyBoundRecovery {
     pub(super) refusal: bool,
 }
 impl ReadyBoundRecovery {
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn evidence_for_test(
+        &self,
+    ) -> cellule_runtime::PendingMutation {
+        self.ready.evidence_for_test()
+    }
     pub(super) fn new(
         owner: PushPreparation,
         intent: Option<Arc<RefPolicyPreparation>>,

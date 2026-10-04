@@ -1,8 +1,6 @@
 //! Exact policy-page registration shares foreground admission and custody.
 use super::*;
 
-pub(super) const RESERVATION: u64 = 2 * REF_POLICY_PAGE_BYTES as u64;
-
 #[derive(Debug, thiserror::Error)]
 pub enum RefPolicyReadyError {
     #[error("ref policy page preparation failed")]
@@ -23,7 +21,6 @@ pub struct ReadyRefPolicyPage {
     intent: Arc<RefPolicyPreparation>,
     command: PreparedCommand<RegisterRefPolicyPage>,
     refusal: Option<Arc<ReadyRootPush>>,
-    refusing: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     refusal_fault: u8,
 }
@@ -51,7 +48,6 @@ impl RefPolicyPreparation {
             intent: self.clone(),
             command,
             refusal: None,
-            refusing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(test)]
             refusal_fault: 0,
         })
@@ -97,13 +93,16 @@ impl ReadyRefPolicyPage {
                 registered,
             }));
         }
-        Ok(ReadyBoundRecovery::new(
+        let ready = ReadyBoundRecovery::new(
             PushPreparation::Catalog(self.prepared),
             Some(self.intent),
             false,
             registered,
             store,
-        ))
+        );
+        #[cfg(test)]
+        ready.ready.refusal_fault_for_test(self.refusal_fault);
+        Ok(ready)
     }
     /// Register both original SDK identities before page submission. A known
     /// settled predecessor is required before this attempt can advance its pin.
@@ -159,93 +158,20 @@ impl ReadyRefPolicyPage {
         self.refusal = Some(refusal);
         Ok(self)
     }
-    pub(super) fn reservation(&self) -> u64 {
-        RESERVATION
-            + if self.refusal.is_some() {
-                roots::ROOT_RESERVATION
-            } else {
-                0
-            }
-    }
     #[cfg(test)]
     pub(in crate::packs::publication) fn refusal_fault_for_test(&mut self, fault: u8) {
         self.refusal_fault = fault;
     }
-    pub(super) fn dispatch_copy(&self) -> Self {
-        Self {
-            prepared: self.prepared.clone(),
-            intent: self.intent.clone(),
-            command: self.command.clone(),
-            refusal: self.refusal.clone(),
-            refusing: self.refusing.clone(),
-            #[cfg(test)]
-            refusal_fault: self.refusal_fault,
-        }
-    }
-    pub(super) fn pending(&self) -> PublicationError {
-        if self.refusing.load(std::sync::atomic::Ordering::Acquire) {
-            return self
-                .refusal
-                .as_ref()
-                .expect("armed refusal phase")
-                .pending();
-        }
-        PublicationError::PolicyPage(InvocationError::Pending(Box::new(
-            self.command.evidence().clone(),
-        )))
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn command_for_test(
+        &self,
+    ) -> &PreparedCommand<RegisterRefPolicyPage> {
+        &self.command
     }
     #[cfg(test)]
     pub(in crate::packs::publication) fn evidence_for_test(
         &self,
     ) -> cellule_runtime::PendingMutation {
         self.command.evidence().clone()
-    }
-    pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
-        if self.refusing.load(std::sync::atomic::Ordering::Acquire) {
-            return self
-                .refusal
-                .as_ref()
-                .expect("armed refusal phase")
-                .dispatch_copy()
-                .dispatch(recover, fault)
-                .await;
-        }
-        let client = self.prepared.base.capability().0.clone();
-        let prepared = self.prepared.clone();
-        let outcome = super::super::exact::invoke_guarded(
-            &client,
-            self.command,
-            recover,
-            512,
-            fault,
-            move || {
-                prepared
-                    .ensure_live()
-                    .map_err(|_| Error::Command("inactive ref policy preparation"))
-            },
-        )
-        .await;
-        let refused = match &outcome {
-            Ok(value) => {
-                matches!(value.output, RefPolicyReply::Denied(_))
-                    || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
-            }
-            Err(InvocationError::Rejected(_)) => true,
-            _ => false,
-        };
-        if refused && let Some(refusal) = self.refusal {
-            // Registered pages commit the refusal phase in their domain
-            // transaction. This flag only selects the in-memory pending witness.
-            self.refusing
-                .store(true, std::sync::atomic::Ordering::Release);
-            #[cfg(test)]
-            let fault = self.refusal_fault;
-            #[cfg(not(test))]
-            let fault = 0;
-            return refusal.dispatch_copy().dispatch(false, fault).await;
-        }
-        outcome
-            .map(PublicationOutcome::PolicyPage)
-            .map_err(PublicationError::PolicyPage)
     }
 }

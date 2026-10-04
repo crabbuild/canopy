@@ -4,50 +4,59 @@ use super::*;
 async fn current_acl_and_new_direct_push_rules_are_checked_before_registration() -> Result {
     let (fixture, graph) = rooted(ObjectFormat::Sha256).await?;
     protect(&fixture, &graph).await?;
-    let pending = graph
-        .prepared
-        .ref_policy_preparation(
-            plan(vec![update("refs/heads/main", None, Some(graph.tip))]),
-            graph.root.path(),
-            graph.budget.clone(),
-            limits(),
-        )
-        .await?;
-    let page = pending.page(&graph.prepared, 0).await?;
+    let changes = plan(vec![update("refs/heads/main", None, Some(graph.tip))]);
     for (sql, reason) in [
         (
             "UPDATE repository_identity SET owner='another'",
             PreparationDenial::Unauthorized,
         ),
         (
-            "UPDATE repository_identity SET owner='owner'; UPDATE branch_rules SET require_pull_request=1,version=version+1",
+            "UPDATE branch_rules SET require_pull_request=1,version=version+1",
             PreparationDenial::Conflict,
         ),
     ] {
+        let attempt = fresh(&fixture, &graph).await?;
+        let pending = attempt
+            .prepared
+            .ref_policy_preparation(
+                changes.clone(),
+                attempt.root.path(),
+                attempt.budget.clone(),
+                limits(),
+            )
+            .await?;
+        let command = arm(
+            &fixture,
+            &attempt,
+            pending.page(&attempt.prepared, 0).await?,
+        )
+        .await?;
         edit(&fixture, sql).await?;
-        let before = state(&fixture.handle).await?;
-        assert!(matches!(fixture.client().command::<RegisterRefPolicyPage>(
-            &fixture.target,identity()?,page.clone()).await,
-            Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(reason)));
-        assert_eq!(state(&fixture.handle).await?, before);
-        assert!(pending.ready(&graph.prepared).await.is_err());
+        denied(&fixture, &command, reason).await?;
+        assert!(pending.ready(&attempt.prepared).await.is_err());
+        edit(&fixture, "UPDATE repository_identity SET owner='owner'").await?;
+        finish_graph(attempt).await?;
     }
-    // Freshly certified pages cannot bypass a pull-request rule either.
-    let pending = graph
+    // A freshly certified and registered page still observes the current
+    // pull-request requirement; an old receipt is not fresh write authority.
+    let attempt = fresh(&fixture, &graph).await?;
+    let pending = attempt
         .prepared
         .ref_policy_preparation(
-            plan(vec![update("refs/heads/main", None, Some(graph.tip))]),
-            graph.root.path(),
-            graph.budget.clone(),
+            changes,
+            attempt.root.path(),
+            attempt.budget.clone(),
             limits(),
         )
         .await?;
-    let page = pending.page(&graph.prepared, 0).await?;
-    let before = state(&fixture.handle).await?;
-    assert!(matches!(fixture.client().command::<RegisterRefPolicyPage>(
-        &fixture.target,identity()?,page).await,
-        Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(PreparationDenial::Conflict)));
-    assert_eq!(state(&fixture.handle).await?, before);
+    let command = arm(
+        &fixture,
+        &attempt,
+        pending.page(&attempt.prepared, 0).await?,
+    )
+    .await?;
+    denied(&fixture, &command, PreparationDenial::Conflict).await?;
+    finish_graph(attempt).await?;
     close(fixture, graph).await
 }
 
@@ -69,7 +78,7 @@ async fn watched_updates_and_rule_context_edits_invalidate_fresh_readiness() -> 
         "context_version=2,version=version+1".into(),
         "state='success',version=version+1".into(),
     ] {
-        let (pending, _) = registered(&fixture, &graph, changes.clone()).await?;
+        let (pending, _, _) = registered(&fixture, &graph, changes.clone()).await?;
         edit(&fixture,&format!("UPDATE check_runs SET {change} WHERE number=(SELECT max(number) FROM check_runs WHERE {watched})")).await?;
         assert!(matches!(
             pending.ready(&graph.prepared).await,
@@ -83,17 +92,24 @@ async fn watched_updates_and_rule_context_edits_invalidate_fresh_readiness() -> 
         "DELETE FROM branch_required_checks WHERE reference='refs/heads/main'",
         "UPDATE check_contexts SET reporter='another',version=version+1",
     ] {
-        let (pending, page) = registered(&fixture, &graph, changes.clone()).await?;
+        let attempt = fresh(&fixture, &graph).await?;
+        let (pending, page, command) = registered(&fixture, &attempt, changes.clone()).await?;
+        let original = Box::pin(command.clone().execute()).await?;
+        let probe = arm(&fixture, &attempt, page).await?;
         edit(&fixture, change).await?;
         assert!(matches!(
-            pending.ready(&graph.prepared).await,
+            pending.ready(&attempt.prepared).await,
             Err(RefPolicyPreparationError::Context)
         ));
         let before = state(&fixture.handle).await?;
-        assert!(matches!(fixture.client().command::<RegisterRefPolicyPage>(
-            &fixture.target, identity()?, page).await,
-            Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(PreparationDenial::Conflict)));
+        let known = Box::pin(command.clone().execute()).await?;
+        assert_eq!(
+            (known.output, known.receipt),
+            (original.output, original.receipt)
+        );
         assert_eq!(state(&fixture.handle).await?, before);
+        denied(&fixture, &probe, PreparationDenial::Conflict).await?;
+        finish_graph(attempt).await?;
         // Restore configuration through actual mutations; do not reset epochs.
         edit(&fixture,"UPDATE branch_rules SET require_pull_request=0,version=version+1; INSERT OR IGNORE INTO branch_required_checks VALUES('refs/heads/main','ci'); UPDATE check_contexts SET reporter='owner',version=1").await?;
         edit(&fixture, &run_sql(graph.tip, "ci", 1, "success")).await?;
@@ -106,7 +122,7 @@ async fn integer_counters_watch_immutability_and_invalid_guard_resurrection_are_
 {
     let (fixture, graph) = rooted(ObjectFormat::Sha1).await?;
     protect(&fixture, &graph).await?;
-    let (pending, _) = registered(
+    let (pending, _, _) = registered(
         &fixture,
         &graph,
         plan(vec![update("refs/heads/main", None, Some(graph.tip))]),

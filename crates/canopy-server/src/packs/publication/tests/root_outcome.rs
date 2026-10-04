@@ -77,6 +77,7 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
     };
     assert!(session.lease.base.catalog.is_none());
     let before = state(&f.handle).await?;
+    let mut previous = None;
     if fault == 0 {
         let input = session
             .root_outcome_completion(store, root, budget.clone(), None)
@@ -122,11 +123,24 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
         let mut d = BoundedDecoder::new(&bytes, CERTIFICATE_BYTES)?;
         changed.proof = OutcomeCertificate::decode(&mut d)?;
         d.finish()?;
-        let error = f
+        let command = f
             .client()
-            .command::<CompleteRootOutcome>(&f.target, identity()?, changed)
-            .await
-            .unwrap_err();
+            .prepare_command::<CompleteRootOutcome>(&f.target, identity()?, changed)
+            .await?;
+        let registered = Box::pin(super::super::recovery::persist_full(
+            &session,
+            &command,
+            super::super::recovery::Kind::Outcome,
+            None,
+            None,
+            store,
+            identity()?,
+            0,
+        ))
+        .await?;
+        let error =
+            super::super::recovery::normalize_root(Box::pin(command.execute()).await).unwrap_err();
+        previous = Some(registered);
         assert!(
             matches!(error, InvocationError::Rejected(ref r) if r.output == RootCompletionReply::Denied(PreparationDenial::Unauthorized))
         );
@@ -147,25 +161,35 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
             matches!(error, InvocationError::Rejected(ref r) if r.output == CatalogCompletionReply::Denied(PreparationDenial::Unauthorized))
         );
         assert_eq!(state(&f.handle).await?, before);
+    }
+    let ready = session
+        .ready_root_outcome(identity()?, store, root, budget.clone(), None)
+        .await?;
+    let evidence = ready.evidence_for_test();
+    let registered = if let Some(previous) = &previous {
+        Box::pin(ready.persist_recovery_after(store, identity()?, previous)).await?
+    } else {
+        Box::pin(ready.persist_recovery(store, identity()?)).await?
+    };
+    if fault == 0 {
+        let command = ready
+            .outcome_command_for_test()
+            .ok_or("original outcome command")?;
         for trigger in [
             "BEFORE UPDATE OF response_root ON pushes",
             "BEFORE DELETE ON catalog_operations",
         ] {
             edit(f, &format!("CREATE TRIGGER root_outcome_fault {trigger} BEGIN SELECT RAISE(ABORT,'root outcome late fault'); END;")).await?;
-            assert!(
-                f.client()
-                    .command::<CompleteRootOutcome>(&f.target, identity()?, input.clone())
-                    .await
-                    .is_err()
-            );
+            assert!(Box::pin(command.clone().execute()).await.is_err());
+            assert!(matches!(
+                f.client().resolve(&evidence).await?,
+                Resolution::Absent
+            ));
             assert_eq!(state(&f.handle).await?, before);
             edit(f, "DROP TRIGGER root_outcome_fault").await?;
         }
     }
-    let ready = session
-        .ready_root_outcome(identity()?, store, root, budget, None)
-        .await?;
-    let evidence = ready.evidence_for_test();
+    let ready = ready.bind_recovery(registered, store)?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     p.fault_for_test(fault);
     let observer = ticket.publish(&p, ready)?;
@@ -181,7 +205,7 @@ pub(super) async fn qualify(context: Context<'_>, kind: Kind, fault: u8, revoked
             return Err("ref-free exact command evidence lost".into());
         };
         assert_eq!(actual.as_ref(), &evidence);
-        assert_eq!(p.stats().await.command_bytes, 16 << 10);
+        assert_eq!(p.stats().await.command_bytes, 32 << 10);
         let known = match f.client().resolve(&evidence).await? {
             Resolution::Absent => None,
             Resolution::Committed(value) => {

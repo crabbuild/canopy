@@ -15,13 +15,15 @@ fn request(fixture: &Fixture, id: [u8; 16]) -> RefPolicyReap {
 async fn cleanup_is_bounded_transactional_and_retains_live_invalid_tombstones() -> Result {
     let (fixture, graph) = rooted(ObjectFormat::Sha256).await?;
     protect(&fixture, &graph).await?;
-    let (pending, page) = registered(
+    let (pending, page, command) = registered(
         &fixture,
         &graph,
         plan(vec![update("refs/heads/main", None, Some(graph.tip))]),
     )
     .await?;
     let id = pending.intent().id;
+    let original = Box::pin(command.clone().execute()).await?;
+    let conflict = arm(&fixture, &graph, page.clone()).await?;
     let plans=fixture.handle.query(0,8192,move|connection| {
         let statements=[
             "EXPLAIN QUERY PLAN SELECT guard FROM ref_policy_watches WHERE oid=?1 AND context=?2 AND context_version=?3 AND run_number<=?4",
@@ -87,10 +89,13 @@ async fn cleanup_is_bounded_transactional_and_retains_live_invalid_tombstones() 
         }
     );
     let before = state(&fixture.handle).await?;
-    assert!(matches!(fixture.client().command::<RegisterRefPolicyPage>(
-        &fixture.target,identity()?,page.clone()).await,
-        Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(PreparationDenial::Conflict)));
+    let known = Box::pin(command.clone().execute()).await?;
+    assert_eq!(
+        (known.output, known.receipt),
+        (original.output, original.receipt)
+    );
     assert_eq!(state(&fixture.handle).await?, before);
+    denied(&fixture, &conflict, PreparationDenial::Conflict).await?;
     fixture
         .client()
         .command::<AbortPreparation>(&fixture.target, identity()?, check(graph.prepared.token()))
@@ -106,11 +111,39 @@ async fn cleanup_is_bounded_transactional_and_retains_live_invalid_tombstones() 
             removed: true
         }
     );
-    let before = state(&fixture.handle).await?;
-    assert!(matches!(fixture.client().command::<RegisterRefPolicyPage>(
-        &fixture.target,identity()?,page).await,
-        Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(PreparationDenial::Missing)));
-    assert_eq!(state(&fixture.handle).await?, before);
+    let competing = fixture
+        .client()
+        .prepare_command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page)
+        .await?;
+    super::super::mandatory_registration::not_started(&fixture, &competing).await?;
+    // An independently registered original command also reaches the actual
+    // missing-operation denial after abort, rather than failing at the gate.
+    let attempt = fresh(&fixture, &graph).await?;
+    let pending = attempt
+        .prepared
+        .ref_policy_preparation(
+            plan(vec![update("refs/heads/main", None, Some(attempt.tip))]),
+            attempt.root.path(),
+            attempt.budget.clone(),
+            limits(),
+        )
+        .await?;
+    let missing = arm(
+        &fixture,
+        &attempt,
+        pending.page(&attempt.prepared, 0).await?,
+    )
+    .await?;
+    fixture
+        .client()
+        .command::<AbortPreparation>(
+            &fixture.target,
+            identity()?,
+            check(attempt.prepared.token()),
+        )
+        .await?;
+    denied(&fixture, &missing, PreparationDenial::Missing).await?;
+    finish_graph(attempt).await?;
     close(fixture, graph).await
 }
 
@@ -119,17 +152,16 @@ async fn restored_owner_cannot_replay_old_guard_into_new_writes_and_can_reap_its
 {
     let (fixture, graph) = rooted(ObjectFormat::Sha1).await?;
     protect(&fixture, &graph).await?;
-    let (pending, page) = registered(
+    let (pending, page, command) = registered(
         &fixture,
         &graph,
         plan(vec![update("refs/heads/main", None, Some(graph.tip))]),
     )
     .await?;
-    let mutation = identity()?;
-    let original = fixture
-        .client()
-        .command::<RegisterRefPolicyPage>(&fixture.target, mutation, page.clone())
-        .await?;
+    let mutation = command.evidence().identity();
+    let original = Box::pin(command.clone().execute()).await?;
+    graph.ticket.stop();
+    assert!(graph.staging.close_and_drain().await.is_empty());
     fixture.handle.drain().await?;
     fixture.runtime.shutdown().await?;
     let session = SessionId::from_bytes([232; 16]);
@@ -166,9 +198,17 @@ async fn restored_owner_cannot_replay_old_guard_into_new_writes_and_can_reap_its
         (original.output, original.receipt)
     );
     let before = state(&handle).await?;
-    assert!(matches!(client.command::<RegisterRefPolicyPage>(
-        &fixture.target,identity()?,page).await,
-        Err(InvocationError::Rejected(value)) if value.output==RefPolicyReply::Denied(PreparationDenial::Stale)));
+    let competing = client
+        .prepare_command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page)
+        .await?;
+    assert!(matches!(
+        Box::pin(competing.clone().execute()).await,
+        Err(InvocationError::NotStarted(_))
+    ));
+    assert!(matches!(
+        client.resolve(competing.evidence()).await?,
+        Resolution::Absent
+    ));
     assert_eq!(state(&handle).await?, before);
     assert_eq!(
         client
@@ -190,8 +230,7 @@ async fn restored_owner_cannot_replay_old_guard_into_new_writes_and_can_reap_its
             removed: true
         }
     );
-    drop(graph.prepared);
-    cleaned(graph.root.path(), &graph.budget).await?;
+    finish_graph(graph).await?;
     runtime.shutdown().await?;
     Ok(())
 }

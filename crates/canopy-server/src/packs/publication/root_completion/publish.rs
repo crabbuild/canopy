@@ -10,7 +10,7 @@ pub struct CompleteRootPush;
 impl Command for CompleteRootPush {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 36;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = RootPushCompletion;
     type Output = RootCompletionReply;
     fn execute(
@@ -26,7 +26,6 @@ impl Command for CompleteRootPush {
             context,
             &check,
             super::super::recovery::Kind::Publish,
-            RootCompletionReply::Denied,
             |context| Self::domain(context, input),
         )
     }

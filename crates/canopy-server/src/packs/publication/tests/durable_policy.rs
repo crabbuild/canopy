@@ -34,7 +34,6 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
-    let fallback_evidence = refusal.evidence_for_test();
     let mut first_identity = identity()?;
     first_identity.expires_at_ms = first_identity.issued_at_ms + 8_000;
     let page = intent
@@ -54,21 +53,13 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             .await
             .is_err()
     );
-    // Premature refusal cannot consume the pre-frozen SDK identity.
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
-    let observer = queue
-        .submit(refusal.clone())
-        .await
-        .map_err(|error| format!("premature refusal admission: {:?}", error.reason))?;
-    assert!(matches!(
-        observer.wait().await,
-        PublicationState::Finished(Err(_))
-    ));
-    assert!(matches!(
-        f.client().resolve(&fallback_evidence).await?,
-        Resolution::Absent
-    ));
-    assert!(queue.close_and_drain().await.is_empty());
+    // The queue cannot admit an unregistered factory value. Direct receiver
+    // submission must also preserve the original premature refusal's absence.
+    super::mandatory_registration::not_started(
+        f,
+        refusal.refusal_command().ok_or("original frozen refusal")?,
+    )
+    .await?;
     if refusal_case {
         edit(
             f,

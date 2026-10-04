@@ -8,7 +8,7 @@ use tokio::time::{Duration, timeout};
 pub(super) async fn maintenance(
     handle: &CellHandle,
     repository: [u8; 16],
-) -> Result<MaintenanceRequest> {
+) -> std::io::Result<MaintenanceRequest> {
     let actor = handle
         .query(0, 256, |db| {
             Ok(db
@@ -19,11 +19,44 @@ pub(super) async fn maintenance(
                 )?
                 .into_bytes())
         })
-        .await?;
+        .await
+        .map_err(std::io::Error::other)?;
     Ok(MaintenanceRequest {
         repository,
-        actor: String::from_utf8(actor)?,
+        actor: String::from_utf8(actor).map_err(std::io::Error::other)?,
         owner: handle.owner_fence(),
+    })
+}
+
+// Keep this complete qualifier off the shared native setup poll stack while
+// retaining the original service, ticket, artifact storage and workspace.
+pub(super) fn spawn_qualify(
+    fixture: Fixture,
+    store: Arc<ArtifactStore>,
+    staging: StagingCoordinator,
+    ticket: StagingTicket,
+    work: (Arc<tempfile::TempDir>, cellule_ltx::DiskBudget),
+    request: PushCompletionRequest,
+    case: (u8, Arc<InMemory>),
+) -> tokio::task::JoinHandle<std::result::Result<(), String>> {
+    tokio::spawn(async move {
+        let (root, budget) = work;
+        let (fault, provider) = case;
+        Box::pin(qualify(
+            Context {
+                fixture: &fixture,
+                store: &store,
+                staging: &staging,
+                ticket: &ticket,
+                root: root.path(),
+                budget,
+                request,
+            },
+            fault,
+            provider,
+        ))
+        .await
+        .map_err(|error| error.to_string())
     })
 }
 
@@ -175,8 +208,14 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
         .identity()
         .expires_at_ms
         .max(original.identity().expires_at_ms);
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= expires {
+    // Tokio waits on a monotonic clock; SDK expiration uses wall time. Check
+    // the actual boundary after each wait rather than assuming the two clocks
+    // advanced by precisely the same amount during a long receipt lifetime.
+    loop {
+        let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        if now > expires {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(u64::try_from(expires - now + 1)?)).await;
     }
     assert!(matches!(
