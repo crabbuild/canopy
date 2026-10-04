@@ -159,6 +159,19 @@ impl CatalogFiles {
             .workspace(owner, cleanup, head)
             .await
     }
+    pub(in crate::packs) async fn write_workspace(
+        &self,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+        head: String,
+        objects: Arc<crate::git_cache::GitCache>,
+    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .workspace_with_objects(owner, cleanup, head, Some(objects))
+            .await
+    }
     pub(in crate::packs) async fn install_workspace(
         &self,
         cache: Arc<crate::git_cache::GitCache>,

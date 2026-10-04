@@ -1,8 +1,8 @@
 //! Bounded immutable object pages for cold cache hydration.
 
 use cellule_runtime::{
-    Error, InvocationError, Observed, Receipt, primitives::sql::SqlBatch,
-    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    Error, InvocationError, Observed, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
+    primitives::sql::SqlStatement, primitives::sql::SqlValue,
 };
 
 use crate::{
@@ -12,10 +12,7 @@ use crate::{
 
 pub(crate) struct ObjectHeaders {
     pub(crate) objects: Observed<Vec<crate::ObjectId>>,
-    pub(crate) through: i64,
 }
-
-const CHANGED_HEADERS: &str = "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence LIMIT ?3";
 
 impl RepositoryCell {
     /// Reads at most 128 objects and 768 KiB of inline bodies, in OID order.
@@ -50,55 +47,9 @@ impl RepositoryCell {
         Ok(self.object_records(headers.objects).await?.output)
     }
 
-    pub(crate) async fn object_high_water(
-        &self,
-    ) -> Result<Observed<i64>, InvocationError<Vec<SqlResultSet>>> {
-        let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT COALESCE(MAX(sequence), 0) FROM objects".into(),
-                        parameters: vec![],
-                    }],
-                },
-            )
-            .await?;
-        let row = result.output.first().and_then(|set| set.rows.first());
-        let Some([SqlValue::Integer(sequence)]) = row.map(Vec::as_slice) else {
-            return Err(InvocationError::NotStarted(Error::Command(
-                "invalid object high water",
-            )));
-        };
-        Ok(Observed {
-            output: *sequence,
-            receipt: result.receipt,
-        })
-    }
-
-    pub(crate) async fn object_headers(
-        &self,
-        after: i64,
-        high_water: &Observed<i64>,
-    ) -> Result<ObjectHeaders, InvocationError<Vec<SqlResultSet>>> {
-        self.read_object_headers(
-            Some(high_water.receipt),
-            SqlStatement {
-                sql: CHANGED_HEADERS.into(),
-                parameters: vec![
-                    SqlValue::Integer(after),
-                    SqlValue::Integer(high_water.output),
-                    SqlValue::Integer(MAX_OBJECTS as i64),
-                ],
-            },
-        )
-        .await
-    }
-
     async fn read_object_headers(
         &self,
-        minimum: Option<Receipt>,
+        minimum: Option<cellule_runtime::Receipt>,
         statement: SqlStatement,
     ) -> Result<ObjectHeaders, InvocationError<Vec<SqlResultSet>>> {
         let headers = self
@@ -114,13 +65,12 @@ impl RepositoryCell {
             .output
             .first()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing object headers")))?;
-        let (ids, through) = decode_headers(&rows.rows).map_err(InvocationError::NotStarted)?;
+        let (ids, _) = decode_headers(&rows.rows).map_err(InvocationError::NotStarted)?;
         Ok(ObjectHeaders {
             objects: Observed {
                 output: ids,
                 receipt: headers.receipt,
             },
-            through,
         })
     }
 
@@ -290,6 +240,3 @@ fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
     };
     Ok(StoredObject { oid, kind, storage })
 }
-
-#[cfg(test)]
-mod tests;

@@ -3,18 +3,93 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. The native workspace checkpoint below replaces the
-legacy fetch reader; four legacy object-page readers still fail locally. At the
-preceding published head `cc4a963`, both actual Rust CI logs report 670 server
-passes and the same five legacy-reader failures; both harness checks pass.
-Those CI runs do not qualify this newer source. Conflict freedom is checked at
-publication independently of incomplete release gates. The PR is ready for
-review, but not ready to merge or deploy. Older checkpoint notes describe their
-historical states.
+directly against `main`. The cursor/native-base conversion below passes its focused and library
+qualification; the full CI workflow still fails in a legacy integration caller. Both actual `6ab78d6` Rust runs fail on four obsolete SQL cursor tests
+(`objects` is absent); both harness checks pass. The change below replaces their
+production hydration caller before transferring coverage to the immutable source
+index. Passing that coverage will not by itself qualify the whole CI workflow or
+complete owned write publication. The PR is ready for review, but not ready to
+merge or deploy. Older checkpoint notes describe their historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Immutable source cursor and native write-base conversion
+
+The private cache constructor used by HTTP push and generated candidate
+preparation now takes one retained joint snapshot. It reads only requested ref
+expectations in batches of at most 128 names and 256 KiB, including tombstone
+versions; the native baseline streams all live refs directly into packed-refs.
+Post-receive comparison resolves exact requested names with owned native cat-file
+batches (32 names / 64 KiB input), avoiding prefix enumeration and changes to
+unrequested refs. Candidate preparation requests no repository-wide ref map.
+
+Catalog inputs now stream from the immutable source index in count/descriptor-
+byte-bounded pages. The shared range-tree difference cursor compares full records
+at matching first keys, emits additions/replacements, omits deletions and skips
+identical authenticated subtrees. Fixed old/new roots exclude later publications;
+new lower keys are found by starting a new root-pair difference, rather than
+continuing an OID or retired SQL sequence. A byte-excluded descriptor is retained
+for the next page. Cancellation/error poisons the cursor; callers restart with
+the same root pair after their last returned key. Its two frontier stacks retain
+only bounded-height paths and siblings. Source shard descriptors reuse the existing
+range-tree structure and physical pack bindings.
+
+Native write-base construction currently enumerates `None -> selected sources`:
+it is a cold per-request baseline, not a coalesced incremental cache. Admitted
+disk stores physical pack deduplication. Authenticated pack/index inputs remain
+native, and a separate writable sibling cache uses that baseline as an alternate.
+This prevents accepted catalog packs from being mistaken for new receive outputs.
+Both cache owners retain the snapshot, physical generation and cleanup admission;
+construction refreshes current read authority and lease observations and rechecks
+before returning. This internal base grants neither fetch reachability nor mutation
+publication authority. Fetch continues to require its distinct completed closure.
+
+The retired sequence/high-water hydration caller, shared loose-cache reuse and
+its obsolete periodic repack loop are removed. Unused loose-object/repack helpers
+are confined to unit-test fixtures to preserve native cache mechanism coverage.
+Legacy object ingestion, graph preparation, candidate reservation/completion and
+HTTP/SSH write publication still require their owned staged-producer conversion.
+Some legacy object APIs remain genuine callers and are not relabeled as converted.
+Native generation maintenance, workspace sharing and cold-history performance
+qualification remain open.
+
+Nine focused replacement cases pass: lower-key/future-root isolation, byte-prefix
+restart, duplicate/failed/deleted/replaced records, subtree-read bounds after
+10,000 sources, independent differential results across tree shapes, native
+baseline/incoming-pack isolation, literal ref lookup, and real provider
+cancellation/revocation through drain. The focused command takes 114.256 seconds
+(including compilation); test runtime is 2.70 seconds. A failed draft cancellation
+test suspended at ref-root loading before file admission; it is preserved in the
+evidence. Warming that immutable metadata moves the gate to its intended native
+pack-transfer phase without relaxing the physical retention assertion.
+
+The exact full workspace command runs all 713 library cases successfully,
+including 693 server cases and all 398 publication cases, plus two binary cases.
+It then passes 12 directory integration cases and fails
+`directory_reservations_recover_two_distinct_repository_cells` with
+`Registry("operation descriptor is unavailable")`: its fixture still invokes the
+retired loose-object ingestion command. Later integration binaries and provider
+qualification have not run. Nine selected portable workspace/startup/drain cases
+pass independently, including production packed-repository initialization.
+Total executed Rust coverage is 737 unique cases: 736 pass, one fails; focused
+reruns and two nested subprocess summaries are excluded. Linux-only fork cases
+were not run locally. This is progress on CI, not a green full workflow.
+
+Workspace/all-target Clippy with warnings denied (36.465 seconds), server build
+(45.072 seconds), formatting, diff checks and all 96 Python harness cases pass.
+The protected original index/archive, clean read-only SDK and exact dependency
+pins are unchanged. Frozen source includes 487 files / 473 Rust files; its
+fingerprint, commands, log digests and preceding CI diagnostics are in
+[evidence](evidence/serving-native-write-base-20261004.json).
+
+Highest next priorities are the real owned HTTP/SSH/generated write producers,
+then integration-fixture conversion against those producers and complete
+workflow/provider qualification. Authority, recovery, custody history/rollover,
+final DDL, GC/backup/restore, resource containment, fair native maintenance,
+workspace sharing, full-history/team capacity and file attribution remain
+mandatory scope.
 
 ## Certified native transport workspace checkpoint
 

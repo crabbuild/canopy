@@ -21,7 +21,6 @@ pub(crate) struct PackRecord {
     pub pack: LargeBlobReference,
     pub index: LargeBlobReference,
     pub approved: bool,
-    pub covered_through: i64,
 }
 
 pub(crate) struct PackReader {
@@ -71,12 +70,6 @@ impl PackReader {
         Ok(Arc::clone(
             cache.as_ref().ok_or(GatewayError::MalformedCache)?,
         ))
-    }
-    pub(crate) async fn replace(&self, old: &Arc<GitCache>, next: Arc<GitCache>) {
-        let mut cache = self.cache.lock().await;
-        if cache.as_ref().is_some_and(|cache| Arc::ptr_eq(cache, old)) {
-            *cache = Some(next);
-        }
     }
     pub(crate) async fn install(
         &self,
@@ -155,6 +148,7 @@ impl PackReader {
             process,
             output,
             oid,
+            #[cfg(test)]
             size,
             remaining: size,
             expected: digest,
@@ -219,6 +213,7 @@ pub(crate) struct NativePackedRead {
     process: GitProcess<Arc<GitCache>>,
     output: tokio::process::ChildStdout,
     pub(crate) oid: ObjectId,
+    #[cfg(test)]
     pub(crate) size: u64,
     remaining: u64,
     expected: [u8; 32],
@@ -294,7 +289,7 @@ fn decode(row: &[SqlValue]) -> Result<PackRecord, ReadError> {
         SqlValue::Blob(index_digest),
         SqlValue::Blob(index_sha),
         SqlValue::Integer(approved),
-        SqlValue::Integer(covered_through),
+        SqlValue::Integer(_covered_through),
     ] = row
     else {
         return Err(invalid());
@@ -314,7 +309,6 @@ fn decode(row: &[SqlValue]) -> Result<PackRecord, ReadError> {
             sha256: index_sha.as_slice().try_into().map_err(|_| invalid())?,
         },
         approved: *approved == 1,
-        covered_through: *covered_through,
     })
 }
 impl RepositoryCell {
@@ -338,17 +332,6 @@ impl RepositoryCell {
                 .and_then(|set| set.rows.first())
                 .ok_or_else(invalid)?,
         )
-    }
-    pub(crate) async fn approved_packs(&self, after: &[u8]) -> Result<Vec<PackRecord>, ReadError> {
-        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement { sql: format!("SELECT {COLUMNS} FROM git_packs WHERE approved = 1 AND sha256 > ?1 ORDER BY sha256 LIMIT 128"), parameters: vec![SqlValue::Blob(after.to_vec())] }] }).await?;
-        result
-            .output
-            .first()
-            .ok_or_else(invalid)?
-            .rows
-            .iter()
-            .map(|row| decode(row))
-            .collect()
     }
     pub(crate) async fn register_pack(
         &self,

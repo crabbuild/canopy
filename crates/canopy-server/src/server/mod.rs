@@ -203,7 +203,6 @@ pub(crate) struct RepositoryManager {
     residency_admission: AccountAdmission,
     transfers: AccountAdmission,
     tasks: TaskTracker,
-    maintenance_stop: CancellationToken,
     publication_budget: crate::packs::publication::PublicationBudget,
     recovery_scans: crate::packs::publication::RecoveryScanBudget,
     serving_reads: crate::packs::publication::ServingReadBudget,
@@ -656,7 +655,6 @@ impl RunningServer {
                     "account repository activations",
                 ),
                 tasks: tasks.clone(),
-                maintenance_stop: maintenance_stop.clone(),
                 publication_budget: crate::packs::publication::PublicationBudget::new(
                     crate::packs::publication::PublicationLimits::default(),
                 )

@@ -225,6 +225,16 @@ impl NativeFiles {
         cleanup: ReadOwner,
         head: String,
     ) -> Result<Arc<GitCache>, NativeReadError> {
+        self.workspace_with_objects(owner, cleanup, head, None)
+            .await
+    }
+    pub(super) async fn workspace_with_objects(
+        &self,
+        owner: ReadOwner,
+        cleanup: ReadOwner,
+        head: String,
+        objects: Option<Arc<GitCache>>,
+    ) -> Result<Arc<GitCache>, NativeReadError> {
         let admission = self.admit(owner.clone(), 4096).await?;
         let lifetime: ReadOwner = Arc::new((cleanup, admission));
         Ok(GitCache::create_owned(
@@ -232,7 +242,7 @@ impl NativeFiles {
             self.budget.clone(),
             &head,
             self.format,
-            None,
+            objects,
             self.native.clone(),
             CacheOwnership {
                 work: Arc::new((owner, lifetime.clone())),

@@ -13,6 +13,7 @@ use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 mod body;
 mod edges;
+mod native_base;
 mod workspace;
 pub use edges::{MAX_EDGE_PARENTS, ServingEdgePage};
 pub use workspace::{NativeWorkspace, WorkspaceLimits, WorkspaceStats};

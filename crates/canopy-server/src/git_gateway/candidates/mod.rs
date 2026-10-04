@@ -52,7 +52,7 @@ impl GitGateway {
         }) {
             return Ok(CandidateOutcome::Conflict);
         }
-        let cached = self.build_cache(self.cell_refs().await?, true).await?;
+        let cached = self.build_cache(actor, &[]).await?;
         let result = prepare_native(&self.repository, &cached.backend, &candidate).await?;
         if !valid_result(&result) {
             return Err(GitHttpError::TooLarge.into());
@@ -67,7 +67,7 @@ impl GitGateway {
                     new_oid: Some(parse_oid(oid)?),
                 }],
             };
-            self.persist_objects(&cached.backend, &cached.snapshot.refs, &plan)
+            self.persist_objects(&cached.backend, &cached.refs, &plan)
                 .await?;
             self.repository
                 .prepare_graph(&plan)
@@ -220,13 +220,13 @@ fn merge_output(bytes: &[u8]) -> Result<(String, Vec<&[u8]>), GatewayError> {
     Ok((tree.into(), paths))
 }
 
-struct Output {
-    status: ExitStatus,
-    stdout: Vec<u8>,
+pub(super) struct Output {
+    pub(super) status: ExitStatus,
+    pub(super) stdout: Vec<u8>,
     stderr: Vec<u8>,
 }
 impl Output {
-    fn error(self) -> GatewayError {
+    pub(super) fn error(self) -> GatewayError {
         GitHttpError::GitExit {
             status: self.status,
             stderr: String::from_utf8_lossy(&self.stderr).into_owned(),
@@ -234,7 +234,7 @@ impl Output {
         .into()
     }
 }
-async fn run(
+pub(super) async fn run(
     backend: &GitHttpBackend,
     args: &[&str],
     input: &[u8],

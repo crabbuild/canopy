@@ -106,6 +106,18 @@ impl CatalogReader {
     pub(in crate::packs) fn source_root(&self) -> Option<SourceRoot> {
         self.source_root
     }
+    pub(in crate::packs) fn source_changes(
+        &self,
+        before: Option<SourceRoot>,
+        after: Option<super::super::directory::SegmentKey>,
+    ) -> Result<
+        super::super::directory::index::RangeChanges<'_, super::super::sources::SourceRecord>,
+        IndexError,
+    > {
+        self.indexes
+            .sources
+            .changes(before, self.source_root, after)
+    }
     pub async fn lookup(
         &self,
         oid: ObjectId,

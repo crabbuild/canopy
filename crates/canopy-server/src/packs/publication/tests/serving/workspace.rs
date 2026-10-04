@@ -1,6 +1,141 @@
 //! Native forward closures use physically verified packs. Trusted generation
 //! installation isolates serving from the still-incomplete live publisher.
 use super::*;
+
+#[tokio::test]
+async fn native_write_base_streams_catalog_inputs_and_isolates_new_native_outputs() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let (native, _) = super::body::catalog(&f, Arc::new(InMemory::new())).await?;
+        let q = super::pool::queue(&f)?;
+        let root = tempfile::TempDir::new()?;
+        let tasks = TaskTracker::new();
+        let (ctx, files) =
+            super::body::serving_context(&f, native.store.clone(), &root, tasks.clone())?;
+        let pool = ServingPool::new(ctx, q.clone(), ServingPoolLimits::default())?;
+        let view = pool.snapshot(Some("owner".into())).await?;
+        let backend = view.native_base().await?;
+        assert!(backend.cache.pack_sources().await?.is_empty());
+        assert_eq!(files.native_stats()?.ok_or("stats")?.open_files, 2);
+        let mut objects = crate::git_objects::GitObjects::batch_owned(
+            &backend.git_dir(),
+            &backend.cache.native,
+            backend.cache.clone(),
+        )?;
+        for (id, (expected, _)) in &native.fixture.objects {
+            let body = objects.read_verified(*expected, 1 << 20).await?;
+            assert_eq!(crate::object_id(format, expected.kind, &body), *id);
+        }
+        objects.finish().await?;
+        let path = backend.git_dir();
+        assert_eq!(std::fs::read_dir(path.join("objects/pack"))?.count(), 0);
+        assert!(path.join("objects/info/alternates").exists());
+        let body = b"new generated native object";
+        let written = crate::packs::metadata::tests::git(
+            &path,
+            &["hash-object", "-w", "--stdin"],
+            Some(body.to_vec()),
+        )
+        .await?;
+        let id = crate::object_id(format, ObjectKind::Blob, body);
+        assert_eq!(String::from_utf8(written)?.trim(), hex::encode(id));
+        let input = format!("{}\n", hex::encode(id));
+        let pack = crate::packs::metadata::tests::git(
+            &path,
+            &["pack-objects", "--stdout"],
+            Some(input.into_bytes()),
+        )
+        .await?;
+        crate::packs::metadata::tests::git(&path, &["index-pack", "--stdin"], Some(pack)).await?;
+        let incoming = backend.cache.pack_sources().await?;
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].3, [id]); // baseline history must never be ingested as the new pack
+        drop(view);
+        let mut drain = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.close_and_drain().await }
+        });
+        assert!(
+            timeout(Duration::from_millis(50), &mut drain)
+                .await
+                .is_err()
+        );
+        assert_eq!(pin_count(&f).await?, 1);
+        drop(backend);
+        timeout(Duration::from_secs(8), drain).await??;
+        super::pool::finish(&f, &pool, &q, tasks).await?;
+        assert!(!path.exists());
+        assert_eq!(files.native_stats()?.ok_or("stats")?.open_files, 0);
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_write_base_cancellation_and_revocation_retain_real_provider_work_until_drain()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for cancel in [false, true] {
+            let f = Fixture::new(format).await?;
+            let provider = Arc::new(super::blocked::Gate::new());
+            let (native, _) = super::body::catalog(&f, provider.clone()).await?;
+            edit(
+                &f,
+                "INSERT INTO repository_members(account,role) VALUES('viewer','read')",
+            )
+            .await?;
+            let q = super::pool::queue(&f)?;
+            let root = tempfile::TempDir::new()?;
+            let tasks = TaskTracker::new();
+            let (ctx, files) =
+                super::body::serving_context(&f, native.store.clone(), &root, tasks.clone())?;
+            let pool = ServingPool::new(ctx, q.clone(), ServingPoolLimits::default())?;
+            let view = pool.snapshot(Some("viewer".into())).await?;
+            assert!(
+                view.headers(&[*native.fixture.objects.keys().next().ok_or("object")?])
+                    .await?[0]
+                    .is_some()
+            );
+            // Warm immutable ref-root metadata so the gate below suspends the
+            // native pack transfer after file admission, not ref-root loading.
+            view.resolve_ref(None).await?;
+            provider.armed.store(true, Ordering::Release);
+            let observer = tokio::spawn(async move { view.native_base().await });
+            timeout(Duration::from_secs(8), provider.entered.acquire())
+                .await??
+                .forget();
+            if cancel {
+                observer.abort();
+                assert!(observer.await.err().ok_or("cancelled")?.is_cancelled());
+                let mut drain = tokio::spawn({
+                    let pool = pool.clone();
+                    async move { pool.close_and_drain().await }
+                });
+                assert!(
+                    timeout(Duration::from_millis(50), &mut drain)
+                        .await
+                        .is_err()
+                );
+                assert_eq!(pin_count(&f).await?, 1);
+                assert_eq!(files.native_stats()?.ok_or("stats")?.open_files, 1);
+                provider.proceed.add_permits(1);
+                timeout(Duration::from_secs(8), drain).await??;
+            } else {
+                edit(&f, "DELETE FROM repository_members WHERE account='viewer'").await?;
+                assert_eq!(pin_count(&f).await?, 1);
+                provider.proceed.add_permits(1);
+                assert!(matches!(
+                    timeout(Duration::from_secs(8), observer).await??,
+                    Err(ServingReadError::Inactive)
+                ));
+            }
+            super::pool::finish(&f, &pool, &q, tasks).await?;
+            assert_eq!(files.native_stats()?.ok_or("stats")?.open_files, 0);
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
 use crate::packs::catalog::serving_fixture::{operation, prepare};
 use crate::{ObjectId, ObjectKind};
 use std::collections::BTreeSet;

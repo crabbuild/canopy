@@ -14,9 +14,11 @@ pub(in crate::packs) mod codec;
 pub(in crate::packs) mod record;
 pub use record::{IndexKey, IndexRecord};
 mod bulk;
+mod changes;
 mod cursor;
 mod rewrite;
 mod update;
+pub use changes::RangeChanges;
 pub use cursor::RangeCursor;
 
 pub const FANOUT: usize = 128;

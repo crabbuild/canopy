@@ -353,7 +353,7 @@ impl ServingPin {
         .await
     }
 }
-async fn job<T: Send + 'static>(
+pub(super) async fn job<T: Send + 'static>(
     spool: &Arc<Mutex<GraphSpool>>,
     owner: ReadOwner,
     body: impl FnOnce(&mut GraphSpool) -> Result<T, MetadataError> + Send + 'static,
@@ -371,12 +371,12 @@ async fn job<T: Send + 'static>(
 /// Amortize authority queries across bounded graph steps, rather than issuing
 /// repository SQL per object. Long provider suspensions still force a fresh check
 /// before the next step, and construction always rechecks before returning.
-struct Observation {
-    deadline: Instant,
-    next: Instant,
+pub(super) struct Observation {
+    pub(super) deadline: Instant,
+    pub(super) next: Instant,
 }
 impl Observation {
-    async fn refresh(
+    pub(super) async fn refresh(
         &mut self,
         inner: &Inner,
         actor: &Option<String>,

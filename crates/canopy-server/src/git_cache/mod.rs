@@ -1,7 +1,7 @@
 //! Disposable Git files charged to the node's shared disk budget.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
@@ -9,15 +9,20 @@ use std::{
 };
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
+#[cfg(test)]
 use flate2::{Compression, write::ZlibEncoder};
+#[cfg(test)]
+use std::collections::BTreeMap;
 use tokio::sync::Mutex;
 
 use crate::{
-    ObjectKind, RefExpectation,
     blob::{LargeBlobError, LargeBlobRead},
-    object_id,
     refs::valid_ref_name,
 };
+
+#[cfg(test)]
+use crate::object_id;
+use crate::{ObjectKind, RefExpectation};
 
 pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
@@ -67,14 +72,14 @@ pub(crate) struct GitCache {
     objects: Option<Arc<GitCache>>,
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
+    #[cfg(test)]
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
     packed: RwLock<Vec<crate::git_format::pack_index::PackIndex>>,
     durable_packs: RwLock<HashSet<[u8; 32]>>,
     pub(crate) selection: Mutex<()>,
-    pub(crate) prepared: Mutex<BTreeSet<(crate::ObjectId, bool)>>,
+    #[cfg(test)]
     pub(crate) loose_objects: std::sync::atomic::AtomicU64,
     pub(crate) pack_files: std::sync::atomic::AtomicU64,
-    pub(crate) hydrating: std::sync::atomic::AtomicU64,
     pub(crate) write_generation: std::sync::atomic::AtomicU64,
 }
 
@@ -136,14 +141,14 @@ impl GitCache {
                 reservation: Some(budget.try_reserve(0)?),
                 cleanup_owner: cleanup,
                 objects,
-                object_writes: OnceLock::new(),
+                #[cfg(test)]
+    object_writes: OnceLock::new(),
                 packed: RwLock::new(Vec::new()),
                 durable_packs: RwLock::new(HashSet::new()),
                 selection: Mutex::new(()),
-                prepared: Mutex::new(BTreeSet::new()),
+                #[cfg(test)]
                 loose_objects: std::sync::atomic::AtomicU64::new(0),
                 pack_files: std::sync::atomic::AtomicU64::new(0),
-                hydrating: std::sync::atomic::AtomicU64::new(0),
                 write_generation: std::sync::atomic::AtomicU64::new(0),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
@@ -177,18 +182,13 @@ impl GitCache {
         self.root().join("repo.git")
     }
 
-    pub(crate) fn hydration_guard(self: &Arc<Self>) -> HydrationGuard {
-        self.hydrating
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        HydrationGuard(Arc::clone(self))
-    }
-
     fn reservation(&self) -> io::Result<&DiskReservation> {
         self.reservation
             .as_ref()
             .ok_or_else(|| io::Error::other("Git cache accounting is closed"))
     }
 
+    #[cfg(test)]
     pub(crate) fn bytes(&self) -> io::Result<u64> {
         Ok(self.reservation()?.bytes())
     }
@@ -208,6 +208,7 @@ impl GitCache {
         self.writer(Path::new(relative))?.write_all(bytes)
     }
 
+    #[cfg(test)]
     pub(crate) async fn missing_objects(
         self: &Arc<Self>,
         ids: Vec<crate::ObjectId>,
@@ -225,6 +226,7 @@ impl GitCache {
         .await?
     }
 
+    #[cfg(test)]
     fn object_path(&self, oid: crate::ObjectId) -> PathBuf {
         let hex = hex::encode(oid);
         self.git_dir()
@@ -233,6 +235,7 @@ impl GitCache {
             .join(&hex[2..])
     }
 
+    #[cfg(test)]
     fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
         for index in self
             .packed
@@ -255,6 +258,7 @@ impl GitCache {
         }
     }
 
+    #[cfg(test)]
     fn object_write_lock(&self, oid: crate::ObjectId) -> Arc<Mutex<()>> {
         let stripes = self
             .object_writes
@@ -262,6 +266,7 @@ impl GitCache {
         Arc::clone(&stripes[oid[0] as usize % stripes.len()])
     }
 
+    #[cfg(test)]
     fn object_writer(
         self: &Arc<Self>,
         oid: crate::ObjectId,
@@ -320,6 +325,7 @@ impl GitCache {
         .await?
     }
 
+    #[cfg(test)]
     pub(crate) async fn store_object(
         self: &Arc<Self>,
         oid: crate::ObjectId,
@@ -354,18 +360,21 @@ impl GitCache {
         .await?
     }
 
+    #[cfg(test)]
     pub(crate) async fn store_blob(
         self: &Arc<Self>,
         reader: LargeBlobRead,
     ) -> Result<(), CacheError> {
         self.store_blob_reader(BlobReader::External(reader)).await
     }
+    #[cfg(test)]
     pub(crate) async fn store_native_blob(
         self: &Arc<Self>,
         reader: crate::pack_store::NativePackedRead,
     ) -> Result<(), CacheError> {
         self.store_blob_reader(BlobReader::Packed(reader)).await
     }
+    #[cfg(test)]
     async fn store_blob_reader(self: &Arc<Self>, mut reader: BlobReader) -> Result<(), CacheError> {
         let (oid, size) = reader.metadata();
         let write = self.object_write_lock(oid).lock_owned().await;
@@ -416,6 +425,7 @@ impl GitCache {
         .await?
     }
 
+    #[cfg(test)]
     pub(crate) async fn store_refs(
         self: &Arc<Self>,
         refs: &BTreeMap<String, RefExpectation>,
@@ -459,6 +469,7 @@ impl GitCache {
 
     /// Physical index entries, including duplicates across packs. This is an
     /// admission/telemetry bound, never a proof of canonical object coverage.
+    #[cfg(test)]
     pub(crate) fn indexed_entries(&self) -> u64 {
         self.packed
             .read()
@@ -473,6 +484,7 @@ impl GitCache {
             )
     }
 
+    #[cfg(test)]
     fn register_index(&self, path: &Path) -> io::Result<()> {
         self.register_checked_index(crate::git_format::pack_index::PackIndex::open(
             path,
@@ -591,19 +603,12 @@ mod tests;
 
 mod maintenance;
 
-pub(crate) struct HydrationGuard(Arc<GitCache>);
-impl Drop for HydrationGuard {
-    fn drop(&mut self) {
-        self.0
-            .hydrating
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
+#[cfg(test)]
 enum BlobReader {
     External(LargeBlobRead),
     Packed(crate::pack_store::NativePackedRead),
 }
+#[cfg(test)]
 impl BlobReader {
     fn metadata(&self) -> (crate::ObjectId, u64) {
         match self {

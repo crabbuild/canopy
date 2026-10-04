@@ -116,6 +116,19 @@ pub struct ServingSnapshot {
     _borrow: Arc<Borrow>,
 }
 impl ServingSnapshot {
+    pub(crate) async fn resolve_refs(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<ResolvedServingRef>, ServingReadError> {
+        self.pin.resolve_refs(self.actor.clone(), names).await
+    }
+    /// Internal write-preparation inputs. Publication still needs a separately
+    /// authorized staged producer; this API grants no forward membership proof.
+    pub(crate) async fn native_base(
+        &self,
+    ) -> Result<crate::git_http::GitHttpBackend, ServingReadError> {
+        self.pin.native_base(self.actor.clone(), self.clone()).await
+    }
     /// Build a complete forward closure from certified roots. Callers choosing
     /// fetch roots must independently bind them to this snapshot's live refs.
     pub async fn workspace(

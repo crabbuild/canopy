@@ -23,6 +23,17 @@ pub(super) enum PushCommands {
 }
 
 impl PushCommands {
+    pub(super) fn names(&self) -> Vec<String> {
+        match self {
+            Self::Parsed { updates, .. } => {
+                let mut names: Vec<_> = updates.iter().map(|update| update.name.clone()).collect();
+                names.sort();
+                names
+            }
+            Self::OtherMedia | Self::Limited => Vec::new(),
+        }
+    }
+
     pub(super) async fn read(
         request: &GitHttpRequest,
         format: crate::ObjectFormat,

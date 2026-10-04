@@ -1,5 +1,4 @@
 use super::*;
-use cellule_runtime::primitives::sql::{SqlBatch, SqlStatement, SqlValue};
 
 pub(super) struct FetchRequest {
     pub(super) wants: BTreeSet<crate::ObjectId>,
@@ -137,78 +136,6 @@ impl GitGateway {
                 .any(|present| !present)
             {
                 return Err(GatewayError::UnreachableWant);
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) async fn hydrate_selected(
-        &self,
-        cache: &Arc<GitCache>,
-        mut pending: BTreeSet<crate::ObjectId>,
-    ) -> Result<(), GatewayError> {
-        let mut visited = BTreeSet::new();
-        let mut stats = Hydration::default();
-        while !pending.is_empty() {
-            let ids: Vec<_> = pending.iter().take(MAX_OBJECTS).copied().collect();
-            // Advertisements peel tags even with blob filtering. Follow only
-            // tag edges here; ordinary tree descendants stay omitted.
-            let placeholders = vec!["?"; ids.len()].join(",");
-            let result = self.repository.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-                sql: format!("SELECT e.child FROM object_edges e JOIN objects o ON o.oid = e.parent WHERE o.kind = 'tag' AND e.parent IN ({placeholders})"),
-                parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect(),
-            }] }).await.map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            for oid in &ids {
-                pending.remove(oid);
-                visited.insert(*oid);
-            }
-            for row in &result
-                .output
-                .first()
-                .ok_or(GatewayError::MalformedCache)?
-                .rows
-            {
-                let [SqlValue::Blob(oid)] = row.as_slice() else {
-                    return Err(GatewayError::MalformedCache);
-                };
-                let oid = oid
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| GatewayError::MalformedCache)?;
-                if !visited.contains(&oid) {
-                    pending.insert(oid);
-                }
-            }
-            self.hydrate_objects(cache, ids, &mut stats).await?;
-        }
-        tracing::debug!(
-            objects = stats.objects,
-            bytes = stats.bytes,
-            "hydrated explicit Git objects"
-        );
-        Ok(())
-    }
-
-    async fn hydrate_objects(
-        &self,
-        cache: &Arc<GitCache>,
-        ids: Vec<crate::ObjectId>,
-        stats: &mut Hydration,
-    ) -> Result<(), GatewayError> {
-        let mut missing: BTreeSet<_> = cache.missing_objects(ids).await?.into_iter().collect();
-        while !missing.is_empty() {
-            let selected: Vec<_> = missing.iter().copied().collect();
-            let page = self
-                .repository
-                .selected_objects(&selected)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            if page.is_empty() {
-                return Err(GatewayError::MalformedCache);
-            }
-            for object in page {
-                missing.remove(&object.oid);
-                self.cache_object(cache, object, stats).await?;
             }
         }
         Ok(())

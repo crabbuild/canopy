@@ -24,10 +24,11 @@ impl GitGateway {
                     .ok_or(GatewayError::MalformedCache)?;
                 return Ok::<_, GatewayError>((response, None, None));
             }
-            let cached = self.build_cache(self.cell_refs().await?, true).await?;
+            let names = commands.names();
+            let cached = self.build_cache(actor, &names).await?;
             self.install_branch_policy(&cached, &commands).await?;
             let signers = self.install_certificate_policy(&cached, &commands, actor).await?;
-            let before = cached.snapshot.refs.clone();
+            let before = cached.refs.clone();
             let backend = signers.map_or_else(
                 || cached.backend.clone(),
                 |path| cached.backend.with_signers(path),
@@ -37,7 +38,7 @@ impl GitGateway {
             // Git may accept some refs and reject others unless atomic was requested.
             // Publish its actual changes before returning any successful per-ref report.
             let plan = if response.status == 200 {
-                let after = git_refs(&cached.backend.git_dir(), &cached.backend.cache.native).await?;
+                let after = git_refs(&cached.backend, &names).await?;
                 let plan = diff_refs(&before, &after, actor);
                 if plan.updates.is_empty() {
                     None

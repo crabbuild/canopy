@@ -35,6 +35,44 @@ impl Inner {
 }
 
 impl ServingPin {
+    pub(in crate::packs::publication::serving) async fn resolve_refs(
+        &self,
+        actor: Option<String>,
+        names: &[String],
+    ) -> Result<Vec<ResolvedServingRef>, ServingReadError> {
+        if names.len() > 128
+            || names.iter().any(|name| !valid_ref_name(name))
+            || names.iter().map(String::len).sum::<usize>() > PAGE_BYTES
+            || names.windows(2).any(|p| p[0] >= p[1])
+        {
+            return Err(ServingReadError::Context);
+        }
+        let names = names
+            .iter()
+            .map(|name| RefNameKey::new(name))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.read_owned(actor, move |inner, deadline, _permit| async move {
+            let snapshot = inner.ref_snapshot().await?;
+            let mut result = Vec::with_capacity(names.len());
+            for name in names {
+                if Instant::now() >= deadline {
+                    return Err(ServingReadError::Inactive);
+                }
+                result.push(ResolvedServingRef {
+                    generation: snapshot.generation as i64,
+                    state: inner
+                        .context
+                        .indexes
+                        .refs()
+                        .read(snapshot.root.clone(), name.as_str())
+                        .await?,
+                    reference: name.as_str().to_owned(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+    }
     pub async fn resolve_ref(
         &self,
         actor: Option<String>,

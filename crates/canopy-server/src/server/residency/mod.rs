@@ -44,19 +44,6 @@ pub(super) struct LoadedRepository {
     state: ResidencyState,
     slot: Arc<OwnedSemaphorePermit>,
     recovery: Option<Arc<RecoveryServices>>,
-    maintenance: Option<MaintenanceWorker>,
-}
-struct MaintenanceWorker {
-    stop: tokio_util::sync::CancellationToken,
-    task: tokio::task::JoinHandle<()>,
-}
-impl MaintenanceWorker {
-    async fn shutdown(self) {
-        self.stop.cancel();
-        if let Err(error) = self.task.await {
-            tracing::error!(?error, "repository Git maintenance failed during drain");
-        }
-    }
 }
 
 enum EvictionAction {
@@ -214,10 +201,7 @@ impl RepositoryManager {
             // Remote cache ownership is disposable. Reacquire idle/expired Cell
             // authority locally before binding a new route after owner loss.
             let removed = self.loaded.lock().await.remove(&entry.repository_id);
-            if let Some(mut repository) = removed {
-                if let Some(maintenance) = repository.maintenance.take() {
-                    maintenance.shutdown().await;
-                }
+            if let Some(repository) = removed {
                 reclaimed = Some(repository.slot);
             }
         }
@@ -544,15 +528,6 @@ impl RepositoryManager {
                 rejected.insert(id);
                 continue;
             }
-            let maintenance = self
-                .loaded
-                .lock()
-                .await
-                .get_mut(&id)
-                .and_then(|repository| repository.maintenance.take());
-            if let Some(maintenance) = maintenance {
-                maintenance.shutdown().await;
-            }
             let (cell, _) = match action {
                 EvictionAction::DropRemote => {
                     let removed = self.loaded.lock().await.remove(&id);
@@ -682,27 +657,6 @@ impl RepositoryManager {
         );
         let router = self.router_for(entry, Arc::clone(&gateway))?;
         let pin = Arc::new(());
-        let weak_gateway = Arc::downgrade(&gateway);
-        let weak_pin = Arc::downgrade(&pin);
-        let stop = self.maintenance_stop.child_token();
-        let maintenance_stop = stop.clone();
-        let task = self.tasks.spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    () = stop.cancelled() => return,
-                    _ = interval.tick() => {},
-                }
-                let (Some(gateway), Some(_pin)) = (weak_gateway.upgrade(), weak_pin.upgrade()) else { return; };
-                // Stop between owned rounds. Cancellation does not abandon
-                // cache/provider work after eviction has selected this owner.
-                if let Err(error) = gateway.maintain().await {
-                    tracing::warn!(error = ?error, "background Git maintenance failed; previous cache retained");
-                }
-            }
-        });
         Ok(LoadedRepository {
             repository,
             client,
@@ -716,10 +670,6 @@ impl RepositoryManager {
             state: ResidencyState::Serving,
             slot,
             recovery: None,
-            maintenance: Some(MaintenanceWorker {
-                stop: maintenance_stop,
-                task,
-            }),
         })
     }
 
