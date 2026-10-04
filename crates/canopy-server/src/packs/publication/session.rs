@@ -20,6 +20,7 @@ pub struct PreparationSession {
     pub(super) deadline: Arc<Mutex<Instant>>,
     pub(super) ceiling: Option<Instant>,
     pub(super) fenced: Arc<AtomicBool>,
+    fence_changed: tokio::sync::watch::Sender<bool>,
 }
 impl PreparationSession {
     pub async fn open(
@@ -50,6 +51,7 @@ impl PreparationSession {
             deadline: Arc::new(Mutex::new(deadline)),
             ceiling: None,
             fenced: Arc::new(AtomicBool::new(false)),
+            fence_changed: tokio::sync::watch::channel(false).0,
         })
     }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, &LeaseCheck) {
@@ -78,6 +80,17 @@ impl PreparationSession {
     }
     pub(super) fn fence(&self) {
         self.fenced.store(true, Ordering::Release);
+        // Retain the terminal value even with no observers. A worker subscribing
+        // after a fence must not wait for another notification.
+        self.fence_changed.send_replace(true);
+    }
+    pub(super) async fn wait_fenced(&self) {
+        let mut changed = self.fence_changed.subscribe();
+        while !*changed.borrow_and_update() {
+            if changed.changed().await.is_err() {
+                return;
+            }
+        }
     }
     pub(super) async fn refresh(&self, minimum: Receipt) -> Result<(), PreparationBaseError> {
         let result = self.refresh_inner(minimum).await;

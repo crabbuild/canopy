@@ -47,6 +47,17 @@ pub(super) async fn accept_bound(
         fence_and_drain(inner, job, StagingError::Context).await;
         return false;
     }
+    open_bound(inner, job, original, ceiling).await
+}
+
+/// Shared fresh session installation after authenticating a bound outcome.
+pub(super) async fn open_bound(
+    inner: &Inner,
+    job: &Job,
+    original: Arc<StagingBound>,
+    ceiling: Instant,
+) -> bool {
+    let lease = original.lease;
     let session = PreparationSession::open(
         job.client.clone(),
         job.target.clone(),
@@ -54,7 +65,7 @@ pub(super) async fn accept_bound(
             token: lease.token,
             actor: job.actor.clone(),
         },
-        Some(value.receipt),
+        Some(original.receipt),
         job.authority.clone(),
     )
     .await;
