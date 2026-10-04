@@ -494,7 +494,7 @@ impl Query for CheckPreparationFrontier {
 }
 
 pub struct ReapPreparation;
-pub(super) const REAP_GENERATIONS: &str = "DELETE FROM catalog_generations WHERE generation IN (SELECT g.generation FROM catalog_generations g WHERE g.generation>0 AND g.generation<(SELECT generation FROM catalog_state WHERE singleton=1) AND g.generation<COALESCE((SELECT min(generation) FROM catalog_leases),9223372036854775807) ORDER BY g.generation LIMIT ?1)";
+pub(super) const REAP_GENERATIONS: &str = "DELETE FROM catalog_generations WHERE generation IN (SELECT g.generation FROM catalog_generations g WHERE g.generation>0 AND g.generation<(SELECT generation FROM catalog_state WHERE singleton=1) AND g.generation<COALESCE((SELECT min(generation) FROM catalog_leases),9223372036854775807) AND NOT EXISTS(SELECT 1 FROM catalog_serving_pins r WHERE r.generation=g.generation) ORDER BY g.generation LIMIT ?1)";
 impl Command for ReapPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 16;

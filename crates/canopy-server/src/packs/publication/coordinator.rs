@@ -245,9 +245,15 @@ struct ReadContext {
     target: CellTarget,
     request: BeginRequest,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum JobKind {
+    Publication,
+    CustodyStop,
+    ServingRelease,
+}
 struct Job {
     operation: [u8; 16],
-    custody_stop: bool,
+    kind: JobKind,
     actor: String,
     // Removed before terminal notification; tickets never retain command
     // payloads or local inventory after the admission charge is released.
@@ -340,7 +346,7 @@ impl<T> ClassQueue<T> {
 }
 #[derive(Default)]
 struct State {
-    jobs: HashMap<([u8; 16], bool), Arc<Job>>,
+    jobs: HashMap<([u8; 16], JobKind), Arc<Job>>,
     actors: HashMap<String, [usize; 2]>,
     queue: ClassQueue<Work>,
     counts: [usize; 2],
@@ -459,7 +465,7 @@ impl PublicationCoordinator {
         let reservation = ready.reservation();
         let at = class.index();
         let (client, target, request) = ready.context();
-        let custody_stop = ready.is_custody_stop();
+        let kind = ready.job_kind();
         let limits = self.inner.limits;
         let (operation_limit, byte_limit) = match class {
             PublicationClass::Foreground => (
@@ -476,7 +482,7 @@ impl PublicationCoordinator {
             Some(PublicationScheduleError::Foreign)
         } else if state.closed {
             Some(PublicationScheduleError::Closed)
-        } else if state.jobs.contains_key(&(request.operation, custody_stop)) {
+        } else if state.jobs.contains_key(&(request.operation, kind)) {
             Some(PublicationScheduleError::Duplicate)
         } else if state.counts[at] >= operation_limit
             || state
@@ -510,7 +516,7 @@ impl PublicationCoordinator {
         };
         let job = Arc::new(Job {
             operation: request.operation,
-            custody_stop,
+            kind,
             actor: request.actor.clone(),
             class,
             reservation,
@@ -532,7 +538,7 @@ impl PublicationCoordinator {
         state.bytes[at] += job.reservation;
         state
             .jobs
-            .insert((job.operation, job.custody_stop), Arc::clone(&job));
+            .insert((job.operation, job.kind), Arc::clone(&job));
         if !held {
             enqueue(state, &job, false);
             self.start(state);
@@ -556,7 +562,7 @@ impl PublicationCoordinator {
         let mut state = self.inner.state.lock().await;
         if !state
             .jobs
-            .get(&(ticket.job.operation, ticket.job.custody_stop))
+            .get(&(ticket.job.operation, ticket.job.kind))
             .is_some_and(|job| Arc::ptr_eq(job, &ticket.job))
             || !matches!(*ticket.job.status.borrow(), PublicationState::Uncertain(_))
         {
@@ -666,23 +672,23 @@ impl PublicationCoordinator {
     /// Service-internal lookup after its caller loses a ticket. This is not an
     /// externally authorized product query; use completed-request replay there.
     pub async fn pending(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
-        self.pending_kind(operation, false).await
+        self.pending_kind(operation, JobKind::Publication).await
     }
     /// Retirement has a separate bounded key kind, never a fabricated operation.
     pub async fn pending_custody_stop(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
-        self.pending_kind(operation, true).await
+        self.pending_kind(operation, JobKind::CustodyStop).await
     }
-    async fn pending_kind(
-        &self,
-        operation: [u8; 16],
-        custody_stop: bool,
-    ) -> Option<PublicationTicket> {
+    /// Read-retention release cannot collide with a creating request's ID.
+    pub async fn pending_serving_release(&self, reader: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_kind(reader, JobKind::ServingRelease).await
+    }
+    async fn pending_kind(&self, operation: [u8; 16], kind: JobKind) -> Option<PublicationTicket> {
         self.inner
             .state
             .lock()
             .await
             .jobs
-            .get(&(operation, custody_stop))
+            .get(&(operation, kind))
             .map(|job| PublicationTicket {
                 inner: Arc::clone(&self.inner),
                 job: Arc::clone(job),
@@ -916,7 +922,7 @@ fn release(state: &mut State, job: &Job) {
     // Both callers drop retained proof/body ownership before making either
     // the repository or node reservation reusable. Ticket DTOs may survive.
     job.budget.lock().expect("publication budget permit").take();
-    state.jobs.remove(&(job.operation, job.custody_stop));
+    state.jobs.remove(&(job.operation, job.kind));
     let count = state
         .actors
         .get_mut(&job.actor)
@@ -1057,7 +1063,10 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
         // Resume only that exact preparation evidence, never unrelated work.
         if let Ok(PublicationOutcome::CustodyStop(value)) = &outcome
             && value.stop.is_some()
-            && let Some(original) = state.jobs.get(&(job.operation, false)).cloned()
+            && let Some(original) = state
+                .jobs
+                .get(&(job.operation, JobKind::Publication))
+                .cloned()
             && matches!(*original.status.borrow(), PublicationState::Uncertain(_))
         {
             let matches = original

@@ -68,6 +68,7 @@ impl PreparedCompaction {
 /// Immutable root completions and policy pages require registered recovery.
 #[must_use]
 pub enum ReadyPublication {
+    ServingRelease(ReadyServingRelease),
     Push(ReadyCatalogPush),
     RootRecovery(ReadyRootRecovery),
     TerminalRelease(Box<ReadyTerminalRelease>),
@@ -76,6 +77,11 @@ pub enum ReadyPublication {
     Compaction(ReadyCatalogCompaction),
     Inputs(ReadyNativeInputs),
     Preparation(ReadyPreparation),
+}
+impl From<ReadyServingRelease> for ReadyPublication {
+    fn from(ready: ReadyServingRelease) -> Self {
+        Self::ServingRelease(ready)
+    }
 }
 impl From<ReadyCustodyStop> for ReadyPublication {
     fn from(ready: ReadyCustodyStop) -> Self {
@@ -118,8 +124,12 @@ impl From<ReadyPreparation> for ReadyPublication {
     }
 }
 impl ReadyPublication {
-    pub(super) fn is_custody_stop(&self) -> bool {
-        matches!(self, Self::CustodyStop(_))
+    pub(super) fn job_kind(&self) -> JobKind {
+        match self {
+            Self::CustodyStop(_) => JobKind::CustodyStop,
+            Self::ServingRelease(_) => JobKind::ServingRelease,
+            _ => JobKind::Publication,
+        }
     }
     pub(super) fn preparation_original(&self) -> Option<&cellule_runtime::PendingMutation> {
         match self {
@@ -144,7 +154,8 @@ impl ReadyPublication {
             | Self::Preparation(_)
             | Self::RootRecovery(_)
             | Self::TerminalRelease(_)
-            | Self::CustodyStop(_) => return false,
+            | Self::CustodyStop(_)
+            | Self::ServingRelease(_) => return false,
         };
         source.target == session.target
             && source.check == session.check
@@ -163,6 +174,7 @@ impl ReadyPublication {
     }
     pub(super) fn dispatch_copy(&self) -> Self {
         match self {
+            Self::ServingRelease(ready) => Self::ServingRelease(ready.dispatch_copy()),
             Self::Preparation(ready) => Self::Preparation(ready.dispatch_copy()),
             Self::RootRecovery(ready) => Self::RootRecovery(ready.clone()),
             Self::TerminalRelease(ready) => Self::TerminalRelease(ready.clone()),
@@ -190,13 +202,15 @@ impl ReadyPublication {
             | Self::BoundRecovery(_)
             | Self::Inputs(_)
             | Self::Preparation(_) => PublicationClass::Foreground,
-            Self::Compaction(_) | Self::TerminalRelease(_) | Self::CustodyStop(_) => {
-                PublicationClass::Maintenance
-            }
+            Self::Compaction(_)
+            | Self::TerminalRelease(_)
+            | Self::CustodyStop(_)
+            | Self::ServingRelease(_) => PublicationClass::Maintenance,
         }
     }
     pub(super) fn context(&self) -> (&CellClient, &CellTarget, BeginRequest) {
         let (client, target, check) = match self {
+            Self::ServingRelease(ready) => return ready.context(),
             Self::CustodyStop(ready) => return ready.context(),
             Self::Push(ready) => ready.owner.capability(),
             Self::RootRecovery(ready) => ready.capability(),
@@ -220,6 +234,7 @@ impl ReadyPublication {
     }
     pub(super) fn pending(&self) -> PublicationError {
         match self {
+            Self::ServingRelease(ready) => ready.pending(),
             Self::Preparation(ready) => ready.pending(),
             Self::RootRecovery(ready) => ready.pending(),
             Self::TerminalRelease(ready) => ready.pending(),
@@ -239,6 +254,11 @@ impl ReadyPublication {
     pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
         let client = self.context().0.clone();
         match self {
+            Self::ServingRelease(ready) => ready
+                .dispatch(recover, fault)
+                .await
+                .map(PublicationOutcome::ServingRelease)
+                .map_err(PublicationError::ServingRelease),
             Self::Inputs(ready) => ready.dispatch(recover, fault).await,
             Self::Preparation(ready) => ready.dispatch(recover, fault).await,
             Self::RootRecovery(ready) => ready.dispatch(fault).await,
@@ -287,6 +307,7 @@ impl ReadyPublication {
 
 #[derive(Clone, Debug)]
 pub enum PublicationOutcome {
+    ServingRelease(Committed<ServingReleaseReply>),
     Initialization(Committed<InitializationReply>),
     Push(Committed<CatalogCompletionReply>),
     RootPush(Committed<RootCompletionReply>),
@@ -300,6 +321,8 @@ pub enum PublicationOutcome {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("serving pin release: {0}")]
+    ServingRelease(#[source] InvocationError<ServingReleaseReply>),
     #[error("publication custody intent failed")]
     Custody {
         evidence: Box<cellule_runtime::PendingMutation>,
@@ -344,6 +367,7 @@ impl PublicationError {
             Self::Custody { source, .. } if source.uncertain() => "pending",
             Self::Custody { .. } => "not_started",
             Self::Recovery { .. } => "pending",
+            Self::ServingRelease(error) => kind(error),
             Self::Initialization(error) => kind(error),
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
@@ -365,6 +389,7 @@ impl PublicationError {
         match self {
             Self::Custody { source, .. } => source.uncertain(),
             Self::Recovery { .. } => true,
+            Self::ServingRelease(error) => unknown(error),
             Self::Initialization(error) => unknown(error),
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),

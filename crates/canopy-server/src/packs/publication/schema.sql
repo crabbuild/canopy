@@ -453,6 +453,7 @@ CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnati
 CREATE INDEX catalog_leases_by_generation ON catalog_leases(generation, expires_at_ms);
 CREATE TRIGGER catalog_generations_retained BEFORE DELETE ON catalog_generations
 WHEN OLD.generation=0 OR OLD.generation >= (SELECT min(generation) FROM catalog_leases)
+  OR EXISTS(SELECT 1 FROM catalog_serving_pins WHERE generation=OLD.generation)
 BEGIN SELECT RAISE(ABORT, 'catalog generation is retained'); END;
 CREATE UNIQUE INDEX catalog_leases_by_artifact ON catalog_leases(artifact_operation);
 CREATE TRIGGER catalog_lease_not_replaced BEFORE INSERT ON catalog_leases

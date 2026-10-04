@@ -6,7 +6,7 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
-## Resident recovery lifecycle under final qualification
+## Resident recovery lifecycle checkpoint
 
 The production repository manager now retains one recovery coordinator plus root
 and custody scanners for each initialized local resident, sharing node command
@@ -54,6 +54,56 @@ restore, OS containment, native acceleration/physical rewrite/fair continuous
 maintenance, signed completion/cold clone, file attribution and full-history plus
 10,000-developer capacity qualification remain mandatory. This branch remains
 local, unpublished and unreleasable.
+
+## Certified serving pin foundation
+
+The [serving contract](design/certified-serving-pins.md) describes the new atomic
+Read-only generation receiver, separate bounded retention table, owner-checked
+metadata capability and tracked physical-drain/release protocol. It is not yet
+connected to production acquisition/renewal, object/native/stream consumers or
+snapshot caching. Expired serving pins remain retained until authenticated drain;
+no expiry/epoch-only cleanup is introduced. The original goal remains active.
+Final-source macOS/Rust 1.98.0 qualification passes all twelve focused serving
+families (1.63 seconds), including independent-context duplicate exclusion,
+blocked-provider cancellation/revocation, real owner restoration, and original
+release absence/lost-reply/panic in both object formats. Initialization's recovery
+floor is retired through its authentic terminal release before checking serving
+reaping. A separate typed scheduler key prevents logical-ID collisions with held
+preparation jobs while retaining the shared node/class/account budgets.
+
+The full workspace library remains **failed** (exit 101): 625 pass and the same
+five unconverted `objects` readers fail, out of 630 unique cases. All 336
+publication, seven startup and four production resident-recovery cases pass
+within that run; two nested subprocess summaries are excluded. Nine additional
+workspace/lifecycle cases pass in 4.42 seconds, including prebound cancellation.
+Combined: 639 unique executed, 634 passed, five failed. Clippy workspace/all-targets
+with warnings denied (23.28 seconds), server build (30.96 seconds), formatting
+(1.08 seconds), diff/static checks, 459 frozen source/schema/manifest files
+(446 Rust), 151 local doc links, exact five SDK manifest/six lock pins and the
+protected original index/archive checks pass. Retained proof and logs use the
+`/tmp/canopy-serving-pins-*` prefix. Draft diagnostics are retained, not counted
+as passing qualification.
+
+The bounded process-wide owner registry closes the duplicate-drain-counter gap:
+all contexts reject a second constructor for an owned exact pin, including with
+an independent budget. It retains only weak entries, caps live owners at 4,096,
+and holds no async/provider work under its lock. This local physical exclusion
+is not a durable acquisition ledger. Expired/old-owner SQL roots deliberately
+remain retained until their actual ownership is resolved; automatic expiry or
+new-epoch cleanup would violate correctness.
+
+Highest next: a production serving owner must retain exact acquisition/renewal
+commands, coalesce a bounded set of generation capabilities, and carry their
+worker/stream lifetime through actual eviction/shutdown. Convert all actual
+object/ref/cache/graph/browser/policy/check/merge consumers, including the five
+failures. Complete owned HTTP/SSH/generated producers and final hard-cutover DDL;
+admitted immutable custody history/exact lookup, retained physical-input
+adoption and scanner/fault campaigns remain required. Typed GC/backup/isolated
+restore, OS containment, native acceleration/physical rewrite/fair maintenance,
+signed completion/cold clone, file-attribution endpoint/UI/cache/index, and full
+Linux/Kubernetes/Chromium plus 10,000-engineer mixed-load/recovery/capacity gates
+remain mandatory. The branch is local, unpublished and unreleasable; no capacity
+claim or whole-goal completion is made.
 
 ## Shared node publication budget
 

@@ -117,3 +117,16 @@ Keep one coordinator and geometric planner per repository, with one shared publi
 Tests exercise class/account admission, retained failure values, duplicate logical IDs, maintenance concurrency while foreground completes, canceled observers, current admin revocation, and SHA-1/SHA-256 absent/lost-acknowledgement/panic recovery with original receipts and exactly one logical outcome. The existing push dispatcher tests remain in place with typed-result assertions. The geometric native fixture now prepares and publishes repeatedly through this shared dispatcher until ingress and level debt drain, checking canonical/source/version identity, unchanged refs and old-reader access.
 
 These fixtures establish bounded dispatch and recovery. They do not establish stable maintenance service under 35 pushes/s, full-history amplification, durability grouping, source-independent restore or capacity for 10,000 engineers. The mandatory workload and recovery campaigns remain release gates.
+
+## Serving retention release
+
+`ReadyServingRelease` joins the existing maintenance class under an 8 KiB
+reservation, with the original exact 1 KiB command and 128-byte result. Its
+private factory requires sticky serving closure and actual physical read-worker
+drain. A distinct typed job kind keeps its real reader ID separate from both
+creating publications and custody retirement; it does not fabricate an artifact
+namespace or grant preparation authority. Uncertainty retains the original
+command/owner/credits, and release recovery is looked up through
+`pending_serving_release`. See the [serving contract](certified-serving-pins.md).
+Production acquisition/renewal, generation caching and read-owner handoff still
+require integration.

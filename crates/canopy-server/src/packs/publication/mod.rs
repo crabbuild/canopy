@@ -14,6 +14,13 @@ use cellule_runtime::{
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
     registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
 };
+mod serving;
+pub use serving::{
+    AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_OWNERS,
+    MAX_SERVING_PINS, ReadyServingRelease, ReleaseServingPin, RenewServingPin, RenewServingRequest,
+    ServingCheck, ServingContext, ServingDenial, ServingDrainProof, ServingLease, ServingPin,
+    ServingReadBudget, ServingReadError, ServingReleaseReply, ServingReply, ServingToken,
+};
 mod owner;
 pub(crate) mod registry;
 pub use owner::PreparationAuthority;
@@ -130,7 +137,8 @@ pub use commands::{
 
 pub const SCHEMA: &str = concat!(
     include_str!("schema.sql"),
-    include_str!("ref_policy/schema.sql")
+    include_str!("ref_policy/schema.sql"),
+    include_str!("serving/schema.sql")
 );
 pub const MAX_OPERATIONS: u64 = 1024;
 pub const MAX_GENERATION_LEASES: u64 = 4096;
@@ -234,6 +242,10 @@ pub struct MaintenanceRequest {
 /// Bind the packed production contract. Inline publication/completion adapters
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    registry.bind_command::<AcquireServingPin>()?;
+    registry.bind_command::<RenewServingPin>()?;
+    registry.bind_command::<ReleaseServingPin>()?;
+    registry.bind_query::<CheckServingPin>()?;
     registry.bind_command::<RegisterCustodyIntent>()?;
     registry.bind_command::<ExecuteCustody>()?;
     registry.bind_command::<StopCustodyIntent>()?;

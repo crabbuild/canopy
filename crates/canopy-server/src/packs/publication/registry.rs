@@ -23,7 +23,7 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 16] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 19] = [
     crate::operation(1),
     command::<AbortPreparation>(4096, 4096),
     command::<ReapPreparation>(4096, 4096),
@@ -40,8 +40,11 @@ pub(crate) const COMMANDS: [OperationDescriptor; 16] = [
     command::<RegisterCustodyIntent>(4096, 4096),
     command::<ExecuteCustody>(1024, 512),
     command::<StopCustodyIntent>(1024, 128),
+    command::<AcquireServingPin>(1024, 1024),
+    command::<RenewServingPin>(1024, 1024),
+    command::<ReleaseServingPin>(1024, 128),
 ];
-pub(crate) const QUERIES: [OperationDescriptor; 9] = [
+pub(crate) const QUERIES: [OperationDescriptor; 10] = [
     crate::operation(2),
     query::<CheckPreparation>(4096, 4096),
     query::<CheckPreparationFrontier>(4096, 4096),
@@ -51,6 +54,7 @@ pub(crate) const QUERIES: [OperationDescriptor; 9] = [
     query::<CheckInitializedCatalog>(4096, 512),
     query::<CheckRefPolicyGuard>(4096, 128),
     query::<CheckCompletedRootPush>(4096, 512),
+    query::<CheckServingPin>(1024, 1024),
 ];
 
 #[cfg(test)]
@@ -81,7 +85,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43
+                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46
             ]
         );
         assert_eq!(
@@ -90,7 +94,7 @@ mod tests {
                 .iter()
                 .map(|operation| operation.id)
                 .collect::<Vec<_>>(),
-            vec![2, 15, 21, 23, 27, 30, 32, 34, 37]
+            vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47]
         );
         for (id, codec, input, output) in [
             (
@@ -116,6 +120,9 @@ mod tests {
             (41, RegisterCustodyIntent::CODEC_VERSION, 4096, 4096),
             (42, ExecuteCustody::CODEC_VERSION, 1024, 512),
             (43, StopCustodyIntent::CODEC_VERSION, 1024, 128),
+            (44, AcquireServingPin::CODEC_VERSION, 1024, 1024),
+            (45, RenewServingPin::CODEC_VERSION, 1024, 1024),
+            (46, ReleaseServingPin::CODEC_VERSION, 1024, 128),
         ] {
             let operation = descriptor
                 .commands

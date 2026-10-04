@@ -28,6 +28,7 @@ mod refs;
 mod root_completion;
 mod root_dispatch;
 mod root_outcome;
+mod serving;
 mod staged_durable;
 mod staging;
 mod staging_receipt;
