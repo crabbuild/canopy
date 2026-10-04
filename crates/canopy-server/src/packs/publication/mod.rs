@@ -16,12 +16,13 @@ use cellule_runtime::{
 };
 mod serving;
 pub use serving::{
-    AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_OWNERS,
-    MAX_SERVING_PINS, ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
-    RenewServingRequest, SelectServingGeneration, ServingCheck, ServingContext, ServingDenial,
-    ServingDrainObserver, ServingDrainProof, ServingLease, ServingOwner, ServingOwnerError,
-    ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingReadBudget, ServingReadError,
-    ServingReleaseReply, ServingReply, ServingSelection, ServingSnapshot, ServingToken,
+    AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_GENERATIONS,
+    MAX_SERVING_OWNERS, MAX_SERVING_PINS, ReadyServingCommand, ReadyServingRelease,
+    ReleaseServingPin, RenewServingPin, RenewServingRequest, SelectServingGeneration, ServingCheck,
+    ServingContext, ServingDenial, ServingDrainObserver, ServingDrainProof, ServingLease,
+    ServingOwner, ServingOwnerError, ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingPool,
+    ServingPoolLimits, ServingReadBudget, ServingReadError, ServingReleaseReply, ServingReply,
+    ServingSelection, ServingSnapshot, ServingToken,
 };
 mod owner;
 pub(crate) mod registry;

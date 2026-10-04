@@ -8,11 +8,13 @@ mod commands;
 pub use command_owner::ReadyServingCommand;
 mod lifecycle;
 mod ownership;
+mod pool;
 pub use lifecycle::{
     ServingDrainObserver, ServingOwner, ServingOwnerError, ServingOwnerPhase, ServingOwnerStats,
     ServingSnapshot,
 };
 pub use ownership::MAX_SERVING_OWNERS;
+pub use pool::{MAX_SERVING_GENERATIONS, ServingPool, ServingPoolLimits};
 mod session;
 pub use commands::{
     AcquireServingPin, CheckServingPin, ReleaseServingPin, RenewServingPin, SelectServingGeneration,

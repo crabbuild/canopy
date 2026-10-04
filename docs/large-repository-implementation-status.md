@@ -3,7 +3,7 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published head `2012f86`, GitHub reports
+directly against `main`. At the preceding published head `b21f9d7`, GitHub reports
 no merge conflicts; both Rust CI runs fail on the same five unconverted
 legacy `objects` readers and both harness checks pass. The PR is currently marked
 ready for review, but production conversion and release requirements remain
@@ -13,6 +13,61 @@ notes describe their historical states, not the current publication state.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Resident serving pool checkpoint
+
+The production manager now owns one node serving budget and creates one lazy,
+repository-scoped pool/context with shared index/file clients for each local
+resident. `RepositoryCell::serving_snapshot` uses a weak association. The pool
+coalesces pending viewers, retains at most four generation slots including
+closing owners, and binds returned snapshots to the actual accepted joint fact
+across head races. At capacity it retires an idle old owner, returns explicit
+backpressure and charges the slot until real producer completion.
+
+Eviction pauses borrowing and producer creation, refuses pending originals/
+borrows/physical workers without discarding them, and resumes the same owners
+on refusal. Idle owners release through the existing exact-token admission gate
+before queue closure. A private task owns accepted drain across observer
+cancellation. Pool cleanup and generation releases proceed independently.
+Shutdown joins serving owners before closing the node tracker/publication
+budget or Cell/workspace/heartbeat. Partial construction joins its first owners.
+See the [serving contract](design/certified-serving-pins.md).
+
+Fifty-five focused serving/resident families pass in 20.42 seconds; they include
+six new pool and two actual-manager cases in both formats. The cases cover
+coalescing/current access, canceled cold observation, lost acknowledgement,
+four-generation retention and real slot reuse, deterministic acquisition head
+races, busy/canceled exclusive drain, independent release while an old real
+provider blocks, weak repository association, eviction retry and actual server
+shutdown held by the last borrowed clone. Warnings-denied workspace/all-target
+Clippy passes in 28.89 seconds. Empty/copied-root fixtures qualify this lifecycle,
+not full nonempty native/body/history serving or capacity.
+
+Final frozen-source workspace library qualification executes 672 unique cases:
+**667 pass and five fail**, retaining exit 101. All 376 publication, seven
+startup, four resident recovery and two resident serving families pass. Two
+nested subprocess summaries are excluded and focused cases are not counted
+again. Nine selected portable workspace/lifecycle cases also pass; combined
+coverage is 681 unique cases, 676 pass and five fail. No compatibility table or
+green-result substitution is introduced. The server build passes in 32.16
+seconds and formatting in 1.35 seconds. All 96 Python harness tests pass.
+The freeze covers 471 Rust/SQL/manifest files, including 457 Rust files. The
+[persisted evidence](evidence/serving-pool-20261004.json) records commands, source
+fingerprint and log digests. The initial check's missing Arc qualification is
+retained as a draft diagnostic, not a passing check. The final driver completes
+its other checks and exits 101. Both preceding-head Linux Rust CI failures have
+been read and contain exactly the same five `objects` readers; they qualify the
+preceding source only. Linux-only fork integration cases were not run locally.
+
+Highest next work is conversion of all authoritative object/ref/cache/graph/
+browser/policy/merge readers and HTTP/SSH/generated producers to the resident
+snapshot and certified publication path, including physical native/body/stream
+ownership. Five unconverted legacy `objects` readers still fail. Physically
+fenced adoption/quota recovery, immutable admitted custody history/exact lookup,
+final DDL, typed GC/backup/restore, fault campaigns, OS containment, native
+acceleration/rewrite/fair maintenance, signed completion/cold clone, attribution
+and full-history plus 10,000-developer capacity qualification remain mandatory.
+The full objective remains open and this branch remains unreleasable.
 
 ## Owned serving lifecycle checkpoint
 

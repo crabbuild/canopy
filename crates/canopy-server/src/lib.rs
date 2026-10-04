@@ -301,6 +301,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving/command_owner.rs"));
                 source.update(include_bytes!("packs/publication/serving/session.rs"));
                 source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
+                source.update(include_bytes!("packs/publication/serving/pool.rs"));
                 source.update(include_bytes!(
                     "packs/publication/serving/session/handoff.rs"
                 ));
@@ -415,6 +416,7 @@ pub struct RepositoryCell {
     // Gateways own the cache lifetime. Sharing the reader through a weak
     // reference must not retain its original disk budget after gateway eviction.
     pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
+    serving: std::sync::Mutex<Option<std::sync::Weak<packs::publication::ServingPool>>>,
 }
 
 impl RepositoryCell {
@@ -442,7 +444,38 @@ impl RepositoryCell {
             application: application.clone(),
             target,
             pack_readers: std::sync::Mutex::new(Vec::new()),
+            serving: std::sync::Mutex::new(None),
         })
+    }
+
+    pub(crate) fn attach_serving(&self, pool: &std::sync::Arc<packs::publication::ServingPool>) {
+        *self.serving.lock().expect("repository serving pool") =
+            Some(std::sync::Arc::downgrade(pool));
+    }
+    /// Borrow the resident's certified joint generation; a detached caller
+    /// cannot abandon its acquisition or extend a released residency.
+    pub async fn serving_snapshot(
+        &self,
+        actor: ReadIdentity<'_>,
+    ) -> std::result::Result<
+        packs::publication::ServingSnapshot,
+        packs::publication::ServingOwnerError,
+    > {
+        actor
+            .validate()
+            .map_err(packs::publication::ServingReadError::Capability)?;
+        let pool = self
+            .serving
+            .lock()
+            .expect("repository serving pool")
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(packs::publication::ServingReadError::Inactive)?;
+        let actor = match actor {
+            ReadIdentity::Anonymous => None,
+            ReadIdentity::Account(value) => Some(value.to_owned()),
+        };
+        pool.snapshot(actor).await
     }
 
     /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.

@@ -206,6 +206,7 @@ pub(crate) struct RepositoryManager {
     maintenance_stop: CancellationToken,
     publication_budget: crate::packs::publication::PublicationBudget,
     recovery_scans: crate::packs::publication::RecoveryScanBudget,
+    serving_reads: crate::packs::publication::ServingReadBudget,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -657,6 +658,8 @@ impl RunningServer {
                     tasks.clone(),
                 )
                 .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                serving_reads: crate::packs::publication::ServingReadBudget::new(64, tasks.clone())
+                    .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
             });
             let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;

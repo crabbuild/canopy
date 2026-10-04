@@ -16,7 +16,7 @@ use tokio::time::{Duration, timeout};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-async fn server() -> Result<(RunningServer, tempfile::TempDir)> {
+pub(super) async fn server() -> Result<(RunningServer, tempfile::TempDir)> {
     let files = tempfile::TempDir::new()?;
     let server = RunningServer::start(
         ServerConfig {
@@ -45,7 +45,7 @@ async fn server() -> Result<(RunningServer, tempfile::TempDir)> {
     .await?;
     Ok((server, files))
 }
-async fn create(
+pub(super) async fn create(
     manager: &Arc<RepositoryManager>,
     name: &str,
     format: ObjectFormat,
@@ -65,7 +65,7 @@ async fn create(
     })
     .await??)
 }
-async fn loaded(
+pub(super) async fn loaded(
     manager: &RepositoryManager,
     id: [u8; 16],
 ) -> Result<(Arc<RepositoryCell>, CellClient, Arc<RecoveryServices>)> {

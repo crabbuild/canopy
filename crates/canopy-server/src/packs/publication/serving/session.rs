@@ -25,6 +25,8 @@ pub enum ServingReadError {
     Authority(#[from] PreparationBaseError),
     #[error("serving query failed")]
     Query(#[source] Box<InvocationError<Option<ServingLease>>>),
+    #[error("serving generation selection failed")]
+    Selection(#[source] Box<InvocationError<Option<GenerationFact>>>),
     #[error("serving metadata failed")]
     Metadata(#[from] crate::packs::directory::index::IndexError),
     #[error("serving capability failed")]
@@ -95,6 +97,47 @@ pub struct ServingContext {
     administrator: String,
 }
 impl ServingContext {
+    pub(super) fn repository(&self) -> [u8; 16] {
+        self.indexes.store().repository()
+    }
+    pub(super) fn administrator(&self) -> &str {
+        &self.administrator
+    }
+    pub(super) async fn select(
+        &self,
+        actor: Option<String>,
+    ) -> Result<GenerationFact, ServingReadError> {
+        if self.budget.inner.stop.is_cancelled() {
+            return Err(ServingReadError::Inactive);
+        }
+        let scope = actor
+            .as_deref()
+            .map_or(ReadIdentity::Anonymous, ReadIdentity::Account);
+        let permit = self.budget.inner.admission.acquire(scope).await?;
+        let context = self.clone();
+        self.tasks()
+            .spawn(async move {
+                let _permit = permit;
+                if context.budget.inner.stop.is_cancelled() {
+                    return Err(ServingReadError::Inactive);
+                }
+                context
+                    .client
+                    .query::<SelectServingGeneration>(
+                        &context.target,
+                        None,
+                        ServingSelection {
+                            repository: context.repository(),
+                            actor,
+                        },
+                    )
+                    .await
+                    .map_err(|error| ServingReadError::Selection(Box::new(error)))?
+                    .output
+                    .ok_or(ServingReadError::Inactive)
+            })
+            .await?
+    }
     pub(super) fn client_for_owner(&self) -> CellClient {
         self.client.clone()
     }
@@ -198,6 +241,10 @@ struct ReleaseCommand {
     digest: [u8; 32],
 }
 impl ServingPin {
+    pub(super) fn workers_idle(&self) -> bool {
+        let state = self.inner.state.lock().expect("serving workers");
+        !state.closed && state.active == 0
+    }
     pub(super) async fn authorize(
         &self,
         actor: Option<String>,

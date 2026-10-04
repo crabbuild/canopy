@@ -123,6 +123,7 @@ impl RunningServer {
             None
         };
         self.listeners.stop_ingress();
+        self.repositories.drain_serving().await;
         self.tasks.close();
         self.tasks.wait().await;
         self.repositories.drain_recovery().await;

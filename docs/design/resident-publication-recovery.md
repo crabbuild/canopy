@@ -95,9 +95,13 @@ constructed. Cleanup failures retain the released entry and its charged slot.
 ## Shutdown and independent progress
 
 Shutdown closes native admission, stops maintenance, closes scan discovery and
-stops HTTP/SSH ingress. It joins ingress and the node task tracker, including
-accepted requests, residency transitions and owned scan/maintenance rounds.
-The repository manager then closes publication admission and drains the retained
+stops HTTP/SSH ingress. After joining ingress it closes and joins the resident
+[serving pools](certified-serving-pins.md#bounded-resident-generation-pool) while
+publication admission, Cell authority and heartbeat remain available. Borrowed
+snapshot clones and detached physical workers retain their exact roots until
+authenticated release. Only then does it close/join the node task tracker,
+including accepted requests, residency transitions and owned scan/maintenance
+rounds. The repository manager then closes publication admission and drains the retained
 coordinators. All per-repository drain futures run together, bounded by the
 existing loaded-residency cap and shared publication/transport budgets.
 A producer-held command in one repository must not prevent exact recovery in
@@ -127,11 +131,11 @@ Final-source totals and retained diagnostic logs are recorded in the
 [implementation status](../large-repository-implementation-status.md).
 
 The current selected packed schema still exposes unconverted legacy consumers.
-Production HTTP/SSH/generated staging, authoritative certified serving retention,
+Production HTTP/SSH/generated staging, conversion to the resident serving pool,
 all object/ref/graph/browser/policy/check/merge consumers and final DDL removal
 must move together. Admitted immutable custody history/exact lookup, retained
 physical input adoption, typed GC/backup/isolated restore, OS resource containment,
 accelerated reads/physical rewrite, fair continuous maintenance, signed native
 completion/cold clone, file attribution and full Linux/Kubernetes/Chromium plus
 10,000-developer mixed-load qualification remain mandatory. This local branch is
-unpublished and unreleasable until those gates are complete.
+published in PR #34 and unreleasable until those gates are complete.

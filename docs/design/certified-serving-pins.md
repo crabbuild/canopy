@@ -5,7 +5,9 @@ artifacts cannot disappear while an owned worker is suspended. The implementatio
 adds a bounded serving-pin receiver and an owned metadata-read capability. This
 is a foundation for production reader conversion. A service-owned producer now
 acquires, retains, renews and drains one generation independently of its callers;
-the production manager does not yet pool or hand these owners to its consumers.
+the production manager now creates a bounded resident pool and exposes its
+borrow through `RepositoryCell::serving_snapshot`. Existing product/native/body/
+stream consumers still require conversion to this capability.
 The branch remains unreleasable until that conversion and the full cutover gates
 are complete.
 
@@ -74,7 +76,7 @@ that same guard. Closing the pin waits until a proven unexecuted held command is
 discarded or the exact original reaches a known disposition. Cancellation of an
 observer cannot release it. The production owner must retain and activate/discard
 held tickets and drive uncertain recovery. `ServingOwner` now performs that
-ownership and automatic renewal; a resident generation pool is still required.
+ownership and automatic renewal; the resident pool now composes that lifecycle.
 
 The existing bounded custody scanner also visits serving heads and can retire an
 expired unexecuted original. A stop records logical closure and never invents an
@@ -200,6 +202,60 @@ caches across generations. This does not expose raw catalog readers or native
 workspace mutation authority. Object bodies, native operations, response streams
 and all current object/ref/cache/graph/browser consumers still need conversion.
 
+## Bounded resident generation pool
+
+`ServingPool` retains at most four generation slots, including acquisitions and
+closing owners. Pending viewers coalesce on one acquisition; known owners are
+matched by their accepted token's generation. Current-root selection is an
+admitted, tracked observation under the requesting viewer's Read access. A head
+advance between selection and acquisition returns the actual accepted joint
+fact, never a capability labeled with the earlier observation. Product consumers
+must resolve their revision/ref through that accepted snapshot.
+
+The pool admits each viewer before spawning private request work. Its permit
+covers selection, acquisition waiting and the returned snapshot borrow. Observer
+cancellation detaches accepted work, and the owner's original stays retained.
+At capacity, the pool initiates closure of one least-recently-used unborrowed
+owner and returns an explicit capacity error. Its slot remains charged until the
+real producer has exited; there is no unbounded retired-owner list or waiting
+behind old provider work under the pool lock. Borrowed old generations remain
+immutable. Their independent owners keep renewing while other generations work.
+
+Eviction pauses acquisition/borrowing and uses a nonwaiting owner handshake.
+The producer driver must be idle, with no pending original, outstanding borrow
+or physical pin work. An already built/held/uncertain command is never discarded
+by that handshake. Busy refusal resumes the same owners. Only after all owners
+are paused may the common coordinator reserve the bounded exact-token drain
+gate. Accepted drain is owned by a private task: cancellation cannot abandon
+its guard or strand paused owners. Actual releases and producer joins precede
+coordinator closure. Repeating quiescence after a later Cell-release refusal
+works only after every owner/request has really drained.
+
+`RepositoryManager` owns one 64-slot node serving budget. Each initialized local
+resident's `RecoveryServices` owns one pool/context and repository-scoped shared
+index/file clients, using the actual NodePeer authority and its existing common
+publication coordinator. `RepositoryCell` holds a weak pool association; stale
+repository handles do not keep serving admission open. Remote routes receive no
+local pool. Partial service construction explicitly joins its pool/scanner before
+returning failure. Last pool-handle loss initiates its private supervised drain.
+
+Recovery quiescence pauses discovery before pool drain. Server shutdown joins
+HTTP/SSH ingress, closes and joins serving pools while Cell, heartbeat and
+publication admission remain available, then closes the node task tracker and
+drains recovery/Cell/workspace. Node serving admission closes only after pool
+drain. The standalone recovery drain also enforces that ordering. A borrowed
+snapshot clone or detached real I/O cannot permit early publication-budget
+closure, Cell shutdown or workspace reuse.
+
+Six pool and two real-manager families pass as part of 55 focused serving/
+resident tests. They cover concurrent viewer coalescing and current access,
+canceled cold observation/lost acknowledgement, four borrowed generations and
+actual slot reuse, deterministic acquisition head races, busy/canceled exclusive
+drain, blocked old provider work with independent other-generation release, weak
+repository access and real shutdown retaining publication/Cell/heartbeat/workspace
+until the last borrow. These empty/copy-root fixtures qualify ownership and
+selection semantics, not native publication throughput or full-history serving.
+
 ## Sticky closure and exact release
 
 Closure prevents new reads and waits for every owned drain guard. Notify
@@ -249,15 +305,14 @@ owner fence.
 
 ## Production integration and qualification gates
 
-The next serving layer must integrate `ServingOwner` and its accepted acquisition
-handoff into production residency. Command reconstruction alone does not
-establish physical ownership. Cache/coalesce a bounded set of active generation
-owners per repository rather than allocating a pin per browser/SDE. Carry that
+The resident pool now integrates `ServingOwner` and its accepted acquisition
+handoff with manager residency. Command reconstruction alone does not establish
+physical ownership. The next serving layer must carry that
 ownership through native work, object bodies and response streams; integrate
 its drain into actual eviction and shutdown. A close must join all producers and
 workers before Cell/workspace/artifact release.
 
-Production integration must preserve these boundaries:
+Consumer conversion must preserve these boundaries:
 
 1. `RepositoryManager` owns the node read budget. Each local resident owns one
    repository-scoped context and bounded generation pool, sharing its index/file
@@ -273,7 +328,8 @@ Production integration must preserve these boundaries:
 3. Shutdown stops borrowing and joins all generation producers while Cell,
    administrator authority and publication admission remain usable. Only then
    may the node tracker/publication budget close and resident recovery/Cell/
-   workspace drain finish. The current shutdown path is not yet wired this way.
+   workspace drain finish. The current shutdown path enforces this ordering;
+   native/body/stream consumers still need to carry the snapshot guard.
 4. Actual process fencing and restored-owner adoption must precede releasing an
    abandoned pin. A historical lease or an expired deadline is insufficient.
    Quota recovery must use that authenticated lifecycle rather than reaping SQL

@@ -9,6 +9,7 @@ use tokio::time::{Duration, timeout};
 use tokio_util::task::TaskTracker;
 mod custody;
 mod lifecycle;
+mod pool;
 mod selection_drain;
 
 async fn initialize(f: &Fixture, store: Arc<ArtifactStore>) -> Result<GenerationFact> {

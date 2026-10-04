@@ -42,6 +42,7 @@ pub struct ServingOwnerStats {
 }
 struct Control {
     closed: bool,
+    paused: bool,
     borrowers: usize,
     pin: Option<ServingPin>,
 }
@@ -191,6 +192,7 @@ impl ServingOwner {
             request,
             control: Mutex::new(Control {
                 closed: false,
+                paused: false,
                 borrowers: 0,
                 pin: None,
             }),
@@ -218,6 +220,48 @@ impl ServingOwner {
     }
     pub fn stats(&self) -> ServingOwnerStats {
         self.inner.updates.borrow().clone()
+    }
+    pub(super) fn is_drained(&self) -> bool {
+        self.inner.tasks.is_empty()
+    }
+    pub(super) fn retire_if_idle(&self) -> bool {
+        let mut state = self.inner.control.lock().expect("serving owner control");
+        if state.borrowers != 0 {
+            return false;
+        }
+        state.closed = true;
+        drop(state);
+        self.inner.changed.notify_waiters();
+        true
+    }
+    /// A nonwaiting handshake: the worker cannot create another original after
+    /// its driver lock has been observed while paused. Busy originals stay owned.
+    pub(super) fn pause_for_drain(&self) -> Option<Option<ServingToken>> {
+        self.inner
+            .control
+            .lock()
+            .expect("serving owner control")
+            .paused = true;
+        let Ok(driver) = self.inner.driver.try_lock() else {
+            return None;
+        };
+        if driver.done {
+            return Some(None);
+        }
+        let state = self.inner.control.lock().expect("serving owner control");
+        if state.closed || state.borrowers != 0 || driver.pending.is_some() {
+            return None;
+        }
+        let pin = state.pin.as_ref()?;
+        pin.workers_idle().then_some(Some(pin.token()))
+    }
+    pub(super) fn resume(&self) {
+        self.inner
+            .control
+            .lock()
+            .expect("serving owner control")
+            .paused = false;
+        self.inner.changed.notify_waiters();
     }
     pub fn drain_observer(&self) -> ServingDrainObserver {
         ServingDrainObserver {
@@ -262,6 +306,13 @@ impl ServingOwner {
         actor: Option<String>,
     ) -> Result<ServingSnapshot, ServingReadError> {
         let permit = self.inner.context.admit_snapshot(&actor).await?;
+        self.snapshot_admitted(actor, permit).await
+    }
+    pub(super) async fn snapshot_admitted(
+        &self,
+        actor: Option<String>,
+        permit: AdmissionPermit,
+    ) -> Result<ServingSnapshot, ServingReadError> {
         let inner = self.inner.clone();
         self.inner
             .context
@@ -274,7 +325,7 @@ impl ServingOwner {
                     changed.as_mut().enable();
                     let acquired = {
                         let mut state = inner.control.lock().expect("serving owner control");
-                        if state.closed {
+                        if state.closed || state.paused {
                             return Err(ServingReadError::Inactive);
                         }
                         if let Some(pin) = state.pin.clone() {
@@ -341,6 +392,9 @@ impl Inner {
         if driver.pending.is_none() {
             let (closed, borrowers, pin) = {
                 let state = self.control.lock().expect("serving owner control");
+                if state.paused && !state.closed {
+                    return Ok(false);
+                }
                 (state.closed, state.borrowers, state.pin.clone())
             };
             // A factory has not registered or submitted anything. Once all
