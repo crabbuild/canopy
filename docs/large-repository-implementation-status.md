@@ -3,7 +3,7 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published pool head `02307fd`, GitHub reports
+directly against `main`. At the preceding published shutdown-fix head `1e32347`, GitHub reports
 no merge conflicts; both Rust CI runs fail on the same five unconverted
 legacy `objects` readers and both harness checks pass. The PR is currently marked
 ready for review, but production conversion and release requirements remain
@@ -13,6 +13,57 @@ notes describe their historical states, not the current publication state.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Certified browser ref reads checkpoint
+
+The local browser's ref listing and resolution now select the accepted immutable
+joint ref root through `ServingSnapshot`; neither legacy ref rows nor their
+default branch/counter can override it. The implementation reuses `RefPage`,
+`RefExpectation` and the existing byte-ordered `RefStateIndex`. Its bounded node
+client is shared by the resident, and each pin coalesces ref-descriptor loading.
+Ref and metadata reads share admitted private work, current access/owner/lease
+checks before and after I/O, and physical-drain ownership across observer loss.
+
+Pages contain at most 256 records and 512 KiB of name/record charges. Live cursors
+skip deleted subtrees; version-preserving consumers can include tombstones.
+Continuations bind the ref snapshot's generation and return changed on mismatch.
+Old borrowed generations remain immutable while new heads are selected. HTTP
+requests remain bounded at 512 KiB, allowing legal long cursors with JSON escapes;
+overlong names reject as invalid rather than exceeding the index's byte limit.
+The [serving contract](design/certified-serving-pins.md#certified-immutable-ref-reads)
+defines these boundaries.
+
+Five new ref families and one actual browser HTTP/manager family exercise both
+formats. They cover count/byte continuation, retained deletion versions, old-head
+immutability, cached and in-flight access revocation, blocked real provider I/O
+after canceled observation, bad snapshot context, and deliberately conflicting
+legacy SQL. All 62 focused serving/recovery families pass in 20.59 seconds;
+warnings-denied workspace/all-target Clippy passes in 28.37 seconds. Inventory
+roots in the ref fixtures are trusted injection to isolate reader behavior,
+not proof of native graph publication or capacity.
+
+Final frozen-source library qualification executes 679 unique cases: 674 pass
+and the same five legacy `objects` readers fail. All 381 publication, seven
+startup, four resident recovery and four resident serving cases pass. Nine
+selected portable workspace/lifecycle cases pass: 688 unique Rust cases, 683
+passed and five failed. Nested subprocess summaries and focused cases are not
+counted twice; the driver's actual library exit 101 remains visible. Linux-only
+fork cases were not run locally. Source fingerprints, commands, log digests and
+corrected fixture diagnostics are retained in
+[certified ref evidence](evidence/serving-refs-20261004.json).
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+Static qualification verifies 474 frozen source/schema/manifest files, including
+460 Rust files, exact SDK pins and the protected original index/archive.
+
+Highest next work is certified object/body/native serving and owner-aware remote
+routes, followed by conversion of all remaining ref/cache/graph/browser/policy/
+merge consumers and HTTP/SSH/generated producers. Default-branch and other
+policy producers still require immutable publication conversion. Physical
+adoption/quota recovery, admitted immutable custody history/exact lookup, final
+DDL, typed GC/backup/isolated restore, fault campaigns, OS containment, native
+acceleration/rewrite/fair maintenance, signed completion/cold clone, attribution
+and full-history/10,000-developer capacity qualification remain mandatory.
+The full objective remains open and the branch remains unreleasable.
 
 ## Serving construction/shutdown barrier checkpoint
 

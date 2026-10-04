@@ -1,0 +1,256 @@
+{
+  "source_files": 474,
+  "rust_files": 460,
+  "source_hash_digest": "8f29f85e5224490ae647603bb51ebf64add25d4be3c1a748b559cf6418ce80f1",
+  "phases": [
+    {
+      "label": "clippy",
+      "exit_code": 0,
+      "log": "/tmp/canopy-serving-refs-clippy.log",
+      "preceding_unchanged_source": true,
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log_sha256": "2ef814fea8430b2d9875931a8da0eec6994f6db900678285b2abbca6b2610eb2"
+    },
+    {
+      "label": "focused",
+      "exit_code": 0,
+      "log": "/tmp/canopy-serving-refs-focused.log",
+      "preceding_unchanged_source": true,
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--lib",
+        "--locked",
+        "--",
+        "packs::publication::tests::serving",
+        "server::residency::tests::serving",
+        "server::residency::tests::recovery",
+        "--test-threads=4"
+      ],
+      "log_sha256": "38824abbd62d5575e20bd5da172f6a577484789398ee143e6329b5e5b764afd3"
+    },
+    {
+      "label": "library",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "--workspace",
+        "--lib",
+        "--locked",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 101,
+      "seconds": 319.161,
+      "log": "/tmp/canopy-serving-refs-library.log",
+      "passed": 674,
+      "failed": 5,
+      "ignored": 0,
+      "publication_passed": 381,
+      "known_failures": [
+        "git_gateway::fetch::tests::reachability_stops_at_live_refs_without_scanning_other_history",
+        "object_reads::tests::byte_limited_page_advances_only_over_the_selected_prefix",
+        "object_reads::tests::duplicate_rollback_and_deletion_do_not_hide_subsequent_inserts",
+        "object_reads::tests::insertion_cursor_finds_lower_oids_and_excludes_later_publications",
+        "object_reads::tests::small_increment_uses_bounded_sql_work_after_large_history"
+      ],
+      "nested_summaries_excluded": 2,
+      "log_sha256": "fc0247c2f4bca0d77357470ff286b40886a169ab16f62bcdf6e18773098f5920"
+    },
+    {
+      "label": "workspace",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "workspace::",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 49.394,
+      "log": "/tmp/canopy-serving-refs-workspace.log",
+      "passed": 3,
+      "log_sha256": "a337ef4df179f5a331a9e5a4b57933eaac2d5c0d695ab1cd1a6c86eece61b56d"
+    },
+    {
+      "label": "lifecycle",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::fork::",
+        "lifecycle::cancelled_prebound_startup",
+        "lifecycle::runtime_destruction",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 2.4,
+      "log": "/tmp/canopy-serving-refs-lifecycle.log",
+      "passed": 2,
+      "log_sha256": "6acc35040ce2fe43604a266a74cb5872201853bf3f4b52b8a34871c2176c5052"
+    },
+    {
+      "label": "drain",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::cancelled_startup_keeps_workspace",
+        "lifecycle::dropped_handle_and_cancelled_shutdown",
+        "lifecycle::failed_drain_retains_workspace",
+        "lifecycle::startup_rejects_ignored_conditional",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.823,
+      "log": "/tmp/canopy-serving-refs-drain.log",
+      "passed": 4,
+      "log_sha256": "0a023f055205a8f1e78b323294adec111fe2706ad0b0b85ab279da45a058f220"
+    },
+    {
+      "label": "build",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "build",
+        "--locked",
+        "--bin",
+        "canopy"
+      ],
+      "exit_code": 0,
+      "seconds": 34.969,
+      "log": "/tmp/canopy-serving-refs-build.log",
+      "log_sha256": "b307219c288f74812291c45ea66b0e6286a48003bff3756a846d6ff8d429a545"
+    },
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.181,
+      "log": "/tmp/canopy-serving-refs-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.054,
+      "log": "/tmp/canopy-serving-refs-diff.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "harness",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_code": 0,
+      "seconds": 41.981,
+      "log": "/tmp/canopy-serving-refs-harness.log",
+      "log_sha256": "f8961ead9be0a4008e6c4f7837f0e66f80ba739d0b42551ca7aef8c97b6e133c"
+    }
+  ],
+  "release_qualified": false,
+  "unique_workspace_cases": 688,
+  "unique_workspace_passed": 683,
+  "unique_workspace_failed": 5,
+  "execution_complete": true,
+  "clippy_seconds": 28.37,
+  "harness_cases": 96,
+  "focused_cases": 62,
+  "focused_seconds": 20.59,
+  "pool_families": 6,
+  "production_manager_families": 4,
+  "new_ref_families": 5,
+  "new_production_manager_families": 1,
+  "draft_diagnostics": [
+    {
+      "log": "/tmp/canopy-serving-refs-initial-focused.log",
+      "exit_code": 101,
+      "log_sha256": "fb37089273f7a353780ce91979d4b2b38a8393d1a6aba4e4d010b1e6f79f6d9e",
+      "reason": "The new fixture supplied bare records to build_sorted, which requires Result records; fixed before qualification."
+    },
+    {
+      "log": "/tmp/canopy-serving-refs-new-focused.log",
+      "exit_code": 101,
+      "log_sha256": "c31fa05cb0010c07c177811e8d6862f481648b17e1fd57d03ff2cd68d626c6ee",
+      "reason": "Three new fixture roots used invalid artifact namespaces, and the HTTP fixture supplied hex rather than a canonical UUID; corrected before qualification."
+    }
+  ],
+  "scope": "Local browser ref conversion and owned immutable ref reads. Workspace library plus nine selected portable multi_server cases; focused lifecycle cases are included in the library total. This is not full production or capacity qualification.",
+  "platform": "macOS / Rust 1.98.0; Linux-only fork cases not executed locally",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "shared ignored build directory; no deployment/demo restart"
+  },
+  "sdk_revision": "161067f5a21703b3e257024bcb64e565fd9657b4",
+  "sdk_manifest_pins": 5,
+  "sdk_lock_pins": 6,
+  "protected_hashes": {
+    "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+    "/Users/haipingfu/.codex/worktrees/packed-catalog-publication-pr/canopy/docs/archive/pr20-progress-through-8bb0ee7.md": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+  },
+  "validated_source_parent": "1e32347a411fe24245e34638221e79eb8968b241",
+  "fetched_main": "9438bb865959fb975d5349ba8b9908b461653821",
+  "prior_ci": {
+    "head": "1e32347a411fe24245e34638221e79eb8968b241",
+    "rust": "failed: five legacy objects readers",
+    "harness": "passed",
+    "runs": [
+      37224582653,
+      37224580445
+    ],
+    "not_qualification_for_new_source": true
+  },
+  "checked_local_documentation_links": 90
+}

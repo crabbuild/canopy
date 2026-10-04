@@ -20,7 +20,8 @@ pub use commands::{
     AcquireServingPin, CheckServingPin, ReleaseServingPin, RenewServingPin, SelectServingGeneration,
 };
 pub use session::{
-    ReadyServingRelease, ServingContext, ServingPin, ServingReadBudget, ServingReadError,
+    ReadyServingRelease, ResolvedServingRef, ServingContext, ServingPin, ServingReadBudget,
+    ServingReadError,
 };
 
 pub const MAX_SERVING_PINS: u64 = 4096;

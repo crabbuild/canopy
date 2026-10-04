@@ -37,6 +37,92 @@ fn missing(format: ObjectFormat) -> ObjectId {
 }
 
 #[tokio::test]
+async fn production_browser_refs_use_certified_joint_roots_and_ignore_legacy_ref_tables() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, _files) = server().await?;
+        let manager = server.repositories.clone();
+        let entry = create(&manager, "browser-refs", format).await?;
+        let (repository, _, _) = loaded(&manager, entry.repository_id).await?;
+        // Trusted divergence isolates consumer authority. This old row must not
+        // become visible without publication of the immutable joint ref root.
+        repository.sql.batch(crate::server::mutation_identity()?, SqlBatch {
+            statements: vec![
+                SqlStatement { sql: "UPDATE ref_generation SET default_branch='refs/heads/legacy',generation=99 WHERE singleton=1".into(), parameters: vec![] },
+                SqlStatement { sql: "INSERT INTO refs(name,oid,version) VALUES('refs/heads/legacy',?1,1)".into(), parameters: vec![SqlValue::Blob(missing(format).to_vec())] },
+            ],
+        }).await?;
+        let client = reqwest::Client::new();
+        let url = format!(
+            "http://{}/api/repositories/browser-refs/browse",
+            server.address
+        );
+        for query in [
+            serde_json::json!({"kind":"resolve"}),
+            serde_json::json!({"kind":"refs"}),
+        ] {
+            let response = client
+                .post(&url)
+                .bearer_auth("local-recovery-test")
+                .json(&serde_json::json!({
+                    "repository_id": uuid::Uuid::from_bytes(entry.repository_id).to_string(), "query":query,
+                }))
+                .send()
+                .await?;
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            let body: serde_json::Value = response.json().await?;
+            if query["kind"] == "resolve" {
+                assert_eq!(body["view"]["resolved"]["reference"], "refs/heads/main");
+                assert!(body["view"]["resolved"]["oid"].is_null());
+                assert!(body["view"]["resolved"]["version"].is_null());
+                assert_eq!(body["view"]["resolved"]["generation"], 0);
+            } else {
+                assert_eq!(body["view"]["refs"]["default_branch"], "refs/heads/main");
+                assert_eq!(body["view"]["refs"]["entries"], serde_json::json!([]));
+                assert_eq!(body["view"]["refs"]["generation"], 0);
+            }
+        }
+        let changed = client.post(&url).bearer_auth("local-recovery-test").json(&serde_json::json!({
+            "repository_id": uuid::Uuid::from_bytes(entry.repository_id).to_string(), "query":{"kind":"refs","generation":99},
+        })).send().await?;
+        assert_eq!(changed.status(), reqwest::StatusCode::CONFLICT);
+        let long = format!("refs/heads/{}", "\"".repeat(65_000));
+        let continued = client
+            .post(&url)
+            .bearer_auth("local-recovery-test")
+            .json(&serde_json::json!({
+                "repository_id": uuid::Uuid::from_bytes(entry.repository_id).to_string(),
+                "query":{"kind":"refs","generation":0,"after":long},
+            }))
+            .send()
+            .await?;
+        assert_eq!(continued.status(), reqwest::StatusCode::OK);
+        let oversized = format!("refs/heads/{}", "x".repeat(65_536));
+        let invalid = client
+            .post(&url)
+            .bearer_auth("local-recovery-test")
+            .json(&serde_json::json!({
+                "repository_id": uuid::Uuid::from_bytes(entry.repository_id).to_string(),
+                "query":{"kind":"refs","generation":0,"after":oversized},
+            }))
+            .send()
+            .await?;
+        assert_eq!(invalid.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+        let anonymous = client
+            .post(&url)
+            .json(&serde_json::json!({
+                "repository_id": uuid::Uuid::from_bytes(entry.repository_id).to_string(), "query":{"kind":"resolve"},
+            }))
+            .send()
+            .await?;
+        assert_ne!(anonymous.status(), reqwest::StatusCode::OK);
+        drop(repository);
+        timeout(Duration::from_secs(10), server.shutdown()).await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn shutdown_refuses_unpublished_serving_constructor_and_joins_it_before_workspace_release()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {

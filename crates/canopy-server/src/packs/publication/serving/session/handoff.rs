@@ -60,6 +60,7 @@ impl ServingPin {
                 state: Mutex::new(Workers::default()),
                 changed: Notify::new(),
                 reader: tokio::sync::Mutex::new(None),
+                refs: tokio::sync::OnceCell::new(),
                 release: tokio::sync::Mutex::new(None),
             }) })
         }).await?

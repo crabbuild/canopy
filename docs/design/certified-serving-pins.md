@@ -269,6 +269,48 @@ and verifies that workspace/publication ownership remains until rejected
 construction cleanup joins. The regression fails against the preceding weak
 association ordering and passes with the registration barrier in both formats.
 
+## Certified immutable ref reads
+
+`ServingSnapshot::resolve_ref` and `refs_page` use only the ref snapshot in the
+accepted joint fact. The snapshot descriptor is loaded once per retained pin,
+validated against repository, object format and the joint generation, and shared
+by its viewers. The resident's existing `CatalogIndexes` also owns the shared
+`RefStateIndex`, so unchanged authenticated nodes reuse the same bounded cache.
+Public descriptors or a cache hit do not grant Read or retain a generation.
+
+Ref and canonical-header reads share a private admitted worker. Current access,
+owner and lease are checked before and after artifact work; expiry or revocation
+refuses the result. Observer cancellation detaches that worker without returning
+its admission or physical guard. Closing a pool cannot release its pin while a
+ref descriptor/index download is still pending. The worker finishes its actual
+I/O rather than dropping it to manufacture a timeout/drain result.
+
+The new path reuses `RefPage` and `RefExpectation`. Lookup distinguishes a name
+that never existed from a retained deletion with a version. Page size is at most
+256 records and 512 KiB of name/record charges. Live cursors skip authenticated
+zero-weight subtrees; other consumers can request deletion versions. Continuation
+requires the first page's ref generation, and a different selected ref generation
+returns an explicit changed result. An old borrowed snapshot continues to read
+its old immutable refs after the current head advances. Ref generation is the
+snapshot's counter, not the catalog counter; catalog-only changes can share refs.
+
+The local browser's `Refs` and `Resolve` operations select this service. Both the
+default branch and its tip come from the same immutable snapshot; legacy `refs`
+and `ref_generation` rows cannot override them. The HTTP request ceiling is
+512 KiB so even supported long ref cursors with JSON escapes can be submitted.
+Names above the index's 65,535-byte limit reject as invalid input. Changed page
+generations return HTTP 409. This does not yet convert remote owner routing,
+object bodies, tree/file/history browsing, native Git or policy/default-branch
+producers; those remain required for the full cutover.
+
+Five new ref families and one actual HTTP/manager family exercise both object
+formats: count/byte continuation, tombstones, old-generation immutability, cached
+and in-flight revocation, canceled real provider I/O, malformed snapshot context,
+and immutable authority despite deliberately conflicting legacy SQL. The ref
+inventory fixtures inject roots to isolate reader behavior; their tips do not
+qualify native graph publication or capacity. Final frozen-source totals are
+recorded in the [implementation status](../large-repository-implementation-status.md).
+
 ## Sticky closure and exact release
 
 Closure prevents new reads and waits for every owned drain guard. Notify

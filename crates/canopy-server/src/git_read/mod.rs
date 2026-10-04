@@ -50,6 +50,10 @@ pub(crate) enum ReadError {
     Cell(#[from] InvocationError<Vec<SqlResultSet>>),
     #[error("Git read worker failed")]
     Task(#[from] tokio::task::JoinError),
+    #[error("certified Git snapshot is unavailable")]
+    Serving(#[from] crate::packs::publication::ServingReadError),
+    #[error("certified Git snapshot owner is unavailable")]
+    ServingOwner(#[from] crate::packs::publication::ServingOwnerError),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {

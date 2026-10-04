@@ -10,6 +10,7 @@ use tokio_util::task::TaskTracker;
 mod custody;
 mod lifecycle;
 mod pool;
+mod refs;
 mod selection_drain;
 
 async fn initialize(f: &Fixture, store: Arc<ArtifactStore>) -> Result<GenerationFact> {

@@ -2,6 +2,10 @@ use super::*;
 use crate::git_read::{ReadError, Reader};
 use std::time::Duration;
 
+// A legal 65,535-byte ref cursor can expand sixfold in JSON escapes. Keep
+// requests bounded while allowing clients to continue every supported ref page.
+const REQUEST_BYTES: usize = 512 * 1024;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
@@ -75,7 +79,7 @@ async fn serve(
         };
     let body = match tokio::time::timeout(
         Duration::from_secs(30),
-        to_bytes(request.into_body(), 32 * 1024),
+        to_bytes(request.into_body(), REQUEST_BYTES),
     )
     .await
     {

@@ -8,6 +8,7 @@ pub struct CatalogIndexes {
     ranges: RangeIndex,
     sources: Arc<SourceIndex>,
     inputs: super::super::sources::NativeInputIndex,
+    refs: super::super::ref_state::RefStateIndex,
 }
 impl CatalogIndexes {
     pub fn new(store: Arc<ArtifactStore>, format: ObjectFormat) -> Self {
@@ -15,6 +16,7 @@ impl CatalogIndexes {
             ranges: RangeIndex::new(Arc::clone(&store), format),
             sources: Arc::new(SourceIndex::new(Arc::clone(&store), format)),
             inputs: super::super::sources::NativeInputIndex::new(Arc::clone(&store), format),
+            refs: super::super::ref_state::RefStateIndex::new(Arc::clone(&store), format),
             store,
         }
     }
@@ -26,6 +28,9 @@ impl CatalogIndexes {
     }
     pub(in crate::packs) fn inputs(&self) -> &super::super::sources::NativeInputIndex {
         &self.inputs
+    }
+    pub(in crate::packs) fn refs(&self) -> &super::super::ref_state::RefStateIndex {
+        &self.refs
     }
     pub fn input_stats(&self) -> super::super::directory::index::ReadStats {
         self.inputs.stats()

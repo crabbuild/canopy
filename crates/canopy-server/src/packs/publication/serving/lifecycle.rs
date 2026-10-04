@@ -125,6 +125,22 @@ impl ServingSnapshot {
     ) -> Result<Vec<Option<crate::packs::metadata::ObjectHeader>>, ServingReadError> {
         self.pin.headers(self.actor.clone(), ids).await
     }
+    pub async fn resolve_ref(
+        &self,
+        reference: Option<&str>,
+    ) -> Result<ResolvedServingRef, ServingReadError> {
+        self.pin.resolve_ref(self.actor.clone(), reference).await
+    }
+    pub async fn refs_page(
+        &self,
+        after: &str,
+        generation: Option<i64>,
+        live_only: bool,
+    ) -> Result<crate::refs::RefPage, ServingReadError> {
+        self.pin
+            .refs_page(self.actor.clone(), after, generation, live_only)
+            .await
+    }
 }
 enum Original {
     Command(Arc<ReadyServingCommand>),

@@ -1,7 +1,7 @@
 //! Bounded pooling and actual lifecycle ownership, including head races.
 use super::*;
 
-fn pooled(
+pub(super) fn pooled(
     f: &Fixture,
     store: Arc<ArtifactStore>,
     root: &tempfile::TempDir,
@@ -28,7 +28,7 @@ fn pooled(
         ServingPoolLimits::default(),
     )?)
 }
-fn queue(f: &Fixture) -> Result<PublicationCoordinator> {
+pub(super) fn queue(f: &Fixture) -> Result<PublicationCoordinator> {
     Ok(PublicationCoordinator::new(
         f.target.clone(),
         PublicationLimits::default(),
@@ -40,7 +40,7 @@ async fn advance(f: &Fixture, generation: u64) -> Result {
     // native publication, changing Git content, or a full-history benchmark.
     edit(f, &format!("INSERT INTO catalog_generations(generation,catalog,certificate,refs) SELECT {generation},catalog,certificate,refs FROM catalog_generations WHERE generation=1; UPDATE catalog_state SET generation={generation} WHERE singleton=1")).await
 }
-async fn finish(
+pub(super) async fn finish(
     f: &Fixture,
     pool: &ServingPool,
     q: &PublicationCoordinator,

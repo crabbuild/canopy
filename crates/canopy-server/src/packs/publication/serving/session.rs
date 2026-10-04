@@ -12,6 +12,9 @@ use std::sync::Mutex;
 use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 mod handoff;
+mod reads;
+mod refs;
+pub use refs::ResolvedServingRef;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServingReadError {
@@ -21,6 +24,12 @@ pub enum ServingReadError {
     Inactive,
     #[error("invalid serving context or budget")]
     Context,
+    #[error("serving refs changed while reading pages")]
+    Changed,
+    #[error("serving ref snapshot failed")]
+    RefSnapshot(#[from] crate::packs::ref_state::RefSnapshotError),
+    #[error("serving ref index failed")]
+    Refs(#[from] crate::packs::ref_state::RefStateError),
     #[error("serving authority failed")]
     Authority(#[from] PreparationBaseError),
     #[error("serving query failed")]
@@ -219,6 +228,7 @@ struct Inner {
     state: Mutex<Workers>,
     changed: Notify,
     reader: tokio::sync::Mutex<Option<Arc<CatalogReader>>>,
+    refs: tokio::sync::OnceCell<crate::packs::ref_state::RefStateSnapshot>,
     release: tokio::sync::Mutex<Option<ReleaseCommand>>,
 }
 #[derive(Default)]
@@ -294,6 +304,7 @@ impl ServingPin {
                         state: Mutex::new(Workers::default()),
                         changed: Notify::new(),
                         reader: tokio::sync::Mutex::new(None),
+                        refs: tokio::sync::OnceCell::new(),
                         release: tokio::sync::Mutex::new(None),
                     }),
                 })
@@ -321,66 +332,29 @@ impl ServingPin {
         {
             return Err(ServingReadError::Context);
         }
-        if self.inner.context.budget.inner.stop.is_cancelled() {
-            return Err(ServingReadError::Inactive);
-        }
-        let scope = actor
-            .as_deref()
-            .map_or(ReadIdentity::Anonymous, ReadIdentity::Account);
-        let permit = self
-            .inner
-            .context
-            .budget
-            .inner
-            .admission
-            .acquire(scope)
-            .await?;
-        let guard = {
-            let mut state = self.inner.state.lock().expect("serving workers");
-            if state.closed {
+        let ids = ids.to_vec();
+        self.read_owned(actor, move |inner, deadline| async move {
+            let reader = {
+                let mut reader = inner.reader.lock().await;
+                if reader.is_none() {
+                    *reader = Some(Arc::new(
+                        CatalogReader::open(
+                            Arc::clone(&inner.context.indexes),
+                            inner.lease.fact.catalog.ok_or(ServingReadError::Context)?,
+                        )
+                        .await?,
+                    ));
+                }
+                Arc::clone(reader.as_ref().expect("opened serving catalog"))
+            };
+            if Instant::now() >= deadline {
                 return Err(ServingReadError::Inactive);
             }
-            state.active += 1;
-            Active(Arc::clone(&self.inner))
-        };
-        let ids = ids.to_vec();
-        let inner = Arc::clone(&self.inner);
-        self.inner
-            .context
-            .budget
-            .inner
-            .tasks
-            .spawn(async move {
-                let (_permit, _guard) = (permit, guard);
-                let (_, deadline) = inner.observe(actor.clone()).await?;
-                let reader = {
-                    let mut reader = inner.reader.lock().await;
-                    if reader.is_none() {
-                        *reader = Some(Arc::new(
-                            CatalogReader::open(
-                                Arc::clone(&inner.context.indexes),
-                                inner.lease.fact.catalog.ok_or(ServingReadError::Context)?,
-                            )
-                            .await?,
-                        ));
-                    }
-                    Arc::clone(reader.as_ref().expect("opened serving catalog"))
-                };
-                // Never time out by dropping owned metadata/SQLite work. Expiry
-                // stops serving its result; the pin remains until explicit drain.
-                if Instant::now() >= deadline {
-                    return Err(ServingReadError::Inactive);
-                }
-                let headers = reader
-                    .headers(&ids, &*inner.context.files, &*inner.context.files)
-                    .await?;
-                inner.observe(actor).await?;
-                if Instant::now() >= deadline {
-                    return Err(ServingReadError::Inactive);
-                }
-                Ok(headers)
-            })
-            .await?
+            Ok(reader
+                .headers(&ids, &*inner.context.files, &*inner.context.files)
+                .await?)
+        })
+        .await
     }
     /// Own the exact renewal and its drain guard before yielding to a caller.
     /// The coordinator retains both across held/unknown states and transport loss.
