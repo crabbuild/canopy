@@ -14,6 +14,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | You want to… | Start with |
 | --- | --- |
 | Understand the storage model | [How Canopy stores a repository](#how-canopy-stores-a-repository) |
+| Trace architecture and control flow | [Canopy and Cellule architecture atlas](diagram/canopy-architecture/README.md) |
 | Navigate the Rust crates | [Rust workspace](docs/workspace.md) |
 | Run a development node | [Run a local node](#run-a-local-node) |
 | Start an isolated local server and test a Kubernetes-sized repository | [Local evaluation and real-repository benchmark](deploy/local-evaluation.md) |

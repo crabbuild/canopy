@@ -28,6 +28,8 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 
 ## Understand where data lives
 
+For the full component map and request, push, read and recovery flows, open the [Canopy and Cellule architecture atlas](../diagram/canopy-architecture/README.md). It includes nine diagrams with standalone SVG/PNG exports and separates the active serving architecture from incomplete packed-storage integration.
+
 The Directory Cell resolves names and accounts. Each repository has its own Repository Cell, which owns the durable Git and collaboration state. Native Git uses a disposable cache for wire protocols. Large Git blobs and Git LFS bodies live in immutable object-store objects referenced by the repository's SQLite state.
 
 ![Canopy gateway, Directory Cell, Repository Cell, object store and disposable Git cache](architecture.svg)

@@ -1,0 +1,111 @@
+[
+  {
+    "slug": "01-system-overview",
+    "title": "Canopy system architecture",
+    "explanation": "Canopy is an embedded Cellule application. Public ingress and native Git run in Canopy, while each durable Directory or Repository Cell has one fenced owner. A receiving node may call a remote owner. The object store holds authority records, SQLite recovery roots and product body objects. Native Git caches are disposable.",
+    "sources": [
+      "crates/canopy-server/src/server/mod.rs",
+      "crates/canopy-server/src/server/residency/mod.rs",
+      "crates/canopy-server/src/git_gateway/mod.rs",
+      "crates/canopy-server/src/lib.rs",
+      "crates/canopy-server/src/schema.sql"
+    ]
+  },
+  {
+    "slug": "02-canopy-on-cellule",
+    "title": "How Canopy models its domain on Cellule",
+    "explanation": "CanopyApplication registers DirectoryModule and RepositoryModule as SQL Cell types. Directory uses a fixed shard; repository UUIDs derive entity partitions. Product wrappers hold typed SqlCell handles. Cellule owns execution and persistence mechanics, and Canopy owns protocols and authorization. Other framework primitives are available but are not composed into Canopy Repository Cells.",
+    "sources": [
+      "crates/canopy-server/src/lib.rs",
+      "crates/canopy-server/src/directory/mod.rs",
+      "crates/canopy-server/Cargo.toml",
+      "docs/repository-cell-primitives.md"
+    ]
+  },
+  {
+    "slug": "03-durable-command",
+    "title": "Cellule command execution and durability",
+    "explanation": "This is the object-store durability path assembled by Canopy. The Cell owner records domain state and the request outcome together, captures SQLite through LTX and publishes the exact root using a fenced conditional authority update. Only then does the caller receive Committed and a receipt. A Cellule follower-log mode exists, but this diagram does not claim Canopy enables it.",
+    "sources": [
+      "crates/canopy-server/src/server/mod.rs",
+      "crates/canopy-server/src/lib.rs"
+    ]
+  },
+  {
+    "slug": "04-request-routing",
+    "title": "Request routing and repository residency",
+    "explanation": "Directory state authenticates accounts and resolves ready repository names. RepositoryManager binds a stable target to either a local actor or a signed peer client. Cold transitions are admitted and supervised; remote-owner loss triggers acquisition on demand. Repository authorization is checked using current durable state. Response pins prevent eviction during streaming.",
+    "sources": [
+      "crates/canopy-server/src/server/residency/mod.rs",
+      "crates/canopy-server/src/server/peer.rs",
+      "crates/canopy-server/src/repository_http/authorization.rs",
+      "crates/canopy-server/src/server/discovery.rs"
+    ]
+  },
+  {
+    "slug": "05-git-push",
+    "title": "Git push from wire input to durable refs",
+    "explanation": "After outer authentication, GitGateway spools and hashes the encoded request and binds a logical push ID to the actor and digest. It can replay a completed push before decoding and native work. New attempts prepare a private ref snapshot, run receive-pack, ingest canonical objects, certify graph closure and stage the report and ref plan. CompletePush checks current policy and expected ref versions and commits accepted refs with the canonical response pointer. Cellule gates acknowledgement on durable publication.",
+    "sources": [
+      "crates/canopy-server/src/git_gateway/mod.rs",
+      "crates/canopy-server/src/git_gateway/preflight.rs",
+      "crates/canopy-server/src/git_gateway/push.rs",
+      "crates/canopy-server/src/push/mod.rs",
+      "crates/canopy-server/src/refs.rs"
+    ]
+  },
+  {
+    "slug": "06-read-and-lfs",
+    "title": "Fetch, browse and Git LFS data paths",
+    "explanation": "Fetch takes consistent refs, validates requested object reachability, hydrates selected verified objects and uses native upload-pack to stream the wire response. Browser APIs read through Cell metadata and verified body readers. LFS uploads first publish and verify immutable bytes, then commit authorized metadata; downloads verify manifest-bound parts. The active serving schema supports inline, chunked, external and packed storage records, distinct from the incomplete immutable catalog replacement.",
+    "sources": [
+      "crates/canopy-server/src/git_gateway/fetch.rs",
+      "crates/canopy-server/src/git_gateway/hydration.rs",
+      "crates/canopy-server/src/git_gateway/discovery.rs",
+      "crates/canopy-server/src/git_read/mod.rs",
+      "crates/canopy-server/src/lfs/upload.rs",
+      "crates/canopy-server/src/lfs/read.rs",
+      "crates/canopy-server/src/schema.sql"
+    ]
+  },
+  {
+    "slug": "07-owner-recovery",
+    "title": "Owner lifecycle and exact recovery",
+    "explanation": "Canopy locks its local runtime workspace, verifies storage capabilities, validates the selected release and enrolls a signed node lease before serving. New or cold Cells bootstrap, acquire idle authority or fence an expired owner and restore the authority-pinned SQLite root. Recovery preserves the request outcome ledger. Native caches rebuild afterward. Shutdown and maintenance supervise all admitted work; backup copies durable roots and referenced external bodies into an independent prefix.",
+    "sources": [
+      "crates/canopy-server/src/server/mod.rs",
+      "crates/canopy-server/src/server/lifecycle.rs",
+      "crates/canopy-server/src/server/workspace/mod.rs",
+      "crates/canopy-server/src/deployment/recovery.rs",
+      "crates/canopy-server/src/deployment/backup/mod.rs",
+      "docs/operations.md"
+    ]
+  },
+  {
+    "slug": "08-domain-and-policy",
+    "title": "Repository components and collaboration control",
+    "explanation": "The Repository Cell colocates Git refs and graph metadata with ACLs, visibility, issues, PRs, reviews, line threads, check attempts, branch rules and operation outcomes. Merge preparation may run native Git outside the authority boundary, but MergePull rechecks current exact revisions, policy and required evidence before atomically changing the branch and PR state. Directory and Repository state remain separate Cells.",
+    "sources": [
+      "crates/canopy-server/src/schema.sql",
+      "crates/canopy-server/src/pulls/merge/command.rs",
+      "crates/canopy-server/src/pulls/candidates/mod.rs",
+      "crates/canopy-server/src/branch_rules/command.rs",
+      "crates/canopy-server/src/server/discovery.rs"
+    ]
+  },
+  {
+    "slug": "09-packed-storage-evolution",
+    "title": "Packed storage evolution and remaining integration",
+    "explanation": "The current product still uses per-object SQL authority, with an active archived-pack optimization. The new subsystem moves canonical inventories, graph metadata, ref snapshots and exact outcomes into verified immutable artifacts and short Cell publication commands. Preparation, publication dispatch, certificates, policy pages, recovery records and readers exist, but the full serving path is not registered and the hard cutover remains incomplete. Multi-capability repository Cells are a separate proposal.",
+    "sources": [
+      "crates/canopy-server/src/packs/publication/mod.rs",
+      "crates/canopy-server/src/packs/publication/coordinator.rs",
+      "crates/canopy-server/src/packs/catalog/mod.rs",
+      "crates/canopy-server/src/packs/directory/mod.rs",
+      "crates/canopy-server/src/packs/ref_state/mod.rs",
+      "docs/large-repository-implementation-status.md",
+      "docs/large-team-scalability.md",
+      "docs/repository-cell-primitives.md"
+    ]
+  }
+]
