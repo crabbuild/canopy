@@ -6,10 +6,11 @@ use crate::{
         metadata::MetadataLimits,
         publication::{
             BeginRequest, CatalogPreparation, CheckInitializedCatalog, CheckPreparation,
-            CustodyAction, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
-            LeaseRequest, MaintenanceRequest, PreparationAuthority, PreparationBaseResolver,
-            PreparationDenial, PreparationReply, PreparationToken, PreparedCustody,
-            PublicationError, RegisteredCustody, RegisteredRootRecovery, TerminalReleaseReply,
+            CustodyAction, CustodyError, DEFAULT_LEASE_MS, GenerationFact, InitializationReply,
+            LeaseCheck, LeaseRequest, MaintenanceRequest, PreparationAuthority,
+            PreparationBaseResolver, PreparationDenial, PreparationReply, PreparationToken,
+            PreparedCustody, PublicationError, RegisteredCustody, RegisteredRootRecovery,
+            TerminalReleaseReply,
         },
     },
 };
@@ -158,7 +159,7 @@ pub(super) async fn ensure(
     };
     // Discover the exact latest custody phase before constructing another SDK
     // identity. Both accepted and denied Begin/Claim/Renew survive process loss.
-    let custody = RegisteredCustody::load_latest(&client, target, input.operation).await?;
+    let custody = startup_head(&client, target, &input, &authority).await?;
     let refused_attempt = claim.as_ref().map(|check| check.token);
     let action = if let Some(check) = claim {
         CustodyAction::ClaimPreparation(LeaseRequest {
@@ -168,10 +169,28 @@ pub(super) async fn ensure(
     } else {
         CustodyAction::BeginPreparation(input.clone())
     };
-    let result = if let Some(ref custody) = custody {
-        if !initialization_custody(&custody.action()?, &input) {
-            return Err(Error::Command("initialization custody context differs").into());
+    if let Some(ref custody) = custody
+        && !initialization_custody(&custody.action()?, &input)
+    {
+        return Err(Error::Command("initialization custody context differs").into());
+    }
+    // A stop closes registration, not execution: never manufacture a receipt or
+    // denial for the original. Observe the current operation after the separate
+    // authenticated stop receipt, then let the new receiver authorize a successor.
+    let stopped = custody.as_ref().and_then(RegisteredCustody::stop_fact);
+    let action = if let Some(stopped) = stopped {
+        match observed_attempt(&client, repository, &input, stopped.receipt).await? {
+            Some(check) => CustodyAction::ClaimPreparation(LeaseRequest {
+                check,
+                lease_ms: DEFAULT_LEASE_MS,
+            }),
+            None => CustodyAction::BeginPreparation(input.clone()),
         }
+    } else {
+        action
+    };
+    let replay = custody.as_ref().filter(|saved| saved.stop_fact().is_none());
+    let result = if let Some(custody) = replay {
         custody
             .recover_preparation(&client)
             .await
@@ -192,8 +211,7 @@ pub(super) async fn ensure(
                     PreparationReply::Denied(PreparationDenial::Stale | PreparationDenial::Expired)
                 )
             {
-                let prior = custody
-                    .as_ref()
+                let prior = replay
                     .map(RegisteredCustody::action)
                     .transpose()?
                     .unwrap_or(action);
@@ -331,6 +349,55 @@ pub(super) async fn ensure(
     Ok(())
 }
 
+/// Already owned by the account-bounded, tracked cold transition. No background
+/// outbox or new native work is introduced; ambiguous original outcomes retain
+/// their exact identity, and only receiver-accepted closure permits a successor.
+async fn startup_head(
+    client: &CellClient,
+    target: &cellule_runtime::CellTarget,
+    input: &BeginRequest,
+    authority: &PreparationAuthority,
+) -> Result<Option<RegisteredCustody>, Failure> {
+    let Some(saved) = RegisteredCustody::load_latest(client, target, input.operation).await? else {
+        return Ok(None);
+    };
+    if !initialization_custody(&saved.action()?, input) {
+        return Err(Error::Command("initialization custody context differs").into());
+    }
+    if saved.closed() || saved.evidence().identity().expires_at_ms >= super::unix_now_ms()? {
+        return Ok(Some(saved));
+    }
+    // Journal knowledge precedes SDK expiry. Never retire an already known
+    // grant/denial merely because this previously loaded DTO has no phase.
+    if !matches!(saved.recover_preparation(client).await,
+        Err(InvocationError::Pending(ref evidence)) if **evidence == *saved.evidence())
+    {
+        return Ok(Some(saved));
+    }
+    match saved
+        .ready_stop(client.clone(), super::mutation_identity()?, authority)
+        .await
+    {
+        Ok(ready) => {
+            let outcome = ready.complete_tracked().await?;
+            if outcome.original != *saved.evidence() {
+                return Err(Error::Command("initialization retirement original differs").into());
+            }
+        }
+        Err(CustodyError::Stopped(_)) => {} // Another helper already recorded closure.
+        Err(error) => return Err(error.into()),
+    }
+    let current = RegisteredCustody::load_latest(client, target, input.operation)
+        .await?
+        .ok_or(Error::Command("initialization custody disappeared"))?;
+    if !initialization_custody(&current.action()?, input)
+        || (current.evidence() == saved.evidence() && !current.closed())
+    {
+        return Err(Error::Command("initialization retirement not established").into());
+    }
+    Ok(Some(current))
+}
+
 async fn verify_and_retire(
     repository: &RepositoryCell,
     client: &CellClient,
@@ -386,25 +453,80 @@ async fn prior_attempt(
     input: &BeginRequest,
     minimum: Receipt,
 ) -> Result<LeaseCheck, Failure> {
+    observed_attempt(client, repository, input, minimum)
+        .await?
+        .ok_or_else(|| Error::Command("prior initialization attempt absent").into())
+}
+async fn observed_attempt(
+    client: &CellClient,
+    repository: &RepositoryCell,
+    input: &BeginRequest,
+    minimum: Receipt,
+) -> Result<Option<LeaseCheck>, Failure> {
     let sql = SqlCell::<RepositoryModule>::new(client.clone(), repository.target.clone())?;
     let observed = sql.query(Some(minimum), SqlBatch { statements: vec![SqlStatement {
-        sql: "SELECT o.incarnation,o.owner_epoch,o.admission_sequence,o.artifact_operation FROM catalog_operations o JOIN repository_identity r ON r.singleton=1 WHERE o.id=?1 AND o.actor=?2 AND o.request_digest=?3 AND o.generation=0 AND r.owner=?2 AND r.repository_id=?4 AND r.object_format=?5".into(),
-        parameters: vec![SqlValue::Blob(input.operation.to_vec()), SqlValue::Text(input.actor.clone()), SqlValue::Blob(input.request_digest.to_vec()), SqlValue::Blob(repository.id.to_vec()), SqlValue::Text(repository.object_format.as_str().into())],
+        sql: "SELECT r.repository_id,r.object_format,r.owner,o.actor,o.request_digest,o.generation,o.incarnation,o.owner_epoch,o.admission_sequence,o.artifact_operation FROM repository_identity r LEFT JOIN catalog_operations o ON o.id=?1 WHERE r.singleton=1".into(),
+        parameters: vec![SqlValue::Blob(input.operation.to_vec())],
     }] }).await?;
-    let Some([incarnation, epoch, SqlValue::Integer(sequence), operation]) = observed
+    let Some(
+        [
+            SqlValue::Blob(id),
+            SqlValue::Text(format),
+            SqlValue::Text(owner),
+            actor,
+            digest,
+            generation,
+            incarnation,
+            epoch,
+            sequence,
+            operation,
+        ],
+    ) = observed
         .output
         .first()
         .and_then(|set| set.rows.first())
         .map(Vec::as_slice)
     else {
-        return Err(Error::Command("prior initialization attempt absent").into());
+        return Err(Error::Command("initialization identity absent or malformed").into());
     };
+    if id.as_slice() != repository.id
+        || format != repository.object_format.as_str()
+        || owner != &input.actor
+    {
+        return Err(Error::Command("initialization identity differs").into());
+    }
+    if [
+        actor,
+        digest,
+        generation,
+        incarnation,
+        epoch,
+        sequence,
+        operation,
+    ]
+    .iter()
+    .all(|value| matches!(value, SqlValue::Null))
+    {
+        return Ok(None);
+    }
+    let (
+        SqlValue::Text(actor),
+        SqlValue::Blob(digest),
+        SqlValue::Integer(0),
+        SqlValue::Integer(sequence),
+    ) = (actor, digest, generation, sequence)
+    else {
+        return Err(Error::Command("prior initialization binding malformed").into());
+    };
+    if actor != &input.actor || digest.as_slice() != input.request_digest {
+        return Err(Error::Command("prior initialization binding differs").into());
+    }
     let attempt = u64::try_from(*sequence)
         .map_err(|_| Error::Command("invalid prior initialization sequence"))?;
     if attempt == 0 {
         return Err(Error::Command("invalid prior initialization sequence").into());
     }
-    Ok(LeaseCheck {
+    Ok(Some(LeaseCheck {
         actor: input.actor.clone(),
         token: PreparationToken {
             repository: repository.id,
@@ -417,5 +539,8 @@ async fn prior_attempt(
             attempt,
             artifact_operation: fixed(operation)?,
         },
-    })
+    }))
 }
+
+#[cfg(test)]
+mod tests;

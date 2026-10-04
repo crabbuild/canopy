@@ -367,11 +367,26 @@ impl ReadyCustodyStop {
         }
         Ok(saved.stopped)
     }
+    /// The repository's admitted, cancellation-owned cold transition may retire
+    /// its one initialization head without starting a separate discovery task.
+    /// This does not authorize native work or discard the original's evidence.
+    pub(crate) async fn complete_tracked(self) -> Result<CustodyStopOutcome, PublicationError> {
+        self.complete_exact(false, 0).await
+    }
     pub(in crate::packs::publication) async fn dispatch(
         self,
         recover: bool,
         fault: u8,
     ) -> Result<PublicationOutcome, PublicationError> {
+        self.complete_exact(recover, fault)
+            .await
+            .map(|outcome| PublicationOutcome::CustodyStop(Box::new(outcome)))
+    }
+    async fn complete_exact(
+        self,
+        recover: bool,
+        fault: u8,
+    ) -> Result<CustodyStopOutcome, PublicationError> {
         let saved = self
             .recorded()
             .await
@@ -416,14 +431,12 @@ impl ReadyCustodyStop {
             }
             (saved.map(|value| value.fact(&self.target)), Some(committed))
         };
-        Ok(PublicationOutcome::CustodyStop(Box::new(
-            CustodyStopOutcome {
-                original: self.original,
-                invocation,
-                stop,
-                committed,
-            },
-        )))
+        Ok(CustodyStopOutcome {
+            original: self.original,
+            invocation,
+            stop,
+            committed,
+        })
     }
     #[cfg(test)]
     pub(in crate::packs::publication) fn input_for_test(

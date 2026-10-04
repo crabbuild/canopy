@@ -25,7 +25,7 @@ impl PreparationAuthority {
         }
     }
     #[cfg(test)]
-    pub(super) fn local(layout: cellule_ltx::CellStorageLayout, target: CellTarget) -> Self {
+    pub(crate) fn local(layout: cellule_ltx::CellStorageLayout, target: CellTarget) -> Self {
         Self {
             target,
             source: Source::Local(std::sync::Arc::new(
