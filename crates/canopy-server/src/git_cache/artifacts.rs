@@ -6,6 +6,7 @@ use canopy_object_storage::artifact::{ArtifactKind, ArtifactStore};
 struct Writer {
     file: File,
     _cache: Arc<GitCache>,
+    _owner: crate::git_objects::ReadOwner,
 }
 impl GitCache {
     /// The isolated verifier calls this exactly once on its fresh private cache.
@@ -16,6 +17,16 @@ impl GitCache {
         store: &ArtifactStore,
         descriptor: NativePackDescriptor,
     ) -> Result<(), MetadataError> {
+        self.download_native_owned(store, descriptor, Arc::new(()))
+            .await
+    }
+
+    pub(crate) async fn download_native_owned(
+        self: &Arc<Self>,
+        store: &ArtifactStore,
+        descriptor: NativePackDescriptor,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), MetadataError> {
         descriptor
             .validate(store.repository(), self.object_format)
             .map_err(|_| MetadataError::Integrity)?;
@@ -23,7 +34,9 @@ impl GitCache {
             return Err(MetadataError::Integrity);
         }
         let cache = Arc::clone(self);
+        let admission = Arc::clone(&owner);
         tokio::task::spawn_blocking(move || {
+            let _owner = admission;
             let size = descriptor
                 .pack
                 .size
@@ -38,6 +51,7 @@ impl GitCache {
             (ArtifactKind::Index, descriptor.index, "idx"),
         ] {
             let cache = Arc::clone(self);
+            let admission = Arc::clone(&owner);
             let mut writer = tokio::task::spawn_blocking(move || {
                 let path = cache.git_dir().join(format!(
                     "objects/pack/pack-{}.{}",
@@ -47,6 +61,7 @@ impl GitCache {
                 Ok::<_, MetadataError>(Writer {
                     file: File::create_new(path)?,
                     _cache: cache,
+                    _owner: admission,
                 })
             })
             .await??;

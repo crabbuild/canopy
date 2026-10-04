@@ -8,6 +8,7 @@ pub(super) struct Cleanup {
     pub(super) path: PathBuf,
     pub(super) reservation: Option<DiskReservation>,
     pub(super) objects: Option<Arc<GitCache>>,
+    pub(super) owner: Option<crate::git_objects::ReadOwner>,
 }
 
 impl Cleanup {
@@ -45,6 +46,7 @@ impl Cleanup {
                         // Successful removal permits normal field teardown.
                         self.reservation.take();
                         self.objects.take();
+                        self.owner.take();
                     }).await;
                     return;
                 }
@@ -67,6 +69,9 @@ impl Drop for Cleanup {
         // uncharged or invalidate an orphan worker's borrowed alternate.
         if let Some(reservation) = self.reservation.take() {
             std::mem::forget(reservation);
+        }
+        if let Some(owner) = self.owner.take() {
+            std::mem::forget(owner);
         }
         if let Some(objects) = self.objects.take() {
             std::mem::forget(objects);

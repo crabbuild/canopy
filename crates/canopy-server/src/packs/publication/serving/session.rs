@@ -11,6 +11,7 @@ use cellule_runtime::{Committed, InvocationError, Receipt, primitives::sql::SqlC
 use std::sync::Mutex;
 use tokio::{sync::Notify, time::Instant};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+mod body;
 mod handoff;
 mod reads;
 mod refs;
@@ -44,6 +45,10 @@ pub enum ServingReadError {
     Custody(#[source] Box<CustodyError>),
     #[error("serving encoding failed")]
     Codec(#[from] CodecError),
+    #[error("serving body exceeds its read limit")]
+    TooLarge,
+    #[error("serving native body failed")]
+    Native(#[from] crate::packs::catalog::NativeReadError),
     #[error("serving worker failed")]
     Task(#[from] tokio::task::JoinError),
     #[error("serving release proof query failed")]
@@ -334,19 +339,7 @@ impl ServingPin {
         }
         let ids = ids.to_vec();
         self.read_owned(actor, move |inner, deadline| async move {
-            let reader = {
-                let mut reader = inner.reader.lock().await;
-                if reader.is_none() {
-                    *reader = Some(Arc::new(
-                        CatalogReader::open(
-                            Arc::clone(&inner.context.indexes),
-                            inner.lease.fact.catalog.ok_or(ServingReadError::Context)?,
-                        )
-                        .await?,
-                    ));
-                }
-                Arc::clone(reader.as_ref().expect("opened serving catalog"))
-            };
+            let reader = inner.catalog().await?;
             if Instant::now() >= deadline {
                 return Err(ServingReadError::Inactive);
             }
@@ -475,6 +468,19 @@ impl ServingPin {
     }
 }
 impl Inner {
+    async fn catalog(&self) -> Result<Arc<CatalogReader>, ServingReadError> {
+        let mut reader = self.reader.lock().await;
+        if reader.is_none() {
+            *reader = Some(Arc::new(
+                CatalogReader::open(
+                    Arc::clone(&self.context.indexes),
+                    self.lease.fact.catalog.ok_or(ServingReadError::Context)?,
+                )
+                .await?,
+            ));
+        }
+        Ok(Arc::clone(reader.as_ref().expect("opened serving catalog")))
+    }
     async fn observe(&self, actor: Option<String>) -> Result<(Receipt, Instant), ServingReadError> {
         let ctx = &self.context;
         ctx.authority

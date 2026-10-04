@@ -125,6 +125,13 @@ impl ServingSnapshot {
     ) -> Result<Vec<Option<crate::packs::metadata::ObjectHeader>>, ServingReadError> {
         self.pin.headers(self.actor.clone(), ids).await
     }
+    pub async fn body(
+        &self,
+        oid: crate::ObjectId,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>, ServingReadError> {
+        self.pin.body(self.actor.clone(), oid, limit).await
+    }
     pub async fn resolve_ref(
         &self,
         reference: Option<&str>,

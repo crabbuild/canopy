@@ -194,6 +194,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads/mod.rs"));
                 source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
+                source.update(include_bytes!("git_cache/artifacts.rs"));
+                source.update(include_bytes!("git_cache/cleanup.rs"));
+                source.update(include_bytes!("git_cache/mod.rs"));
+                source.update(include_bytes!("packs/catalog/native.rs"));
+                source.update(include_bytes!("packs/catalog/files.rs"));
                 source.update(include_bytes!("native_resources.rs"));
                 source.update(include_bytes!("native_git.rs"));
                 source.update(include_bytes!("native_git/process.rs"));
@@ -301,6 +306,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/serving/command_owner.rs"));
                 source.update(include_bytes!("packs/publication/serving/session.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/reads.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/body.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/refs.rs"));
                 source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
                 source.update(include_bytes!("packs/publication/serving/pool.rs"));

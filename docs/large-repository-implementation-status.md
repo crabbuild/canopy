@@ -3,7 +3,7 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. At the preceding published shutdown-fix head `1e32347`, GitHub reports
+directly against `main`. At the preceding published ref-reader head `b89d929`, GitHub reports
 no merge conflicts; both Rust CI runs fail on the same five unconverted
 legacy `objects` readers and both harness checks pass. The PR is currently marked
 ready for review, but production conversion and release requirements remain
@@ -13,6 +13,50 @@ notes describe their historical states, not the current publication state.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Certified native object body checkpoint
+
+`ServingSnapshot::body` now resolves an object through the accepted catalog and
+verified preferred source. It returns absent for entries missing from that
+catalog even if a reused pack physically contains the object. Foreground copies
+are bounded to 64 MiB and must match canonical kind, size, Git OID and BLAKE3
+body digest; incomplete or corrupt batch frames poison the reader.
+
+Resident file services share authenticated, verified native pack copies across
+generations, coalesce cold misses with sixteen fixed stripes, and charge at most
+eight live file slots with four cached copies. Borrowed/evicted files and native
+processes retain slots. Idle cache eviction can relieve shared disk pressure;
+retention follows deferred/failed cleanup. Native work uses the node's shared
+foreground scope. Physical generation guards survive blocking creation, transfer,
+verification and hashing, plus process descendants/reaping after cancellation.
+Idle cache files retain file/root charges, not generation pins.
+
+The [serving contract](design/certified-serving-pins.md#certified-bounded-native-body-reads)
+defines these bounds. Actual pack fixtures cover both formats, parallel reuse,
+metadata/body integrity, disk-pressure eviction, live slot exhaustion, generation
+isolation, current access after cached/in-flight reads, canceled provider work,
+and process ownership. Their catalog installation is trusted fixture injection
+to isolate serving behavior; this is not producer/publication qualification.
+All 97 focused serving/cache/native families pass in 26.35 seconds on the final
+source. Workspace/all-target Clippy with warnings denied passes in 38.39 seconds.
+The workspace library runs 689 unique cases: 684 pass and the same five legacy
+`objects` readers fail. All 385 publication cases pass. Nine selected portable
+workspace/lifecycle cases pass, giving 698 unique Rust cases, 693 passes and five
+failures; nested subprocess summaries and focused reruns are not counted twice.
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+The driver retains the actual library exit 101. Linux-only fork cases were not
+executed locally. Commands, source fingerprint and log digests are retained in
+[native body evidence](evidence/serving-native-bodies-20261004.json). The frozen
+inventory contains 478 source/schema/manifest files, including 464 Rust files.
+Exact SDK pins and protected original index/archive remain unchanged.
+
+Browser/tree/file/history/graph consumers and remote routes still require
+conversion to this API. Streaming larger bodies, a complete graph workspace for
+native history, persistent batch scheduling and cold-pack I/O optimization remain
+open. One private source pack is not necessarily a complete Git history workspace.
+Full producer/reader conversion, physical owner adoption, custody archival,
+final DDL, GC/backup/restore, OS containment, native maintenance, signed completion,
+attribution and full-history/large-team capacity qualification remain mandatory.
 
 ## Certified browser ref reads checkpoint
 

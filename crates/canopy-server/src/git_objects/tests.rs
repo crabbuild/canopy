@@ -342,3 +342,133 @@ async fn streamed_inspection_rejects_hash_mismatch_partial_bodies_bad_separators
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn verified_body_checks_catalog_fingerprint_size_kind_and_limit_for_both_formats()
+-> TestResult {
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let body = b"bounded canonical body";
+        let expected = crate::packs::metadata::CanonicalObject {
+            oid: object_id(format, ObjectKind::Blob, body),
+            kind: ObjectKind::Blob,
+            size: body.len() as u64,
+            digest: *blake3::hash(body).as_bytes(),
+        };
+        let frame = format!("{} blob {}\n", hex::encode(expected.oid), expected.size)
+            .into_bytes()
+            .into_iter()
+            .chain(body.iter().copied())
+            .chain(*b"\n")
+            .collect::<Vec<_>>();
+        let mut input = frame.as_slice();
+        let object = open_object(&mut input, expected.oid).await?;
+        assert_eq!(
+            object
+                .body_verified(expected, body.len(), std::sync::Arc::new(()))
+                .await?,
+            body
+        );
+        for variant in 0..4 {
+            let mut metadata = expected;
+            let mut limit = body.len();
+            match variant {
+                0 => metadata.digest[0] ^= 1,
+                1 => metadata.kind = ObjectKind::Tree,
+                2 => metadata.size += 1,
+                _ => limit -= 1,
+            }
+            let mut input = frame.as_slice();
+            let object = open_object(&mut input, expected.oid).await?;
+            assert!(
+                object
+                    .body_verified(metadata, limit, std::sync::Arc::new(()))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn verified_batch_reuses_only_complete_verified_frames_and_poison_refuses_finish()
+-> TestResult {
+    let directory = fixture().await?;
+    let blob = oid(directory.path(), "HEAD:file-0").await?;
+    let expected = crate::packs::metadata::CanonicalObject {
+        oid: blob,
+        kind: ObjectKind::Blob,
+        size: 3,
+        digest: *blake3::hash(b"0\0\n").as_bytes(),
+    };
+    let resources = crate::native_resources::NativeResources::default();
+    let scope = resources.scope(crate::native_resources::NativeClass::Foreground);
+    let mut reader = GitObjects::batch(&directory.path().join(".git"), &scope)?;
+    assert!(matches!(
+        reader.read_verified(expected, 2).await,
+        Err(ObjectReadError::TooLarge)
+    ));
+    assert_eq!(reader.read_verified(expected, 3).await?, b"0\0\n");
+    assert_eq!(reader.read_verified(expected, 3).await?, b"0\0\n");
+    reader.finish().await?;
+    let mut reader = GitObjects::batch(&directory.path().join(".git"), &scope)?;
+    let mut corrupt = expected;
+    corrupt.digest[0] ^= 1;
+    assert!(matches!(
+        reader.read_verified(corrupt, 3).await,
+        Err(ObjectReadError::Malformed)
+    ));
+    assert!(matches!(
+        reader.read_verified(expected, 3).await,
+        Err(ObjectReadError::Malformed)
+    ));
+    assert!(matches!(
+        reader.finish().await,
+        Err(ObjectReadError::Malformed)
+    ));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn owned_batch_cancellation_releases_owner_only_after_native_reaping() -> TestResult {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+    struct Owner {
+        pid: Arc<AtomicU32>,
+        released: tokio::sync::oneshot::Sender<bool>,
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            let pid = self.pid.load(Ordering::Acquire);
+            // SAFETY: signal zero only queries a PID assigned by this fixture.
+            let gone = unsafe { libc::kill(pid as i32, 0) } == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            let (unused, _) = tokio::sync::oneshot::channel();
+            let released = std::mem::replace(&mut self.released, unused);
+            let _ = released.send(gone);
+        }
+    }
+    let directory = fixture().await?;
+    let pid = Arc::new(AtomicU32::new(0));
+    let (released, observed) = tokio::sync::oneshot::channel();
+    let owner = Arc::new(Owner {
+        pid: Arc::clone(&pid),
+        released,
+    });
+    let reader = GitObjects::batch_owned(
+        &directory.path().join(".git"),
+        &crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground),
+        owner,
+    )?;
+    pid.store(
+        reader.batch.worker.child.id().ok_or("native PID")?,
+        Ordering::Release,
+    );
+    drop(reader);
+    assert!(timeout(Duration::from_secs(5), observed).await??);
+    Ok(())
+}

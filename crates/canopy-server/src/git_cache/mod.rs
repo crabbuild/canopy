@@ -50,11 +50,19 @@ pub(crate) enum ReceiveHook {
     PreReceive,
 }
 
+/// Creation work and retained file admission have different lifetimes. Only the
+/// cleanup charge belongs in an idle cached file; work may pin a generation.
+pub(crate) struct CacheOwnership {
+    pub(crate) work: crate::git_objects::ReadOwner,
+    pub(crate) cleanup: Option<crate::git_objects::ReadOwner>,
+}
+
 pub(crate) struct GitCache {
     pub(crate) object_format: crate::ObjectFormat,
     pub(crate) native: crate::native_resources::NativeScope,
     directory: tempfile::TempDir,
     reservation: Option<DiskReservation>,
+    cleanup_owner: Option<crate::git_objects::ReadOwner>,
     objects: Option<Arc<GitCache>>,
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
@@ -88,11 +96,36 @@ impl GitCache {
         objects: Option<Arc<GitCache>>,
         native: crate::native_resources::NativeScope,
     ) -> Result<Arc<Self>, CacheError> {
+        Self::create_owned(
+            root,
+            budget,
+            head,
+            object_format,
+            objects,
+            native,
+            CacheOwnership {
+                work: Arc::new(()),
+                cleanup: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn create_owned(
+        root: PathBuf,
+        budget: DiskBudget,
+        head: &str,
+        object_format: crate::ObjectFormat,
+        objects: Option<Arc<GitCache>>,
+        native: crate::native_resources::NativeScope,
+        owner: CacheOwnership,
+    ) -> Result<Arc<Self>, CacheError> {
         if !crate::default_branch::valid_default_branch(head) {
             return Err(CacheError::InvalidHead);
         }
         let head = format!("ref: {head}\n");
         tokio::task::spawn_blocking(move || {
+            let CacheOwnership { work: _owner, cleanup } = owner;
             let cache = Arc::new(Self {
                 object_format,
                 native,
@@ -100,6 +133,7 @@ impl GitCache {
                 // absolute even when the node's data directory is relative.
                 directory: tempfile::Builder::new().prefix(CACHE_PREFIX).tempdir_in(fs::canonicalize(root)?)?,
                 reservation: Some(budget.try_reserve(0)?),
+                cleanup_owner: cleanup,
                 objects,
                 object_writes: OnceLock::new(),
                 packed: RwLock::new(Vec::new()),
@@ -487,6 +521,7 @@ impl Drop for GitCache {
                     path: self.root().to_path_buf(),
                     reservation: self.reservation.take(),
                     objects: self.objects.take(),
+                    owner: self.cleanup_owner.take(),
                 }
                 .defer();
                 return;
@@ -501,6 +536,9 @@ impl Drop for GitCache {
             // must survive too, until startup fences every generation together.
             if let Some(objects) = self.objects.take() {
                 std::mem::forget(objects);
+            }
+            if let Some(owner) = self.cleanup_owner.take() {
+                std::mem::forget(owner);
             }
             // TempDir must not retry deletion after a worker fence rejected it.
             // Startup reclaims this directory once all descendants have exited.

@@ -33,8 +33,11 @@ pub enum ObjectReadError {
     Task(#[from] tokio::task::JoinError),
 }
 
+pub(crate) type ReadOwner = std::sync::Arc<dyn Send + Sync>;
+
 struct Process {
-    worker: crate::native_git::process::GitProcess<()>,
+    owner: ReadOwner,
+    worker: crate::native_git::process::GitProcess<ReadOwner>,
     output: BufReader<ChildStdout>,
     stderr: AbortOnDropHandle<Result<Vec<u8>, io::Error>>,
 }
@@ -44,6 +47,15 @@ impl Process {
         git_dir: &Path,
         args: &[&str],
         native: &crate::native_resources::NativeScope,
+    ) -> Result<(Self, ChildStdin), ObjectReadError> {
+        Self::start_owned(git_dir, args, native, std::sync::Arc::new(()))
+    }
+
+    fn start_owned(
+        git_dir: &Path,
+        args: &[&str],
+        native: &crate::native_resources::NativeScope,
+        owner: ReadOwner,
     ) -> Result<(Self, ChildStdin), ObjectReadError> {
         let mut command = crate::native_git::command(git_dir)?;
         command
@@ -55,7 +67,7 @@ impl Process {
             .stderr(Stdio::piped());
         let mut child = crate::native_git::process::GitProcess::spawn(
             command,
-            (),
+            std::sync::Arc::clone(&owner),
             native.try_admit(crate::native_resources::NativeWork::Read)?,
         )?;
         let input = child.child.stdin.take().ok_or(ObjectReadError::Malformed)?;
@@ -84,6 +96,7 @@ impl Process {
         }));
         Ok((
             Self {
+                owner,
                 worker: child,
                 output: BufReader::new(output),
                 stderr,
@@ -236,7 +249,18 @@ impl GitObjects {
         git_dir: &Path,
         native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
-        let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"], native)?;
+        Self::batch_owned(git_dir, native, std::sync::Arc::new(()))
+    }
+
+    /// Retain physical generation/cache admission through native descendants
+    /// and deferred reaping, including cancellation of the calling worker.
+    pub(crate) fn batch_owned(
+        git_dir: &Path,
+        native: &crate::native_resources::NativeScope,
+        owner: ReadOwner,
+    ) -> Result<Self, ObjectReadError> {
+        let (batch, requests) =
+            Process::start_owned(git_dir, &["cat-file", "--batch"], native, owner)?;
         Ok(Self {
             walk: None,
             inventory: None,
@@ -244,6 +268,34 @@ impl GitObjects {
             requests,
             inspection_failed: false,
         })
+    }
+
+    /// Bounded canonical body read. A canceled, rejected or corrupt response
+    /// poisons the batch; only a fully verified frame permits reuse.
+    pub(crate) async fn read_verified(
+        &mut self,
+        expected: crate::packs::metadata::CanonicalObject,
+        limit: usize,
+    ) -> Result<Vec<u8>, ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
+        if expected.size > limit as u64 {
+            return Err(ObjectReadError::TooLarge);
+        }
+        self.inspection_failed = true;
+        let owner = std::sync::Arc::clone(&self.batch.owner);
+        let object = timeout(IO_TIMEOUT, async {
+            self.requests
+                .write_all(format!("{}\n", hex::encode(expected.oid)).as_bytes())
+                .await?;
+            open_object(&mut self.batch.output, expected.oid).await
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)??;
+        let body = object.body_verified(expected, limit, owner).await?;
+        self.inspection_failed = false;
+        Ok(body)
     }
 
     /// Streams canonical hashing and typed structural extraction. Sink writes
@@ -453,6 +505,39 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
             return Err(ObjectReadError::Malformed);
         }
         Ok(())
+    }
+
+    async fn body_verified(
+        mut self,
+        expected: crate::packs::metadata::CanonicalObject,
+        limit: usize,
+        owner: ReadOwner,
+    ) -> Result<Vec<u8>, ObjectReadError> {
+        if self.oid != expected.oid || self.kind != expected.kind || self.size != expected.size {
+            return Err(ObjectReadError::Malformed);
+        }
+        if self.size > limit as u64 || self.size > isize::MAX as u64 {
+            return Err(ObjectReadError::TooLarge);
+        }
+        let mut body = Vec::new();
+        body.try_reserve_exact(self.size as usize)
+            .map_err(ObjectReadError::Allocation)?;
+        body.resize(self.size as usize, 0);
+        timeout(IO_TIMEOUT, self.reader.read_exact(&mut body))
+            .await
+            .map_err(|_| ObjectReadError::Timeout)??;
+        self.finish().await?;
+        // Do not drop a detached hash job's physical owner at an observer timeout.
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            if object_id(expected.oid.format(), expected.kind, &body) != expected.oid
+                || blake3::hash(&body).as_bytes() != &expected.digest
+            {
+                return Err(ObjectReadError::Malformed);
+            }
+            Ok(body)
+        })
+        .await?
     }
 
     pub(crate) async fn body(mut self) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {

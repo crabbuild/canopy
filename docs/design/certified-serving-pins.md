@@ -410,3 +410,50 @@ campaigns, typed GC/backup/isolated restore, OS CPU/RSS/I/O/PID containment, nat
 acceleration/physical rewrite/fair maintenance, signed native completion/cold clone,
 [file attribution](file-attribution.md), and full Linux/Kubernetes/Chromium plus
 10,000-SDE mixed-load/recovery/capacity qualification remain mandatory.
+
+## Certified bounded native body reads
+
+`ServingSnapshot::body(oid, limit)` resolves the object through its accepted
+catalog and preferred source before opening native Git. A missing catalog entry
+returns absent even when an old cached pack physically contains that OID. The
+foreground copy limit is at most 64 MiB; larger objects require a separate owned
+streaming producer rather than increasing this allocation without bounds.
+
+Each resident's configured `CatalogFiles` shares immutable native pack copies
+across borrowed generations. Sixteen fixed load stripes coalesce equal misses;
+at most four completed copies are cached and eight file slots are live,
+including borrowed/evicted copies and deferred cleanup. Idle copies can be
+removed to make room under the shared disk budget. Fully authenticated pack and
+index bytes are reserved before download, and their Git checksum/index binding
+is checked before they enter the cache. Whole-pack verification occurs on a
+bounded admitted blocking job, once per retained copy.
+
+A native body must match the selected canonical kind, size, Git object ID and
+BLAKE3 body digest. Header mismatches and limits reject before allocation. The
+batch is poisoned across an incomplete, canceled or invalid read and becomes
+reusable only after a complete verified frame. Native process ownership includes
+its physical-generation guard and cache reference through descendants and
+leader reaping. Blocking creation, writes and hashing also retain their work
+owners independently of observers. A cache's file-slot/root owner follows failed
+or deferred cleanup; its generation guard is not retained by the idle cache.
+
+Resident configuration uses the node's shared foreground native resource scope.
+A metadata-only loader has no implicit native resource pool and refuses body
+reads. Native cache statistics expose live/cached files, cache hits and completed
+downloads. Authorization and conservative lease checks still run before and
+after work through the common serving read contract.
+
+This API is a prerequisite for browser, graph and transfer conversion. Existing
+browser body/commit consumers and remote routes still require conversion; it is
+not evidence of completed native streaming, OS containment, publication or
+large-repository capacity. Pack reuse reduces repeated downloads, but each
+bounded body currently starts a native batch process. Shared persistent readers
+and multi-object batching require separate bounded scheduling and qualification.
+
+A private source pack can omit graph parents that reside in other certified
+sources. It is sufficient for verified object-body decoding, but is not by itself
+a complete native history workspace for `git log` or attribution. Such producers
+must hydrate the required graph through certified source selection and retain
+all physical inputs through their owned lifetime. Cold load still reads and
+verifies a full pack/index pair; these tests establish reuse and bounded ownership,
+not a cold-read latency guarantee for multi-gigabyte packs.

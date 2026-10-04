@@ -7,6 +7,7 @@ use cellule_ltx::DiskBudget;
 use cellule_runtime::{Committed, PreparedCommand};
 use tokio::time::{Duration, timeout};
 use tokio_util::task::TaskTracker;
+mod body;
 mod custody;
 mod lifecycle;
 mod pool;

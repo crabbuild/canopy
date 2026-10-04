@@ -62,7 +62,12 @@ impl RecoveryServices {
                             entry.object_format,
                             CatalogFileLimits::default(),
                         )
-                        .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                        .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?
+                        .with_native(
+                            manager
+                                .native
+                                .scope(crate::native_resources::NativeClass::Foreground),
+                        ),
                     ),
                     manager.serving_reads.clone(),
                     entry.owner.clone(),

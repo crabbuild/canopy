@@ -16,6 +16,8 @@ use canopy_object_storage::artifact::{
 use std::sync::Arc;
 
 mod codec;
+mod native;
+pub use native::{NativeFileStats, NativeReadError};
 mod files;
 pub use files::{CatalogFileLimits, CatalogFileStats, CatalogFiles, MAX_OPEN_CATALOG_FILES};
 mod reader;
