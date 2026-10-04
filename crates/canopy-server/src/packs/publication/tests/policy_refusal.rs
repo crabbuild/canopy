@@ -502,7 +502,7 @@ async fn owned_positive(
     let directory = root.to_path_buf();
     let mutation = identity()?;
     Ok(ticket
-        .spawn_bound(move |_| async move {
+        .spawn_bound(move |_, _context| async move {
             owner
                 .ready_root_push(mutation, &guard, &directory, budget, limits(), None)
                 .await

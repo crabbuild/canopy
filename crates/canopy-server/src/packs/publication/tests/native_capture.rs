@@ -628,7 +628,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             .await
             .map_err(|error| StagingError::Input(Box::new(error)))?;
         let response = producer
-            .run_native_receive(preflight.into_native_request())
+            .run_native_receive(&context, preflight.into_native_request())
             .await
             .map_err(|error| StagingError::Input(Box::new(error)))?;
         let inputs = producer
@@ -837,17 +837,30 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     }
     let physical_root = Arc::new(tempfile::TempDir::new()?);
     let physical_disk = DiskBudget::new(256 << 20);
-    let mut verifier = PhysicalVerifier::download(
-        physical_root.path(),
-        physical_disk.clone(),
-        &store,
-        inputs[0],
-        physical_limits(),
-        native.scope(NativeClass::Foreground),
-    )
-    .await?;
-    let segment = verifier.inspect_next_shard(inputs[0].object_count).await?;
-    let witness = verifier.finish().await?;
+    let verify_root = physical_root.clone();
+    let verify_disk = physical_disk.clone();
+    let verify_store = store.clone();
+    let verify_native = native.clone();
+    let work = ticket.spawn(move |context| async move {
+        let result = async {
+            let mut verifier = PhysicalVerifier::download_staged(
+                &context,
+                verify_root.path(),
+                verify_disk,
+                &verify_store,
+                inputs[0],
+                physical_limits(),
+                verify_native.scope(NativeClass::Foreground),
+            )
+            .await?;
+            let segment = verifier.inspect_next_shard(inputs[0].object_count).await?;
+            let witness = verifier.finish().await?;
+            Ok::<_, crate::packs::verification::PhysicalError>((witness, segment))
+        }
+        .await;
+        result.map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let (witness, segment) = work.wait().await.map_err(|error| error.to_string())?;
     ticket.seal()?;
     assert!(matches!(
         timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
@@ -935,7 +948,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     let producer_root = Arc::clone(&physical_root);
     let producer_disk = physical_disk.clone();
     let publication_identity = identity()?;
-    let work = ticket.spawn_bound(move |_| async move {
+    let work = ticket.spawn_bound(move |_, _context| async move {
         let result = async {
             let mut builder = CatalogPreparation::new(
                 producer_root.path(),

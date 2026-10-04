@@ -147,7 +147,7 @@ pub(super) async fn qualify(
         let (release, wait) = tokio::sync::oneshot::channel();
         let (entered, running) = tokio::sync::oneshot::channel();
         let worker = if offset == 0 {
-            Some(ticket.spawn_bound(move |_| async move {
+            Some(ticket.spawn_bound(move |_, _context| async move {
                 let _ = entered.send(());
                 wait.await.map_err(|_| StagingError::Worker)?;
                 Ok(42u64)
@@ -270,7 +270,7 @@ pub(super) async fn qualify(
             let disk = budget.clone();
             let mutation = identity()?;
             ticket
-                .spawn_bound(move |_| async move {
+                .spawn_bound(move |_, _context| async move {
                     let guard = policy
                         .ready(&owner)
                         .await
@@ -489,7 +489,7 @@ pub(super) async fn qualify_revoked(context: Context<'_>, root_case: bool) -> Re
         let disk = budget;
         let mutation = identity()?;
         let ready = ticket
-            .spawn_bound(move |_| async move {
+            .spawn_bound(move |_, _context| async move {
                 let guard = intent
                     .ready(&owner)
                     .await

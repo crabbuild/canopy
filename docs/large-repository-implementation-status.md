@@ -3,17 +3,67 @@
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. The cursor/native-base conversion below passes its focused and library
-qualification; the full CI workflow still fails in a legacy integration caller. Both actual `6ab78d6` Rust runs fail on four obsolete SQL cursor tests
-(`objects` is absent); both harness checks pass. The change below replaces their
-production hydration caller before transferring coverage to the immutable source
-index. Passing that coverage will not by itself qualify the whole CI workflow or
-complete owned write publication. The PR is ready for review, but not ready to
-merge or deploy. Older checkpoint notes describe their historical states.
+directly against `main`. The original SQL hydration failures have been resolved by
+converting their real read/cache callers. Full CI remains open: the directory
+integration fixture still invokes the retired loose-object ingestion command.
+The physical worker ownership change below supplies a prerequisite for the native
+write replacement; it does not complete that replacement. The PR remains for
+review and is not ready to merge or deploy. Older checkpoint notes describe
+historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Staging physical worker ownership
+
+Staging contexts and result slots now share the original worker admission.
+Result transfer, async cancellation and custody expiry cannot release worker or
+actor capacity while detached physical work retains it. Bound callbacks receive
+the live preparation session and its staging context. The existing `ReadOwner`,
+cache ownership and admitted spool structures carry the pin; there is no new
+queue, durable schema or independent physical-worker inventory.
+
+Native receive requires the checked context and carries its owner in the Git
+process group and response reconciliation. Capture enumeration and authenticated
+pack/index upload carry the same owner in blocking jobs and pinned files.
+`PhysicalVerifier::download_staged` validates live repository, current creating
+namespace and format; cache construction/download, native index validation,
+canonical decoding, edge-spool writes and deferred cleanup retain the worker.
+Inspection and witness completion check live custody again. The unowned download
+is confined to qualification builds. The native-receive qualification now runs
+physical verification as an admitted producer rather than outside the lifecycle. A phase-handoff
+fixture now releases its transferred worker context before Bind and checks that
+the retained staging token cannot reopen staging afterward. Holding that context
+across Bind would correctly keep physical admission charged.
+
+This is a lifecycle/API prerequisite. Live HTTP/SSH/generated producer wiring,
+resident staging service ownership, old-owner input adoption, bounded metadata
+replay and final joint-root completion still need conversion. In particular,
+current-namespace verification does not authorize adopted inputs from an older
+attempt; those need the authenticated retained-input selection path. Request,
+metadata and policy workers outside these native stages still need the same
+physical-owner integration. Full CI and capacity qualification remain open.
+
+Final frozen-source qualification passes all 715 unique workspace library cases
+(6 Git-format, 14 object-storage, 695 server), including all 400 publication
+cases, and all 11 focused ownership/native/expiry cases. Two binary cases, the
+server build, all-target workspace Clippy with warnings denied, formatting/diff
+checks and all 96 Python harness cases pass. Directory integration remains 12
+passes and one failure in retired ingestion. Thus 730 unique Rust cases executed,
+729 pass and one fails; focused reruns and two nested subprocess summaries are
+excluded. Later integration binaries/doctests and Linux/provider/capacity gates
+remain unrun for this source. Both actual preceding `6101d58` CI runs pass all
+693 server library cases and fail at the same directory case. Failed draft and
+isolated diagnostics, exact source/commands/log hashes and limits are preserved
+in the [physical-worker evidence](evidence/staging-physical-workers-20261004.json).
+The transferred-context fixture releases admission before Bind and checks the
+old token's staging denial afterward. One-second publication ceilings are now
+applied after actual Bind before private ready-proof construction, exercising
+the same ceiling guard without making startup speed a test prerequisite. The
+ceiling duration, virtual-time advance and publication/result/credit assertions
+remain unchanged. One preceding-source serving timeout passes in exact isolation
+and the final full rerun; no claim of eliminating all timing failures is made.
 
 ## Immutable source cursor and native write-base conversion
 

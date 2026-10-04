@@ -87,7 +87,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
     let artifacts = store.clone();
     let directory = root.to_path_buf();
     let ready = ticket
-        .spawn_bound(move |original| async move {
+        .spawn_bound(move |original, _context| async move {
             original
                 .ready_root_outcome(mutation, &artifacts, &directory, budget, None)
                 .await

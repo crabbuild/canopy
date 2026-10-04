@@ -123,7 +123,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     let weak = Arc::downgrade(&prepared);
     let directory = root.to_owned();
     let producer_store = store.clone();
-    let producer = ticket.spawn_bound(move |session| async move {
+    let producer = ticket.spawn_bound(move |session, _context| async move {
         assert!(Arc::ptr_eq(
             &prepared.base.session.deadline,
             &session.deadline
@@ -184,7 +184,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     p.fault_for_test(fault);
     let (release, wait) = tokio::sync::oneshot::channel();
     let (entered, running) = tokio::sync::oneshot::channel();
-    let worker = ticket.spawn_bound(move |_| async move {
+    let worker = ticket.spawn_bound(move |_, _context| async move {
         let _ = entered.send(());
         wait.await.map_err(|_| StagingError::Worker)?;
         Ok(42u64)
@@ -211,7 +211,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     let renewal = ticket.bound_renewal().ok_or("ordered root renewal")?;
     assert!(!close.as_ref().unwrap().is_finished());
     assert_eq!(p.close_and_drain().await.len(), 1);
-    assert!(ticket.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(ticket.spawn_bound(|_, _context| async { Ok(()) }).is_err());
     release.send(()).map_err(|_| "drained worker disappeared")?;
     assert_eq!(
         ticket

@@ -398,7 +398,7 @@ async fn cold_bound_owner_loss_cancels_workers_before_releasing_resource_credit(
                 wrong_order: wrong_order.clone(),
             };
             let (entered, running) = oneshot::channel();
-            let worker = ticket.spawn_bound(move |_| async move {
+            let worker = ticket.spawn_bound(move |_, _context| async move {
                 let _resource = resource;
                 let _ = entered.send(());
                 std::future::pending::<std::result::Result<(), StagingError>>().await
@@ -421,7 +421,7 @@ async fn cold_bound_owner_loss_cancels_workers_before_releasing_resource_credit(
             assert!(dropped.load(Ordering::Acquire));
             assert!(!wrong_order.load(Ordering::Acquire));
             assert_eq!(service.stats().workers, 0);
-            assert!(ticket.spawn_bound(|_| async { Ok(()) }).is_err());
+            assert!(ticket.spawn_bound(|_, _context| async { Ok(()) }).is_err());
             assert_eq!(ticket.restored_evidence(), Some(&evidence));
             assert_eq!(
                 *ticket.restored_outcome().ok_or("historical outcome lost")?,
@@ -459,7 +459,7 @@ async fn cold_staging_unsettled_expired_originals_keep_exact_evidence_and_never_
             assert_eq!(ticket.restored_evidence(), Some(&evidence));
             assert!(ticket.restored_outcome().is_none());
             assert!(ticket.spawn(|_| async { Ok(()) }).is_err());
-            assert!(ticket.spawn_bound(|_| async { Ok(()) }).is_err());
+            assert!(ticket.spawn_bound(|_, _context| async { Ok(()) }).is_err());
             assert_eq!(
                 service.stats().command_bytes,
                 super::super::super::custody::RESERVATION

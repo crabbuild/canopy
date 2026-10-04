@@ -1074,12 +1074,12 @@ impl StagingTicket {
     /// slots, cancellation/drain and typed result ownership as staging inputs.
     pub fn spawn_bound<F, Fut, T>(&self, producer: F) -> Result<StagingTask<T>, StagingError>
     where
-        F: FnOnce(Arc<PreparationSession>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<PreparationSession>, StagingContext) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, StagingError>> + Send + 'static,
         T: Send + 'static,
     {
         let session = self.bound_session()?;
-        self.spawn_in_phase(true, move |_| producer(session))
+        self.spawn_in_phase(true, move |context| producer(session, context))
     }
     fn spawn_in_phase<F, Fut, T>(
         &self,
@@ -1097,7 +1097,7 @@ impl StagingTicket {
         let actor_permit = Arc::clone(&self.job.actor_workers)
             .try_acquire_owned()
             .map_err(|_| StagingError::Capacity)?;
-        let context = {
+        let (token, format) = {
             let mut l = self.job.local.lock().expect("staging local");
             if (l.seal && !bound)
                 || l.finishing
@@ -1124,18 +1124,20 @@ impl StagingTicket {
                 (lease.token, lease.format)
             };
             l.workers += 1;
-            StagingContext {
-                job: Arc::clone(&self.job),
-                token,
-                format,
-                bound,
-            }
+            (token, format)
         };
-        let guard = Activity {
+        let guard = Arc::new(Activity {
             inner: Arc::clone(&self.inner),
             job: Arc::clone(&self.job),
             permit: Some(permit),
             actor_permit: Some(actor_permit),
+        });
+        let context = StagingContext {
+            job: Arc::clone(&self.job),
+            token,
+            format,
+            bound,
+            activity: Arc::clone(&guard),
         };
         let mut work = self.job.work.lock().expect("staging work");
         let id = work.next.checked_add(1).ok_or(StagingError::Capacity)?;
@@ -1250,6 +1252,24 @@ impl StagingTicket {
     /// Inject a short custody ceiling only after a test reaches its intended
     /// recovery phase. The real clock and normal fence/drain path still run.
     #[cfg(test)]
+    pub(super) fn limit_bound_ceiling_for_test(
+        &self,
+        remaining: Duration,
+    ) -> Result<Instant, StagingError> {
+        let mut local = self.job.local.lock().expect("staging local");
+        if local.workers != 0 || local.finishing || remaining.is_zero() {
+            return Err(StagingError::Context);
+        }
+        let mut session = (**local.bound.as_ref().ok_or(StagingError::NotReady)?).clone();
+        session.live_lease()?;
+        let ceiling = (Instant::now() + remaining).min(local.lifetime);
+        session.ceiling = Some(ceiling);
+        local.bound = Some(Arc::new(session));
+        local.lifetime = ceiling;
+        self.job.changed.notify_one();
+        Ok(ceiling)
+    }
+    #[cfg(test)]
     pub(super) fn expire_bound_for_test(&self) -> Result<Instant, StagingError> {
         let mut local = self.job.local.lock().expect("staging local");
         let session = local.bound.as_ref().ok_or(StagingError::NotReady)?;
@@ -1287,8 +1307,16 @@ pub struct StagingContext {
     token: PreparationToken,
     format: ObjectFormat,
     bound: bool,
+    // Clones share the original worker admission. Detached blocking jobs,
+    // native descendants and provider readers must retain it until they drain.
+    activity: Arc<Activity>,
 }
 impl StagingContext {
+    /// Lifetime ownership only; it grants no custody or publication authority.
+    /// Keep this in every physical worker that can outlive its async observer.
+    pub(crate) fn physical_owner(&self) -> crate::git_objects::ReadOwner {
+        self.activity.clone()
+    }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, LeaseCheck) {
         (
             &self.job.client,
@@ -1357,7 +1385,7 @@ impl StagingContext {
 struct WorkSlot<T> {
     result: Mutex<Option<Result<T, Arc<StagingError>>>>,
     ready: watch::Sender<bool>,
-    guard: Mutex<Option<Activity>>,
+    guard: Mutex<Option<Arc<Activity>>>,
 }
 impl<T: Send + 'static> RetainedWork for WorkSlot<T> {
     fn erased(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {

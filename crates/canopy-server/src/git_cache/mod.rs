@@ -459,8 +459,16 @@ impl GitCache {
 
     /// Measures native Git's completed writes before the gateway can publish refs.
     pub(crate) async fn reconcile(self: &Arc<Self>) -> Result<(), CacheError> {
+        self.reconcile_owned(Arc::new(())).await
+    }
+
+    pub(crate) async fn reconcile_owned(
+        self: &Arc<Self>,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), CacheError> {
         let cache = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
+            let _owner = owner;
             cache.reservation()?.resize(tree_bytes(cache.root())?)?;
             Ok(())
         })

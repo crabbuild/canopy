@@ -43,6 +43,8 @@ impl Default for PhysicalLimits {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PhysicalError {
+    #[error("physical verification has no live staging custody")]
+    Staging(#[from] crate::packs::publication::StagingError),
     #[error("isolated native workspace failed")]
     Cache(#[from] CacheError),
     #[error("physical artifact binding failed")]
@@ -113,6 +115,7 @@ impl PhysicalPackWitness {
 /// The service must also retain its native-process admission for this lifetime.
 pub struct PhysicalVerifier {
     store: ArtifactStore,
+    context: Option<crate::packs::publication::StagingContext>,
     // Drop the native actor/index before releasing the fenced workspace.
     native: Option<CanonicalVerifier>,
     binding: Arc<VerifiedPackBinding>,
@@ -127,6 +130,7 @@ pub struct PhysicalVerifier {
     failed: bool,
 }
 impl PhysicalVerifier {
+    #[cfg(test)]
     pub async fn download(
         root: &Path,
         budget: DiskBudget,
@@ -134,6 +138,62 @@ impl PhysicalVerifier {
         descriptor: NativePackDescriptor,
         limits: PhysicalLimits,
         native: crate::native_resources::NativeScope,
+    ) -> Result<Self, PhysicalError> {
+        Self::download_owned(
+            root,
+            budget,
+            store,
+            descriptor,
+            limits,
+            native,
+            Arc::new(()),
+        )
+        .await
+    }
+
+    /// Retain the admitted creating or bound worker through provider reads,
+    /// blocking assembly, native descendants and deferred workspace cleanup.
+    /// A retained owner does not extend custody; check it before each new stage.
+    pub async fn download_staged(
+        context: &crate::packs::publication::StagingContext,
+        root: &Path,
+        budget: DiskBudget,
+        store: &ArtifactStore,
+        descriptor: NativePackDescriptor,
+        limits: PhysicalLimits,
+        native: crate::native_resources::NativeScope,
+    ) -> Result<Self, PhysicalError> {
+        let token = context.token()?;
+        if descriptor.repository != token.repository
+            || store.repository() != token.repository
+            || descriptor.operation != token.artifact_operation
+            || descriptor.format != context.format()
+        {
+            return Err(PhysicalError::Integrity);
+        }
+        let mut verifier = Self::download_owned(
+            root,
+            budget,
+            store,
+            descriptor,
+            limits,
+            native,
+            context.physical_owner(),
+        )
+        .await?;
+        context.ensure_live()?;
+        verifier.context = Some(context.clone());
+        Ok(verifier)
+    }
+
+    async fn download_owned(
+        root: &Path,
+        budget: DiskBudget,
+        store: &ArtifactStore,
+        descriptor: NativePackDescriptor,
+        limits: PhysicalLimits,
+        native: crate::native_resources::NativeScope,
+        owner: crate::git_objects::ReadOwner,
     ) -> Result<Self, PhysicalError> {
         descriptor.validate(store.repository(), descriptor.format)?;
         if limits.max_pack_bytes > MAX_ARTIFACT_BYTES
@@ -145,16 +205,28 @@ impl PhysicalVerifier {
             return Err(PhysicalError::Limit);
         }
         let root = root.to_owned();
-        let root = tokio::task::spawn_blocking(move || std::fs::canonicalize(root)).await??;
-        let cache = GitCache::create(
+        let root_owner = owner.clone();
+        let root = tokio::task::spawn_blocking(move || {
+            let _owner = root_owner;
+            std::fs::canonicalize(root)
+        })
+        .await??;
+        let cache = GitCache::create_owned(
             root.clone(),
             budget.clone(),
             "refs/heads/main",
             descriptor.format,
+            None,
             native,
+            crate::git_cache::CacheOwnership {
+                work: owner.clone(),
+                cleanup: Some(owner.clone()),
+            },
         )
         .await?;
-        cache.download_native(store, descriptor).await?;
+        cache
+            .download_native_owned(store, descriptor, owner)
+            .await?;
         let pinned = Arc::clone(&cache);
         let input_claim = cache
             .native
@@ -166,9 +238,15 @@ impl PhysicalVerifier {
         })
         .await??;
         validate_native(Arc::clone(&cache), descriptor, limits.native_timeout).await?;
-        let native = CanonicalVerifier::new(&cache.git_dir(), descriptor.format, &cache.native)?;
+        let native = CanonicalVerifier::new_owned(
+            &cache.git_dir(),
+            descriptor.format,
+            &cache.native,
+            cache.clone(),
+        )?;
         Ok(Self {
             store: store.clone(),
+            context: None,
             native: Some(native),
             binding: Arc::new(binding),
             cache,
@@ -190,6 +268,7 @@ impl PhysicalVerifier {
         &mut self,
         object_count: u32,
     ) -> Result<Arc<MetadataSegment>, PhysicalError> {
+        self.ensure_live()?;
         if self.failed {
             return Err(PhysicalError::Integrity);
         }
@@ -203,7 +282,9 @@ impl PhysicalVerifier {
         let root = self.root.clone();
         let budget = self.budget.clone();
         let limits = self.limits.metadata;
+        let cache = Arc::clone(&self.cache);
         let mut builder = tokio::task::spawn_blocking(move || {
+            let _pin = cache;
             MetadataBuilder::new(&root, budget, identity, limits)
         })
         .await??;
@@ -225,8 +306,10 @@ impl PhysicalVerifier {
                 return Err(PhysicalError::Integrity);
             }
             let mut witnesses = Vec::with_capacity(ids.len());
-            let edges = spool::EdgeSpool::new(&self.root, self.budget.clone());
+            let edges =
+                spool::EdgeSpool::new_owned(&self.root, self.budget.clone(), self.cache.clone());
             for oid in ids {
+                self.ensure_live()?;
                 let witness = self
                     .native
                     .as_mut()
@@ -257,11 +340,13 @@ impl PhysicalVerifier {
         self.chain = fold_shard(self.chain, self.shards, segment.descriptor());
         self.shards = self.shards.checked_add(1).ok_or(PhysicalError::Integrity)?;
         self.next_ordinal = end;
+        self.ensure_live()?;
         self.failed = false;
         Ok(segment)
     }
 
     pub async fn finish(mut self) -> Result<PhysicalPackWitness, PhysicalError> {
+        self.ensure_live()?;
         if self.failed || self.next_ordinal != self.descriptor.object_count || self.shards == 0 {
             return Err(PhysicalError::Integrity);
         }
@@ -269,12 +354,19 @@ impl PhysicalVerifier {
         tokio::time::timeout(self.limits.native_timeout, native.finish())
             .await
             .map_err(|_| GitHttpError::Timeout)??;
+        self.ensure_live()?;
         Ok(PhysicalPackWitness {
             store: self.store,
             native: self.descriptor,
             shard_count: self.shards,
             metadata_digest: self.chain,
         })
+    }
+    fn ensure_live(&self) -> Result<(), PhysicalError> {
+        if let Some(context) = &self.context {
+            context.ensure_live()?;
+        }
+        Ok(())
     }
 }
 

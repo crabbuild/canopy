@@ -169,7 +169,7 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             let directory = root.to_path_buf();
             let disk = budget.clone();
             let ready = ticket
-                .spawn_bound(move |_| async move {
+                .spawn_bound(move |_, _context| async move {
                     owner
                         .ready_root_push(root_identity, &guard, &directory, disk, limits(), None)
                         .await
@@ -405,7 +405,7 @@ async fn late_write_case(
     // The lifecycle owns expensive preparation. Awaiting its typed result
     // keeps the original factory/custody checks without nesting the complete
     // native receive fixture on the producer's poll stack.
-    let worker = context.ticket.spawn_bound(move |_| async move {
+    let worker = context.ticket.spawn_bound(move |_, _context| async move {
         let publishing = owner
             .ready_root_push(
                 positive_identity,

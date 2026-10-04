@@ -70,7 +70,7 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
     let weak = Arc::downgrade(&session);
     let (release, wait) = oneshot::channel();
     let (entered, running) = oneshot::channel();
-    let worker = ticket.spawn_bound(move |session| async move {
+    let worker = ticket.spawn_bound(move |session, _context| async move {
         session.live_lease()?;
         let _ = entered.send(());
         wait.await.map_err(|_| StagingError::Worker)?;
@@ -109,7 +109,11 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
     })
     .await?;
     assert!(!close.is_finished());
-    assert!(retained.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(
+        retained
+            .spawn_bound(|_, _context| async { Ok(()) })
+            .is_err()
+    );
     release.send(()).map_err(|_| "worker lost")?;
     let result = retained
         .pending_task::<Arc<PreparationSession>>(id)
@@ -352,9 +356,19 @@ async fn bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_
     active(&ticket).await?;
     let work = ticket.spawn(|ctx| async { Ok(ctx) })?;
     let old = work.wait().await.map_err(|e| e.to_string())?;
+    let old_token = old.token()?;
+    // A context now owns its physical worker admission. Retain only the
+    // historical token before handoff; a live context must keep Bind blocked.
+    drop(old);
     ticket.seal()?;
     assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
-    assert!(old.ensure_live().is_err());
+    assert!(
+        f.client()
+            .query::<CheckStaging>(&f.target, None, check(old_token))
+            .await?
+            .output
+            .is_none()
+    );
     assert!(ticket.spawn(|_| async { Ok(()) }).is_err());
     let session = ticket.bound_session()?;
     let store = native.store.clone();
@@ -390,7 +404,7 @@ async fn bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_
     ));
     assert!(!session.fenced.load(std::sync::atomic::Ordering::Acquire));
     let (entered, running) = oneshot::channel();
-    let worker = ticket.spawn_bound(move |_| async move {
+    let worker = ticket.spawn_bound(move |_, _context| async move {
         let _ = entered.send(());
         std::future::pending::<std::result::Result<(), StagingError>>().await
     })?;
@@ -448,13 +462,13 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
         wrong: wrong.clone(),
     };
     let (done, completed) = oneshot::channel();
-    let work = a.spawn_bound(move |_| async move {
+    let work = a.spawn_bound(move |_, _context| async move {
         let _ = done.send(());
         Ok(owned)
     })?;
     timeout(Duration::from_secs(10), completed).await??;
     assert_eq!(c.stats().workers, 1);
-    assert!(b.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(b.spawn_bound(|_, _context| async { Ok(()) }).is_err());
     super::super::publishing::edit(
         &f,
         "UPDATE repository_identity SET owner='other' WHERE singleton=1",
@@ -512,7 +526,7 @@ async fn bound_service_checkpoint_shares_renewal_order_exact_recovery_and_origin
             let session = ticket.bound_session()?;
             let parent = prior.clone();
             let provider = store.clone();
-            let worker = ticket.spawn_bound(move |s| async move {
+            let worker = ticket.spawn_bound(move |s, _context| async move {
                 s.adopt_native_inputs(provider, &parent)
                     .await
                     .map_err(|e| StagingError::Input(Box::new(e)))
@@ -664,8 +678,8 @@ async fn bound_service_restored_owner_claim_retains_old_pin_and_owns_new_session
         assert_eq!(bound.receipt, replay.receipt);
         let old_pin = handle.query(0, 32, move |conn| { Ok(conn.query_row("SELECT generation FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", rusqlite::params![old.owner.incarnation.as_bytes().as_slice(), old.attempt as i64], |row| row.get::<_, i64>(0))?.to_be_bytes().to_vec()) }).await?;
         assert_eq!(old_pin.as_slice(), 0i64.to_be_bytes());
-        let worker =
-            ticket.spawn_bound(|session| async move { Ok(session.live_lease()?.0.token) })?;
+        let worker = ticket
+            .spawn_bound(|session, _context| async move { Ok(session.live_lease()?.0.token) })?;
         assert_eq!(
             worker.wait().await.map_err(|e| e.to_string())?,
             bound.lease.token

@@ -53,7 +53,7 @@ async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_
         let owned_root = root.clone();
         let owned_budget = budget.clone();
         let mutation = identity()?;
-        let work = ticket.spawn_bound(move |_| async move {
+        let work = ticket.spawn_bound(move |_, _context| async move {
             let prepared = Arc::new(
                 PreparedCompaction::prepare(
                     owned_root.path(),

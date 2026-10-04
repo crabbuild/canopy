@@ -132,14 +132,14 @@ async fn automatic_retirement_joins_live_callbacks_and_drops_retained_results_be
             };
             let finished = owned();
             let completed = if bound {
-                ticket.spawn_bound(move |_| async move { Ok(finished) })?
+                ticket.spawn_bound(move |_, _context| async move { Ok(finished) })?
             } else {
                 ticket.spawn(move |_| async move { Ok(finished) })?
             };
             let running = owned();
             let (entered, start) = oneshot::channel();
             let worker = if bound {
-                ticket.spawn_bound(move |_| async move {
+                ticket.spawn_bound(move |_, _context| async move {
                     let _ = entered.send(());
                     std::future::pending::<()>().await;
                     drop(running);

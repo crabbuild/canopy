@@ -41,6 +41,7 @@ struct CapturePin {
     // captured file immutable while hash/upload background jobs retain it.
     _fence: File,
     cache: Arc<GitCache>,
+    _owner: crate::git_objects::ReadOwner,
 }
 impl Drop for CapturePin {
     fn drop(&mut self) {
@@ -90,9 +91,10 @@ impl GitHttpBackend {
             return Err(NativeCaptureError::Limit);
         }
         let _selection = self.cache.selection.lock().await;
-        self.cache.reconcile().await?;
+        self.cache.reconcile_owned(context.physical_owner()).await?;
         let cache = Arc::clone(&self.cache);
         let format = context.format();
+        let owner = context.physical_owner();
         let claim = cache
             .native
             .try_admit(crate::native_resources::NativeWork::Read)?;
@@ -105,6 +107,7 @@ impl GitHttpBackend {
             let pin = Arc::new(CapturePin {
                 cache,
                 _fence: fence,
+                _owner: owner,
             });
             for entry in std::fs::read_dir(pin.cache.git_dir().join("objects"))? {
                 let entry = entry?;
@@ -234,6 +237,7 @@ mod tests {
             _pin: Arc::new(CapturePin {
                 _fence: fence,
                 cache: backend.cache.clone(),
+                _owner: Arc::new(()),
             }),
         });
         let retained = captured.clone();
@@ -312,6 +316,7 @@ mod tests {
             _pin: Arc::new(CapturePin {
                 _fence: fence,
                 cache: Arc::clone(&backend.cache),
+                _owner: Arc::new(()),
             }),
         });
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();

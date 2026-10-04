@@ -101,7 +101,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         let (release, wait) = tokio::sync::oneshot::channel();
         let (entered, running) = tokio::sync::oneshot::channel();
         let worker = if offset == 0 {
-            Some(ticket.spawn_bound(move |_| async move {
+            Some(ticket.spawn_bound(move |_, _context| async move {
                 let _ = entered.send(());
                 wait.await.map_err(|_| StagingError::Worker)?;
                 Ok(42u64)

@@ -1,4 +1,5 @@
 mod bound;
+mod physical;
 mod publication;
 pub(super) mod restore;
 mod retirement;
@@ -616,7 +617,7 @@ async fn staged_service_owned_native_verification_hands_off_to_the_existing_priv
         let bound_work = {
             let root = root.clone();
             let budget = budget.clone();
-            ticket.spawn_bound(move |_| async move {
+            ticket.spawn_bound(move |_, _context| async move {
                 async {
                     let mut assembler =
                         CatalogPreparation::new(root.path(), budget.clone(), base, limits())

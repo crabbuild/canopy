@@ -12,6 +12,7 @@ impl GitCache {
     /// The isolated verifier calls this exactly once on its fresh private cache.
     /// Reserve the complete pair before creating files or reading the provider.
     /// No second pack copy or blob-as-artifact wrapper is involved.
+    #[cfg(test)]
     pub(crate) async fn download_native(
         self: &Arc<Self>,
         store: &ArtifactStore,
