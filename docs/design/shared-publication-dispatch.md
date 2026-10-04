@@ -6,21 +6,24 @@
 
 `PreparedCatalog::ready_push` retains the verified catalog and exact command 19 when publishing refs. `PreparationSession::ready_outcome` retains only the admitted session and exact command 19 for refused/empty outcomes; it requires no catalog artifacts. The prepared-catalog wrapper delegates those outcomes to the same session factory and drops catalog ownership from the ready value. See the [outcome-only contract](outcome-only-completion.md). `PreparedCompaction::ready_compaction` retains the verified compaction and exact command 22; it issues the existing maintenance certificate, checks a 4 KiB input envelope and checks the live lease before and after SDK preparation. Both factories perform verification/certification before admission. Raw descriptors and a caller-selected class cannot construct either ready object.
 
-`PreparedCatalog::ready_root_push` composes the private registered-native completion factory with exact command 36. It verifies the 8 KiB input bound and shared live custody before and after SDK preparation, then retains the prepared catalog and original command. `ReadyPublication::RootPush` enters the foreground class with a 16 KiB reservation for the retained and dispatch copies. PreparationSession::ready_root_outcome retains exact command 38 with only the shared session for registered failed/empty native results. Both use the same RootPush variant and 512-byte reply. It reuses the existing bound handoff, class/account scheduling and recovery slots; no independent queue or mutable response identity is introduced. See the [immutable completion contract](immutable-push-outcomes.md).
+`PreparedCatalog::ready_root_push` composes the private registered-native completion factory with exact command 36. It verifies the 8 KiB input bound and shared live custody before and after SDK preparation, then retains the prepared catalog and original command. The raw `ReadyRootPush` factory must persist and bind its original before admission as `ReadyPublication::BoundRecovery`; cold registered work enters as `ReadyPublication::RootRecovery`. Both reserve 32 KiB for the original body and recovery header copies. See the mandatory [registration contract](mandatory-publication-registration.md). PreparationSession::ready_root_outcome retains exact command 38 with only the shared session for registered failed/empty native results. Both use the same registered recovery variants and 512-byte reply. It reuses the existing bound handoff, class/account scheduling and recovery slots; no independent queue or mutable response identity is introduced. See the [immutable completion contract](immutable-push-outcomes.md).
 
 `Arc<RefPolicyPreparation>::ready_page` retains the original intent/evidence, verified catalog and exact command 33 under a 512 KiB reservation for two 256 KiB encoded copies. Its `PolicyPage` result preserves the original receipt and never becomes a native response. `StagingTicket::register_policy_page` reuses the existing held publication slot as an intermediate barrier: known success resumes Bound, unarmed known refusal fences, and uncertainty blocks final handoff even if historical SQL progress is complete. Current guard queries and final transactional guard checks remain mandatory. See the [paged-policy contract](paged-ref-policy-guards.md).
 
-An armed policy page retains a shared `ready_root_refusal` command as well as its original page. Composition requires the exact session and refusal-only role; failures preserve both inputs. Its wire reservation is 528 KiB. A known page refusal changes the local phase before executing the exact terminal command; uncertainty/panic recovery preserves the phase-specific SDK evidence. Known page success resumes Bound and does not submit that command. Sharing one refusal Arc across pages avoids repeated native report freezing. The same Arc can also enter final RootPush handoff after later policy/write changes. Refusal-only handoff uses local live custody and the final transaction's authoritative checks rather than requiring fresh Write for renewal/observation. Queued checkpoints and owned work still drain. See the [immutable refusal contract](immutable-push-outcomes.md).
+An armed policy page retains a shared `ready_root_refusal` command as well as its original page. Composition requires the exact session and refusal-only role; failures preserve both inputs. Its wire reservation is 544 KiB, including the mandatory original refusal registration header. A known page refusal changes the local phase before executing the exact terminal command; uncertainty/panic recovery preserves the phase-specific SDK evidence. Known page success resumes Bound and does not submit that command. Sharing one refusal Arc across pages avoids repeated native report freezing. The same Arc can also enter final RootPush handoff after later policy/write changes. Refusal-only handoff uses local live custody and the final transaction's authoritative checks rather than requiring fresh Write for renewal/observation. Queued checkpoints and owned work still drain. See the [immutable refusal contract](immutable-push-outcomes.md).
 
 PreparationSession::ready_inputs retains the existing command 29 and shared bound session for an adopted native input checkpoint. It checks exact scope/format/adoption context and bounded encoding before SDK preparation; the final command still checks MAC, source custody, current permission, owner, pin and expiry. These checkpoints use the foreground queue. See the [checkpoint contract](native-input-checkpoint.md). They establish descriptor retention rather than physical, canonical or ref authority.
 
-ReadyPreparation::claim and PreparationSession::ready_renew retain exact commands 12/13 with bounded requests and fresh post-commit session observations; see the [bound preparation contract](bound-preparation-dispatch.md). They share foreground admission with an 8 KiB reservation. The [bound lifecycle](bound-preparation-lifecycle.md) now schedules renewal automatically; durable takeover reconstruction remains required.
+ReadyPreparation::claim and PreparationSession::ready_renew retain original typed custody command 42 and exact registrar 41 with bounded requests and fresh post-commit session observations; see the [bound preparation contract](bound-preparation-dispatch.md). They share foreground admission with a 28 KiB reservation for both originals and their bounded transport/query copies. The [bound lifecycle](bound-preparation-lifecycle.md) now schedules renewal automatically; durable takeover reconstruction remains required.
 
 `ReadyPublication` wraps those private factory outputs. `submit` accepts any factory output and returns the same `PublicationTicket`. Admission failure returns the original typed ready value, preserving its mutation identity and wire bytes. Logical IDs are unique across both classes in one coordinator.
 
 `PublicationOutcome` distinguishes committed inline push, immutable root push, policy page, compaction, input checkpoint and bound preparation results. RegisteredNativeInputs preserves the original registration outcome and separately reports fresh checkpoint/bound-session custody; a failed observation fences the shared session without erasing a commit. `PublicationError` preserves the corresponding typed Cellule invocation error, evidence and rejected receipt. `PublicationState` includes held, queued, running, uncertain, finished and proven unexecuted discarded states. `ticket.class()` identifies the class. `ticket.response()` accepts only a completed inline push outcome; `ticket.root_response(store)` requires a completed root push and performs a current authorized query at its original receipt before streaming authenticated bytes. Neither a completed DTO nor a caller-supplied root grants access. Other result kinds refuse both response methods; compactions, input checkpoints and bound preparation commands never become HTTP push responses. These APIs replace the previous push-only outcome shape; there is no compatibility adapter.
 
-## Bounded class and account admission
+## Repository class and account admission
+
+These are repository limits. The constructor also requires a shared node budget,
+which applies an additional aggregate cap across repository coordinators.
 
 | Default | Bound |
 | --- | --- |
@@ -28,7 +31,7 @@ ReadyPreparation::claim and PreparationSession::ready_renew retain exact command
 | Maintenance operations | Four reserved slots |
 | Foreground operations | Remaining 28 slots |
 | Per actor | Eight operations per class |
-| Encoded command reservation | 8 MiB per inline push; 16 KiB per immutable root push; 512 KiB per unarmed policy page, 528 KiB per armed page; 8 KiB per compaction, input checkpoint or bound Claim/Renew command |
+| Encoded command reservation | 8 MiB per inline push; 32 KiB per immutable root push; 512 KiB per unarmed policy page, 544 KiB per armed page; 8 KiB per compaction or input checkpoint; 28 KiB per bound Claim/Renew command |
 | Total command-byte budget | 256 MiB |
 | Concurrent durability waits | Eight |
 | Maintenance durability waits | At most two |
@@ -40,6 +43,59 @@ Each job records its private factory's reservation; mixed foreground checkpoint/
 
 Configuration requires room for another foreground account, nonzero reserved maintenance slots, checked byte headroom, a burst in 1–32, and a valid maintenance concurrency bound. With multiple durability waits, maintenance cannot use every slot. A one-wait profile permits one maintenance wait; fair class starts then share that serialized dispatch slot. Invalid profiles reject before a coordinator is created.
 
+## Shared node admission and transport
+
+Create one `PublicationBudget` from the existing `PublicationLimits` profile and
+pass clones to every node-local `PublicationCoordinator::new(target, limits,
+budget)`. There is no constructor that supplies an independent budget implicitly.
+The selected production repository manager creates and retains that shared
+instance for its resident recovery coordinators. See the
+[resident lifecycle](resident-publication-recovery.md). All remaining producer
+and reader integration must reuse this owner; a mandatory constructor argument
+alone does not establish whole-service integration.
+
+The node ledger charges the private ready value's account, class and exact wire
+reservation after repository admission succeeds. It bounds the sum of held,
+queued, running and uncertain originals across repositories. Any node refusal
+returns the original ready value without consuming repository credits or
+changing the SDK identity. Foreground and maintenance have independent operation
+and byte shares. With the default profile, node foreground admission has 28
+slots and 256 MiB minus 32 KiB; maintenance has four slots and 32 KiB. Node
+foreground account admission is at most eight; maintenance account admission is
+at most two, leaving room for another account even when one actor administers
+many repositories. Account maps exist only while charged jobs exist.
+
+Transport has separate class and account gates. With the default profile, six
+foreground and two maintenance dispatches can be active; an account can occupy
+at most three foreground and one maintenance gate. An account acquires its own
+gate before the node class gate, so its waiting jobs cannot hold global capacity
+needed by another account. Both class lanes must have at least two slots; node
+maintenance admission must also have at least two operations. Repository profiles
+can still serialize local work. Repository FIFO/account rotation and class burst
+scheduling remain in the existing queue; node gates provide bounded concurrency
+and account headroom, not a global class-burst, CPU-time or I/O-fairness promise.
+
+The node transport gate is acquired before making the dispatch body copy and
+held through the exact invocation/recovery future. Returning an uncertain result
+releases transport capacity while keeping original command credits. A known
+terminal result or proven held discard drops retained command/proof resources
+before releasing node and repository credits. Observer cancellation releases
+neither charge. `PublicationBudget::close` refuses new reservations but leaves
+gates usable by already admitted activation and exact recovery; it does not
+cancel or drain repository workers. `stats` exposes charged class/account/byte
+occupancy, acquired class transport gates and admission closure.
+
+This is resource admission, not a durable outcome owner or artifact retention
+authority. The production service must retain coordinators and returned uncertain
+tickets, explicitly stop scanners, drain workers and resolve exact originals
+before releasing the Cell or deleting its workspace. Idle scanners must not
+prevent repository eviction indefinitely. The selected resident recovery owner
+now pauses/joins scanners and Git maintenance before release, rejects busy
+coordinators without abandoning originals, and drains repository recovery before
+node authority/workspace cleanup. Production startup/eviction/shutdown regression
+evidence and its limits are in the [resident contract](resident-publication-recovery.md).
+The full producer/reader conversion and capacity qualification remain open.
+
 ## Held ownership and fair starts
 
 try_reserve admits a charged Held job synchronously without execution. It returns the original ready value on capacity, contention, duplicate, target or closure refusal. activate joins the existing fair queue once; discard_held succeeds only before activation, dropping resources before credits. Both remain usable after close for existing admission. close_and_drain returns held and uncertain jobs still charged. See the [final lifecycle handoff](final-publication-lifecycle.md) for worker/renewal/checkpoint ordering and observation-only final tickets.
@@ -50,14 +106,27 @@ The shared queue contains two instances of the existing account-fair queue. With
 
 Catalog/ref CAS and current policy/ACL checks remain in the authoritative command. Two preparations against one old catalog can conflict even when both dispatch fairly. Uploads, native decoding, canonical verification and reconciliation never run inside this queue. A known durable catalog conflict may reenter only with a newly prepared command identity and a properly reconciled certificate.
 
-Dropping an observer does not cancel admitted execution. Pending, malformed published and panicked-task outcomes retain the original ready value and reservation. `pending`, `recover` and `close_and_drain` handle both classes. Recovery joins the same class/account queues. Staging Begin/Renew/Bind now reuse this same exact invocation/resolution implementation with a 4 KiB decoded-result bound; inline push and compaction results retain their 128-byte bound; immutable root push and policy-page results use a 512-byte bound. Bound input checkpoints and Claim/Renew commands share this foreground dispatcher with a 4 KiB decoded-result bound and fresh post-commit custody queries. Staging has its own long-input admission/lifecycle rather than entering the final-command fair queues; see the [service contract](staging-service-lifecycle.md). Inline push, immutable root push, policy-page and compaction dispatch check local session custody before initial submission and after authoritative absence. Resolve a known committed outcome before that guard; decode a committed result with its original receipt without rerunning its handler. Unknown, expired, unreachable or changed-incarnation evidence remains uncertain. Never replace its proof or mutation identity while acceptance is unknown.
+Dropping an observer does not cancel admitted execution. Pending, malformed published and panicked-task outcomes retain the original ready value and reservation. `pending`, `recover` and `close_and_drain` handle both classes. Recovery joins the same class/account queues. Staging and bound custody commands now use mandatory registered-original recovery with metadata-first outcomes and retained registrar identity; inline push and compaction results retain their 128-byte bound; immutable root push and policy-page results use a 512-byte bound. Bound input checkpoints and Claim/Renew commands share this foreground dispatcher with a 4 KiB decoded-result bound and fresh post-commit custody queries. Staging has its own long-input admission/lifecycle rather than entering the final-command fair queues; see the [service contract](staging-service-lifecycle.md). Inline push, immutable root push, policy-page and compaction dispatch check local session custody before initial submission and after authoritative absence. Resolve a known committed outcome before that guard; decode a committed result with its original receipt without rerunning its handler. Unknown, expired, unreachable or changed-incarnation evidence remains uncertain. Never replace its proof or mutation identity while acceptance is unknown.
 
 A terminal result drops dispatch/retained proof ownership before releasing class/account/byte credits. Resolved tickets retain only bounded result/read context. Recovery remains possible after closing admission. The bound lifecycle now owns automatic renewal and bound Claim; accepted input registration does not renew a lease or extend the original generation floor. The coordinator is service-owned local state, not a durable outbox or permission to delete remote inputs.
 
 ## Integration and evidence
 
-Keep one coordinator and geometric planner per repository. Obtain a fresh admitted query-derived maintenance base, call the [geometric planner](geometric-directory-maintenance.md), wrap the verified result in an Arc and call `ready_compaction`, then `submit`. Observe or recover the exact ticket before releasing uncertain inputs. Obtain a fresh frontier for the next preparation. Integrate process admission, fair CPU/I/O shares, renewal/reaping, owner-loss reconstruction and complete retained-root inventory before selecting production handlers.
+Keep one coordinator and geometric planner per repository, with one shared publication budget owned by the node. Obtain a fresh admitted query-derived maintenance base, call the [geometric planner](geometric-directory-maintenance.md), wrap the verified result in an Arc and call `ready_compaction`, then `submit`. Observe or recover the exact ticket before releasing uncertain inputs. Obtain a fresh frontier for the next preparation. Integrate process admission, fair CPU/I/O shares, renewal/reaping, owner-loss reconstruction and complete retained-root inventory before selecting production handlers.
 
 Tests exercise class/account admission, retained failure values, duplicate logical IDs, maintenance concurrency while foreground completes, canceled observers, current admin revocation, and SHA-1/SHA-256 absent/lost-acknowledgement/panic recovery with original receipts and exactly one logical outcome. The existing push dispatcher tests remain in place with typed-result assertions. The geometric native fixture now prepares and publishes repeatedly through this shared dispatcher until ingress and level debt drain, checking canonical/source/version identity, unchanged refs and old-reader access.
 
 These fixtures establish bounded dispatch and recovery. They do not establish stable maintenance service under 35 pushes/s, full-history amplification, durability grouping, source-independent restore or capacity for 10,000 engineers. The mandatory workload and recovery campaigns remain release gates.
+
+## Serving retention release
+
+`ReadyServingRelease` joins the existing maintenance class under an 8 KiB
+reservation, with the original exact 1 KiB command and 128-byte result. Its
+private factory requires sticky serving closure and actual physical read-worker
+drain. A distinct typed job kind keeps its real reader ID separate from both
+creating publications and custody retirement; it does not fabricate an artifact
+namespace or grant preparation authority. Uncertainty retains the original
+command/owner/credits, and release recovery is looked up through
+`pending_serving_release`. See the [serving contract](certified-serving-pins.md).
+Production acquisition/renewal, generation caching and read-owner handoff still
+require integration.

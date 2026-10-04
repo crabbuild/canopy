@@ -68,13 +68,19 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
         .await?;
     } else {
         edit(f, "CREATE TRIGGER phase_late_fault BEFORE UPDATE OF recovery_phase ON catalog_leases WHEN NEW.recovery_phase IS NOT NULL BEGIN SELECT RAISE(ABORT,'late phase fault'); END;").await?;
-        assert!(first.dispatch_any(&f.client(), store, &flag).await.is_err());
+        assert!(
+            first
+                .dispatch_any(&f.client(), store, &f.authority(), &flag,)
+                .await
+                .is_err()
+        );
         assert!(matches!(
             f.client().resolve(&first_evidence).await?,
             Resolution::Absent
         ));
+        let token = check.token;
         f.handle
-            .query(0, 128, |db| {
+            .query(0, 128, move |db| {
                 assert_eq!(
                     db.query_row("SELECT count(*) FROM ref_policy_guards", [], |row| row
                         .get::<_, u64>(0))?,
@@ -82,8 +88,8 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
                 );
                 assert_eq!(
                     db.query_row(
-                        "SELECT count(*) FROM catalog_leases WHERE recovery_phase IS NOT NULL",
-                        [],
+                        "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery_phase IS NOT NULL",
+                        rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                         |row| row.get::<_, u64>(0)
                     )?,
                     0
@@ -93,7 +99,9 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             .await?;
         edit(f, "DROP TRIGGER phase_late_fault").await?;
     }
-    let original = first.dispatch_any(&f.client(), store, &flag).await?;
+    let original = first
+        .dispatch_any(&f.client(), store, &f.authority(), &flag)
+        .await?;
     let mut head = first.clone();
     let mut saved_first = None;
     let expected = if refusal_case {
@@ -127,8 +135,9 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             let registered = page
                 .persist_recovery(store, identity()?, Some(&head))
                 .await?;
-            let PublicationOutcome::PolicyPage(value) =
-                registered.dispatch_any(&f.client(), store, &flag).await?
+            let PublicationOutcome::PolicyPage(value) = registered
+                .dispatch_any(&f.client(), store, &f.authority(), &flag)
+                .await?
             else {
                 return Err("successor page did not complete".into());
             };
@@ -160,7 +169,7 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             let directory = root.to_path_buf();
             let disk = budget.clone();
             let ready = ticket
-                .spawn_bound(move |_| async move {
+                .spawn_bound(move |_, _context| async move {
                     owner
                         .ready_root_push(root_identity, &guard, &directory, disk, limits(), None)
                         .await
@@ -172,13 +181,14 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             head = ready
                 .persist_recovery_after(store, identity()?, &head)
                 .await?;
-            head.dispatch(&f.client(), store).await?
+            head.dispatch(&f.client(), store, &f.authority()).await?
         }
     };
     // Return the same settled page through its retained predecessor frame.
     if let Some(expected) = &saved_first {
-        let PublicationOutcome::PolicyPage(actual) =
-            first.dispatch_any(&f.client(), store, &flag).await?
+        let PublicationOutcome::PolicyPage(actual) = first
+            .dispatch_any(&f.client(), store, &f.authority(), &flag)
+            .await?
         else {
             return Err("original page history missing".into());
         };
@@ -218,7 +228,9 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
     let loaded = RegisteredRootRecovery::load(&client, &f.target, store, &check)
         .await?
         .ok_or("restored durable phase")?;
-    let PublicationOutcome::RootPush(actual) = loaded.dispatch_any(&client, store, &flag).await?
+    let PublicationOutcome::RootPush(actual) = loaded
+        .dispatch_any(&client, store, &f.authority(), &flag)
+        .await?
     else {
         return Err("restored terminal phase missing".into());
     };
@@ -247,8 +259,9 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             ))
             .await?;
         }
-        let PublicationOutcome::PolicyPage(actual) =
-            first.dispatch_any(&client, store, &flag).await?
+        let PublicationOutcome::PolicyPage(actual) = first
+            .dispatch_any(&client, store, &f.authority(), &flag)
+            .await?
         else {
             return Err("expired predecessor reply missing".into());
         };
@@ -275,14 +288,24 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             Ok(Vec::new())
         })
         .await?;
-    Box::pin(query_failure(&loaded, &client, &handle, store, &expected)).await?;
+    Box::pin(query_failure(
+        &loaded,
+        &client,
+        &handle,
+        store,
+        &expected,
+        f.authority(),
+        f.publication_budget.clone(),
+    ))
+    .await?;
     let _released = Box::pin(super::terminal_retention::archive(
         f, &client, &handle, store, &loaded, &expected, 0,
     ))
     .await?;
     if let Some(expected) = &saved_first {
-        let PublicationOutcome::PolicyPage(actual) =
-            first.dispatch_any(&client, store, &flag).await?
+        let PublicationOutcome::PolicyPage(actual) = first
+            .dispatch_any(&client, store, &f.authority(), &flag)
+            .await?
         else {
             return Err("archived original page lost".into());
         };
@@ -301,6 +324,8 @@ async fn query_failure(
     handle: &CellHandle,
     store: &canopy_object_storage::artifact::ArtifactStore,
     expected: &cellule_runtime::Committed<RootCompletionReply>,
+    authority: PreparationAuthority,
+    budget: PublicationBudget,
 ) -> Result {
     // The service is stopped and the original outcome has settled. Hide the
     // phase table to inject a real private-query failure without changing data.
@@ -309,11 +334,14 @@ async fn query_failure(
         "ALTER TABLE catalog_leases RENAME TO phase_query_fault",
     )
     .await?;
-    let ready = loaded.clone().ready(client.clone(), store.clone())?;
+    let ready = loaded
+        .clone()
+        .ready(client.clone(), store.clone(), authority)?;
     let reservation = ready.reservation();
     let queue = PublicationCoordinator::new(
         loaded.evidence().target().clone(),
         PublicationLimits::default(),
+        budget,
     )?;
     let observer = queue
         .submit(ready)
@@ -377,7 +405,7 @@ async fn late_write_case(
     // The lifecycle owns expensive preparation. Awaiting its typed result
     // keeps the original factory/custody checks without nesting the complete
     // native receive fixture on the producer's poll stack.
-    let worker = context.ticket.spawn_bound(move |_| async move {
+    let worker = context.ticket.spawn_bound(move |_, _context| async move {
         let publishing = owner
             .ready_root_push(
                 positive_identity,
@@ -422,7 +450,9 @@ async fn late_write_case(
     let registered = refusal
         .persist_recovery_after(store, identity()?, head)
         .await?;
-    let result = registered.dispatch(&f.client(), store).await?;
+    let result = registered
+        .dispatch(&f.client(), store, &f.authority())
+        .await?;
     assert!(
         matches!(&result.output, RootCompletionReply::Completed(value)
                 if value.completion.rejected && value.completion.publication.is_none())

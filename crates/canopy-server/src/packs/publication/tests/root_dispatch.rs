@@ -91,7 +91,8 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             .is_err(),
         "publishing native intent must not become a ref-free outcome"
     );
-    let operation = prepared.token().operation;
+    let token = prepared.token();
+    let operation = token.operation;
     let lookup = BeginRequest {
         repository: f.repository,
         operation,
@@ -122,7 +123,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     let weak = Arc::downgrade(&prepared);
     let directory = root.to_owned();
     let producer_store = store.clone();
-    let producer = ticket.spawn_bound(move |session| async move {
+    let producer = ticket.spawn_bound(move |session, _context| async move {
         assert!(Arc::ptr_eq(
             &prepared.base.session.deadline,
             &session.deadline
@@ -159,6 +160,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             f.repository,
         )?,
         PublicationLimits::default(),
+        f.publication_budget.clone(),
     )?;
     let failure = ticket
         .publish(&foreign, ready)
@@ -174,11 +176,15 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     assert_eq!(retained.evidence_for_test(), evidence);
     assert_eq!(foreign.stats().await.admitted, 0);
 
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     p.fault_for_test(fault);
     let (release, wait) = tokio::sync::oneshot::channel();
     let (entered, running) = tokio::sync::oneshot::channel();
-    let worker = ticket.spawn_bound(move |_| async move {
+    let worker = ticket.spawn_bound(move |_, _context| async move {
         let _ = entered.send(());
         wait.await.map_err(|_| StagingError::Worker)?;
         Ok(42u64)
@@ -205,7 +211,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     let renewal = ticket.bound_renewal().ok_or("ordered root renewal")?;
     assert!(!close.as_ref().unwrap().is_finished());
     assert_eq!(p.close_and_drain().await.len(), 1);
-    assert!(ticket.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(ticket.spawn_bound(|_, _context| async { Ok(()) }).is_err());
     release.send(()).map_err(|_| "drained worker disappeared")?;
     assert_eq!(
         ticket
@@ -245,12 +251,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             Loss::Expiry => {
                 // Cellule's SQL deadlines use the real monotonic clock. Wait
                 // for this shared local ceiling without shifting Tokio time.
-                let deadline = weak
-                    .upgrade()
-                    .ok_or("root custody lost")?
-                    .base
-                    .live_lease()?
-                    .1;
+                let deadline = ticket.expire_bound_for_test()?;
                 tokio::time::sleep_until(deadline + Duration::from_millis(1)).await;
                 assert!(
                     weak.upgrade()
@@ -322,7 +323,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 response(observer.root_response(store).await?).await?,
                 expected
             );
-            assert_eq!(f.counts().await?, (0, 2));
+            assert_eq!(f.counts_for(token).await?, (0, 1));
             let saved = f
                 .client()
                 .query::<CheckCompletedRootPush>(&f.target, Some(committed.receipt), lookup.clone())
@@ -336,7 +337,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 PublicationError::RootPush(InvocationError::NotStarted(_))
             ));
             assert!(observer.root_response(store).await.is_err());
-            assert_eq!(f.counts().await?, (1, 2));
+            assert_eq!(f.counts_for(token).await?, (1, 1));
             assert!(
                 f.client()
                     .query::<CheckCompletedRootPush>(&f.target, None, lookup.clone())

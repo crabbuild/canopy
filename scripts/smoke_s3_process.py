@@ -755,7 +755,7 @@ def main():
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
             second.kill()
             second.wait(timeout=10)
-            abandoned = directory / "second" / "runtime-v1"
+            abandoned = directory / "second" / "canopy-pack-v1"
             stale_caches = list(abandoned.glob("canopy-git-*"))
             assert stale_caches, "expected a retained fetch cache at owner death"
             sentinel = abandoned / "abandoned-upload"

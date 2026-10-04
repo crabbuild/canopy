@@ -8,7 +8,7 @@ use std::{
 };
 
 const MARKER: &str = ".canopy-runtime";
-const FORMAT: &[u8] = b"canopy-runtime-v1\n";
+const FORMAT: &[u8] = crate::deployment::STORAGE_FORMAT.as_bytes();
 
 struct OwnerLock(File);
 
@@ -42,7 +42,17 @@ impl Workspace {
         fs::create_dir_all(directory)?;
         let directory = fs::canonicalize(directory)?;
         let owner = OwnerLock::acquire(&directory.join(".canopy-owner.lock"))?;
-        let root = directory.join("runtime-v1");
+        match fs::symlink_metadata(directory.join("runtime-v1")) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "legacy Canopy runtime requires a fresh packed-format data directory",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let root = directory.join(crate::deployment::STORAGE_FORMAT);
         #[cfg(unix)]
         let created = {
             use std::os::unix::fs::DirBuilderExt;

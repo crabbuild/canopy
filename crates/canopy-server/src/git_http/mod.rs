@@ -38,6 +38,8 @@ pub(crate) const WORKER_DEADLINE: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHttpError {
+    #[error("native receive has no live staging custody")]
+    Staging(#[from] crate::packs::publication::StagingError),
     #[error("Git cache failed")]
     Cache(#[from] CacheError),
     #[error("Git process I/O failed")]
@@ -133,8 +135,13 @@ impl GitHttpBackend {
     /// this API, then capture and verify inputs before durable publication.
     pub async fn run_native_receive(
         &self,
+        context: &crate::packs::publication::StagingContext,
         request: GitHttpRequest,
     ) -> Result<GitHttpResponse, GitHttpError> {
+        context.ensure_live()?;
+        if context.format() != self.cache.object_format || !request.authenticated {
+            return Err(GitHttpError::Interrupted);
+        }
         if request.method != "POST"
             || request.path_info != "/repo.git/git-receive-pack"
             || !request.query.is_empty()
@@ -143,13 +150,27 @@ impl GitHttpBackend {
         }
         let mut command = self.transport_command()?;
         command.args(["-c", "receive.unpackLimit=0"]);
-        let response = self.stream_command(request, (), command).await?;
-        self.collect(response).await
+        let response = self
+            .stream_command(request, context.physical_owner(), command)
+            .await?;
+        let response = self
+            .collect_owned(response, context.physical_owner())
+            .await?;
+        context.ensure_live()?;
+        Ok(response)
     }
 
     async fn collect(
         &self,
         response: GitHttpResponse<GitBody>,
+    ) -> Result<GitHttpResponse, GitHttpError> {
+        self.collect_owned(response, Arc::new(())).await
+    }
+
+    async fn collect_owned(
+        &self,
+        response: GitHttpResponse<GitBody>,
+        owner: crate::git_objects::ReadOwner,
     ) -> Result<GitHttpResponse, GitHttpError> {
         let GitHttpResponse {
             status,
@@ -164,7 +185,7 @@ impl GitHttpBackend {
             }
             bytes.extend_from_slice(&chunk);
         }
-        self.cache.reconcile().await?;
+        self.cache.reconcile_owned(owner).await?;
         Ok(GitHttpResponse {
             status,
             headers,

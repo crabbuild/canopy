@@ -3,6 +3,7 @@ use super::super::metadata::{
     tests::{builder, fill, fixture},
 };
 use super::*;
+mod changes;
 use canopy_object_storage::artifact::ArtifactStore;
 use canopy_object_storage::external::MAX_ARTIFACT_BYTES;
 use cellule_ltx::DiskBudget;

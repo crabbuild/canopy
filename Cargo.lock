@@ -399,6 +399,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "flate2",
  "futures-core",
+ "futures-util",
  "hex",
  "http-body",
  "libc",

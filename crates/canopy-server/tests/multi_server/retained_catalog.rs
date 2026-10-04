@@ -58,7 +58,7 @@ async fn retained_fixture() -> Result<RetainedFixture> {
                 .store_prefix
                 .clone()
                 .join("canopy-root-v1.json"),
-            Bytes::from_static(br#"{"kind":"service"}"#),
+            Bytes::from_static(br#"{"format":"canopy-pack-v1","purpose":{"kind":"service"}}"#),
         )
         .await?;
     ApplicationIdentityStore::new(storage.clone(), configuration.store_prefix.clone())

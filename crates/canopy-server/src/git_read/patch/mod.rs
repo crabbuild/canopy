@@ -106,6 +106,7 @@ impl Reader {
         let actor = actor.into();
         let path = path(encoded_path)?;
         let revision = self.authorize(actor, number, &target).await?;
+        self.bind(actor).await?;
         let (merge_base, old_tree, new_tree) = self
             .roots(oid(&revision.base_oid)?, oid(&revision.source_oid)?)
             .await?;

@@ -1,4 +1,4 @@
-//! Bounded repository browsing and PR comparison over verified Cell Git objects.
+//! Bounded repository browsing and comparison over certified immutable Git objects.
 
 use crate::ReadIdentity;
 
@@ -13,10 +13,7 @@ use crate::{
     pulls::{PullRevision, parse_oid},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use cellule_runtime::{
-    InvocationError, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
-    primitives::sql::SqlStatement, primitives::sql::SqlValue,
-};
+use cellule_runtime::{InvocationError, primitives::sql::SqlResultSet};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -50,6 +47,10 @@ pub(crate) enum ReadError {
     Cell(#[from] InvocationError<Vec<SqlResultSet>>),
     #[error("Git read worker failed")]
     Task(#[from] tokio::task::JoinError),
+    #[error("certified Git snapshot is unavailable")]
+    Serving(#[from] crate::packs::publication::ServingReadError),
+    #[error("certified Git snapshot owner is unavailable")]
+    ServingOwner(#[from] crate::packs::publication::ServingOwnerError),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -119,6 +120,7 @@ pub(crate) struct FilePreview {
 pub(crate) struct Reader {
     repository: Arc<RepositoryCell>,
     admission: Arc<AdmissionPermit>,
+    snapshot: Option<crate::packs::publication::ServingSnapshot>,
     bytes: u64,
     entries: usize,
 }
@@ -127,9 +129,34 @@ impl Reader {
         Self {
             repository,
             admission,
+            snapshot: None,
             bytes: 0,
             entries: 0,
         }
+    }
+    async fn bind(&mut self, actor: ReadIdentity<'_>) -> Result<(), ReadError> {
+        if self.snapshot.is_some() {
+            return Err(ReadError::Malformed);
+        }
+        self.snapshot = Some(self.repository.serving_snapshot(actor).await?);
+        Ok(())
+    }
+    fn snapshot(&self) -> Result<&crate::packs::publication::ServingSnapshot, ReadError> {
+        self.snapshot.as_ref().ok_or(ReadError::Malformed)
+    }
+    async fn header(&self, oid: Oid) -> Result<crate::packs::metadata::ObjectHeader, ReadError> {
+        if oid.format() != self.repository.object_format() {
+            return Err(ReadError::Invalid);
+        }
+        if oid.is_zero() {
+            return Err(ReadError::Missing);
+        }
+        self.snapshot()?
+            .headers(&[oid])
+            .await?
+            .pop()
+            .flatten()
+            .ok_or(ReadError::Missing)
     }
     async fn authorize<'a>(
         &self,
@@ -207,6 +234,7 @@ impl Reader {
         let actor = actor.into();
         let cursor = after.map(path).transpose()?;
         let revision = self.authorize(actor, number, &target).await?;
+        self.bind(actor).await?;
         let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);
         let (merge_base, before, after) = self.roots(base, source).await?;
         let changes = self.changes(before, after).await?;
@@ -249,6 +277,7 @@ impl Reader {
         let actor = actor.into();
         let path = path(encoded_path)?;
         let revision = self.authorize(actor, number, &target).await?;
+        self.bind(actor).await?;
         let (base, source) = (oid(&revision.base_oid)?, oid(&revision.source_oid)?);
         let (merge_base, before, after) = self.roots(base, source).await?;
         let root = match side {
@@ -284,37 +313,11 @@ impl Reader {
         })
     }
     async fn size(&self, oid: Oid, kind: ObjectKind) -> Result<u64, ReadError> {
-        let result = self
-            .repository
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT kind, size FROM objects WHERE oid = ?1".into(),
-                        parameters: vec![SqlValue::Blob(oid.to_vec())],
-                    }],
-                },
-            )
-            .await?;
-        let Some([SqlValue::Text(stored_kind), SqlValue::Integer(size)]) = result
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(Vec::as_slice)
-        else {
-            return Err(ReadError::Malformed);
-        };
-        let expected = match kind {
-            ObjectKind::Blob => "blob",
-            ObjectKind::Tree => "tree",
-            ObjectKind::Commit => "commit",
-            ObjectKind::Tag => "tag",
-        };
-        if stored_kind != expected {
+        let object = self.header(oid).await?.object;
+        if object.kind != kind {
             return Err(ReadError::Malformed);
         }
-        u64::try_from(*size).map_err(|_| ReadError::Malformed)
+        Ok(object.size)
     }
     async fn body(&mut self, oid: Oid, kind: ObjectKind) -> Result<Vec<u8>, ReadError> {
         let size = self.size(oid, kind).await?;
@@ -322,13 +325,16 @@ impl Reader {
             return Err(ReadError::TooLarge);
         }
         self.bytes += size;
-        let (stored_kind, body) = self
-            .repository
-            .object(oid, None)
-            .await?
-            .output
-            .ok_or(ReadError::Malformed)?;
-        if stored_kind != kind || body.len() as u64 != size {
+        let body = self
+            .snapshot()?
+            .body(oid, MAX_OBJECT_BYTES as usize)
+            .await
+            .map_err(|error| match error {
+                crate::packs::publication::ServingReadError::TooLarge => ReadError::TooLarge,
+                error => ReadError::Serving(error),
+            })?
+            .ok_or(ReadError::Missing)?;
+        if body.len() as u64 != size {
             return Err(ReadError::Malformed);
         }
         Ok(body)

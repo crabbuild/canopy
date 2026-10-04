@@ -114,7 +114,7 @@ def main():
                                                  "process_tree_rss_bytes": rss}) + "\n")
                         # MAX(sequence) uses the integer primary key. Avoid
                         # table scans or long transactions on the live Cell.
-                        for database in (args.state_dir / "node" / "runtime-v1").glob("*/repository.sqlite"):
+                        for database in (args.state_dir / "node" / "canopy-pack-v1").glob("*/repository.sqlite"):
                             try:
                                 connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=0.2)
                                 try:
@@ -258,7 +258,7 @@ def main():
         git("prepare-pull-client", "clone", "--shared", "--single-branch", "--branch",
             default_ref.removeprefix("refs/heads/"), str(args.work_dir / "warm-v2.git"), str(pull_work))
         git("configure-pull-client", "-C", str(pull_work), "remote", "set-url", "origin", url)
-        # The binary's startup contract removes runtime-v1 before recovering
+        # The binary's startup contract removes canopy-pack-v1 before recovering
         # authoritative Cells from the provider; no manual deletion is needed.
         commit_env = {**git_env, "GIT_AUTHOR_NAME": "Canopy Evaluation",
             "GIT_AUTHOR_EMAIL": "evaluation@example.invalid",

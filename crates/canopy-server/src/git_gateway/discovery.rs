@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Instant;
 
 pub(super) async fn is_ref_discovery(request: &GitHttpRequest) -> Result<bool, InputError> {
     if request.method == "GET" && request.path_info == "/repo.git/info/refs" {
@@ -47,67 +46,6 @@ fn ls_refs(mut bytes: &[u8]) -> bool {
             command = Some(value);
         }
         bytes = &bytes[length..];
-    }
-}
-
-impl GitGateway {
-    pub(super) async fn discovery_cache(
-        &self,
-        snapshot: RefSnapshot,
-    ) -> Result<GitHttpBackend, GatewayError> {
-        let started = Instant::now();
-        let backend = GitHttpBackend::initialize(
-            self.scratch_root.clone(),
-            self.disk_budget.clone(),
-            &snapshot.head,
-            self.repository.object_format(),
-            self.native.clone(),
-        )
-        .await?
-        .with_nonce(self.certificate_nonce().await?);
-        let mut pending: BTreeSet<_> = snapshot
-            .refs
-            .values()
-            .filter_map(|state| state.oid)
-            .collect();
-        let mut visited = BTreeSet::new();
-        let mut stats = Hydration::default();
-        while !pending.is_empty() {
-            let ids: Vec<_> = pending.iter().take(MAX_OBJECTS).copied().collect();
-            let page = self
-                .repository
-                .selected_objects(&ids)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-            if page.is_empty() {
-                return Err(GatewayError::MalformedCache);
-            }
-            for object in page {
-                pending.remove(&object.oid);
-                visited.insert(object.oid);
-                let tag = object.kind == ObjectKind::Tag;
-                let target = self
-                    .cache_object(&backend.cache, object, &mut stats)
-                    .await?;
-                if tag {
-                    let target = target.ok_or(GatewayError::MalformedCache)?;
-                    if !visited.contains(&target) {
-                        pending.insert(target);
-                    }
-                }
-            }
-        }
-        // Native discovery checks ref target existence and peels tag chains.
-        // Commit parents and tree contents are needed only by later transfer RPCs.
-        backend.cache.store_refs(&snapshot.refs).await?;
-        tracing::debug!(
-            repository = %hex::encode(self.repository.repository_id()),
-            objects = stats.objects,
-            bytes = stats.bytes,
-            elapsed_seconds = started.elapsed().as_secs_f64(),
-            "prepared Git ref discovery"
-        );
-        Ok(backend)
     }
 }
 

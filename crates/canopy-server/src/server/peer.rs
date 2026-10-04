@@ -118,10 +118,31 @@ impl NodePeer {
             .is_some_and(|owner| owner.session() != self.0.session))
     }
 
+    pub(crate) async fn current_owner_fence(
+        &self,
+        target: &CellTarget,
+    ) -> Result<cellule_runtime::registry::OwnerFence, ServerError> {
+        self.live_binding(target)
+            .await?
+            .map(|(_, fence)| fence)
+            .ok_or(Error::Fenced.into())
+    }
+
     async fn live_owner(
         &self,
         target: &CellTarget,
     ) -> Result<Option<NodeAdvertisement>, ServerError> {
+        Ok(self
+            .live_binding(target)
+            .await?
+            .map(|(advertisement, _)| advertisement))
+    }
+
+    async fn live_binding(
+        &self,
+        target: &CellTarget,
+    ) -> Result<Option<(NodeAdvertisement, cellule_runtime::registry::OwnerFence)>, ServerError>
+    {
         let authority = CellAuthority::new(self.0.layout.clone());
         let Some(control) = authority.load(target.cell_id()).await? else {
             return Ok(None);
@@ -136,7 +157,10 @@ impl NodePeer {
         if live.advertisement().endpoint() != owner.endpoint {
             return Err(Error::Fenced.into());
         }
-        Ok(Some(live.advertisement().clone()))
+        Ok(Some((
+            live.advertisement().clone(),
+            control.value().owner_fence(),
+        )))
     }
 
     pub(super) async fn ensure_directory(&self) -> Result<(), ServerError> {

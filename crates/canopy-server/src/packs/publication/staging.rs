@@ -219,7 +219,7 @@ pub struct ClaimStaging;
 impl Command for ClaimStaging {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 28;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = LeaseRequest;
     type Output = StagingReply;
     fn execute(
@@ -237,7 +237,9 @@ impl Command for ClaimStaging {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
         let Some(row) = load(context, check.token)? else {
-            if !super::staging_receipt::restart_matches(context, &check)? {
+            if !super::staging_receipt::restart_matches(context, &check)?
+                && !super::custody::restart_matches(context, &check, true)?
+            {
                 return Ok(denied(PreparationDenial::Missing));
             }
             let begin = BeginRequest {

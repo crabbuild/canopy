@@ -1,6 +1,7 @@
 use super::*;
 use crate::ReadIdentity;
-use crate::refs::{RefReadError, valid_ref_name};
+use crate::packs::ref_state::MAX_NAME_BYTES;
+use crate::refs::valid_ref_name;
 
 const PAGE: usize = 32;
 
@@ -65,21 +66,22 @@ impl Reader {
         generation: Option<i64>,
     ) -> Result<serde_json::Value, ReadError> {
         let actor = actor.into();
-        if (!after.is_empty() && (!valid_ref_name(after) || generation.is_none()))
+        if (!after.is_empty()
+            && (after.len() > MAX_NAME_BYTES || !valid_ref_name(after) || generation.is_none()))
             || generation.is_some_and(|n| n < 0)
         {
             return Err(ReadError::Invalid);
         }
         self.member(actor).await?;
-        let page = self
-            .repository
-            .refs_page(after, generation)
-            .await
-            .map_err(|error| match error {
-                RefReadError::Changed => ReadError::Changed,
-                RefReadError::Cell(error) => ReadError::Cell(error),
-            })?
-            .output;
+        let snapshot = self.repository.serving_snapshot(actor).await?;
+        let page =
+            snapshot
+                .refs_page(after, generation, true)
+                .await
+                .map_err(|error| match error {
+                    crate::packs::publication::ServingReadError::Changed => ReadError::Changed,
+                    error => ReadError::Serving(error),
+                })?;
         let next_after = page
             .has_more
             .then(|| page.refs.last().map(|(name, _)| name.clone()))
@@ -96,62 +98,30 @@ impl Reader {
         reference: Option<&str>,
     ) -> Result<serde_json::Value, ReadError> {
         let actor = actor.into();
-        if reference.is_some_and(|name| !valid_ref_name(name)) {
+        if reference.is_some_and(|name| name.len() > MAX_NAME_BYTES || !valid_ref_name(name)) {
             return Err(ReadError::Invalid);
         }
         self.member(actor).await?;
-        // Resolve default HEAD and its tip in one observation. The returned OID
-        // pins subsequent reads even if a writer moves the ref during browsing.
-        let result = self.repository.sql.query(None, SqlBatch {statements: vec![SqlStatement {
-            sql: "SELECT g.generation, coalesce(?1,g.default_branch), r.oid, r.version FROM ref_generation g LEFT JOIN refs r ON r.name = coalesce(?1,g.default_branch) WHERE g.singleton = 1".into(),
-            parameters: vec![reference.map_or(SqlValue::Null, |value| SqlValue::Text(value.into()))],
-        }]}).await?;
-        let row = result
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .ok_or(ReadError::Malformed)?;
-        let [
-            SqlValue::Integer(generation),
-            SqlValue::Text(name),
-            value,
-            version,
-        ] = row.as_slice()
-        else {
-            return Err(ReadError::Malformed);
-        };
-        let oid = match value {
-            SqlValue::Null => None,
-            SqlValue::Blob(bytes) if matches!(bytes.len(), 20 | 32) => Some(hex::encode(bytes)),
-            _ => return Err(ReadError::Malformed),
-        };
-        let version = match version {
-            SqlValue::Null => None,
-            SqlValue::Integer(n) => Some(*n),
-            _ => return Err(ReadError::Malformed),
-        };
+        let snapshot = self.repository.serving_snapshot(actor).await?;
+        let resolved = snapshot.resolve_ref(reference).await?;
+        let oid = resolved
+            .state
+            .as_ref()
+            .and_then(|state| state.oid)
+            .map(hex::encode);
+        let version = resolved.state.as_ref().map(|state| state.version);
         self.member(actor).await?;
-        Ok(
-            serde_json::json!({"reference":name,"oid":oid,"version":version,"generation":generation}),
-        )
+        Ok(serde_json::json!({
+            "reference":resolved.reference, "oid":oid,
+            "version":version, "generation":resolved.generation,
+        }))
     }
     async fn commit(&mut self, mut target: Oid) -> Result<Commit, ReadError> {
         // Only certified objects are browseable. Staged push bytes do not become
         // visible through a guessed OID before their complete graph is verified.
         for _ in 0..16 {
-            let rows = self.repository.sql.query(None,SqlBatch {statements:vec![SqlStatement {
-                sql:"SELECT o.kind FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1".into(), parameters:vec![SqlValue::Blob(target.to_vec())],
-            }]}).await?;
-            let Some([SqlValue::Text(kind)]) = rows
-                .output
-                .first()
-                .and_then(|s| s.rows.first())
-                .map(Vec::as_slice)
-            else {
-                return Err(ReadError::Missing);
-            };
-            match kind.as_str() {
-                "commit" => {
+            match self.header(target).await?.object.kind {
+                ObjectKind::Commit => {
                     let body = self.body(target, ObjectKind::Commit).await?;
                     let admission = Arc::clone(&self.admission);
                     return tokio::task::spawn_blocking(move || {
@@ -160,7 +130,7 @@ impl Reader {
                     })
                     .await?;
                 }
-                "tag" => {
+                ObjectKind::Tag => {
                     let body = self.body(target, ObjectKind::Tag).await?;
                     let first = body
                         .split(|b| *b == b'\n')
@@ -187,6 +157,7 @@ impl Reader {
     ) -> Result<Directory, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let path = if encoded_path.is_empty() {
             Vec::new()
         } else {
@@ -243,6 +214,7 @@ impl Reader {
     ) -> Result<File, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let path = path(encoded_path)?;
         let commit = self.commit(oid(revision)?).await?;
         let entry = self
@@ -282,6 +254,7 @@ impl Reader {
     ) -> Result<History, ReadError> {
         let actor = actor.into();
         self.member(actor).await?;
+        self.bind(actor).await?;
         let mut target = Some(oid(revision)?);
         let mut commits = Vec::new();
         while let Some(current) = target {

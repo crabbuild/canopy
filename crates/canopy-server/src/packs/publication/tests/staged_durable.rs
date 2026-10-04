@@ -57,7 +57,11 @@ pub(super) async fn qualify(
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     let mut terminal = None;
     for offset in [0, 128, 256] {
@@ -102,7 +106,9 @@ pub(super) async fn qualify(
             assert_eq!(failure.original.evidence_for_test(), evidence);
             assert_eq!(failure.registered.evidence(), &evidence);
         }
-        let cold = registered.clone().ready(f.client(), store.clone())?;
+        let cold = registered
+            .clone()
+            .ready(f.client(), store.clone(), f.authority())?;
         let failure = ticket
             .publish(&queue, cold)
             .err()
@@ -141,7 +147,7 @@ pub(super) async fn qualify(
         let (release, wait) = tokio::sync::oneshot::channel();
         let (entered, running) = tokio::sync::oneshot::channel();
         let worker = if offset == 0 {
-            Some(ticket.spawn_bound(move |_| async move {
+            Some(ticket.spawn_bound(move |_, _context| async move {
                 let _ = entered.send(());
                 wait.await.map_err(|_| StagingError::Worker)?;
                 Ok(42u64)
@@ -233,6 +239,7 @@ pub(super) async fn qualify(
             .dispatch_any(
                 &f.client(),
                 store,
+                &f.authority(),
                 &std::sync::atomic::AtomicBool::new(false),
             )
             .await?;
@@ -263,7 +270,7 @@ pub(super) async fn qualify(
             let disk = budget.clone();
             let mutation = identity()?;
             ticket
-                .spawn_bound(move |_| async move {
+                .spawn_bound(move |_, _context| async move {
                     let guard = policy
                         .ready(&owner)
                         .await
@@ -321,7 +328,7 @@ pub(super) async fn qualify(
             .await?
             .ok_or("durable terminal record")?;
         assert_eq!(loaded.evidence(), &evidence);
-        let actual = loaded.dispatch(&f.client(), store).await?;
+        let actual = loaded.dispatch(&f.client(), store, &f.authority()).await?;
         assert_eq!(
             (&actual.output, actual.receipt),
             (&value.output, value.receipt)
@@ -386,7 +393,11 @@ pub(super) async fn qualify_fence(context: Context<'_>) -> Result {
     let registered = page.persist_recovery(store, identity()?, None).await?;
     let bound = page.bind_recovery(registered, store)?;
     session.fence();
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let observer = queue
         .submit(bound)
         .await
@@ -433,7 +444,11 @@ pub(super) async fn qualify_revoked(context: Context<'_>, root_case: bool) -> Re
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     let mut observer = None;
     for offset in [0, 128, 256] {
@@ -474,7 +489,7 @@ pub(super) async fn qualify_revoked(context: Context<'_>, root_case: bool) -> Re
         let disk = budget;
         let mutation = identity()?;
         let ready = ticket
-            .spawn_bound(move |_| async move {
+            .spawn_bound(move |_, _context| async move {
                 let guard = intent
                     .ready(&owner)
                     .await

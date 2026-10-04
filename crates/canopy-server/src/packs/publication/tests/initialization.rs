@@ -10,7 +10,7 @@ use crate::packs::{
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
 
-async fn empty(
+pub(super) async fn empty(
     fixture: &Fixture,
     operation: [u8; 16],
     store: Arc<ArtifactStore>,
@@ -30,17 +30,133 @@ fn initialized(reply: InitializationReply) -> Result<GenerationFact> {
         InitializationReply::Denied(why) => Err(format!("initialization denied {why:?}").into()),
     }
 }
-async fn reject(fixture: &Fixture, input: InitialRefProof, reason: PreparationDenial) -> Result {
-    let before = state(&fixture.handle).await?;
-    let result = fixture
+pub(super) async fn registered(
+    fixture: &Fixture,
+    prepared: &PreparedCatalog,
+    input: InitialRefProof,
+    mutation: MutationIdentity,
+) -> Result<(
+    cellule_runtime::PreparedCommand<InitializeCatalogRefs>,
+    RegisteredRootRecovery,
+)> {
+    let command = fixture
         .client()
-        .command::<InitializeCatalogRefs>(&fixture.target, identity()?, input)
+        .prepare_command::<InitializeCatalogRefs>(&fixture.target, mutation, input)
+        .await?;
+    let record = super::super::recovery::persist(
+        &prepared.base.session,
+        &command,
+        super::super::recovery::Kind::Initialization,
+        &prepared.base.indexes().store(),
+        identity()?,
+        0,
+    )
+    .await?;
+    Ok((command, record))
+}
+async fn reject(
+    fixture: &Fixture,
+    command: cellule_runtime::PreparedCommand<InitializeCatalogRefs>,
+    registered: &RegisteredRootRecovery,
+    store: &ArtifactStore,
+    reason: PreparationDenial,
+) -> Result {
+    let before = state(&fixture.handle).await?;
+    let evidence = command.evidence().clone();
+    let result = command.execute().await?;
+    assert_eq!(result.output, InitializationReply::Denied(reason));
+    assert_eq!(state(&fixture.handle).await?, before);
+    assert!(matches!(
+        fixture.client().resolve(&evidence).await?,
+        cellule_runtime::Resolution::Committed(
+            cellule_runtime::cell::executor::StoredOutcome::Success { .. }
+        )
+    ));
+    let recovered = registered
+        .recover_initialization(&fixture.client(), store, &fixture.authority())
         .await;
     assert!(
-        matches!(result,Err(InvocationError::Rejected(ref value)) if value.output==InitializationReply::Denied(reason)),
+        matches!(recovered,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==result.receipt && value.output==result.output)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unregistered_initialization_keeps_sdk_and_catalog_absent() -> Result {
+    let fixture = Fixture::new(ObjectFormat::Sha1).await?;
+    let store = Arc::new(ArtifactStore::new(
+        Arc::new(InMemory::new()),
+        fixture.repository,
+    ));
+    let (prepared, root, budget) = empty(&fixture, [229; 16], store).await?;
+    let command = fixture
+        .client()
+        .prepare_command::<InitializeCatalogRefs>(
+            &fixture.target,
+            identity()?,
+            prepared.empty_ref_initialization().await?,
+        )
+        .await?;
+    let evidence = command.evidence().clone();
+    let before = state(&fixture.handle).await?;
+    let result = command.execute().await;
+    assert!(
+        matches!(result, Err(InvocationError::NotStarted(_))),
         "{result:?}"
     );
     assert_eq!(state(&fixture.handle).await?, before);
+    assert!(matches!(
+        fixture.client().resolve(&evidence).await?,
+        cellule_runtime::Resolution::Absent
+    ));
+    drop(prepared);
+    cleaned(root.path(), &budget).await?;
+    fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_initialization_records_original_expiry_and_revocation_denials() -> Result {
+    for (sql, reason) in [
+        (
+            "UPDATE catalog_leases SET expires_at_ms=0; UPDATE catalog_operations SET expires_at_ms=0",
+            PreparationDenial::Expired,
+        ),
+        (
+            "UPDATE repository_identity SET owner='replacement'",
+            PreparationDenial::Unauthorized,
+        ),
+    ] {
+        let fixture = Fixture::new(ObjectFormat::Sha256).await?;
+        let store = Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        ));
+        let (prepared, root, budget) = empty(&fixture, [231; 16], store.clone()).await?;
+        let proof = prepared.empty_ref_initialization().await?;
+        let (command, registered) = registered(&fixture, &prepared, proof, identity()?).await?;
+        let evidence = command.evidence().clone();
+        drop(command);
+        drop(prepared);
+        cleaned(root.path(), &budget).await?;
+        edit(&fixture, sql).await?;
+        let before = state(&fixture.handle).await?;
+        let result = registered
+            .recover_initialization(&fixture.client(), &store, &fixture.authority())
+            .await;
+        assert!(
+            matches!(result,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output==InitializationReply::Denied(reason)),
+            "{result:?}"
+        );
+        assert_eq!(state(&fixture.handle).await?, before);
+        assert!(matches!(
+            fixture.client().resolve(&evidence).await?,
+            cellule_runtime::Resolution::Committed(
+                cellule_runtime::cell::executor::StoredOutcome::Success { .. }
+            )
+        ));
+        fixture.runtime.shutdown().await?;
+    }
     Ok(())
 }
 
@@ -78,10 +194,9 @@ async fn fresh_initialization_commits_joint_empty_roots_and_enables_first_ref_pr
                 .is_none()
         );
         let mutation = identity()?;
-        let committed = fixture
-            .client()
-            .command::<InitializeCatalogRefs>(&fixture.target, mutation, proof.clone())
-            .await?;
+        let (command, registered) =
+            registered(&fixture, &prepared, proof.clone(), mutation).await?;
+        let committed = command.clone().execute().await?;
         let fact = initialized(committed.output.clone())?;
         let mut e = BoundedEncoder::new(512)?;
         committed.output.encode(&mut e)?;
@@ -130,13 +245,19 @@ async fn fresh_initialization_commits_joint_empty_roots_and_enables_first_ref_pr
                 .receipt,
             committed.receipt
         );
-        assert_eq!(
+        assert!(matches!(
             fixture
                 .client()
                 .command::<InitializeCatalogRefs>(&fixture.target, identity()?, proof.clone())
-                .await?
-                .output,
-            committed.output
+                .await,
+            Err(InvocationError::NotStarted(_))
+        ));
+        let recovered = registered
+            .recover_initialization(&fixture.client(), &store, &fixture.authority())
+            .await?;
+        assert_eq!(
+            (recovered.output, recovered.receipt),
+            (committed.output.clone(), committed.receipt)
         );
         assert_eq!(
             fixture
@@ -230,53 +351,76 @@ async fn initialization_refuses_history_head_changes_revocation_expiry_and_forge
             Arc::new(InMemory::new()),
             fixture.repository,
         ));
-        let (prepared, root, budget) = empty(&fixture, [223; 16], store).await?;
+        let (prepared, root, budget) = empty(&fixture, [223; 16], store.clone()).await?;
         let proof = prepared.empty_ref_initialization().await?;
+        let (command, registered) = registered(&fixture, &prepared, proof, identity()?).await?;
         edit(&fixture, sql).await?;
-        reject(&fixture, proof, reason).await?;
+        reject(&fixture, command, &registered, &store, reason).await?;
         drop(prepared);
         cleaned(root.path(), &budget).await?;
         fixture.runtime.shutdown().await?;
     }
-    let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-    let store = Arc::new(ArtifactStore::new(
-        Arc::new(InMemory::new()),
-        fixture.repository,
-    ));
-    let (prepared, root, budget) = empty(&fixture, [224; 16], store).await?;
-    let proof = prepared.empty_ref_initialization().await?;
-    let mut stale = proof.clone();
-    let mut data = stale.certificate.data()?;
-    data.token.owner.epoch += 1;
-    stale.certificate = CatalogCertificate::seal(&data, &[16; 32])?;
-    reject(&fixture, stale, PreparationDenial::Stale).await?;
-    let mut forged = proof.clone();
-    forged.certificate = CatalogCertificate::seal(&proof.certificate.data()?, &[17; 32])?;
-    reject(&fixture, forged, PreparationDenial::Unauthorized).await?;
-    let mut wrong = proof.clone();
-    let mut data = wrong.certificate.data()?;
-    data.tenant = [96; 16];
-    wrong.certificate = CatalogCertificate::seal(&data, &[16; 32])?;
-    reject(&fixture, wrong, PreparationDenial::Unauthorized).await?;
-    let mut e = BoundedEncoder::new(128)?;
-    proof.refs.encode(&mut e)?;
-    let mut bytes = e.finish();
-    let end = bytes.len() - 1;
-    bytes[end] ^= 1;
-    let mut d = BoundedDecoder::new(&bytes, 128)?;
-    let refs = RefStateSnapshotRoot::decode(&mut d)?;
-    d.finish()?;
-    let raw = InitialRefProof {
-        refs,
-        certificate: proof.certificate,
-    };
-    assert!(
-        raw.encode(&mut BoundedEncoder::new(INITIALIZATION_BYTES)?)
-            .is_err()
-    );
-    drop(prepared);
-    cleaned(root.path(), &budget).await?;
-    fixture.runtime.shutdown().await?;
+    for mode in 0..3 {
+        let fixture = Fixture::new(ObjectFormat::Sha256).await?;
+        let store = Arc::new(ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            fixture.repository,
+        ));
+        let (prepared, root, budget) = empty(&fixture, [224; 16], store.clone()).await?;
+        let proof = prepared.empty_ref_initialization().await?;
+        let mut forged = proof.clone();
+        let mut data = proof.certificate.data()?;
+        if mode == 0 {
+            data.token.owner.epoch += 1;
+        }
+        if mode == 2 {
+            data.tenant = [96; 16];
+        }
+        forged.certificate =
+            CatalogCertificate::seal(&data, &if mode == 1 { [17; 32] } else { [16; 32] })?;
+        let (command, registered) = registered(&fixture, &prepared, forged, identity()?).await?;
+        if mode == 0 {
+            let before = state(&fixture.handle).await?;
+            let evidence = command.evidence().clone();
+            assert!(matches!(
+                command.execute().await,
+                Err(InvocationError::NotStarted(_))
+            ));
+            assert_eq!(state(&fixture.handle).await?, before);
+            assert!(matches!(
+                fixture.client().resolve(&evidence).await?,
+                cellule_runtime::Resolution::Absent
+            ));
+        } else {
+            reject(
+                &fixture,
+                command,
+                &registered,
+                &store,
+                PreparationDenial::Unauthorized,
+            )
+            .await?;
+        }
+        let mut e = BoundedEncoder::new(128)?;
+        proof.refs.encode(&mut e)?;
+        let mut bytes = e.finish();
+        let end = bytes.len() - 1;
+        bytes[end] ^= 1;
+        let mut d = BoundedDecoder::new(&bytes, 128)?;
+        let refs = RefStateSnapshotRoot::decode(&mut d)?;
+        d.finish()?;
+        let raw = InitialRefProof {
+            refs,
+            certificate: proof.certificate,
+        };
+        assert!(
+            raw.encode(&mut BoundedEncoder::new(INITIALIZATION_BYTES)?)
+                .is_err()
+        );
+        drop(prepared);
+        cleaned(root.path(), &budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
     Ok(())
 }
 
@@ -292,16 +436,34 @@ async fn initialization_late_failure_rolls_back_roots_checkpoint_and_outcome_and
     let (second, root_b, budget_b) = empty(&fixture, [226; 16], store).await?;
     let a = first.empty_ref_initialization().await?;
     let b = second.empty_ref_initialization().await?;
+    let (command_a, registered_a) = registered(&fixture, &first, a, identity()?).await?;
+    let (command_b, registered_b) = registered(&fixture, &second, b, identity()?).await?;
     edit(&fixture,"CREATE TRIGGER fail_initialization BEFORE INSERT ON catalog_initialization BEGIN SELECT RAISE(ABORT,'late initialization fault'); END;").await?;
     let before = state(&fixture.handle).await?;
+    let failed = command_a.clone().execute().await;
     assert!(
-        fixture
-            .client()
-            .command::<InitializeCatalogRefs>(&fixture.target, identity()?, a.clone())
-            .await
-            .is_err()
+        matches!(failed,Err(InvocationError::NotStarted(Error::Sqlite(rusqlite::Error::SqliteFailure(_,Some(ref message))))) if message == "late initialization fault"),
+        "{failed:?}"
     );
     assert_eq!(state(&fixture.handle).await?, before);
+    fixture
+        .handle
+        .query(0, 128, |db| {
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM catalog_leases WHERE recovery_phase IS NOT NULL",
+                    [],
+                    |row| row.get::<_, u64>(0)
+                )?,
+                0
+            );
+            Ok(Vec::new())
+        })
+        .await?;
+    assert!(matches!(
+        fixture.client().resolve(command_a.evidence()).await?,
+        cellule_runtime::Resolution::Absent
+    ));
     assert!(
         fixture
             .client()
@@ -312,29 +474,25 @@ async fn initialization_late_failure_rolls_back_roots_checkpoint_and_outcome_and
     );
     edit(&fixture, "DROP TRIGGER fail_initialization").await?;
     let client = fixture.client();
-    let (result_a, result_b) = tokio::join!(
-        client.command::<InitializeCatalogRefs>(&fixture.target, identity()?, a.clone()),
-        client.command::<InitializeCatalogRefs>(&fixture.target, identity()?, b.clone()),
-    );
-    let (committed, losing, winner, loser) = match (result_a, result_b) {
-        (Ok(committed), Err(InvocationError::Rejected(rejected))) => {
-            assert_eq!(
-                rejected.output,
-                InitializationReply::Denied(PreparationDenial::Conflict)
-            );
-            (committed, b, [225; 16], [226; 16])
-        }
-        (Err(InvocationError::Rejected(rejected)), Ok(committed)) => {
-            assert_eq!(
-                rejected.output,
-                InitializationReply::Denied(PreparationDenial::Conflict)
-            );
-            (committed, a, [226; 16], [225; 16])
-        }
-        other => {
-            return Err(format!("initialization must have exactly one winner: {other:?}").into());
-        }
-    };
+    let (result_a, result_b) = tokio::join!(command_a.execute(), command_b.execute());
+    let result_a = result_a?;
+    let result_b = result_b?;
+    let (committed, losing, winner, loser, registered_loser) =
+        match (&result_a.output, &result_b.output) {
+            (
+                InitializationReply::Initialized(_),
+                InitializationReply::Denied(PreparationDenial::Conflict),
+            ) => (result_a, result_b, [225; 16], [226; 16], registered_b),
+            (
+                InitializationReply::Denied(PreparationDenial::Conflict),
+                InitializationReply::Initialized(_),
+            ) => (result_b, result_a, [226; 16], [225; 16], registered_a),
+            other => {
+                return Err(
+                    format!("initialization must have exactly one winner: {other:?}").into(),
+                );
+            }
+        };
     let fact = initialized(committed.output)?;
     assert_eq!(fact.generation, 1);
     assert_eq!(
@@ -351,7 +509,12 @@ async fn initialization_late_failure_rolls_back_roots_checkpoint_and_outcome_and
             .output
             .is_none()
     );
-    reject(&fixture, losing, PreparationDenial::Conflict).await?;
+    let recovered = registered_loser
+        .recover_initialization(&client, &first.base.indexes().store(), &fixture.authority())
+        .await;
+    assert!(
+        matches!(recovered,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==losing.receipt && value.output==losing.output)
+    );
     drop(first);
     drop(second);
     cleaned(root_a.path(), &budget_a).await?;
@@ -373,10 +536,11 @@ async fn initialization_exact_outcome_survives_owner_restore_and_pending_old_att
     let a = first.empty_ref_initialization().await?;
     let b = second.empty_ref_initialization().await?;
     let mutation = identity()?;
-    let committed = fixture
-        .client()
-        .command::<InitializeCatalogRefs>(&fixture.target, mutation, a.clone())
-        .await?;
+    let (command_a, registered_a) = registered(&fixture, &first, a.clone(), mutation).await?;
+    let (command_b, registered_b) = registered(&fixture, &second, b.clone(), identity()?).await?;
+    let snapshot_b = command_b.snapshot();
+    let body_b = command_b.input_bytes().to_vec();
+    let committed = command_a.execute().await?;
     fixture.handle.drain().await?;
     fixture.runtime.shutdown().await?;
     let session = SessionId::from_bytes([229; 16]);
@@ -412,21 +576,45 @@ async fn initialization_exact_outcome_survives_owner_restore_and_pending_old_att
         (exact.output, exact.receipt),
         (committed.output.clone(), committed.receipt)
     );
-    assert_eq!(
+    assert!(matches!(
         client
             .command::<InitializeCatalogRefs>(&fixture.target, identity()?, a)
-            .await?
-            .output,
-        committed.output
+            .await,
+        Err(InvocationError::NotStarted(_))
+    ));
+    let recovered = registered_a
+        .recover_initialization(&client, &first.base.indexes().store(), &fixture.authority())
+        .await?;
+    assert_eq!(
+        (recovered.output, recovered.receipt),
+        (committed.output.clone(), committed.receipt)
     );
     let before = state(&handle).await?;
-    let stale = client
-        .command::<InitializeCatalogRefs>(&fixture.target, identity()?, b)
+    // Cold recovery must settle the absent original under the new owner. It
+    // cannot depend on opening the old owner's now-invalid live capability.
+    let denied = registered_b
+        .recover_initialization(
+            &client,
+            &second.base.indexes().store(),
+            &fixture.authority(),
+        )
         .await;
     assert!(
-        matches!(stale,Err(InvocationError::Rejected(ref value)) if value.output==InitializationReply::Denied(PreparationDenial::Stale))
+        matches!(denied,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output==InitializationReply::Denied(PreparationDenial::Stale)),
+        "{denied:?}"
+    );
+    let stale = client
+        .restore_command::<InitializeCatalogRefs>(snapshot_b, body_b)?
+        .execute()
+        .await?;
+    assert_eq!(
+        stale.output,
+        InitializationReply::Denied(PreparationDenial::Stale)
     );
     assert_eq!(state(&handle).await?, before);
+    assert!(
+        matches!(denied,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==stale.receipt && value.output==stale.output)
+    );
     assert_eq!(
         client
             .query::<CheckInitializedCatalog>(&fixture.target, None, fixture.begin([227; 16]))

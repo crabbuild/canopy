@@ -10,6 +10,84 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod retained_maintenance;
 
+#[tokio::test]
+async fn root_reservation_limit_includes_the_format_envelope_before_any_write() -> TestResult {
+    let deployment = fixture()?;
+    let mut purpose = root::RootPurpose::Backup {
+        source: String::new(),
+        pin: uuid::Uuid::new_v4().to_string(),
+        complete: false,
+    };
+    let previous_overhead = serde_json::to_vec(&purpose)?.len();
+    if let root::RootPurpose::Backup { source, .. } = &mut purpose {
+        *source = "s".repeat(4096 - previous_overhead);
+    }
+    assert_eq!(serde_json::to_vec(&purpose)?.len(), 4096);
+    assert!(matches!(
+        root::reserve(deployment.layout.store(), &deployment.prefix, purpose).await,
+        Err(Error::Backup("root reservation exceeds size limit"))
+    ));
+    assert!(
+        root::load(deployment.layout.store(), &deployment.prefix)
+            .await?
+            .is_none()
+    );
+    assert!(deployment.identities.load().await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_or_unknown_root_format_cannot_initialize_identity_or_release() -> TestResult {
+    for bytes in [
+        br#"{"kind":"service"}"#.as_slice(),
+        br#"{"purpose":{"kind":"service"}}"#,
+        br#"{"format":"future-format","purpose":{"kind":"service"}}"#,
+        br#"{"format":"canopy-pack-v1","purpose":{"kind":"service"},"extra":true}"#,
+    ] {
+        let deployment = fixture()?;
+        let path = deployment.prefix.clone().join("canopy-root-v1.json");
+        let original = bytes::Bytes::copy_from_slice(bytes);
+        deployment
+            .layout
+            .store()
+            .create_strict(&path, original.clone())
+            .await?;
+        let before = deployment.layout.store().get_with_etag(&path).await?;
+        assert!(
+            root::load(deployment.layout.store(), &deployment.prefix)
+                .await
+                .is_err()
+        );
+        assert!(deployment.initialize().await.is_err());
+        assert!(deployment.identities.load().await?.is_none());
+        assert!(deployment.releases.load().await?.is_none());
+        assert_eq!(
+            deployment.layout.store().get_with_etag(&path).await?,
+            before
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn packed_root_envelope_reuses_purpose_and_is_rejected_by_old_decoder() -> TestResult {
+    let deployment = fixture()?;
+    deployment.initialize().await?;
+    let path = deployment.prefix.clone().join("canopy-root-v1.json");
+    let (bytes, _) = deployment.layout.store().get_with_etag(&path).await?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes)?,
+        serde_json::json!({
+            "format": "canopy-pack-v1", "purpose": { "kind": "service" }
+        })
+    );
+    // The old decoder is exactly the existing tagged RootPurpose type.
+    assert!(serde_json::from_slice::<root::RootPurpose>(&bytes).is_err());
+    deployment.initialize().await?;
+    deployment.require_ready().await?;
+    Ok(())
+}
+
 fn fixture() -> std::result::Result<Deployment, Box<dyn std::error::Error>> {
     let app = CanopyApplication::compile(build_descriptor(
         include_bytes!("../../../../Cargo.lock"),

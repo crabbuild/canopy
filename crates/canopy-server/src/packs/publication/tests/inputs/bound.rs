@@ -44,8 +44,11 @@ impl Bound {
             return Err("bound source".into());
         };
         assert!(staging.close_and_drain().await.is_empty());
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let claimed = coordinator
             .submit(
                 ReadyPreparation::claim(
@@ -59,6 +62,7 @@ impl Bound {
                         lease_ms: DEFAULT_LEASE_MS,
                     },
                     identity()?,
+                    fixture.authority(),
                 )
                 .await?,
             )
@@ -193,7 +197,11 @@ async fn bound_checkpoint_canceled_observer_and_foreign_duplicate_closed_admissi
     let mutation = identity()?;
     let ready = session.ready_inputs(mutation, proof.clone()).await?;
     let other = Fixture::new(ObjectFormat::Sha256).await?;
-    let foreign = PublicationCoordinator::new(other.target.clone(), PublicationLimits::default())?;
+    let foreign = PublicationCoordinator::new(
+        other.target.clone(),
+        PublicationLimits::default(),
+        other.publication_budget.clone(),
+    )?;
     let refused = foreign
         .submit(ready)
         .await
@@ -247,6 +255,7 @@ async fn bound_checkpoint_canceled_observer_and_foreign_duplicate_closed_admissi
                 actor: "owner".into(),
             },
             Some(result.registration.receipt),
+            fixture.authority(),
         )
         .await?,
     );
@@ -423,6 +432,7 @@ async fn bound_checkpoint_real_retained_pair_publishes_after_source_pin_expiry_i
                 indexes,
                 files,
                 Some(registered.registration.receipt),
+                bound.fixture.authority(),
             )
             .await?,
         );
@@ -472,6 +482,7 @@ async fn bound_checkpoint_shares_push_actor_quotas_and_exact_mixed_byte_admissio
             maintenance_in_flight: 1,
             foreground_burst: 3,
         },
+        bound.fixture.publication_budget.clone(),
     )?;
     mutate(&bound.fixture.handle, "INSERT INTO repository_members VALUES('writer','write'); INSERT INTO repository_members VALUES('third','write')".into()).await?;
     let (release, entered) = bound.coordinator.pause_for_test().await;

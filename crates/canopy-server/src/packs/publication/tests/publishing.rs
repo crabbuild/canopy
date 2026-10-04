@@ -57,30 +57,34 @@ pub(super) async fn assembled(
         .ok_or("blob")?
         .0
         .oid;
-    let (tip, other) = if depth == 0 {
-        (initial, initial)
-    } else {
-        history(&mut native, initial, depth).await?
-    };
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(256 << 20);
-    let mut builder = CatalogPreparation::new(root.path(), budget.clone(), base, limits()).await?;
-    let (witness, segments) = physical(&native, root.path(), budget.clone()).await?;
-    builder.begin_pack(witness)?;
-    for segment in segments {
-        builder.add_segment(segment).await?;
-    }
-    builder.finish_pack().await?;
-    Ok(Graph {
-        prepared: builder.finish().await?,
-        root,
-        budget,
-        initial,
-        tip,
-        other,
-        blob,
-        store: native.store,
+    super::prepare::renewing(fixture, &base, async {
+        let (tip, other) = if depth == 0 {
+            (initial, initial)
+        } else {
+            history(&mut native, initial, depth).await?
+        };
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(256 << 20);
+        let mut builder =
+            CatalogPreparation::new(root.path(), budget.clone(), base.clone(), limits()).await?;
+        let (witness, segments) = physical(&native, root.path(), budget.clone()).await?;
+        builder.begin_pack(witness)?;
+        for segment in segments {
+            builder.add_segment(segment).await?;
+        }
+        builder.finish_pack().await?;
+        Ok(Graph {
+            prepared: builder.finish().await?,
+            root,
+            budget,
+            initial,
+            tip,
+            other,
+            blob,
+            store: native.store,
+        })
     })
+    .await
 }
 async fn history(
     native: &mut Prepared,
@@ -206,10 +210,10 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
         }
         let policy_hash=*hash.finalize().as_bytes();
         hash.update(b"\0completed-root-and-operation-state\0");
-        let mut outcomes=connection.prepare("SELECT id,actor,request_digest,response_id,completion_digest,rejected,publication,publication_plan_digest,response_root FROM pushes ORDER BY id")?;
+        let mut outcomes=connection.prepare("SELECT id,actor,request_digest,response_id,completion_digest,rejected,publication,publication_plan_digest,response_root,initial_staging,initial_preparation FROM pushes ORDER BY id")?;
         let mut rows=outcomes.query([])?;
         while let Some(row)=rows.next()? {
-            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<i64>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,Option<Vec<u8>>>(7)?,row.get::<_,Option<Vec<u8>>>(8)?);
+            let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<i64>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,Option<Vec<u8>>>(7)?,row.get::<_,Option<Vec<u8>>>(8)?,row.get::<_,Option<Vec<u8>>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?);
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root outcome hash"))?);
         }
         let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations ORDER BY id")?;
@@ -738,19 +742,25 @@ async fn later_policy_changes_and_late_transaction_failures_publish_nothing() ->
     .await?;
     edit(&fixture,"UPDATE branch_rules SET version=2,require_pull_request=1 WHERE reference='refs/heads/main';").await?;
     reject(&fixture, valid.clone(), PreparationDenial::Conflict).await?;
-    edit(&fixture,"UPDATE branch_rules SET version=3,require_pull_request=0 WHERE reference='refs/heads/main'; CREATE TRIGGER forced_publication_failure BEFORE INSERT ON pushes BEGIN SELECT RAISE(ABORT,'forced late publication failure'); END;").await?;
+    edit(&fixture,"UPDATE branch_rules SET version=3,require_pull_request=0 WHERE reference='refs/heads/main'; CREATE TRIGGER forced_publication_failure BEFORE UPDATE OF publication ON pushes BEGIN SELECT RAISE(ABORT,'forced late publication failure'); END;").await?;
     let before = state(&fixture.handle).await?;
-    let failed = fixture
+    let command = fixture
         .client()
-        .command::<PublishCatalogRefs>(&fixture.target, identity()?, valid.clone())
-        .await;
-    assert!(failed.is_err(), "{failed:?}");
+        .prepare_command::<PublishCatalogRefs>(&fixture.target, identity()?, valid)
+        .await?;
+    let evidence = command.evidence().clone();
+    let failed = command.clone().execute().await;
+    assert!(
+        matches!(&failed, Err(InvocationError::NotStarted(error)) if format!("{error:?}").contains("forced late publication failure")),
+        "{failed:?}"
+    );
+    assert!(matches!(
+        fixture.client().resolve(&evidence).await?,
+        cellule_runtime::Resolution::Absent
+    ));
     assert_eq!(state(&fixture.handle).await?, before);
     edit(&fixture, "DROP TRIGGER forced_publication_failure;").await?;
-    fixture
-        .client()
-        .command::<PublishCatalogRefs>(&fixture.target, identity()?, valid)
-        .await?;
+    command.execute().await?;
     drop(graph.prepared);
     cleaned(graph.root.path(), &graph.budget).await?;
     drop(next.prepared);
@@ -933,7 +943,7 @@ async fn expired_and_claimed_proofs_and_mutable_publication_facts_fail_closed() 
         "UPDATE pushes SET publication=zeroblob(53)",
         "UPDATE pushes SET publication_plan_digest=zeroblob(32)",
         "UPDATE pushes SET actor='outsider'",
-        "INSERT OR REPLACE INTO pushes SELECT id,actor,request_digest,options,response_id,rejected,rejection_reason,publication,publication_plan_digest FROM pushes",
+        "INSERT OR REPLACE INTO pushes SELECT * FROM pushes",
         "INSERT OR REPLACE INTO catalog_generations SELECT * FROM catalog_generations WHERE generation=1",
     ] {
         assert!(edit(&fixture, sql).await.is_err(), "{sql}");

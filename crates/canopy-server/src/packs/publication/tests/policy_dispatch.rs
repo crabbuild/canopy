@@ -66,7 +66,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     );
     let refusal_evidence = refusal.evidence_for_test();
     let operation = prepared.token().operation;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let before = state(&f.handle).await?;
     let mut head = None;
     let mut offset = 0;
@@ -97,7 +101,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         let (release, wait) = tokio::sync::oneshot::channel();
         let (entered, running) = tokio::sync::oneshot::channel();
         let worker = if offset == 0 {
-            Some(ticket.spawn_bound(move |_| async move {
+            Some(ticket.spawn_bound(move |_, _context| async move {
                 let _ = entered.send(());
                 wait.await.map_err(|_| StagingError::Worker)?;
                 Ok(42u64)
@@ -329,7 +333,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                     assert_eq!(body, rejected.body);
                     assert_eq!(body.windows(3).filter(|part| *part == b"ng ").count(), 257);
                     assert!(!body.windows(3).any(|part| part == b"ok "));
-                    assert_eq!(f.counts().await?, (0, 2));
+                    assert_eq!(f.counts_for(prepared.token()).await?, (0, 1));
                     roots_unchanged(&before, &state(&f.handle).await?)?;
                 }
                 PublicationState::Finished(Err(error)) => {
@@ -344,7 +348,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                     ));
                     assert_denied_page(f, &evidence, loss).await?;
                     assert!(observer.root_response(store).await.is_err());
-                    assert_eq!(f.counts().await?, (1, 2));
+                    assert_eq!(f.counts_for(prepared.token()).await?, (1, 1));
                     roots_unchanged(&before, &state(&f.handle).await?)?;
                 }
                 other => return Err(format!("unexpected policy result {other:?}").into()),
@@ -476,12 +480,17 @@ async fn complete(
         body.extend_from_slice(&part);
     }
     assert_eq!(body, expected.body);
-    // Initialization and the native attempt each retain an independent pin.
-    assert_eq!(f.counts().await?, (0, 2));
+    // Initialization is retired; the native attempt retains its own pin.
+    assert_eq!(f.counts_for(prepared.token()).await?, (0, 1));
+    let operation = prepared.token().operation;
     f.handle
-        .query(0, 1024, |db| {
+        .query(0, 1024, move |db| {
             assert_eq!(
-                db.query_row("SELECT count(*) FROM pushes", [], |r| r.get::<_, u64>(0))?,
+                db.query_row(
+                    "SELECT count(*) FROM pushes WHERE id=?1 AND response_root IS NOT NULL",
+                    [operation.as_slice()],
+                    |r| r.get::<_, u64>(0)
+                )?,
                 1
             );
             assert_eq!(

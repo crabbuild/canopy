@@ -3,13 +3,23 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_COMMITS: usize = 100_000;
 const MAX_EDGES: usize = 250_000;
-const GROUP: usize = 128;
-const PAGE: usize = 512;
+const GROUP: usize = crate::packs::publication::MAX_EDGE_PARENTS;
 type Graph = HashMap<Oid, Vec<Oid>>;
 
 impl Reader {
     pub(super) async fn merge_base(&self, base: Oid, source: Oid) -> Result<Oid, ReadError> {
+        if base.format() != self.repository.object_format()
+            || source.format() != self.repository.object_format()
+        {
+            return Err(ReadError::Invalid);
+        }
+        if base.is_zero() || source.is_zero() {
+            return Err(ReadError::Missing);
+        }
         if base == source {
+            if self.header(base).await?.object.kind != ObjectKind::Commit {
+                return Err(ReadError::Malformed);
+            }
             return Ok(base);
         }
         let mut graph = Graph::new();
@@ -23,35 +33,20 @@ impl Reader {
             for oid in &group {
                 graph.insert(*oid, Vec::new());
             }
-            let mut cursor: Option<(Oid, Oid)> = None;
+            let mut ids = group;
+            ids.sort_unstable();
+            let mut cursor = None;
             loop {
-                let placeholders = (3..group.len() + 3)
-                    .map(|n| format!("?{n}"))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let mut parameters = vec![
-                    SqlValue::Blob(cursor.map_or_else(Vec::new, |(child, _)| child.to_vec())),
-                    SqlValue::Blob(cursor.map_or_else(Vec::new, |(_, parent)| parent.to_vec())),
-                ];
-                parameters.extend(group.iter().map(|oid| SqlValue::Blob(oid.to_vec())));
-                // Parent rows come only from verified commit certificates. Keyset
-                // paging includes every parent even for unusually wide merges.
-                let result = self.repository.sql.query(None,SqlBatch { statements:vec![SqlStatement {
-                    sql:format!("SELECT child, parent FROM commit_parents WHERE child IN ({placeholders}) AND (child > ?1 OR (child = ?1 AND parent > ?2)) ORDER BY child, parent LIMIT {PAGE}"),parameters,
-                }] }).await?;
-                let rows = &result.output.first().ok_or(ReadError::Malformed)?.rows;
-                for row in rows {
-                    let [SqlValue::Blob(child), SqlValue::Blob(parent)] = row.as_slice() else {
+                let page = self.snapshot()?.edges_page(&ids, cursor).await?;
+                for (_, header) in page.headers {
+                    if header.ok_or(ReadError::Missing)?.object.kind != ObjectKind::Commit {
                         return Err(ReadError::Malformed);
-                    };
-                    let child: Oid = child
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| ReadError::Malformed)?;
-                    let parent: Oid = parent
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| ReadError::Malformed)?;
+                    }
+                }
+                for (child, edge) in page.edges {
+                    if edge.expected_kind != ObjectKind::Commit {
+                        continue;
+                    }
                     edges += 1;
                     if edges > MAX_EDGES {
                         return Err(ReadError::TooLarge);
@@ -59,18 +54,19 @@ impl Reader {
                     graph
                         .get_mut(&child)
                         .ok_or(ReadError::Malformed)?
-                        .push(parent);
-                    cursor = Some((child, parent));
-                    if discovered.insert(parent) {
+                        .push(edge.child);
+                    if discovered.insert(edge.child) {
                         if discovered.len() > MAX_COMMITS {
                             return Err(ReadError::TooLarge);
                         }
-                        pending.push(parent);
+                        pending.push(edge.child);
                     }
                 }
-                if rows.len() < PAGE {
-                    break;
+                let Some(next) = page.next_after else { break };
+                if cursor.is_some_and(|old| old >= next) {
+                    return Err(ReadError::Malformed);
                 }
+                cursor = Some(next);
             }
         }
         let admission = Arc::clone(&self.admission);

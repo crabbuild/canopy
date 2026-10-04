@@ -26,6 +26,7 @@ async fn opened(fixture: &Fixture, operation: [u8; 16]) -> Result<Arc<Preparatio
             fixture.target.clone(),
             check(token),
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?,
     ))
@@ -281,8 +282,11 @@ async fn outcome_dispatch_retains_session_and_exact_command_after_observer_cance
         let ready = session
             .ready_outcome(identity()?, native(200, false, &session))
             .await?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let (release, entered) = coordinator.pause_for_test().await;
         coordinator.fault_for_test(fault);
         let ticket = coordinator.submit(ready).await?;

@@ -5,7 +5,11 @@ use tokio::{io::AsyncWriteExt, process::Command};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-async fn git(path: &Path, args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>> {
+pub(in crate::packs) async fn git(
+    path: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+) -> Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
         .env_clear()
@@ -43,6 +47,23 @@ pub(in crate::packs) struct Fixture {
     pub(in crate::packs) objects: BTreeMap<ObjectId, (CanonicalObject, Vec<TypedEdge>)>,
 }
 pub(in crate::packs) async fn fixture(format: ObjectFormat, blobs: usize) -> Result<Fixture> {
+    // fast-import avoids one process per fixture object. The input is a test
+    // fixture; production verification streams native bodies into bounded SQL.
+    let mut input = b"commit refs/heads/main\ncommitter Metadata Test <test@example.invalid> 1 +0000\ndata 7\nfixture\n".to_vec();
+    for n in 0..blobs {
+        let body = format!("fixture body {n}\n");
+        input.extend_from_slice(
+            format!("M 100644 inline file-{n}\ndata {}\n{body}", body.len()).as_bytes(),
+        );
+    }
+    input.extend_from_slice(b"\n");
+    fixture_with_input(format, input).await
+}
+
+pub(in crate::packs) async fn fixture_with_input(
+    format: ObjectFormat,
+    input: Vec<u8>,
+) -> Result<Fixture> {
     let root = tempfile::TempDir::new()?;
     git(
         root.path(),
@@ -54,16 +75,6 @@ pub(in crate::packs) async fn fixture(format: ObjectFormat, blobs: usize) -> Res
         None,
     )
     .await?;
-    // fast-import avoids one process per fixture object. The input is a test
-    // fixture; production verification streams native bodies into bounded SQL.
-    let mut input = b"commit refs/heads/main\ncommitter Metadata Test <test@example.invalid> 1 +0000\ndata 7\nfixture\n".to_vec();
-    for n in 0..blobs {
-        let body = format!("fixture body {n}\n");
-        input.extend_from_slice(
-            format!("M 100644 inline file-{n}\ndata {}\n{body}", body.len()).as_bytes(),
-        );
-    }
-    input.extend_from_slice(b"\n");
     git(root.path(), &["fast-import", "--quiet"], Some(input)).await?;
     git(
         root.path(),

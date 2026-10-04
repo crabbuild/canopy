@@ -5,6 +5,16 @@ use canopy_object_storage::artifact::ArtifactStore;
 use cellule_runtime::{CellClient, Committed, Resolution};
 use tokio::time::{Duration, timeout};
 
+async fn unrelated_recovery_pins(handle: &CellHandle, token: PreparationToken) -> Result<Vec<u8>> {
+    Ok(handle.query(0, 64 << 10, move |db| {
+        let mut statement = db.prepare("SELECT incarnation,admission_sequence,recovery,recovery_phase,recovery_phase_revision FROM catalog_leases WHERE recovery IS NOT NULL AND NOT(incarnation=?1 AND admission_sequence=?2) ORDER BY incarnation,admission_sequence")?;
+        let pins = statement.query_map(rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |row| Ok((
+            row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?, row.get::<_, Vec<u8>>(2)?, row.get::<_, Option<Vec<u8>>>(3)?, row.get::<_, u64>(4)?
+        )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        serde_json::to_vec(&pins).map_err(|_| Error::Command("fixture unrelated recovery pins"))
+    }).await?)
+}
+
 pub(super) async fn maintenance(
     handle: &CellHandle,
     repository: [u8; 16],
@@ -77,7 +87,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
     let artifacts = store.clone();
     let directory = root.to_path_buf();
     let ready = ticket
-        .spawn_bound(move |original| async move {
+        .spawn_bound(move |original, _context| async move {
             original
                 .ready_root_outcome(mutation, &artifacts, &directory, budget, None)
                 .await
@@ -100,7 +110,9 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
             .await
             .is_err()
     );
-    let completed = registered.dispatch(&f.client(), store).await?;
+    let completed = registered
+        .dispatch(&f.client(), store, &f.authority())
+        .await?;
     drop(ready);
     drop(session);
     assert!(staging.close_and_drain().await.is_empty());
@@ -231,7 +243,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
         .await?
         .ok_or("archived recovery missing after owner restore")?;
     assert_eq!(loaded.evidence(), &original);
-    let recovered = loaded.dispatch(&client, store).await?;
+    let recovered = loaded.dispatch(&client, store, &f.authority()).await?;
     assert_eq!(
         (&recovered.output, recovered.receipt),
         (&completed.output, completed.receipt)
@@ -285,7 +297,10 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
     )
     .await?;
     assert_eq!(
-        loaded.dispatch(&client, store).await?.receipt,
+        loaded
+            .dispatch(&client, store, &f.authority(),)
+            .await?
+            .receipt,
         completed.receipt
     );
     assert!(matches!(
@@ -318,6 +333,8 @@ pub(super) async fn archive(
     expected: &Committed<RootCompletionReply>,
     fault: u8,
 ) -> Result<ReadyTerminalRelease> {
+    let token = head.token();
+    let unrelated = unrelated_recovery_pins(handle, token).await?;
     let admin = maintenance(handle, f.repository).await?;
     // The certificate binds the original actor, but release needs CURRENT
     // repository administration and actual admitted owner custody separately.
@@ -349,19 +366,19 @@ pub(super) async fn archive(
         Resolution::Absent
     ));
     handle
-        .query(0, 128, |db| {
+        .query(0, 128, move |db| {
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM pushes WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |r| r.get::<_, u64>(0)
                 )?,
                 0
             );
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |r| r.get::<_, u64>(0)
                 )?,
                 1
@@ -370,7 +387,11 @@ pub(super) async fn archive(
         })
         .await?;
     edit_handle(handle, "DROP TRIGGER terminal_release_late_fault").await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(if fault == 4 { 2 } else { fault });
     let limits = RecoveryScanLimits {
         page: 1,
@@ -383,7 +404,8 @@ pub(super) async fn archive(
             f.target.clone(),
             store.clone(),
             queue.clone(),
-            limits,
+            f.scans(limits),
+            f.authority(),
             admin.clone(),
         )?;
         timeout(Duration::from_secs(10), entered).await??;
@@ -423,7 +445,8 @@ pub(super) async fn archive(
                 f.target.clone(),
                 store.clone(),
                 queue.clone(),
-                limits,
+                f.scans(limits),
+                f.authority(),
                 admin.clone(),
             )?;
             service.shutdown().await?;
@@ -434,7 +457,8 @@ pub(super) async fn archive(
             f.target.clone(),
             store.clone(),
             queue.clone(),
-            limits,
+            f.scans(limits),
+            f.authority(),
             admin.clone(),
         )?;
         // No caller recovery request: the supervisor retries the original
@@ -449,7 +473,10 @@ pub(super) async fn archive(
         assert!(stats.release_recovered > 0);
         assert_eq!(stats.failures, 0);
         if fault != 1 {
-            assert_eq!(stats.scanned, 0);
+            // A retired push has no pin. Other settled intermediate heads
+            // must not admit another publication or release.
+            assert_eq!(stats.scanned, stats.settled);
+            assert_eq!(stats.submitted, 0);
         }
     }
     let PublicationState::Finished(Ok(PublicationOutcome::TerminalRelease(released))) =
@@ -469,14 +496,15 @@ pub(super) async fn archive(
         (&recovered.output, recovered.receipt),
         (&released.output, released.receipt)
     );
-    handle.query(0, 128, |db| {
-        assert_eq!(db.query_row("SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL", [], |r| r.get::<_, u64>(0))?, 0);
-        assert_eq!(db.query_row("SELECT count(*) FROM pushes WHERE recovery IS NOT NULL AND recovery_phase IS NOT NULL AND recovery_release IS NOT NULL", [], |r| r.get::<_, u64>(0))?, 1);
-        for sql in ["UPDATE pushes SET recovery=NULL,recovery_phase=NULL,recovery_release=NULL WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_phase=x'01' WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_release=x'01' WHERE recovery IS NOT NULL", "DELETE FROM pushes WHERE recovery IS NOT NULL"] {
+    handle.query(0, 128, move |db| {
+        assert_eq!(db.query_row("SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |r| r.get::<_, u64>(0))?, 0);
+        assert_eq!(db.query_row("SELECT count(*) FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |r| r.get::<_, u64>(0))?, 1);
+        for sql in ["UPDATE catalog_recovery_receipts SET recovery=NULL,recovery_phase=NULL,recovery_release=NULL WHERE recovery IS NOT NULL", "UPDATE catalog_recovery_receipts SET recovery_phase=x'01' WHERE recovery IS NOT NULL", "UPDATE catalog_recovery_receipts SET recovery_release=x'01' WHERE recovery IS NOT NULL", "DELETE FROM catalog_recovery_receipts WHERE recovery IS NOT NULL"] {
             assert!(db.execute(sql, []).is_err(), "{sql}");
         }
         Ok(Vec::new())
     }).await?;
+    assert_eq!(unrelated_recovery_pins(handle, token).await?, unrelated);
     let loaded = RegisteredRootRecovery::load(
         client,
         &f.target,
@@ -491,11 +519,13 @@ pub(super) async fn archive(
     let original = loaded.clone();
     let artifacts = store.clone();
     let reader = client.clone();
+    let authority = f.authority();
     let actual = tokio::spawn(async move {
         original
             .dispatch_any(
                 &reader,
                 &artifacts,
+                &authority,
                 &std::sync::atomic::AtomicBool::new(false),
             )
             .await

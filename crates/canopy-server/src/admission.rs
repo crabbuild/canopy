@@ -26,6 +26,10 @@ pub(crate) struct AccountAdmission {
 }
 
 impl AccountAdmission {
+    pub(crate) fn available(&self) -> usize {
+        self.total.available_permits()
+    }
+
     pub(crate) fn new(
         limit: usize,
         total_capacity: &'static str,

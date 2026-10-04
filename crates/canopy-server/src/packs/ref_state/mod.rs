@@ -1,6 +1,7 @@
 //! Conditional immutable ref state; raw roots do not confer publication rights.
 //! Final owner/ACL/policy/root-CAS and durable outcome publication remain Cell
-//! responsibilities. This data plane is not selected by the serving path yet.
+//! responsibilities. Certified serving snapshots select this data plane; raw
+//! roots and standalone index clients confer neither Read nor retention authority.
 use super::directory::index::{IndexError, NodeRef, RangeCursor, RangeIndex, ReadStats};
 use crate::{ObjectFormat, PushPlan, RefExpectation};
 use canopy_object_storage::artifact::ArtifactStore;

@@ -65,14 +65,10 @@ CREATE TABLE pushes (
     actor TEXT NOT NULL,
     request_digest BLOB NOT NULL CHECK(length(request_digest) = 32),
     initial_staging BLOB CHECK(initial_staging IS NULL OR (typeof(initial_staging)='blob' AND length(initial_staging) BETWEEN 1 AND 1024)),
+    initial_preparation BLOB CHECK(initial_preparation IS NULL OR (typeof(initial_preparation)='blob' AND length(initial_preparation) BETWEEN 1 AND 1024)),
     options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 65536),
     response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
     completion_digest BLOB CHECK(completion_digest IS NULL OR length(completion_digest) = 32),
-    -- Closed attempts keep their original recovery headers and phase here,
-    -- independently of a preparation floor or creating-input lease.
-    recovery BLOB CHECK(recovery IS NULL OR (typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024)),
-    recovery_phase BLOB CHECK(recovery_phase IS NULL OR (typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048)),
-    recovery_release BLOB CHECK(recovery_release IS NULL OR (typeof(recovery_release)='blob' AND length(recovery_release) BETWEEN 1 AND 1024)),
     response_root BLOB CHECK(response_root IS NULL OR (typeof(response_root)='blob' AND length(response_root) BETWEEN 1 AND 128)),
     rejected INTEGER CHECK(rejected IN (0, 1)),
     rejection_reason TEXT,
@@ -84,9 +80,6 @@ CREATE TABLE pushes (
     CHECK((response_id IS NULL) = (rejected IS NULL)),
     CHECK((response_id IS NULL) = (completion_digest IS NULL)),
     CHECK(response_root IS NULL OR response_id IS NOT NULL),
-    CHECK((recovery IS NULL) = (recovery_phase IS NULL)),
-    CHECK((recovery IS NULL) = (recovery_release IS NULL)),
-    CHECK(recovery IS NULL OR response_root IS NOT NULL),
     CHECK(rejected IS NOT 1 OR publication IS NULL)
 ) WITHOUT ROWID;
 CREATE TRIGGER push_publication_immutable BEFORE UPDATE OF publication,publication_plan_digest ON pushes
@@ -110,16 +103,19 @@ CREATE TRIGGER push_root_completion_retained BEFORE DELETE ON pushes
 WHEN OLD.response_root IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'root completion must be retained'); END;
 
-CREATE TRIGGER push_recovery_archive_immutable BEFORE UPDATE OF recovery,recovery_phase,recovery_release ON pushes
-WHEN OLD.recovery IS NOT NULL AND (NEW.recovery IS NOT OLD.recovery OR NEW.recovery_phase IS NOT OLD.recovery_phase OR NEW.recovery_release IS NOT OLD.recovery_release)
-BEGIN SELECT RAISE(ABORT, 'closed recovery is immutable'); END;
-
 CREATE TRIGGER push_initial_staging_immutable BEFORE UPDATE OF initial_staging ON pushes
 WHEN OLD.initial_staging IS NOT NULL AND NEW.initial_staging IS NOT OLD.initial_staging
 BEGIN SELECT RAISE(ABORT, 'initial staging receipt is immutable'); END;
 CREATE TRIGGER push_initial_staging_retained BEFORE DELETE ON pushes
 WHEN OLD.initial_staging IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'initial staging receipt must be retained'); END;
+
+CREATE TRIGGER push_initial_preparation_immutable BEFORE UPDATE OF initial_preparation ON pushes
+WHEN OLD.initial_preparation IS NOT NULL AND NEW.initial_preparation IS NOT OLD.initial_preparation
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt is immutable'); END;
+CREATE TRIGGER push_initial_preparation_retained BEFORE DELETE ON pushes
+WHEN OLD.initial_preparation IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt must be retained'); END;
 
 CREATE TABLE push_certificates (
     digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
@@ -365,6 +361,8 @@ INSERT INTO catalog_state VALUES(1, 0);
 -- fact retains the small empty catalog/ref metadata for exact logical recovery.
 CREATE TABLE catalog_initialization (
     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence)='integer' AND admission_sequence>0),
     id BLOB NOT NULL UNIQUE CHECK(length(id)=16),
     actor TEXT NOT NULL,
     request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
@@ -393,6 +391,27 @@ BEGIN SELECT RAISE(ABORT, 'compaction outcomes are immutable'); END;
 CREATE TRIGGER catalog_compactions_not_replaced BEFORE INSERT ON catalog_compactions
 WHEN EXISTS(SELECT 1 FROM catalog_compactions WHERE id=NEW.id)
 BEGIN SELECT RAISE(ABORT, 'compaction outcomes cannot be replaced'); END;
+
+-- Closed attempts retain the same bounded authenticated header, phase and
+-- original release receipt, independent of generation floors and pin quota.
+-- Multiple attempts of one logical initialization have independent identities.
+CREATE TABLE catalog_recovery_receipts (
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence)='integer' AND admission_sequence>0),
+    operation BLOB NOT NULL CHECK(typeof(operation)='blob' AND length(operation)=16),
+    recovery BLOB NOT NULL CHECK(typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024),
+    recovery_phase BLOB NOT NULL CHECK(typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048),
+    recovery_release BLOB NOT NULL CHECK(typeof(recovery_release)='blob' AND length(recovery_release) BETWEEN 1 AND 1024),
+    PRIMARY KEY(incarnation,admission_sequence)
+) WITHOUT ROWID;
+CREATE INDEX catalog_recovery_receipts_by_operation ON catalog_recovery_receipts(operation,incarnation,admission_sequence);
+CREATE TRIGGER catalog_recovery_receipt_immutable BEFORE UPDATE ON catalog_recovery_receipts
+BEGIN SELECT RAISE(ABORT, 'closed recovery is immutable'); END;
+CREATE TRIGGER catalog_recovery_receipt_not_replaced BEFORE INSERT ON catalog_recovery_receipts
+WHEN EXISTS(SELECT 1 FROM catalog_recovery_receipts WHERE incarnation=NEW.incarnation AND admission_sequence=NEW.admission_sequence)
+BEGIN SELECT RAISE(ABORT, 'closed recovery cannot be replaced'); END;
+CREATE TRIGGER catalog_recovery_receipt_retained BEFORE DELETE ON catalog_recovery_receipts
+BEGIN SELECT RAISE(ABORT, 'closed recovery must be retained'); END;
 
 -- Staging attempts retain their creating namespace with a NULL generation.
 -- A one-way late bind pins a generation floor and every later generation. This permits
@@ -434,6 +453,7 @@ CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnati
 CREATE INDEX catalog_leases_by_generation ON catalog_leases(generation, expires_at_ms);
 CREATE TRIGGER catalog_generations_retained BEFORE DELETE ON catalog_generations
 WHEN OLD.generation=0 OR OLD.generation >= (SELECT min(generation) FROM catalog_leases)
+  OR EXISTS(SELECT 1 FROM catalog_serving_pins WHERE generation=OLD.generation)
 BEGIN SELECT RAISE(ABORT, 'catalog generation is retained'); END;
 CREATE UNIQUE INDEX catalog_leases_by_artifact ON catalog_leases(artifact_operation);
 CREATE TRIGGER catalog_lease_not_replaced BEFORE INSERT ON catalog_leases
@@ -471,9 +491,9 @@ BEGIN SELECT RAISE(ABORT, 'publication recovery requires exact phase append'); E
 -- Typed recovery/backup traversal must authorize releasing these pins.
 CREATE TRIGGER catalog_lease_recovery_retained BEFORE DELETE ON catalog_leases
 WHEN OLD.recovery IS NOT NULL AND NOT EXISTS(
-    SELECT 1 FROM pushes p WHERE p.id=OLD.operation AND p.response_root IS NOT NULL
-        AND p.recovery IS OLD.recovery AND p.recovery_phase IS OLD.recovery_phase
-        AND p.recovery_release IS NOT NULL)
+    SELECT 1 FROM catalog_recovery_receipts p WHERE p.incarnation=OLD.incarnation
+        AND p.admission_sequence=OLD.admission_sequence AND p.operation=OLD.operation
+        AND p.recovery IS OLD.recovery AND p.recovery_phase IS OLD.recovery_phase)
 BEGIN SELECT RAISE(ABORT, 'root recovery command is retained'); END;
 
 CREATE TABLE catalog_operations (
@@ -526,3 +546,44 @@ BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
 CREATE TRIGGER push_certificate_chunks_not_replaced BEFORE INSERT ON push_certificate_chunks
 WHEN EXISTS(SELECT 1 FROM push_certificate_chunks WHERE push_id=NEW.push_id AND part=NEW.part)
 BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+-- Bounded exact-command metadata exists before any upload namespace is granted.
+-- One unresolved head per logical request. Rows represent custody transitions,
+-- never Git objects, and historical grants are not generation retention roots.
+CREATE TABLE catalog_custody_commands (
+    purpose INTEGER NOT NULL CHECK(typeof(purpose)='integer' AND purpose IN (0,1)),
+    operation BLOB NOT NULL CHECK(typeof(operation)='blob' AND length(operation)=16),
+    step INTEGER NOT NULL CHECK(typeof(step)='integer' AND step BETWEEN 0 AND 65535),
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    request_id BLOB NOT NULL CHECK(typeof(request_id)='blob' AND length(request_id)=16),
+    intent BLOB NOT NULL CHECK(typeof(intent)='blob' AND length(intent) BETWEEN 1 AND 4096),
+    phase BLOB CHECK(phase IS NULL OR (typeof(phase)='blob' AND length(phase) BETWEEN 1 AND 1024)),
+    stopped BLOB CHECK(stopped IS NULL OR (typeof(stopped)='blob' AND length(stopped) BETWEEN 1 AND 1024)),
+    granted_incarnation BLOB CHECK(granted_incarnation IS NULL OR (typeof(granted_incarnation)='blob' AND length(granted_incarnation)=16)),
+    granted_attempt INTEGER CHECK(granted_attempt IS NULL OR (typeof(granted_attempt)='integer' AND granted_attempt>0)),
+    CHECK(phase IS NULL OR stopped IS NULL),
+    CHECK(stopped IS NULL OR granted_attempt IS NULL),
+    CHECK((granted_incarnation IS NULL)=(granted_attempt IS NULL)),
+    CHECK(phase IS NOT NULL OR granted_attempt IS NULL),
+    PRIMARY KEY(purpose,operation,step),
+    UNIQUE(incarnation,request_id)
+) WITHOUT ROWID;
+CREATE INDEX catalog_custody_grants ON catalog_custody_commands(purpose,operation,granted_incarnation,granted_attempt,step DESC) WHERE granted_attempt IS NOT NULL;
+CREATE UNIQUE INDEX catalog_custody_pending ON catalog_custody_commands(purpose,operation) WHERE phase IS NULL AND stopped IS NULL;
+CREATE TRIGGER catalog_custody_identity_immutable BEFORE UPDATE OF purpose,operation,step,incarnation,request_id,intent ON catalog_custody_commands
+WHEN NEW.purpose IS NOT OLD.purpose OR NEW.operation IS NOT OLD.operation OR NEW.step IS NOT OLD.step
+  OR NEW.incarnation IS NOT OLD.incarnation OR NEW.request_id IS NOT OLD.request_id OR NEW.intent IS NOT OLD.intent
+BEGIN SELECT RAISE(ABORT, 'custody command identity is immutable'); END;
+CREATE TRIGGER catalog_custody_phase_immutable BEFORE UPDATE OF phase,granted_incarnation,granted_attempt ON catalog_custody_commands
+WHEN OLD.phase IS NOT NULL AND (NEW.phase IS NOT OLD.phase OR NEW.granted_incarnation IS NOT OLD.granted_incarnation OR NEW.granted_attempt IS NOT OLD.granted_attempt)
+BEGIN SELECT RAISE(ABORT, 'custody command result is immutable'); END;
+CREATE TRIGGER catalog_custody_not_replaced BEFORE INSERT ON catalog_custody_commands
+WHEN EXISTS(SELECT 1 FROM catalog_custody_commands WHERE purpose=NEW.purpose AND operation=NEW.operation AND step=NEW.step)
+  OR EXISTS(SELECT 1 FROM catalog_custody_commands WHERE incarnation=NEW.incarnation AND request_id=NEW.request_id)
+BEGIN SELECT RAISE(ABORT, 'custody command cannot be replaced'); END;
+CREATE TRIGGER catalog_custody_retained BEFORE DELETE ON catalog_custody_commands
+BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;
+
+CREATE TRIGGER catalog_custody_stop_immutable BEFORE UPDATE OF stopped ON catalog_custody_commands
+WHEN OLD.stopped IS NOT NULL AND NEW.stopped IS NOT OLD.stopped
+BEGIN SELECT RAISE(ABORT, 'custody retirement is immutable'); END;

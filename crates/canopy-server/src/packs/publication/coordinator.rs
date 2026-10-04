@@ -22,7 +22,9 @@ use tokio::{
 /// Scratch/native work remains independently charged to its DiskBudget.
 const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
+mod initialization;
 mod inputs;
+pub use initialization::ReadyInitialization;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
 mod policy;
 pub use policy::{ReadyRefPolicyPage, RefPolicyReadyError, RefPolicyRefusalFailure};
@@ -31,9 +33,13 @@ pub use roots::{ReadyRootPush, RootPushReadyError};
 mod recovery;
 pub use recovery::{ReadyBoundRecovery, RecoveryBindingFailure};
 mod preparation;
+mod serving_drain;
 pub use preparation::{
     PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,
 };
+pub use serving_drain::ServingDrainAdmission;
+mod budget;
+pub use budget::{PublicationBudget, PublicationBudgetStats};
 mod work;
 use work::MAINTENANCE_RESERVATION;
 pub use work::{
@@ -100,6 +106,14 @@ impl PublicationLimits {
 pub struct ReadyCatalogPush {
     owner: PushPreparation,
     command: PreparedCommand<CompleteCatalogPush>,
+}
+#[cfg(test)]
+impl ReadyCatalogPush {
+    pub(in crate::packs::publication) fn evidence_for_test(
+        &self,
+    ) -> cellule_runtime::PendingMutation {
+        self.command.evidence().clone()
+    }
 }
 #[derive(Clone)]
 enum PushPreparation {
@@ -233,8 +247,17 @@ struct ReadContext {
     target: CellTarget,
     request: BeginRequest,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum JobKind {
+    Publication,
+    CustodyStop,
+    ServingRelease,
+    ServingCommand,
+    ServingStop,
+}
 struct Job {
     operation: [u8; 16],
+    kind: JobKind,
     actor: String,
     // Removed before terminal notification; tickets never retain command
     // payloads or local inventory after the admission charge is released.
@@ -246,6 +269,7 @@ struct Job {
     status: watch::Sender<PublicationState>,
     read: ReadContext,
     admitted: Instant,
+    budget: std::sync::Mutex<Option<budget::BudgetPermit>>,
 }
 struct Work {
     job: Arc<Job>,
@@ -326,7 +350,7 @@ impl<T> ClassQueue<T> {
 }
 #[derive(Default)]
 struct State {
-    jobs: HashMap<[u8; 16], Arc<Job>>,
+    jobs: HashMap<([u8; 16], JobKind), Arc<Job>>,
     actors: HashMap<String, [usize; 2]>,
     queue: ClassQueue<Work>,
     counts: [usize; 2],
@@ -337,9 +361,11 @@ struct State {
 struct Inner {
     target: CellTarget,
     limits: PublicationLimits,
+    budget: PublicationBudget,
     state: Mutex<State>,
     drained: Notify,
     changed: Notify,
+    serving_drain: std::sync::Mutex<Option<serving_drain::Gate>>,
     #[cfg(test)]
     gate: Mutex<Option<TestGate>>,
     #[cfg(test)]
@@ -379,18 +405,26 @@ pub struct PublicationStats {
     pub maintenance: usize,
 }
 impl PublicationCoordinator {
+    pub(in crate::packs::publication) fn target(&self) -> &CellTarget {
+        &self.inner.target
+    }
+    /// Every repository dispatcher on a node must receive the same budget.
+    /// Repository limits remain additional caps, not independent node shares.
     pub fn new(
         target: CellTarget,
         limits: PublicationLimits,
+        budget: PublicationBudget,
     ) -> Result<Self, PublicationScheduleError> {
         limits.validate()?;
         Ok(Self {
             inner: Arc::new(Inner {
                 target,
                 limits,
+                budget,
                 state: Mutex::new(State::default()),
                 drained: Notify::new(),
                 changed: Notify::new(),
+                serving_drain: std::sync::Mutex::new(None),
                 #[cfg(test)]
                 gate: Mutex::new(None),
                 #[cfg(test)]
@@ -436,7 +470,8 @@ impl PublicationCoordinator {
         let class = ready.class();
         let reservation = ready.reservation();
         let at = class.index();
-        let (client, target, check) = ready.capability();
+        let (client, target, request) = ready.context();
+        let kind = ready.job_kind();
         let limits = self.inner.limits;
         let (operation_limit, byte_limit) = match class {
             PublicationClass::Foreground => (
@@ -451,17 +486,19 @@ impl PublicationCoordinator {
         };
         let reason = if target != &self.inner.target {
             Some(PublicationScheduleError::Foreign)
-        } else if state.closed {
+        } else if state.closed || !self.inner.drain_allows(&ready) {
             Some(PublicationScheduleError::Closed)
-        } else if state.jobs.contains_key(&check.token.operation) {
+        } else if state.jobs.contains_key(&(request.operation, kind)) {
             Some(PublicationScheduleError::Duplicate)
         } else if state.counts[at] >= operation_limit
             || state
                 .actors
-                .get(&check.actor)
+                .get(&request.actor)
                 .map_or(0, |counts| counts[at])
                 >= limits.per_actor
-            || state.bytes[at] > byte_limit - reservation
+            || byte_limit
+                .checked_sub(reservation)
+                .is_none_or(|remaining| state.bytes[at] > remaining)
         {
             Some(PublicationScheduleError::Capacity)
         } else {
@@ -470,20 +507,23 @@ impl PublicationCoordinator {
         if let Some(reason) = reason {
             return Err(Box::new(PublicationAdmissionFailure { reason, ready }));
         }
+        let budget = match self
+            .inner
+            .budget
+            .reserve(class, &request.actor, reservation)
+        {
+            Ok(permit) => permit,
+            Err(reason) => return Err(Box::new(PublicationAdmissionFailure { reason, ready })),
+        };
         let read = ReadContext {
             client: client.clone(),
             target: target.clone(),
-            request: BeginRequest {
-                repository: check.token.repository,
-                operation: check.token.operation,
-                request_digest: check.token.request_digest,
-                actor: check.actor.clone(),
-                lease_ms: DEFAULT_LEASE_MS,
-            },
+            request: request.clone(),
         };
         let job = Arc::new(Job {
-            operation: check.token.operation,
-            actor: check.actor.clone(),
+            operation: request.operation,
+            kind,
+            actor: request.actor.clone(),
             class,
             reservation,
             policy_page: ready.is_policy_page(),
@@ -497,11 +537,14 @@ impl PublicationCoordinator {
             .0,
             read,
             admitted: Instant::now(),
+            budget: std::sync::Mutex::new(Some(budget)),
         });
         state.actors.entry(job.actor.clone()).or_default()[at] += 1;
         state.counts[at] += 1;
         state.bytes[at] += job.reservation;
-        state.jobs.insert(job.operation, Arc::clone(&job));
+        state
+            .jobs
+            .insert((job.operation, job.kind), Arc::clone(&job));
         if !held {
             enqueue(state, &job, false);
             self.start(state);
@@ -525,7 +568,7 @@ impl PublicationCoordinator {
         let mut state = self.inner.state.lock().await;
         if !state
             .jobs
-            .get(&ticket.job.operation)
+            .get(&(ticket.job.operation, ticket.job.kind))
             .is_some_and(|job| Arc::ptr_eq(job, &ticket.job))
             || !matches!(*ticket.job.status.borrow(), PublicationState::Uncertain(_))
         {
@@ -549,6 +592,14 @@ impl PublicationCoordinator {
     pub(in crate::packs::publication) async fn recover_terminal_releases(
         &self,
     ) -> Result<u64, PublicationScheduleError> {
+        self.recover_retirements(false).await
+    }
+    pub(in crate::packs::publication) async fn recover_custody_stops(
+        &self,
+    ) -> Result<u64, PublicationScheduleError> {
+        self.recover_retirements(true).await
+    }
+    async fn recover_retirements(&self, custody: bool) -> Result<u64, PublicationScheduleError> {
         let jobs: Vec<_> = {
             let state = self.inner.state.lock().await;
             state
@@ -565,10 +616,13 @@ impl PublicationCoordinator {
         // retain a command-body copy, replace an identity or retry compaction.
         let mut recovered = 0;
         for job in jobs {
-            let release = matches!(
-                &*job.ready.lock().await,
-                Some(ReadyPublication::TerminalRelease(_))
-            );
+            let ready = job.ready.lock().await;
+            let release = if custody {
+                matches!(&*ready, Some(ReadyPublication::CustodyStop(_)))
+            } else {
+                matches!(&*ready, Some(ReadyPublication::TerminalRelease(_)))
+            };
+            drop(ready);
             if !release {
                 continue;
             }
@@ -596,6 +650,20 @@ impl PublicationCoordinator {
             wake.as_mut().enable();
             {
                 let mut state = self.inner.state.lock().await;
+                // An eviction owner must submit its remaining exact releases
+                // before global closure. Do not strand that owner's admission.
+                if !state.closed
+                    && self
+                        .inner
+                        .serving_drain
+                        .lock()
+                        .expect("serving drain admission")
+                        .is_some()
+                {
+                    drop(state);
+                    wake.await;
+                    continue;
+                }
                 state.closed = true;
                 if !state.worker {
                     return state
@@ -611,15 +679,63 @@ impl PublicationCoordinator {
             wake.await;
         }
     }
+    /// Eviction closes only an already empty queue. Busy/uncertain owners keep
+    /// their admission and may resume discovery without replacing commands.
+    pub(crate) async fn close_if_idle(&self) -> bool {
+        let mut state = self.inner.state.lock().await;
+        if state.worker
+            || !state.jobs.is_empty()
+            || self
+                .inner
+                .serving_drain
+                .lock()
+                .expect("serving drain admission")
+                .is_some()
+        {
+            return false;
+        }
+        state.closed = true;
+        true
+    }
     /// Service-internal lookup after its caller loses a ticket. This is not an
     /// externally authorized product query; use completed-request replay there.
     pub async fn pending(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_kind(operation, JobKind::Publication).await
+    }
+    /// Retirement has a separate bounded key kind, never a fabricated operation.
+    pub async fn pending_custody_stop(&self, operation: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_custody_stop_for(CustodyPurpose::Creating, operation)
+            .await
+    }
+    pub(in crate::packs::publication) async fn pending_custody_stop_for(
+        &self,
+        purpose: CustodyPurpose,
+        operation: [u8; 16],
+    ) -> Option<PublicationTicket> {
+        self.pending_kind(
+            operation,
+            if purpose == CustodyPurpose::Serving {
+                JobKind::ServingStop
+            } else {
+                JobKind::CustodyStop
+            },
+        )
+        .await
+    }
+    pub async fn pending_serving_command(&self, reader: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_kind(reader, JobKind::ServingCommand).await
+    }
+    /// Read-retention release cannot collide with a creating request's ID.
+    pub async fn pending_serving_release(&self, reader: [u8; 16]) -> Option<PublicationTicket> {
+        self.pending_kind(reader, JobKind::ServingRelease).await
+    }
+    async fn pending_kind(&self, operation: [u8; 16], kind: JobKind) -> Option<PublicationTicket> {
         self.inner
             .state
             .lock()
             .await
             .jobs
-            .get(&operation)
+            .get(&(operation, kind))
             .map(|job| PublicationTicket {
                 inner: Arc::clone(&self.inner),
                 job: Arc::clone(job),
@@ -666,7 +782,7 @@ impl PublicationCoordinator {
         (release, start)
     }
     #[cfg(test)]
-    pub(super) fn fault_for_test(&self, fault: u8) {
+    pub(crate) fn fault_for_test(&self, fault: u8) {
         self.inner
             .fault
             .store(fault, std::sync::atomic::Ordering::Release);
@@ -850,7 +966,10 @@ fn enqueue(state: &mut State, job: &Arc<Job>, recover: bool) {
     );
 }
 fn release(state: &mut State, job: &Job) {
-    state.jobs.remove(&job.operation);
+    // Both callers drop retained proof/body ownership before making either
+    // the repository or node reservation reusable. Ticket DTOs may survive.
+    job.budget.lock().expect("publication budget permit").take();
+    state.jobs.remove(&(job.operation, job.kind));
     let count = state
         .actors
         .get_mut(&job.actor)
@@ -941,6 +1060,7 @@ async fn run(inner: Arc<Inner>) {
     }
 }
 async fn dispatch(inner: Arc<Inner>, work: Work) -> DispatchResult {
+    let _dispatch = inner.budget.dispatch(work.job.class, &work.job.actor).await;
     #[cfg(test)]
     {
         // Do not hold the hook's mutex across a wait: other dispatched jobs
@@ -983,9 +1103,51 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
             .send_replace(PublicationState::Uncertain(Arc::new(outcome.unwrap_err())));
     } else {
         // Drop large resources before making their admission reusable.
-        job.ready.lock().await.take();
+        let retained = job.ready.lock().await.take();
+        let released = if matches!(&outcome, Ok(PublicationOutcome::ServingRelease(value)) if value.output == ServingReleaseReply::Released)
+        {
+            retained
+                .as_ref()
+                .and_then(ReadyPublication::serving_release_token)
+        } else {
+            None
+        };
+        drop(retained);
         let mut state = inner.state.lock().await;
         release(&mut state, job);
+        if let Some(token) = released {
+            inner.observe_serving_release(token);
+        }
+        // A retired original may itself occupy a foreground uncertainty slot.
+        // Resume only that exact preparation evidence, never unrelated work.
+        if let Ok(PublicationOutcome::CustodyStop(value)) = &outcome
+            && value.stop.is_some()
+            && let Some(original) = state
+                .jobs
+                .get(&(
+                    job.operation,
+                    if value.purpose == CustodyPurpose::Serving {
+                        JobKind::ServingCommand
+                    } else {
+                        JobKind::Publication
+                    },
+                ))
+                .cloned()
+            && matches!(*original.status.borrow(), PublicationState::Uncertain(_))
+        {
+            let matches = original
+                .ready
+                .lock()
+                .await
+                .as_ref()
+                .and_then(ReadyPublication::custody_original)
+                .is_some_and(|evidence| *evidence == value.original);
+            if matches {
+                original.status.send_replace(PublicationState::Queued);
+                enqueue(&mut state, &original, true);
+                inner.changed.notify_one();
+            }
+        }
         job.status
             .send_replace(PublicationState::Finished(outcome.map_err(Arc::new)));
     }

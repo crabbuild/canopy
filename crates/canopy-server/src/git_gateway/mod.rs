@@ -22,27 +22,21 @@ use crate::{
     RefUpdate, RepositoryCell, StoredObject,
     blob::{LargeBlobError, LargeBlobStore},
     directory::TokenScope,
-    git_cache::{CacheError, GitCache},
+    git_cache::CacheError,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES},
     git_objects::GitObjects,
     lfs::LfsService,
-    object_batch::MAX_OBJECTS,
     push::{PushCompletion, PushError},
-    refs::RefReadError,
 };
 
 mod branch_policy;
 mod candidates;
 mod discovery;
 mod fetch;
-mod hydration;
-mod maintenance;
 pub mod preflight;
 mod push;
 mod ssh;
-
-use hydration::Hydration;
 
 pub use crate::git_objects::ObjectReadError;
 
@@ -82,21 +76,9 @@ pub enum GatewayError {
     Task(#[from] tokio::task::JoinError),
 }
 
-struct CachedObjects {
-    cache: Arc<GitCache>,
-    through: i64,
-}
-
 struct CachedRepository {
     backend: GitHttpBackend,
-    snapshot: RefSnapshot,
-}
-
-#[derive(PartialEq, Eq)]
-struct RefSnapshot {
     refs: BTreeMap<String, RefExpectation>,
-    head: String,
-    generation: i64,
 }
 
 /// Serves Git requests from a warm, disposable cache of durable Cell state.
@@ -110,8 +92,6 @@ pub struct GitGateway {
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
     native: crate::native_resources::NativeScope,
-    cache: Mutex<Option<Arc<CachedRepository>>>,
-    objects: Mutex<Option<CachedObjects>>,
     push: Mutex<()>,
 }
 
@@ -154,8 +134,6 @@ impl GitGateway {
             scratch_root,
             disk_budget,
             native,
-            cache: Mutex::new(None),
-            objects: Mutex::new(None),
             push: Mutex::new(()),
         }
     }
@@ -250,74 +228,49 @@ impl GitGateway {
             .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
             .await?;
         let request = self.decode(request, Some(MAX_FETCH_REQUEST_BYTES)).await?;
+        let snapshot = self
+            .repository
+            .serving_snapshot(actor)
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
         let capabilities = request.protocol_v2
             && request.method == "GET"
             && request.path_info == "/repo.git/info/refs"
             && url::form_urlencoded::parse(request.query.as_bytes())
                 .eq([("service".into(), "git-upload-pack".into())]);
         let response = if capabilities {
-            // Git v2 discovery advertises capabilities, not refs or objects.
-            // Native Git still owns the wire response and capability policy.
-            let head = self
-                .repository
-                .default_branch(None)
+            let head = snapshot
+                .resolve_ref(None)
                 .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                .map_err(|e| GatewayError::Cell(Box::new(e)))?;
             let backend = GitHttpBackend::initialize(
                 self.scratch_root.clone(),
                 self.disk_budget.clone(),
-                &head.output.reference,
+                &head.reference,
                 self.repository.object_format(),
                 self.native.clone(),
             )
             .await?
             .with_nonce(self.certificate_nonce().await?);
-            backend.stream(request, ()).await?
-        } else if discovery::is_ref_discovery(&request).await? {
-            if let Some(cached) = self.current_cache().await? {
-                cached.backend.stream(request, Arc::clone(&cached)).await?
-            } else {
-                let backend = self.discovery_cache(self.cell_refs().await?).await?;
-                backend.stream(request, ()).await?
-            }
+            backend.stream(request, snapshot).await?
         } else {
+            let discovery = discovery::is_ref_discovery(&request).await?;
             let fetch = fetch::FetchRequest::read(&request).await?;
-            let cached = self.fetch_cache(&fetch.wants).await?;
-            self.prepare_fetch(&cached, fetch).await?;
-            cached.backend.stream(request, Arc::clone(&cached)).await?
+            let workspace = snapshot
+                .ref_workspace(crate::packs::publication::WorkspaceLimits::default())
+                .await
+                .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+            Self::validate_wants(&workspace, &fetch.wants).await?;
+            tracing::debug!(discovery,filter=?fetch.filter,generation=workspace.fact().generation,
+                "prepared certified Git transport");
+            let backend = workspace.backend(self.certificate_nonce().await?);
+            backend.stream(request, workspace.read_owner()).await?
         };
         Ok(GitHttpResponse {
             status: response.status,
             headers: response.headers,
             body: Body::from_stream(response.body),
         })
-    }
-
-    async fn current_cache(&self) -> Result<Option<Arc<CachedRepository>>, GatewayError> {
-        // Hydration holds this mutex across storage I/O. Discovery must stay
-        // independent, so inspect only a ready snapshot and release before SQL.
-        let cached = self.cache.try_lock().ok().and_then(|cache| cache.clone());
-        let Some(cached) = cached else {
-            return Ok(None);
-        };
-        // Ref mutations, deletion/recreation and HEAD changes advance the same
-        // generation transactionally. Matching it avoids scanning every ref page.
-        let head = self
-            .repository
-            .default_branch(None)
-            .await
-            .map_err(|error| GatewayError::Cell(Box::new(error)))?
-            .output;
-        let current =
-            cached.snapshot.generation == head.generation && cached.snapshot.head == head.reference;
-        if current {
-            tracing::debug!(
-                repository = %hex::encode(self.repository.repository_id()),
-                generation = head.generation,
-                "reused Git ref snapshot"
-            );
-        }
-        Ok(current.then_some(cached))
     }
 
     async fn receive(
@@ -373,87 +326,35 @@ impl GitGateway {
 
     async fn build_cache(
         &self,
-        snapshot: RefSnapshot,
-        include_blobs: bool,
+        actor: &str,
+        names: &[String],
     ) -> Result<CachedRepository, GatewayError> {
-        // Only hydration writes the shared cache, and only from durable Cell
-        // records. Native pushes/merges write into their private generation.
-        let mut objects = self.objects.lock().await;
-        if objects.is_none() {
-            *objects = Some(CachedObjects {
-                cache: self.pack_reader.cache().await?,
-                through: 0,
-            });
+        if !valid_ref_names(names) {
+            return Err(GatewayError::MalformedCache);
         }
-        let shared = objects.as_mut().ok_or(GatewayError::MalformedCache)?;
-        self.restore_packs(shared).await?;
-        if include_blobs {
-            self.hydrate(shared).await?;
-        } else {
-            // Native ref advertisement only needs tips and peeled tags. Fetch
-            // hydrates the requested structural graph after validating wants.
-            self.hydrate_selected(
-                &shared.cache,
-                snapshot
-                    .refs
-                    .values()
-                    .filter_map(|state| state.oid)
-                    .collect(),
-            )
-            .await?;
-        }
-        let backend = GitHttpBackend {
-            cache: GitCache::create_with_objects(
-                self.scratch_root.clone(),
-                self.disk_budget.clone(),
-                &snapshot.head,
-                self.repository.object_format(),
-                Some(Arc::clone(&shared.cache)),
-                self.native.clone(),
-            )
-            .await?,
-            nonce_seed: self.certificate_nonce().await?,
-            signers: None,
-        };
-        backend.cache.store_refs(&snapshot.refs).await?;
-        Ok(CachedRepository { backend, snapshot })
-    }
-
-    async fn cell_refs(&self) -> Result<RefSnapshot, GatewayError> {
-        for _ in 0..3 {
-            let mut refs = BTreeMap::new();
-            let mut after = String::new();
-            let mut generation = None;
-            loop {
-                let page = match self.repository.refs_page(&after, generation).await {
-                    Ok(page) => page.output,
-                    Err(RefReadError::Changed) => break,
-                    Err(RefReadError::Cell(error)) => {
-                        return Err(GatewayError::Cell(Box::new(error)));
-                    }
-                };
-                generation = Some(page.generation);
-                let complete = !page.has_more;
-                for (name, state) in page.refs {
-                    after = name.clone();
-                    refs.insert(name, state);
-                }
-                if complete {
-                    tracing::debug!(
-                        repository = %hex::encode(self.repository.repository_id()),
-                        generation = page.generation,
-                        refs = refs.len(),
-                        "read Git ref snapshot"
-                    );
-                    return Ok(RefSnapshot {
-                        refs,
-                        head: page.default_branch,
-                        generation: page.generation,
-                    });
+        let snapshot = self
+            .repository
+            .serving_snapshot(ReadIdentity::Account(actor))
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+        let mut refs = BTreeMap::new();
+        for page in ref_pages(names, 128, 256 << 10) {
+            for resolved in snapshot
+                .resolve_refs(page)
+                .await
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            {
+                if let Some(state) = resolved.state {
+                    refs.insert(resolved.reference, state);
                 }
             }
         }
-        Err(GatewayError::RefSnapshotBusy)
+        let backend = snapshot
+            .native_base()
+            .await
+            .map_err(|error| GatewayError::Cell(Box::new(error)))?
+            .with_nonce(self.certificate_nonce().await?);
+        Ok(CachedRepository { backend, refs })
     }
 
     async fn persist_objects(
@@ -474,12 +375,6 @@ impl GitGateway {
         // re-reading old history; the final Cell transaction still verifies every new tip.
         let excluded = before.values().filter_map(|state| state.oid).collect();
         let started = std::time::Instant::now();
-        let initial_high_water = self
-            .repository
-            .object_high_water()
-            .await
-            .map_err(|error| GatewayError::Cell(Box::new(error)))?
-            .output;
         let mut sources = backend.cache.pack_sources().await?;
         let mut archive = None;
         let mut packed_ids = None;
@@ -490,7 +385,6 @@ impl GitGateway {
                 pack: self.pack_reader.upload(pack).await?,
                 index: self.pack_reader.upload(index).await?,
                 approved: false,
-                covered_through: 0,
             };
             self.repository
                 .register_pack(new_identity()?, &record)
@@ -634,42 +528,6 @@ impl GitGateway {
                 .await
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?;
         }
-        let mut shared = self.objects.lock().await;
-        if let Some(shared) = shared.as_mut() {
-            let count = verified.len();
-            match shared
-                .cache
-                .retain_verified_packs(Arc::clone(&backend.cache), verified)
-                .await
-            {
-                Ok(retained) if retained == count && shared.through == initial_high_water => {
-                    if let Some(record) = &archive {
-                        shared.cache.mark_durable_pack(record.pack.sha256);
-                    }
-                    shared.through = self
-                        .repository
-                        .object_high_water()
-                        .await
-                        .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                        .output;
-                    tracing::info!(
-                        objects = retained,
-                        through = shared.through,
-                        "retained verified receive pack for immediate fetch"
-                    );
-                }
-                Ok(retained) => {
-                    if retained == count
-                        && let Some(record) = &archive
-                    {
-                        shared.cache.mark_durable_pack(record.pack.sha256);
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(error = ?error, "receive pack cache reuse skipped; durable hydration remains available")
-                }
-            }
-        }
         tracing::info!(
             elapsed_seconds = started.elapsed().as_secs_f64(),
             "persisted Git objects"
@@ -694,79 +552,80 @@ fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse 
     response
 }
 
-async fn git_output(
-    git_dir: &Path,
-    args: &[&str],
-    native: &crate::native_resources::NativeScope,
-) -> Result<Vec<u8>, GatewayError> {
-    use crate::git_http::{GitProcess, WORKER_DEADLINE, read_bounded};
-    use tokio::io::AsyncReadExt;
-    let mut command = crate::native_git::command(git_dir)?;
-    command
-        .arg("--git-dir")
-        .arg(git_dir)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut process = GitProcess::spawn(
-        command,
-        (),
-        native.try_admit(crate::native_resources::NativeWork::Read)?,
-    )?;
-    let mut stdout = process
-        .child
-        .stdout
-        .take()
-        .ok_or(GatewayError::MalformedCache)?;
-    let stderr = process
-        .child
-        .stderr
-        .take()
-        .ok_or(GatewayError::MalformedCache)?;
-    let run = async {
-        let mut bytes = Vec::new();
-        let read_stdout = async {
-            stdout.read_to_end(&mut bytes).await?;
-            Ok::<_, GitHttpError>(())
-        };
-        let ((), stderr) = tokio::try_join!(read_stdout, read_bounded(stderr, 64 << 10))?;
-        let status = process.wait().await?;
-        if !status.success() {
-            return Err(GatewayError::Git(
-                String::from_utf8_lossy(&stderr).into_owned(),
-            ));
-        }
-        Ok(bytes)
-    };
-    tokio::time::timeout(WORKER_DEADLINE, run)
-        .await
-        .map_err(|_| GitHttpError::Timeout)?
+fn valid_ref_names(names: &[String]) -> bool {
+    names.len() <= crate::refs::MAX_UPDATES
+        && names.windows(2).all(|p| p[0] < p[1])
+        && names.iter().all(|name| {
+            name.len() <= crate::packs::ref_state::MAX_NAME_BYTES
+                && crate::refs::valid_ref_name(name)
+        })
 }
 
+fn ref_pages(names: &[String], count: usize, bytes: usize) -> impl Iterator<Item = &[String]> {
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        if at == names.len() {
+            return None;
+        }
+        let start = at;
+        let mut used = 0;
+        while at < names.len() && at - start < count {
+            let charge = names[at].len() + 1;
+            if charge > bytes - used {
+                break;
+            }
+            used += charge;
+            at += 1;
+        }
+        // Callers validate names against MAX_NAME_BYTES, so one always fits.
+        Some(&names[start..at])
+    })
+}
+
+// Exact requested names only. for-each-ref patterns can scan entire subtrees
+// when an absent requested name prefixes existing refs; cat-file resolves each
+// validated literal ref independently and reports missing names in order.
 async fn git_refs(
-    git_dir: &Path,
-    native: &crate::native_resources::NativeScope,
+    backend: &GitHttpBackend,
+    names: &[String],
 ) -> Result<BTreeMap<String, crate::ObjectId>, GatewayError> {
-    let listing = git_output(
-        git_dir,
-        &["for-each-ref", "--format=%(refname)%00%(objectname)"],
-        native,
-    )
-    .await?;
+    if !valid_ref_names(names) {
+        return Err(GatewayError::MalformedCache);
+    }
     let mut refs = BTreeMap::new();
-    for line in listing
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-    {
-        let Some(separator) = line.iter().position(|byte| *byte == 0) else {
+    for page in ref_pages(names, 32, 64 << 10) {
+        let mut input = page.join("\n").into_bytes();
+        input.push(b'\n');
+        let output = candidates::run(
+            backend,
+            &["cat-file", "--batch-check=%(objectname)"],
+            &input,
+            &[],
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(output.error());
+        }
+        let text = std::str::from_utf8(&output.stdout).map_err(|_| GatewayError::MalformedCache)?;
+        let lines = text
+            .strip_suffix('\n')
+            .ok_or(GatewayError::MalformedCache)?
+            .split('\n')
+            .collect::<Vec<_>>();
+        if lines.len() != page.len() {
             return Err(GatewayError::MalformedCache);
-        };
-        let name =
-            std::str::from_utf8(&line[..separator]).map_err(|_| GatewayError::MalformedCache)?;
-        let oid = std::str::from_utf8(&line[separator + 1..])
-            .map_err(|_| GatewayError::MalformedCache)?;
-        refs.insert(name.to_owned(), parse_oid(oid)?);
+        }
+        for (name, line) in page.iter().zip(lines) {
+            if line == format!("{name} missing") {
+                continue;
+            }
+            let id = crate::ObjectId::from_hex(line.as_bytes())
+                .map_err(|_| GatewayError::MalformedCache)?;
+            if id.is_zero() || id.format() != backend.cache.object_format {
+                return Err(GatewayError::MalformedCache);
+            }
+            refs.insert(name.clone(), id);
+        }
     }
     Ok(refs)
 }
@@ -822,4 +681,96 @@ fn new_identity() -> Result<MutationIdentity, GatewayError> {
         issued_at_ms: now_ms,
         expires_at_ms: now_ms + 60_000,
     })
+}
+
+#[cfg(test)]
+mod native_refs_tests {
+    use super::*;
+    #[tokio::test]
+    async fn native_ref_reads_resolve_only_exact_requested_names_in_both_formats()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+            let root = tempfile::TempDir::new()?;
+            let backend = GitHttpBackend::initialize(
+                root.path().to_owned(),
+                DiskBudget::new(8 << 20),
+                "refs/heads/main",
+                format,
+                crate::native_resources::NativeResources::default()
+                    .scope(crate::native_resources::NativeClass::Foreground),
+            )
+            .await?;
+            let body = b"native ref lookup";
+            let id = crate::object_id(format, ObjectKind::Blob, body);
+            backend
+                .cache
+                .store_object(id, ObjectKind::Blob, body.to_vec())
+                .await?;
+            backend
+                .cache
+                .store_refs(&BTreeMap::from([
+                    (
+                        "refs/heads/main".into(),
+                        RefExpectation {
+                            oid: Some(id),
+                            version: 1,
+                        },
+                    ),
+                    (
+                        "refs/heads/absent/child".into(),
+                        RefExpectation {
+                            oid: Some(id),
+                            version: 1,
+                        },
+                    ),
+                    (
+                        "refs/tags/tag".into(),
+                        RefExpectation {
+                            oid: Some(id),
+                            version: 1,
+                        },
+                    ),
+                ]))
+                .await?;
+            let names = vec![
+                "refs/heads/absent".into(),
+                "refs/heads/main".into(),
+                "refs/tags/missing".into(),
+                "refs/tags/tag".into(),
+            ];
+            assert_eq!(
+                git_refs(&backend, &names).await?,
+                BTreeMap::from([("refs/heads/main".into(), id), ("refs/tags/tag".into(), id)])
+            );
+            assert!(matches!(
+                git_refs(&backend, &["HEAD".into()]).await,
+                Err(GatewayError::MalformedCache)
+            ));
+        }
+        Ok(())
+    }
+    #[test]
+    fn ref_pages_bound_names_and_bytes_and_reject_non_literal_input() {
+        let long = format!(
+            "refs/heads/{}",
+            "x".repeat(crate::packs::ref_state::MAX_NAME_BYTES - 11)
+        );
+        let names = vec![long, "refs/tags/a".into(), "refs/tags/b".into()];
+        assert!(valid_ref_names(&names));
+        let pages: Vec<_> = ref_pages(&names, 32, 64 << 10).collect();
+        assert_eq!(pages.iter().map(|p| p.len()).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(pages.concat(), names);
+        for name in [
+            "HEAD",
+            "refs/heads/a^",
+            "refs/heads/a\n",
+            "refs/heads/a:foo",
+        ] {
+            assert!(!valid_ref_names(&[name.into()]));
+        }
+        assert!(!valid_ref_names(&[format!(
+            "refs/heads/{}",
+            "x".repeat(65_536)
+        )]));
+    }
 }

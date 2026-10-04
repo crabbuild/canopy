@@ -1,6 +1,6 @@
 //! Fenced preparation and retained generation facts in the Repository Cell.
-//! The fresh schema is selected with the final producer/reader hard cutover;
-//! these commands are not registered on the legacy repository serving path.
+//! Production and qualification share the same bounded packed operation registry.
+//! The remaining producer/reader conversion is an unreleasable local cutover.
 use super::{catalog::StoredCatalog, ref_state::RefStateSnapshotRoot};
 use crate::{
     ObjectFormat, RepositoryModule,
@@ -14,6 +14,20 @@ use cellule_runtime::{
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
     registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
 };
+mod serving;
+pub use serving::{
+    AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_EDGE_PARENTS,
+    MAX_SERVING_GENERATIONS, MAX_SERVING_OWNERS, MAX_SERVING_PINS, NativeWorkspace,
+    ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
+    RenewServingRequest, ResolvedServingRef, SelectServingGeneration, ServingCheck, ServingContext,
+    ServingDenial, ServingDrainObserver, ServingDrainProof, ServingEdgePage, ServingLease,
+    ServingOwner, ServingOwnerError, ServingOwnerPhase, ServingOwnerStats, ServingPin, ServingPool,
+    ServingPoolLimits, ServingReadBudget, ServingReadError, ServingReleaseReply, ServingReply,
+    ServingSelection, ServingSnapshot, ServingToken, WorkspaceLimits, WorkspaceStats,
+};
+mod owner;
+pub(crate) mod registry;
+pub use owner::PreparationAuthority;
 mod session;
 pub use session::PreparationSession;
 mod base;
@@ -30,9 +44,10 @@ pub use prepare::{CatalogPreparation, CatalogPreparationError, PreparedCatalog};
 pub(in crate::packs) mod ref_proof;
 pub use ref_proof::{RefProofError, RefPublicationProof};
 mod initialization;
+pub(crate) use initialization::verify_empty as verify_initial_catalog;
 pub use initialization::{
     CheckInitializedCatalog, INITIALIZATION_BYTES, InitialRefProof, InitializationPreparationError,
-    InitializationReply, InitializeCatalogRefs,
+    InitializationReply, InitializationVerificationError, InitializeCatalogRefs,
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
@@ -50,6 +65,7 @@ mod outcome;
 pub use outcome::OutcomeCertificate;
 mod completion;
 mod coordinator;
+mod scan;
 pub use completion::{
     CatalogCompletionReply, CatalogPushCompletion, CatalogPushResponseError, CheckCompletedPush,
     CompleteCatalogPush, CompletedCatalogPush, CompletionCatalogProof, PushCompletionProofError,
@@ -57,13 +73,15 @@ pub use completion::{
 };
 pub use coordinator::{
     CompactionReadyError, NativeInputReadyError, PreparationCommandKind, PreparationCommandOutcome,
-    PreparationReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
-    PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
-    PublicationState, PublicationStats, PublicationTicket, ReadyBoundRecovery,
-    ReadyCatalogCompaction, ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation,
-    ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
-    RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
+    PreparationReadyError, PublicationAdmissionFailure, PublicationBudget, PublicationBudgetStats,
+    PublicationClass, PublicationCoordinator, PublicationError, PublicationLimits,
+    PublicationOutcome, PublicationScheduleError, PublicationState, PublicationStats,
+    PublicationTicket, ReadyBoundRecovery, ReadyCatalogCompaction, ReadyCatalogPush,
+    ReadyInitialization, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
+    ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError, RefPolicyRefusalFailure,
+    RegisteredNativeInputs, RootPushReadyError, ServingDrainAdmission,
 };
+pub use scan::{RecoveryScanBudget, RecoveryScanSettings};
 mod commands;
 mod compaction;
 pub use compaction::{
@@ -96,6 +114,16 @@ pub use root_completion::{
     RootOutcomeCompletion, RootPushCompletion, RootPushOutcomes, RootPushReplayError,
     RootSignedPushFact, replay_root_push_response,
 };
+mod admission_receipt;
+mod custody;
+pub use custody::{
+    CustodyAction, CustodyError, CustodyIntent, CustodyPurpose, CustodyReply, CustodyRequest,
+    CustodyScanStats, CustodyStopFact, CustodyStopInput, CustodyStopOutcome, CustodyStopReply,
+    CustodySupervisor, ExecuteCustody, PreparedCustody, ReadyCustodyStop, RegisterCustodyIntent,
+    RegisteredCustody, StopCustodyIntent,
+};
+mod preparation_receipt;
+pub use preparation_receipt::{PreparationAdmission, PreparationReceiptError};
 mod staging_receipt;
 pub use staging_receipt::{StagingAdmission, StagingReceiptError};
 mod staging;
@@ -113,7 +141,8 @@ pub use commands::{
 
 pub const SCHEMA: &str = concat!(
     include_str!("schema.sql"),
-    include_str!("ref_policy/schema.sql")
+    include_str!("ref_policy/schema.sql"),
+    include_str!("serving/schema.sql")
 );
 pub const MAX_OPERATIONS: u64 = 1024;
 pub const MAX_GENERATION_LEASES: u64 = 4096;
@@ -214,21 +243,18 @@ pub struct MaintenanceRequest {
     pub owner: OwnerFence,
 }
 
-/// Register on the fresh RepositoryModule only, with bounded descriptors for
-/// command IDs 11..14/16..19/22/24..26/28..29/31/33/35 and query IDs
-/// 15/20..21/23/27/30/32/34, plus the existing trusted SQL query. No separate
-/// Cell or compatibility API.
+/// Bind the packed production contract. Inline publication/completion adapters
+/// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
-    registry.bind_command::<BeginStaging>()?;
-    registry.bind_command::<RenewStaging>()?;
-    registry.bind_command::<BindStaging>()?;
-    registry.bind_command::<ClaimStaging>()?;
+    registry.bind_command::<ReleaseServingPin>()?;
+    registry.bind_query::<CheckServingPin>()?;
+    registry.bind_query::<SelectServingGeneration>()?;
+    registry.bind_command::<RegisterCustodyIntent>()?;
+    registry.bind_command::<ExecuteCustody>()?;
+    registry.bind_command::<StopCustodyIntent>()?;
     registry.bind_command::<RegisterStagedInputs>()?;
     registry.bind_query::<CheckStagedInputs>()?;
     registry.bind_query::<CheckStaging>()?;
-    registry.bind_command::<BeginPreparation>()?;
-    registry.bind_command::<ClaimPreparation>()?;
-    registry.bind_command::<RenewPreparation>()?;
     registry.bind_command::<AbortPreparation>()?;
     registry.bind_command::<ReapPreparation>()?;
     registry.bind_command::<RegisterCatalogAttestation>()?;
@@ -237,8 +263,6 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<RegisterRefPolicyPage>()?;
     registry.bind_query::<CheckRefPolicyGuard>()?;
     registry.bind_command::<ReapRefPolicyGuard>()?;
-    registry.bind_command::<PublishCatalogRefs>()?;
-    registry.bind_command::<CompleteCatalogPush>()?;
     registry.bind_command::<CompleteRootPush>()?;
     registry.bind_command::<CompleteRootOutcome>()?;
     registry.bind_command::<RegisterRootRecovery>()?;
@@ -246,7 +270,6 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_query::<CheckCompletedRootPush>()?;
     registry.bind_command::<PublishCatalogCompaction>()?;
     registry.bind_query::<CheckCompletedCompaction>()?;
-    registry.bind_query::<CheckCompletedPush>()?;
     registry.bind_query::<CheckPreparationFrontier>()?;
     registry.bind_query::<CheckPreparation>()
 }

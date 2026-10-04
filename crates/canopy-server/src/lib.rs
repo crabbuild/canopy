@@ -84,22 +84,10 @@ pub(crate) fn replica_limits(database: u64, capture: u64) -> cellule_ltx::Limits
     }
 }
 
-const SCHEMA: &str = include_str!("schema.sql");
-const COMMANDS: [OperationDescriptor; 9] = [
-    operation(1),
-    operation_with_codec(3, 4),
-    operation_with_codec(4, 6),
-    OperationDescriptor {
-        input_limit: object_batch::INPUT_LIMIT,
-        ..operation_with_codec(5, 5)
-    },
-    operation_with_codec(6, 3),
-    operation_with_codec(7, 2),
-    operation_with_codec(8, 2),
-    operation_with_codec(9, 4),
-    operation_with_codec(10, 2),
-];
-const QUERIES: [OperationDescriptor; 1] = [operation(2)];
+/// Fresh packed schema shared by release migrations and actual Cell activation.
+pub const REPOSITORY_SCHEMA: &str = packs::publication::SCHEMA;
+const SCHEMA: &str = REPOSITORY_SCHEMA;
+use packs::publication::registry::{COMMANDS, QUERIES};
 
 const fn operation(id: u32) -> OperationDescriptor {
     operation_with_codec(id, 1)
@@ -184,6 +172,12 @@ impl CellModule for RepositoryModule {
             source_digest: {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
+                source.update(include_bytes!("deployment/mod.rs"));
+                source.update(include_bytes!("deployment/root.rs"));
+                source.update(include_bytes!("server/mod.rs"));
+                source.update(include_bytes!("server/lifecycle.rs"));
+                source.update(include_bytes!("admission.rs"));
+                source.update(include_bytes!("server/workspace/mod.rs"));
                 source.update(include_bytes!("../../canopy-git-format/src/lib.rs"));
                 source.update(include_bytes!(
                     "../../canopy-git-format/src/pack_index/mod.rs"
@@ -200,23 +194,41 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("object_reads/mod.rs"));
                 source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
+                source.update(include_bytes!("git_cache/artifacts.rs"));
+                source.update(include_bytes!("git_cache/serving_refs.rs"));
+                source.update(include_bytes!("git_cache/cleanup.rs"));
+                source.update(include_bytes!("git_cache/mod.rs"));
+                source.update(include_bytes!("git_cache/maintenance.rs"));
+                source.update(include_bytes!("packs/catalog/native.rs"));
+                source.update(include_bytes!("packs/catalog/reader.rs"));
+                source.update(include_bytes!("packs/catalog/graph_spool.rs"));
+                source.update(include_bytes!("packs/catalog/files.rs"));
                 source.update(include_bytes!("native_resources.rs"));
                 source.update(include_bytes!("native_git.rs"));
                 source.update(include_bytes!("native_git/process.rs"));
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
+                source.update(include_bytes!("git_gateway/candidates/mod.rs"));
+                source.update(include_bytes!("git_gateway/fetch.rs"));
+                source.update(include_bytes!("git_gateway/discovery.rs"));
+                source.update(include_bytes!("git_gateway/ssh.rs"));
                 source.update(include_bytes!("git_gateway/preflight.rs"));
                 source.update(include_bytes!("git_gateway/preflight/retention.rs"));
                 source.update(include_bytes!("git_gateway/branch_policy.rs"));
                 source.update(include_bytes!("git_gateway/push.rs"));
                 source.update(include_bytes!("git_input/mod.rs"));
                 source.update(include_bytes!("git_http/capture.rs"));
+                source.update(include_bytes!("git_http/mod.rs"));
+                source.update(include_bytes!("packs/verification/mod.rs"));
+                source.update(include_bytes!("packs/verification/physical.rs"));
+                source.update(include_bytes!("packs/verification/spool.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
                 source.update(include_bytes!("packs/input_artifact.rs"));
                 source.update(include_bytes!("packs/directory/index/mod.rs"));
                 source.update(include_bytes!("packs/directory/index/record.rs"));
                 source.update(include_bytes!("packs/directory/index/codec.rs"));
                 source.update(include_bytes!("packs/directory/index/cursor.rs"));
+                source.update(include_bytes!("packs/directory/index/changes.rs"));
                 source.update(include_bytes!("packs/directory/index/update.rs"));
                 source.update(include_bytes!("packs/directory/index/bulk.rs"));
                 source.update(include_bytes!("packs/directory/index/rewrite.rs"));
@@ -253,6 +265,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/ref_proof.rs"));
                 source.update(include_bytes!("packs/publication/ref_snapshot.rs"));
                 source.update(include_bytes!("packs/publication/initialization.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/initialization.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/recovery/initialization.rs"
+                ));
                 source.update(include_bytes!("packs/publication/ref_policy/mod.rs"));
                 source.update(include_bytes!("packs/publication/ref_policy/codec.rs"));
                 source.update(include_bytes!("packs/publication/ref_policy/commands.rs"));
@@ -263,7 +281,19 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/staging_service.rs"));
                 source.update(include_bytes!("packs/publication/staging_receipt.rs"));
+                source.update(include_bytes!("packs/publication/admission_receipt.rs"));
+                source.update(include_bytes!("packs/publication/custody/mod.rs"));
+                source.update(include_bytes!("packs/publication/custody/codec.rs"));
+                source.update(include_bytes!("packs/publication/custody/commands.rs"));
+                source.update(include_bytes!("packs/publication/custody/dispatch.rs"));
+                source.update(include_bytes!("packs/publication/preparation_receipt.rs"));
                 source.update(include_bytes!("packs/publication/coordinator.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/serving_drain.rs"
+                ));
+                source.update(include_bytes!("packs/publication/coordinator/budget.rs"));
+                source.update(include_bytes!("packs/publication/scan.rs"));
+                source.update(include_bytes!("packs/publication/custody/scan.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/policy.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/roots.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/work.rs"));
@@ -283,6 +313,38 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/exact.rs"));
                 source.update(include_bytes!("packs/publication/mod.rs"));
+                source.update(include_bytes!("packs/publication/serving.rs"));
+                source.update(include_bytes!("packs/publication/serving/codec.rs"));
+                source.update(include_bytes!("packs/publication/serving/commands.rs"));
+                source.update(include_bytes!("packs/publication/serving/command_owner.rs"));
+                source.update(include_bytes!("packs/publication/serving/session.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/reads.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/body.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/edges.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/workspace.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/native_base.rs"
+                ));
+                source.update(include_bytes!("git_read/mod.rs"));
+                source.update(include_bytes!("git_read/browse.rs"));
+                source.update(include_bytes!("git_read/graph.rs"));
+                source.update(include_bytes!("git_read/trees.rs"));
+                source.update(include_bytes!("git_read/patch/mod.rs"));
+                source.update(include_bytes!("packs/publication/serving/session/refs.rs"));
+                source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
+                source.update(include_bytes!("packs/publication/serving/pool.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/handoff.rs"
+                ));
+                source.update(include_bytes!("packs/publication/serving/ownership.rs"));
+                source.update(include_bytes!("packs/publication/serving/schema.sql"));
+                source.update(include_bytes!("packs/publication/registry.rs"));
+                source.update(include_bytes!("server/catalog_initialization.rs"));
+                source.update(include_bytes!("server/residency/mod.rs"));
+                source.update(include_bytes!("server/residency/recovery.rs"));
+                source.update(include_bytes!("server/peer.rs"));
                 source.update(include_bytes!("packs/publication/codec.rs"));
                 source.update(include_bytes!("packs/publication/sql.rs"));
                 source.update(include_bytes!("packs/publication/schema.sql"));
@@ -348,14 +410,7 @@ impl CellModule for RepositoryModule {
 
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
         register_sql::<Self>(registry)?;
-        registry.bind_command::<FinalizePush>()?;
-        registry.bind_command::<push::CompletePush>()?;
-        registry.bind_command::<object_batch::PutObjects>()?;
-        registry.bind_command::<graph::CertifyObjects>()?;
-        registry.bind_command::<ancestry::CertifyAncestry>()?;
-        registry.bind_command::<branch_rules::command::SetBranchRule>()?;
-        registry.bind_command::<pulls::merge::command::MergePull>()?;
-        registry.bind_command::<pulls::candidates::command::PrepareCandidate>()
+        packs::publication::register(registry)
     }
 }
 
@@ -394,6 +449,7 @@ pub struct RepositoryCell {
     // Gateways own the cache lifetime. Sharing the reader through a weak
     // reference must not retain its original disk budget after gateway eviction.
     pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
+    serving: std::sync::Mutex<Option<std::sync::Weak<packs::publication::ServingPool>>>,
 }
 
 impl RepositoryCell {
@@ -421,7 +477,38 @@ impl RepositoryCell {
             application: application.clone(),
             target,
             pack_readers: std::sync::Mutex::new(Vec::new()),
+            serving: std::sync::Mutex::new(None),
         })
+    }
+
+    pub(crate) fn attach_serving(&self, pool: &std::sync::Arc<packs::publication::ServingPool>) {
+        *self.serving.lock().expect("repository serving pool") =
+            Some(std::sync::Arc::downgrade(pool));
+    }
+    /// Borrow the resident's certified joint generation; a detached caller
+    /// cannot abandon its acquisition or extend a released residency.
+    pub async fn serving_snapshot(
+        &self,
+        actor: ReadIdentity<'_>,
+    ) -> std::result::Result<
+        packs::publication::ServingSnapshot,
+        packs::publication::ServingOwnerError,
+    > {
+        actor
+            .validate()
+            .map_err(packs::publication::ServingReadError::Capability)?;
+        let pool = self
+            .serving
+            .lock()
+            .expect("repository serving pool")
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(packs::publication::ServingReadError::Inactive)?;
+        let actor = match actor {
+            ReadIdentity::Anonymous => None,
+            ReadIdentity::Account(value) => Some(value.to_owned()),
+        };
+        pool.snapshot(actor).await
     }
 
     /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.

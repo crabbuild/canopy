@@ -3,16 +3,21 @@ mod attestation;
 mod compaction;
 mod completion;
 mod coordinator;
+mod custody;
+mod custody_stop;
 mod durable_policy;
 mod durable_recovery;
 mod frontier;
 mod initialization;
+mod initialization_recovery;
+mod initialization_retirement;
 mod inputs;
 mod mandatory_registration;
 mod namespaces;
 mod native_capture;
 mod policy_dispatch;
 mod policy_refusal;
+mod preparation_receipt;
 mod prepare;
 mod publishing;
 mod reconcile;
@@ -23,6 +28,7 @@ mod refs;
 mod root_completion;
 mod root_dispatch;
 mod root_outcome;
+mod serving;
 mod staged_durable;
 mod staging;
 mod staging_receipt;
@@ -67,37 +73,31 @@ impl CellModule for Module {
             publish_descriptor.input_limit = 4 << 20;
             let mut complete_descriptor = descriptor(19);
             complete_descriptor.input_limit = 4 << 20;
-            let mut initial_descriptor = descriptor(31);
-            initial_descriptor.input_limit = INITIALIZATION_BYTES;
-            initial_descriptor.output_limit = 512;
-            let mut initial_query = descriptor(32);
-            initial_query.output_limit = 512;
-            let mut policy_page = descriptor(33);
-            policy_page.codec_version = RegisterRefPolicyPage::CODEC_VERSION;
-            policy_page.input_limit = REF_POLICY_PAGE_BYTES;
-            policy_page.output_limit = 128;
-            let mut policy_query = descriptor(34);
-            policy_query.output_limit = 128;
-            let mut policy_reap = descriptor(35);
-            policy_reap.output_limit = 128;
-            let mut root_completion = descriptor(36);
-            root_completion.codec_version = CompleteRootPush::CODEC_VERSION;
-            root_completion.input_limit = ROOT_COMPLETION_BYTES;
-            root_completion.output_limit = 512;
-            let mut root_outcome = descriptor(38);
-            root_outcome.codec_version = CompleteRootOutcome::CODEC_VERSION;
-            root_outcome.input_limit = ROOT_COMPLETION_BYTES;
-            root_outcome.output_limit = 512;
-            let mut root_lookup = descriptor(37);
-            root_lookup.output_limit = 512;
-            let mut recovery = descriptor(39);
-            recovery.codec_version = RegisterRootRecovery::CODEC_VERSION;
-            // Match the existing production SQL transport contract exactly.
-            // The generic 4 KiB fixture limit cannot encode even one valid
-            // 65 KiB ref name; policy construction has its own smaller bound.
-            let sql_query = crate::operation(2);
-            let mut release = descriptor(40);
-            release.output_limit = 128;
+            let mut commands = super::registry::COMMANDS.to_vec();
+            commands.extend([publish_descriptor, complete_descriptor, ref_descriptor]);
+            for id in [AcquireServingPin::ID, RenewServingPin::ID] {
+                let mut raw = descriptor(id);
+                raw.input_limit = 1024;
+                raw.output_limit = 1024;
+                commands.push(raw);
+            }
+            // Raw domain receivers qualify their invariants here. Production
+            // binds only the mandatory registered custody envelope.
+            for (id, codec) in [
+                (BeginPreparation::ID, BeginPreparation::CODEC_VERSION),
+                (ClaimPreparation::ID, ClaimPreparation::CODEC_VERSION),
+                (RenewPreparation::ID, RenewPreparation::CODEC_VERSION),
+                (BeginStaging::ID, BeginStaging::CODEC_VERSION),
+                (ClaimStaging::ID, ClaimStaging::CODEC_VERSION),
+                (RenewStaging::ID, RenewStaging::CODEC_VERSION),
+                (BindStaging::ID, BindStaging::CODEC_VERSION),
+            ] {
+                let mut domain = descriptor(id);
+                domain.codec_version = codec;
+                commands.push(domain);
+            }
+            let mut queries = super::registry::QUERIES.to_vec();
+            queries.push(descriptor(20));
             ModuleDescriptor {
                 name: Self::NAME,
                 source_digest: Digest::from_bytes([11; 32]),
@@ -109,42 +109,8 @@ impl CellModule for Module {
                     sql: SCHEMA,
                     digest: Digest::from_bytes(*blake3::hash(SCHEMA.as_bytes()).as_bytes()),
                 }])),
-                commands: Box::leak(Box::new([
-                    descriptor(11),
-                    descriptor(12),
-                    descriptor(13),
-                    descriptor(14),
-                    descriptor(16),
-                    descriptor(17),
-                    publish_descriptor,
-                    complete_descriptor,
-                    descriptor(22),
-                    descriptor(24),
-                    descriptor(25),
-                    descriptor(26),
-                    descriptor(28),
-                    descriptor(29),
-                    initial_descriptor,
-                    policy_page,
-                    policy_reap,
-                    root_completion,
-                    root_outcome,
-                    recovery,
-                    release,
-                    ref_descriptor,
-                ])),
-                queries: Box::leak(Box::new([
-                    sql_query,
-                    descriptor(15),
-                    descriptor(20),
-                    descriptor(21),
-                    descriptor(23),
-                    descriptor(27),
-                    descriptor(30),
-                    initial_query,
-                    policy_query,
-                    root_lookup,
-                ])),
+                commands: Box::leak(commands.into_boxed_slice()),
+                queries: Box::leak(queries.into_boxed_slice()),
                 workflow_definitions: &[],
                 activity_types: &[],
                 namespaces: Box::leak(Box::new([NamespaceDescriptor {
@@ -159,9 +125,21 @@ impl CellModule for Module {
         })
     }
     fn register(self, registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+        cellule_runtime::primitives::sql::register_sql::<RepositoryModule>(registry)?;
         super::register(registry)?;
-        registry.bind_command::<refs::FixtureRefs>()?;
-        registry.bind_query::<cellule_runtime::primitives::sql::SqlBatchQuery<RepositoryModule>>()
+        registry.bind_command::<AcquireServingPin>()?;
+        registry.bind_command::<RenewServingPin>()?;
+        registry.bind_command::<BeginPreparation>()?;
+        registry.bind_command::<ClaimPreparation>()?;
+        registry.bind_command::<RenewPreparation>()?;
+        registry.bind_command::<BeginStaging>()?;
+        registry.bind_command::<ClaimStaging>()?;
+        registry.bind_command::<RenewStaging>()?;
+        registry.bind_command::<BindStaging>()?;
+        registry.bind_command::<PublishCatalogRefs>()?;
+        registry.bind_command::<CompleteCatalogPush>()?;
+        registry.bind_query::<CheckCompletedPush>()?;
+        registry.bind_command::<refs::FixtureRefs>()
     }
 }
 struct Fixture {
@@ -174,8 +152,16 @@ struct Fixture {
     registry: Arc<Registry>,
     runtime: CellRuntime,
     handle: CellHandle,
+    publication_budget: PublicationBudget,
+    scan_budget: RecoveryScanBudget,
 }
 impl Fixture {
+    fn scans(&self, limits: RecoveryScanLimits) -> RecoveryScanSettings {
+        self.scan_budget.settings(limits, "owner")
+    }
+    fn authority(&self) -> PreparationAuthority {
+        PreparationAuthority::local(self.layout.clone(), self.target.clone())
+    }
     async fn new(format: ObjectFormat) -> Result<Self> {
         Self::with_artifact_sequence(format, 0).await
     }
@@ -239,6 +225,16 @@ impl Fixture {
             registry,
             runtime,
             handle,
+            publication_budget: PublicationBudget::new(PublicationLimits {
+                operations: 128,
+                per_actor: 32,
+                command_bytes: 512 << 20,
+                in_flight: 16,
+                maintenance_operations: 16,
+                maintenance_in_flight: 4,
+                ..PublicationLimits::default()
+            })?,
+            scan_budget: RecoveryScanBudget::new(8, tokio_util::task::TaskTracker::new())?,
         })
     }
     fn client(&self) -> CellClient {
@@ -255,6 +251,18 @@ impl Fixture {
     }
     async fn counts(&self) -> Result<(u64, u64)> {
         counts(&self.handle).await
+    }
+    async fn counts_for(&self, token: PreparationToken) -> Result<(u64, u64)> {
+        let bytes = self.handle.query(0, 16, move |connection| {
+            let parameters = rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt];
+            let operations: u64 = connection.query_row("SELECT count(*) FROM catalog_operations WHERE incarnation=?1 AND admission_sequence=?2", parameters, |row| row.get(0))?;
+            let leases: u64 = connection.query_row("SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", parameters, |row| row.get(0))?;
+            Ok([operations.to_be_bytes(), leases.to_be_bytes()].concat())
+        }).await?;
+        Ok((
+            u64::from_be_bytes(bytes[..8].try_into()?),
+            u64::from_be_bytes(bytes[8..].try_into()?),
+        ))
     }
     // Trusted fixture injection only. Production generation facts require the
     // complete catalog verifier and fenced publisher; a digest is not a proof.
@@ -328,6 +336,22 @@ fn identity() -> std::io::Result<MutationIdentity> {
         issued_at_ms: now,
         expires_at_ms: now + 60_000,
     })
+}
+async fn registered_preparation(
+    f: &Fixture,
+    operation: [u8; 16],
+) -> Result<cellule_runtime::Committed<PreparationReply>> {
+    Ok(PreparedCustody::prepare(
+        &f.client(),
+        &f.target,
+        CustodyAction::BeginPreparation(f.begin(operation)),
+        identity()?,
+    )
+    .await?
+    .register(&f.client(), identity()?)
+    .await?
+    .recover_preparation(&f.client())
+    .await?)
 }
 fn lease(reply: PreparationReply) -> Result<PreparationLease> {
     match reply {
@@ -1050,9 +1074,7 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
                 .await?;
         fixture.install_catalog(1, native.stored).await?;
         let client = fixture.client();
-        let started = client
-            .command::<BeginPreparation>(&fixture.target, identity()?, fixture.begin([36; 16]))
-            .await?;
+        let started = registered_preparation(&fixture, [36; 16]).await?;
         let granted = lease(started.output)?;
         let budget = DiskBudget::new(128 << 20);
         let files = Arc::new(CatalogFiles::new(
@@ -1073,6 +1095,7 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             Arc::clone(&native.indexes),
             Arc::clone(&files),
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?;
         let base = resolver.context().base.ok_or("base")?;
@@ -1099,7 +1122,20 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             Err(ClosureError::Integrity)
         ));
         let renewal = identity()?;
-        resolver.renew(renewal, DEFAULT_LEASE_MS).await?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
+        let ticket = coordinator
+            .submit(resolver.ready_renew(renewal, DEFAULT_LEASE_MS).await?)
+            .await?;
+        let PublicationState::Finished(Ok(PublicationOutcome::Preparation(outcome))) =
+            ticket.wait().await
+        else {
+            return Err("renewal did not finish".into());
+        };
+        outcome.session.map_err(|e| e.to_string())?;
         fixture
             .handle
             .execute(
@@ -1119,10 +1155,20 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             .await?;
         // The exact renewal RPC replays success, but the subsequent fresh query
         // sees expiry. It cannot restart a local deadline from the old reply.
+        let replay = coordinator
+            .submit(resolver.restore_renewal().await?)
+            .await?;
+        let PublicationState::Finished(Ok(PublicationOutcome::Preparation(replayed))) =
+            replay.wait().await
+        else {
+            return Err("renewal replay did not finish".into());
+        };
+        assert_eq!(replayed.committed, outcome.committed);
         assert!(matches!(
-            resolver.renew(renewal, DEFAULT_LEASE_MS).await,
-            Err(PreparationBaseError::Inactive)
+            &replayed.session,
+            Err(error) if matches!(&**error, PreparationBaseError::Inactive)
         ));
+        assert!(coordinator.close_and_drain().await.is_empty());
         assert!(matches!(
             resolver.resolve(base, &ids).await,
             Err(ClosureError::LeaseExpired)
@@ -1134,7 +1180,8 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
                 check(granted.token),
                 Arc::clone(&native.indexes),
                 Arc::clone(&files),
-                None
+                None,
+                fixture.authority(),
             )
             .await,
             Err(PreparationBaseError::Inactive)

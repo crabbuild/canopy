@@ -50,13 +50,7 @@ pub(super) async fn claim(
     Ok(c.submit(ready).map_err(|(e, _)| e)?)
 }
 async fn new_token(f: &Fixture, op: [u8; 16]) -> Result<PreparationToken> {
-    Ok(lease(
-        f.client()
-            .command::<BeginPreparation>(&f.target, identity()?, f.begin(op))
-            .await?
-            .output,
-    )?
-    .token)
+    Ok(lease(registered_preparation(f, op).await?.output)?.token)
 }
 #[tokio::test]
 async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_through_close()
@@ -68,6 +62,7 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
             renew_before_ms: DEFAULT_LEASE_MS - 1000,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let ticket = bind(&f, &c, [203; 16], "owner").await?;
     let original = ticket.bound_result().ok_or("binding receipt")?;
@@ -75,7 +70,7 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
     let weak = Arc::downgrade(&session);
     let (release, wait) = oneshot::channel();
     let (entered, running) = oneshot::channel();
-    let worker = ticket.spawn_bound(move |session| async move {
+    let worker = ticket.spawn_bound(move |session, _context| async move {
         session.live_lease()?;
         let _ = entered.send(());
         wait.await.map_err(|_| StagingError::Worker)?;
@@ -114,7 +109,11 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
     })
     .await?;
     assert!(!close.is_finished());
-    assert!(retained.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(
+        retained
+            .spawn_bound(|_, _context| async { Ok(()) })
+            .is_err()
+    );
     release.send(()).map_err(|_| "worker lost")?;
     let result = retained
         .pending_task::<Arc<PreparationSession>>(id)
@@ -141,7 +140,8 @@ async fn bound_service_renewal_retains_exact_absent_lost_and_panicked_commands_t
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for fault in [1, 2, 3] {
             let f = Fixture::new(format).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = bind(&f, &c, [204; 16], "owner").await?;
             let original = ticket.bound_result().ok_or("binding")?;
             let shared = ticket.bound_session()?;
@@ -168,7 +168,10 @@ async fn bound_service_renewal_retains_exact_absent_lost_and_panicked_commands_t
                 other => return Err(format!("unexpected {other:?}").into()),
             };
             assert_eq!(sequence.is_some(), fault != 1);
-            assert_eq!(c.stats().command_bytes, 8192);
+            assert_eq!(
+                c.stats().command_bytes,
+                super::super::super::custody::RESERVATION
+            );
             drop(ticket);
             let retained = c.pending([204; 16]).ok_or("renewal lost")?;
             assert_eq!(c.close_and_drain().await.len(), 1);
@@ -209,7 +212,8 @@ async fn bound_service_claim_retains_exact_identity_and_new_namespace_through_cl
         for fault in [1, 2, 3] {
             let f = Fixture::new(format).await?;
             let old = new_token(&f, [205; 16]).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let mutation = identity()?;
             c.fault_for_test(fault);
             let ticket = claim(&f, &c, old, mutation).await?;
@@ -232,17 +236,11 @@ async fn bound_service_claim_retains_exact_identity_and_new_namespace_through_cl
             };
             assert_ne!(bound.lease.token, old);
             assert_ne!(bound.lease.token.artifact_operation, old.artifact_operation);
-            let replay = f
-                .client()
-                .command::<ClaimPreparation>(
-                    &f.target,
-                    mutation,
-                    LeaseRequest {
-                        check: check(old),
-                        lease_ms: DEFAULT_LEASE_MS,
-                    },
-                )
-                .await?;
+            let saved = RegisteredCustody::load_latest(&f.client(), &f.target, old.operation)
+                .await?
+                .ok_or("claim intent missing")?;
+            assert_eq!(saved.evidence().identity(), mutation);
+            let replay = saved.recover_preparation(&f.client()).await?;
             assert_eq!(bound.receipt, replay.receipt);
             assert_eq!(bound.lease, lease(replay.output)?);
             let cellule_runtime::Resolution::Committed(value) =
@@ -265,7 +263,8 @@ async fn bound_service_known_renewal_receipts_survive_revocation_expiry_and_supe
     for committed in [false, true] {
         for mode in [0, 1, 2] {
             let f = Fixture::new(ObjectFormat::Sha256).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = bind(&f, &c, [206; 16], "owner").await?;
             let session = ticket.bound_session()?;
             let binding = ticket.bound_result().ok_or("binding")?;
@@ -352,14 +351,24 @@ async fn bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_
     let native =
         crate::packs::catalog::tests::prepared_for_repository(f.format, f.repository).await?;
     f.install_catalog(1, native.stored).await?;
-    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
     let ticket = submit(&f, &c, [207; 16], "owner").await?;
     active(&ticket).await?;
     let work = ticket.spawn(|ctx| async { Ok(ctx) })?;
     let old = work.wait().await.map_err(|e| e.to_string())?;
+    let old_token = old.token()?;
+    // A context now owns its physical worker admission. Retain only the
+    // historical token before handoff; a live context must keep Bind blocked.
+    drop(old);
     ticket.seal()?;
     assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
-    assert!(old.ensure_live().is_err());
+    assert!(
+        f.client()
+            .query::<CheckStaging>(&f.target, None, check(old_token))
+            .await?
+            .output
+            .is_none()
+    );
     assert!(ticket.spawn(|_| async { Ok(()) }).is_err());
     let session = ticket.bound_session()?;
     let store = native.store.clone();
@@ -395,7 +404,7 @@ async fn bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_
     ));
     assert!(!session.fenced.load(std::sync::atomic::Ordering::Acquire));
     let (entered, running) = oneshot::channel();
-    let worker = ticket.spawn_bound(move |_| async move {
+    let worker = ticket.spawn_bound(move |_, _context| async move {
         let _ = entered.send(());
         std::future::pending::<std::result::Result<(), StagingError>>().await
     })?;
@@ -440,6 +449,7 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
             workers_per_actor: 1,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let a = bind(&f, &c, [208; 16], "owner").await?;
     let b = bind(&f, &c, [209; 16], "owner").await?;
@@ -452,13 +462,13 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
         wrong: wrong.clone(),
     };
     let (done, completed) = oneshot::channel();
-    let work = a.spawn_bound(move |_| async move {
+    let work = a.spawn_bound(move |_, _context| async move {
         let _ = done.send(());
         Ok(owned)
     })?;
     timeout(Duration::from_secs(10), completed).await??;
     assert_eq!(c.stats().workers, 1);
-    assert!(b.spawn_bound(|_| async { Ok(()) }).is_err());
+    assert!(b.spawn_bound(|_, _context| async { Ok(()) }).is_err());
     super::super::publishing::edit(
         &f,
         "UPDATE repository_identity SET owner='other' WHERE singleton=1",
@@ -479,7 +489,8 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
                 StagingLimits {
                     bound_lifetime_ms: invalid,
                     ..StagingLimits::default()
-                }
+                },
+                f.authority(),
             )
             .is_err()
         );
@@ -508,13 +519,14 @@ async fn bound_service_checkpoint_shares_renewal_order_exact_recovery_and_origin
                 return Err("source bind".into());
             };
             assert!(source.close_and_drain().await.is_empty());
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = claim(&f, &c, old.lease.token, identity()?).await?;
             assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
             let session = ticket.bound_session()?;
             let parent = prior.clone();
             let provider = store.clone();
-            let worker = ticket.spawn_bound(move |s| async move {
+            let worker = ticket.spawn_bound(move |s, _context| async move {
                 s.adopt_native_inputs(provider, &parent)
                     .await
                     .map_err(|e| StagingError::Input(Box::new(e)))
@@ -551,7 +563,10 @@ async fn bound_service_checkpoint_shares_renewal_order_exact_recovery_and_origin
                 return Err("checkpoint evidence".into());
             };
             let evidence = (**evidence).clone();
-            assert_eq!(c.stats().command_bytes, 12 << 10);
+            assert_eq!(
+                c.stats().command_bytes,
+                super::super::super::custody::RESERVATION + 4096
+            );
             if fault == 2 {
                 super::super::publishing::edit(
                     &f,
@@ -631,7 +646,7 @@ async fn bound_service_restored_owner_claim_retains_old_pin_and_owns_new_session
             )
             .await?;
         let client = CellClient::local(f.registry.clone(), handle.clone());
-        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let mutation = identity()?;
         c.fault_for_test(2);
         let ready = ReadyStaging::claim_bound(
@@ -655,21 +670,16 @@ async fn bound_service_restored_owner_claim_retains_old_pin_and_owns_new_session
         };
         assert_ne!(bound.lease.token.owner, old.owner);
         assert_ne!(bound.lease.token.artifact_operation, old.artifact_operation);
-        let replay = client
-            .command::<ClaimPreparation>(
-                &f.target,
-                mutation,
-                LeaseRequest {
-                    check: check(old),
-                    lease_ms: DEFAULT_LEASE_MS,
-                },
-            )
-            .await?;
+        let saved = RegisteredCustody::load_latest(&client, &f.target, old.operation)
+            .await?
+            .ok_or("claim intent missing")?;
+        assert_eq!(saved.evidence().identity(), mutation);
+        let replay = saved.recover_preparation(&client).await?;
         assert_eq!(bound.receipt, replay.receipt);
         let old_pin = handle.query(0, 32, move |conn| { Ok(conn.query_row("SELECT generation FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", rusqlite::params![old.owner.incarnation.as_bytes().as_slice(), old.attempt as i64], |row| row.get::<_, i64>(0))?.to_be_bytes().to_vec()) }).await?;
         assert_eq!(old_pin.as_slice(), 0i64.to_be_bytes());
-        let worker =
-            ticket.spawn_bound(|session| async move { Ok(session.live_lease()?.0.token) })?;
+        let worker = ticket
+            .spawn_bound(|session, _context| async move { Ok(session.live_lease()?.0.token) })?;
         assert_eq!(
             worker.wait().await.map_err(|e| e.to_string())?,
             bound.lease.token

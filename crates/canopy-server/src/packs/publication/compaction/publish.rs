@@ -83,7 +83,7 @@ pub struct PublishCatalogCompaction;
 impl Command for PublishCatalogCompaction {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 22;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = CatalogCertificate;
     type Output = CompactionReply;
     fn execute(
@@ -127,7 +127,7 @@ impl Command for PublishCatalogCompaction {
             )));
         }
         if !rows(&context.sql(&statement(
-            "SELECT id FROM pushes WHERE id=?1 AND NOT(actor=?2 AND request_digest=?3 AND initial_staging IS NOT NULL AND response_id IS NULL AND response_root IS NULL AND publication IS NULL)",
+            "SELECT id FROM pushes WHERE id=?1 AND NOT(actor=?2 AND request_digest=?3 AND (initial_staging IS NOT NULL OR initial_preparation IS NOT NULL) AND response_id IS NULL AND response_root IS NULL AND publication IS NULL)",
             vec![blob(data.token.operation), SqlValue::Text(data.actor.clone()), blob(data.token.request_digest)],
         ))?)?
         .is_empty()

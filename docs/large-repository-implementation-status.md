@@ -1,10 +1,843 @@
 # Large-repository implementation status
 
-Updated during implementation on 2026-10-03. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
+Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
-Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The audit verifies each directly merged PR's exact merge tree and main ancestry; the entire main tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
+Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
+directly against `main`. The original SQL hydration failures have been resolved by
+converting their real read/cache callers. Full CI remains open: the directory
+integration fixture still invokes the retired loose-object ingestion command.
+The physical worker ownership change below supplies a prerequisite for the native
+write replacement; it does not complete that replacement. The PR remains for
+review and is not ready to merge or deploy. Older checkpoint notes describe
+historical states.
 
-All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. Production startup/HTTP/SSH/generated producer and reader conversion, mandatory registration and the fresh-schema hard cutover remain open.
+Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
+
+All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Staging physical worker ownership
+
+Staging contexts and result slots now share the original worker admission.
+Result transfer, async cancellation and custody expiry cannot release worker or
+actor capacity while detached physical work retains it. Bound callbacks receive
+the live preparation session and its staging context. The existing `ReadOwner`,
+cache ownership and admitted spool structures carry the pin; there is no new
+queue, durable schema or independent physical-worker inventory.
+
+Native receive requires the checked context and carries its owner in the Git
+process group and response reconciliation. Capture enumeration and authenticated
+pack/index upload carry the same owner in blocking jobs and pinned files.
+`PhysicalVerifier::download_staged` validates live repository, current creating
+namespace and format; cache construction/download, native index validation,
+canonical decoding, edge-spool writes and deferred cleanup retain the worker.
+Inspection and witness completion check live custody again. The unowned download
+is confined to qualification builds. The native-receive qualification now runs
+physical verification as an admitted producer rather than outside the lifecycle. A phase-handoff
+fixture now releases its transferred worker context before Bind and checks that
+the retained staging token cannot reopen staging afterward. Holding that context
+across Bind would correctly keep physical admission charged.
+
+This is a lifecycle/API prerequisite. Live HTTP/SSH/generated producer wiring,
+resident staging service ownership, old-owner input adoption, bounded metadata
+replay and final joint-root completion still need conversion. In particular,
+current-namespace verification does not authorize adopted inputs from an older
+attempt; those need the authenticated retained-input selection path. Request,
+metadata and policy workers outside these native stages still need the same
+physical-owner integration. Full CI and capacity qualification remain open.
+
+Final frozen-source qualification passes all 715 unique workspace library cases
+(6 Git-format, 14 object-storage, 695 server), including all 400 publication
+cases, and all 11 focused ownership/native/expiry cases. Two binary cases, the
+server build, all-target workspace Clippy with warnings denied, formatting/diff
+checks and all 96 Python harness cases pass. Directory integration remains 12
+passes and one failure in retired ingestion. Thus 730 unique Rust cases executed,
+729 pass and one fails; focused reruns and two nested subprocess summaries are
+excluded. Later integration binaries/doctests and Linux/provider/capacity gates
+remain unrun for this source. Both actual preceding `6101d58` CI runs pass all
+693 server library cases and fail at the same directory case. Failed draft and
+isolated diagnostics, exact source/commands/log hashes and limits are preserved
+in the [physical-worker evidence](evidence/staging-physical-workers-20261004.json).
+The transferred-context fixture releases admission before Bind and checks the
+old token's staging denial afterward. One-second publication ceilings are now
+applied after actual Bind before private ready-proof construction, exercising
+the same ceiling guard without making startup speed a test prerequisite. The
+ceiling duration, virtual-time advance and publication/result/credit assertions
+remain unchanged. One preceding-source serving timeout passes in exact isolation
+and the final full rerun; no claim of eliminating all timing failures is made.
+
+## Immutable source cursor and native write-base conversion
+
+The private cache constructor used by HTTP push and generated candidate
+preparation now takes one retained joint snapshot. It reads only requested ref
+expectations in batches of at most 128 names and 256 KiB, including tombstone
+versions; the native baseline streams all live refs directly into packed-refs.
+Post-receive comparison resolves exact requested names with owned native cat-file
+batches (32 names / 64 KiB input), avoiding prefix enumeration and changes to
+unrequested refs. Candidate preparation requests no repository-wide ref map.
+
+Catalog inputs now stream from the immutable source index in count/descriptor-
+byte-bounded pages. The shared range-tree difference cursor compares full records
+at matching first keys, emits additions/replacements, omits deletions and skips
+identical authenticated subtrees. Fixed old/new roots exclude later publications;
+new lower keys are found by starting a new root-pair difference, rather than
+continuing an OID or retired SQL sequence. A byte-excluded descriptor is retained
+for the next page. Cancellation/error poisons the cursor; callers restart with
+the same root pair after their last returned key. Its two frontier stacks retain
+only bounded-height paths and siblings. Source shard descriptors reuse the existing
+range-tree structure and physical pack bindings.
+
+Native write-base construction currently enumerates `None -> selected sources`:
+it is a cold per-request baseline, not a coalesced incremental cache. Admitted
+disk stores physical pack deduplication. Authenticated pack/index inputs remain
+native, and a separate writable sibling cache uses that baseline as an alternate.
+This prevents accepted catalog packs from being mistaken for new receive outputs.
+Both cache owners retain the snapshot, physical generation and cleanup admission;
+construction refreshes current read authority and lease observations and rechecks
+before returning. This internal base grants neither fetch reachability nor mutation
+publication authority. Fetch continues to require its distinct completed closure.
+
+The retired sequence/high-water hydration caller, shared loose-cache reuse and
+its obsolete periodic repack loop are removed. Unused loose-object/repack helpers
+are confined to unit-test fixtures to preserve native cache mechanism coverage.
+Legacy object ingestion, graph preparation, candidate reservation/completion and
+HTTP/SSH write publication still require their owned staged-producer conversion.
+Some legacy object APIs remain genuine callers and are not relabeled as converted.
+Native generation maintenance, workspace sharing and cold-history performance
+qualification remain open.
+
+Nine focused replacement cases pass: lower-key/future-root isolation, byte-prefix
+restart, duplicate/failed/deleted/replaced records, subtree-read bounds after
+10,000 sources, independent differential results across tree shapes, native
+baseline/incoming-pack isolation, literal ref lookup, and real provider
+cancellation/revocation through drain. The focused command takes 114.256 seconds
+(including compilation); test runtime is 2.70 seconds. A failed draft cancellation
+test suspended at ref-root loading before file admission; it is preserved in the
+evidence. Warming that immutable metadata moves the gate to its intended native
+pack-transfer phase without relaxing the physical retention assertion.
+
+The exact full workspace command runs all 713 library cases successfully,
+including 693 server cases and all 398 publication cases, plus two binary cases.
+It then passes 12 directory integration cases and fails
+`directory_reservations_recover_two_distinct_repository_cells` with
+`Registry("operation descriptor is unavailable")`: its fixture still invokes the
+retired loose-object ingestion command. Later integration binaries and provider
+qualification have not run. Nine selected portable workspace/startup/drain cases
+pass independently, including production packed-repository initialization.
+Total executed Rust coverage is 737 unique cases: 736 pass, one fails; focused
+reruns and two nested subprocess summaries are excluded. Linux-only fork cases
+were not run locally. This is progress on CI, not a green full workflow.
+
+Workspace/all-target Clippy with warnings denied (36.465 seconds), server build
+(45.072 seconds), formatting, diff checks and all 96 Python harness cases pass.
+The protected original index/archive, clean read-only SDK and exact dependency
+pins are unchanged. Frozen source includes 487 files / 473 Rust files; its
+fingerprint, commands, log digests and preceding CI diagnostics are in
+[evidence](evidence/serving-native-write-base-20261004.json).
+
+Highest next priorities are the real owned HTTP/SSH/generated write producers,
+then integration-fixture conversion against those producers and complete
+workflow/provider qualification. Authority, recovery, custody history/rollover,
+final DDL, GC/backup/restore, resource containment, fair native maintenance,
+workspace sharing, full-history/team capacity and file attribution remain
+mandatory scope.
+
+## Certified native transport workspace checkpoint
+
+Local HTTP and SSH fetch now use complete native forward workspaces from an
+accepted joint snapshot. Live refs stream from the immutable ref index in
+32-name pages, including the same default branch, without a history-sized ref
+map or the explicit-object-root cap. An admitted SQLite spool tracks typed
+frontier, completed membership and distinct physical pack inputs. Each selected
+pack/index pair is authenticated, installed once and physically verified;
+blobs remain packed. Frontier batches have at most 128 objects and edge/
+membership pages have at most 512. Physical pack presence cannot authorize an
+unreferenced want. HTTP and SSH validate every wanted OID against the retained
+refs' completed closure before forwarding it to Git.
+
+Construction retains a producer borrow and physical generation guard, refreshes
+exact lease/owner/access observations during bounded steps, and rechecks before
+returning. Renewal can carry construction past its initial read deadline; an
+expired pin cannot be resurrected. Cancellation detaches observers while actual
+provider/blocking/native work and descendants remain owned. A completed workspace
+releases construction read credit while retaining file/disk admission and its
+snapshot until physical cleanup. The two-credit regression covers that lifetime
+separation.
+
+All 17 focused cases pass (107.869 seconds command,
+13.14 seconds test runtime). They cover both object formats, actual HTTP clones,
+complete 532-parent native history, unrelated physical objects, 10,000 streamed
+ref names, admission/size/type refusals, cancellation, revocation, expired pins,
+and real drain. Fixtures physically verify native packs then install joint facts
+through trusted SQL; they qualify consumers, not live write publication. Existing
+lease tests now use service-owned renewal during expensive fixture construction,
+observed renewal milestones, and short real-clock expiry injected at the intended
+recovery phase. No production lease duration is increased.
+
+The frozen workspace library runs 708 unique cases:
+704 pass and four legacy `object_reads` cursor/rollback/byte-bound cases
+fail on `no such table: objects`. All 396 publication cases
+pass. Nine selected portable workspace/lifecycle cases pass, giving
+717 unique Rust cases, 713
+passes and four failures; focused reruns and nested subprocess summaries are not
+counted twice. Workspace/all-target Clippy with warnings denied passes
+(37.712 seconds), as do server build, formatting, diff checks and all
+96 Python harness tests. The driver preserves the actual library exit 101.
+Linux-only fork cases and the full workspace integration/provider campaign were
+not run locally. Source fingerprint, command results, log digests and earlier
+failed diagnostic runs are in
+[workspace evidence](evidence/serving-certified-workspaces-20261004.json).
+Protected original index/archive and exact SDK pins remain unchanged.
+
+Highest next priority is replacing legacy write/cache object-page readers and
+their real callers with immutable catalog/native APIs, preserving paging,
+rollback and bounded incremental-work coverage. Then finish owned HTTP/SSH/
+generated write producers, live pull/editorial ref authority and owner-aware
+remote routes. Current transfers build their own workspace and download inputs;
+coalescing authorized generation workspaces, bulk graph scheduling and cold I/O
+remain required for large-repository latency. Physical owner adoption, custody
+history/rollover, final DDL, GC/backup/restore, OS containment, native maintenance,
+signed completion, attribution and full-history/10,000-SDE capacity qualification
+remain mandatory. This checkpoint does not establish capacity or latency targets.
+
+## Certified browser objects and ancestry checkpoint
+
+Local directory, file, tag and first-parent history views now borrow one accepted
+joint catalog generation for the whole request. Object presence, kind and size
+come from certified headers; bounded canonical bodies come from the shared
+verified native pack service. The reader no longer queries legacy `objects`,
+`object_closure`, `object_edges` or `commit_parents` tables. The existing raw path,
+mode, pagination and preview behavior remains. Zero/absent revision IDs return
+missing; wrong-format IDs reject as invalid.
+
+Comparison files, patches and previews also use this snapshot for their objects
+and merge-base graph. The new typed edge page accepts at most 128 sorted parent
+IDs and returns at most 512 edges with a tuple continuation. Preferred metadata
+queries run on admitted blocking work retaining a child physical guard. The
+shared private read contract rechecks current access/owner/lease and retains
+workers after observer cancellation. Ancestry filters commit edges, consumes all
+pages and keeps the existing bounded graph budget without a native process per
+commit. Equal tips still require certified commit membership. Live pull/review/
+thread editorial metadata and ref authority remain unconverted.
+
+Six new families exercise real HTTP reads in both object formats, 32-entry tree
+and history continuation, annotated tags, raw non-UTF-8 and literal paths,
+executable files, symlinks, gitlinks, bounded/binary previews, patches, merge bases,
+cached generation isolation, access revocation, and canceled suspended-provider
+work. A native 532-parent merge verifies a relevant parent beyond the first
+512-edge page. Fixtures physically verify actual native packs and metadata;
+their joint catalog facts and editorial records are installed by trusted SQL to
+isolate consumers. They do not qualify live producer/publication or capacity.
+
+All 112 focused cases pass (35.01 seconds test runtime;
+120.624 seconds command including compilation). Warnings-denied
+workspace/all-target Clippy passes in 31.581 seconds.
+The workspace library runs 695 unique cases:
+690 pass and the same five legacy object readers fail. All
+387 publication cases pass. Nine selected portable
+workspace/lifecycle cases pass, giving 704 unique Rust
+cases, 699 passes and five failures; focused reruns and
+nested subprocess summaries are excluded from that count. Build, formatting,
+diff checks and all 96 Python harness tests pass. The driver preserves library
+exit 101. Linux-only fork cases were not executed locally.
+Commands, source fingerprint and log digests are in
+[browser evidence](evidence/serving-certified-browser-20261004.json).
+The frozen inventory has 482 source/schema/manifest files,
+including 468 Rust files. Exact SDK pins and protected original
+index/archive remain unchanged.
+
+Next priorities are certified cache hydration and the five remaining legacy
+reader failures, followed by owned HTTP/SSH/generated producers and actual
+owner-aware remote routes. Complete-history native workspaces, efficient bounded
+batch reads/cold I/O, physical owner adoption, custody archival, final DDL,
+GC/backup/restore, OS containment, native maintenance, signed completion,
+attribution and full-history/10,000-SDE capacity qualification remain mandatory.
+
+## Certified native object body checkpoint
+
+`ServingSnapshot::body` now resolves an object through the accepted catalog and
+verified preferred source. It returns absent for entries missing from that
+catalog even if a reused pack physically contains the object. Foreground copies
+are bounded to 64 MiB and must match canonical kind, size, Git OID and BLAKE3
+body digest; incomplete or corrupt batch frames poison the reader.
+
+Resident file services share authenticated, verified native pack copies across
+generations, coalesce cold misses with sixteen fixed stripes, and charge at most
+eight live file slots with four cached copies. Borrowed/evicted files and native
+processes retain slots. Idle cache eviction can relieve shared disk pressure;
+retention follows deferred/failed cleanup. Native work uses the node's shared
+foreground scope. Physical generation guards survive blocking creation, transfer,
+verification and hashing, plus process descendants/reaping after cancellation.
+Idle cache files retain file/root charges, not generation pins.
+
+The [serving contract](design/certified-serving-pins.md#certified-bounded-native-body-reads)
+defines these bounds. Actual pack fixtures cover both formats, parallel reuse,
+metadata/body integrity, disk-pressure eviction, live slot exhaustion, generation
+isolation, current access after cached/in-flight reads, canceled provider work,
+and process ownership. Their catalog installation is trusted fixture injection
+to isolate serving behavior; this is not producer/publication qualification.
+All 97 focused serving/cache/native families pass in 26.35 seconds on the final
+source. Workspace/all-target Clippy with warnings denied passes in 38.39 seconds.
+The workspace library runs 689 unique cases: 684 pass and the same five legacy
+`objects` readers fail. All 385 publication cases pass. Nine selected portable
+workspace/lifecycle cases pass, giving 698 unique Rust cases, 693 passes and five
+failures; nested subprocess summaries and focused reruns are not counted twice.
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+The driver retains the actual library exit 101. Linux-only fork cases were not
+executed locally. Commands, source fingerprint and log digests are retained in
+[native body evidence](evidence/serving-native-bodies-20261004.json). The frozen
+inventory contains 478 source/schema/manifest files, including 464 Rust files.
+Exact SDK pins and protected original index/archive remain unchanged.
+
+At this historical body checkpoint, browser/tree/file/history/graph consumers
+and remote routes still required conversion; the newer browser checkpoint above
+converts local object and comparison ancestry consumers. Streaming larger bodies, a complete graph workspace for
+native history, persistent batch scheduling and cold-pack I/O optimization remain
+open. One private source pack is not necessarily a complete Git history workspace.
+Full producer/reader conversion, physical owner adoption, custody archival,
+final DDL, GC/backup/restore, OS containment, native maintenance, signed completion,
+attribution and full-history/large-team capacity qualification remain mandatory.
+
+## Certified browser ref reads checkpoint
+
+The local browser's ref listing and resolution now select the accepted immutable
+joint ref root through `ServingSnapshot`; neither legacy ref rows nor their
+default branch/counter can override it. The implementation reuses `RefPage`,
+`RefExpectation` and the existing byte-ordered `RefStateIndex`. Its bounded node
+client is shared by the resident, and each pin coalesces ref-descriptor loading.
+Ref and metadata reads share admitted private work, current access/owner/lease
+checks before and after I/O, and physical-drain ownership across observer loss.
+
+Pages contain at most 256 records and 512 KiB of name/record charges. Live cursors
+skip deleted subtrees; version-preserving consumers can include tombstones.
+Continuations bind the ref snapshot's generation and return changed on mismatch.
+Old borrowed generations remain immutable while new heads are selected. HTTP
+requests remain bounded at 512 KiB, allowing legal long cursors with JSON escapes;
+overlong names reject as invalid rather than exceeding the index's byte limit.
+The [serving contract](design/certified-serving-pins.md#certified-immutable-ref-reads)
+defines these boundaries.
+
+Five new ref families and one actual browser HTTP/manager family exercise both
+formats. They cover count/byte continuation, retained deletion versions, old-head
+immutability, cached and in-flight access revocation, blocked real provider I/O
+after canceled observation, bad snapshot context, and deliberately conflicting
+legacy SQL. All 62 focused serving/recovery families pass in 20.59 seconds;
+warnings-denied workspace/all-target Clippy passes in 28.37 seconds. Inventory
+roots in the ref fixtures are trusted injection to isolate reader behavior,
+not proof of native graph publication or capacity.
+
+Final frozen-source library qualification executes 679 unique cases: 674 pass
+and the same five legacy `objects` readers fail. All 381 publication, seven
+startup, four resident recovery and four resident serving cases pass. Nine
+selected portable workspace/lifecycle cases pass: 688 unique Rust cases, 683
+passed and five failed. Nested subprocess summaries and focused cases are not
+counted twice; the driver's actual library exit 101 remains visible. Linux-only
+fork cases were not run locally. Source fingerprints, commands, log digests and
+corrected fixture diagnostics are retained in
+[certified ref evidence](evidence/serving-refs-20261004.json).
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+Static qualification verifies 474 frozen source/schema/manifest files, including
+460 Rust files, exact SDK pins and the protected original index/archive.
+
+Highest next work is certified object/body/native serving and owner-aware remote
+routes, followed by conversion of all remaining ref/cache/graph/browser/policy/
+merge consumers and HTTP/SSH/generated producers. Default-branch and other
+policy producers still require immutable publication conversion. Physical
+adoption/quota recovery, admitted immutable custody history/exact lookup, final
+DDL, typed GC/backup/isolated restore, fault campaigns, OS containment, native
+acceleration/rewrite/fair maintenance, signed completion/cold clone, attribution
+and full-history/10,000-developer capacity qualification remain mandatory.
+The full objective remains open and the branch remains unreleasable.
+
+## Serving construction/shutdown barrier checkpoint
+
+A deterministic regression exposed a resident constructor publishing its weak
+serving capability before registering its lifecycle owner in the manager's drain
+inventory. Shutdown could collect that inventory while construction was pending.
+Registration now precedes capability exposure under the loaded-resident mutex;
+shutdown permanently closes construction under the same mutex before collecting
+pools. A rejected constructor joins its private pool, scanners and exact recovery
+inside its existing tracked residency task before returning `CellDraining`.
+Workspace, Cell and publication ownership therefore outlive that cleanup.
+
+The regression fails against the preceding publication ordering with
+`unpublished constructor exposed serving before registered ownership`; the fixed
+case passes in both formats. All 56 focused serving/recovery families pass in
+19.40 seconds. Warnings-denied workspace/all-target Clippy passes in 31.41 seconds.
+Final frozen-source library qualification executes 673 unique cases: 668 pass
+and the same five legacy `objects` readers fail. All 376 publication, seven
+startup, four resident recovery and three resident serving cases pass. Nine
+selected portable workspace/lifecycle cases pass, giving 682 unique Rust cases,
+677 passed and five failed. Nested subprocess summaries and focused cases are
+not counted twice. This remains an incomplete release gate, with the library's
+actual exit 101 retained. Linux-only fork cases were not run locally.
+The server build, formatting, diff checks and all 96 Python harness tests pass.
+Static qualification verifies the frozen source, exact SDK pins, protected
+original index/archive and local documentation links.
+
+The source fingerprint, commands, log digests and original failing regression
+are retained in [shutdown barrier evidence](evidence/serving-pool-shutdown-20261004.json).
+These lifecycle fixtures do not qualify full nonempty native/body/history serving,
+physical owner adoption or large-team capacity. Highest next work remains the
+authoritative reader and producer conversion listed below; all remaining release
+requirements stay open.
+
+## Resident serving pool checkpoint
+
+The production manager now owns one node serving budget and creates one lazy,
+repository-scoped pool/context with shared index/file clients for each local
+resident. `RepositoryCell::serving_snapshot` uses a weak association. The pool
+coalesces pending viewers, retains at most four generation slots including
+closing owners, and binds returned snapshots to the actual accepted joint fact
+across head races. At capacity it retires an idle old owner, returns explicit
+backpressure and charges the slot until real producer completion.
+
+Eviction pauses borrowing and producer creation, refuses pending originals/
+borrows/physical workers without discarding them, and resumes the same owners
+on refusal. Idle owners release through the existing exact-token admission gate
+before queue closure. A private task owns accepted drain across observer
+cancellation. Pool cleanup and generation releases proceed independently.
+Shutdown joins serving owners before closing the node tracker/publication
+budget or Cell/workspace/heartbeat. Partial construction joins its first owners.
+See the [serving contract](design/certified-serving-pins.md).
+
+Fifty-five focused serving/resident families pass in 20.42 seconds; they include
+six new pool and two actual-manager cases in both formats. The cases cover
+coalescing/current access, canceled cold observation, lost acknowledgement,
+four-generation retention and real slot reuse, deterministic acquisition head
+races, busy/canceled exclusive drain, independent release while an old real
+provider blocks, weak repository association, eviction retry and actual server
+shutdown held by the last borrowed clone. Warnings-denied workspace/all-target
+Clippy passes in 28.89 seconds. Empty/copied-root fixtures qualify this lifecycle,
+not full nonempty native/body/history serving or capacity.
+
+Final frozen-source workspace library qualification executes 672 unique cases:
+**667 pass and five fail**, retaining exit 101. All 376 publication, seven
+startup, four resident recovery and two resident serving families pass. Two
+nested subprocess summaries are excluded and focused cases are not counted
+again. Nine selected portable workspace/lifecycle cases also pass; combined
+coverage is 681 unique cases, 676 pass and five fail. No compatibility table or
+green-result substitution is introduced. The server build passes in 32.16
+seconds and formatting in 1.35 seconds. All 96 Python harness tests pass.
+The freeze covers 471 Rust/SQL/manifest files, including 457 Rust files. The
+[persisted evidence](evidence/serving-pool-20261004.json) records commands, source
+fingerprint and log digests. The initial check's missing Arc qualification is
+retained as a draft diagnostic, not a passing check. The final driver completes
+its other checks and exits 101. Both preceding-head Linux Rust CI failures have
+been read and contain exactly the same five `objects` readers; they qualify the
+preceding source only. Linux-only fork integration cases were not run locally.
+
+Highest next work is conversion of all authoritative object/ref/cache/graph/
+browser/policy/merge readers and HTTP/SSH/generated producers to the resident
+snapshot and certified publication path, including physical native/body/stream
+ownership. Five unconverted legacy `objects` readers still fail. Physically
+fenced adoption/quota recovery, immutable admitted custody history/exact lookup,
+final DDL, typed GC/backup/restore, fault campaigns, OS containment, native
+acceleration/rewrite/fair maintenance, signed completion/cold clone, attribution
+and full-history plus 10,000-developer capacity qualification remain mandatory.
+The full objective remains open and this branch remains unreleasable.
+
+## Owned serving lifecycle checkpoint
+
+`ServingOwner` now owns acquisition, accepted-original physical handoff,
+automatic renewal and exact release independently of request observers. Its
+private restart supervisor retains factory identities, original commands and
+held/uncertain tickets. Snapshot clones share a private borrow lifetime;
+closure refuses new borrows and renews existing ones until their last guard
+drops. Physical provider work drains before release, including work detached by
+observer cancellation. A known denied release retains ownership and permits a
+new proof only after the denied original has settled. Read revocation after a
+lost acquisition acknowledgement still retains and authentically drains the
+accepted pin. No lease expiry, timeout or logical denial deletes physical roots.
+
+The accepted handoff authenticates the exact original acquisition ordinal and
+current retained pin/generation under actual owner checks. Restored commands,
+renewals, absent/denied executions and independent duplicate physical owners
+cannot mint that handoff. Owner, snapshot and physical-I/O budgets are separate,
+bounded node/account shares; a snapshot cannot consume every I/O slot. The new
+production files participate in the RepositoryModule code digest. See the
+[serving contract](design/certified-serving-pins.md).
+
+Thirteen focused families pass in 8.29 seconds after compilation, including six
+transport fault modes, five producer restart points, clone renewal, deterministic
+recovery/revocation, canceled release observation and blocked actual provider
+I/O. Their initialized empty catalogs qualify lifecycle ownership, not full
+nonempty native/body/history serving or capacity.
+
+Final frozen-source library qualification executes 664 unique cases: **659 pass
+and five fail**, with exit 101 retained. All 370 publication, seven startup and
+four resident-recovery families pass. Two nested subprocess summaries are
+excluded and focused cases are not counted twice. Nine selected portable
+workspace/lifecycle cases also pass, including canceled prebound startup.
+Combined coverage is 673 unique cases, 668 pass and five fail. Every failure is
+one of the five unconverted legacy `objects` readers. Warnings-denied
+workspace/all-target Clippy passes in 29.19 seconds, the server build in 37.26
+seconds, formatting in 1.15 seconds, and all 96 Python harness tests pass.
+The freeze includes 468 Rust/SQL/manifest files, including 454 Rust files and
+the design SQL fixture. The [persisted evidence](evidence/serving-owner-20261004.json)
+records the actual failures, commands and source fingerprint. Library failure
+remains exit 101; the validation driver also finishes 101 after completing its
+other checks. Initial driver prefix/platform assertion mistakes are recorded
+separately, and successful completed commands are reused rather than rerun.
+Linux-only fork cases were not executed locally; their latest prior CI does not
+qualify this new source.
+
+Highest next priorities are the bounded resident generation pool, shared
+node budgets and repository-scoped contexts, eviction/shutdown joining before publication-budget and
+Cell/workspace closure, and conversion of every authoritative reader and
+HTTP/SSH/generated producer. Physical fencing/adoption and quota recovery,
+admitted immutable custody history/exact lookup, final DDL, typed collection,
+backup/restore, fault campaigns, OS containment, native acceleration/physical
+rewrite/fair maintenance, signed completion/cold clone, file attribution and
+full-history plus 10,000-developer capacity qualification remain mandatory.
+This checkpoint does not complete the full goal or make the branch releasable.
+
+## Resident recovery lifecycle checkpoint
+
+The production repository manager now retains one recovery coordinator plus root
+and custody scanners for each initialized local resident, sharing node command
+and read-round budgets. Scans are tracked by the existing server task tracker.
+They pause without abandoning an owned query/artifact read and resume on the same
+cursor when a busy coordinator refuses eviction. Idle coordinators close under
+their admission lock; scans and Git maintenance join before Cell release and
+workspace deletion. Runtime idle generation is refreshed after joining reads.
+Release errors retain the runtime-handle refresh path. Remote routes have no
+local recovery scanner. Partial worker startup explicitly joins its first worker.
+See the [resident contract](design/resident-publication-recovery.md).
+
+Shutdown owns bounded concurrent per-repository drains, so one producer-held
+command cannot delay another repository's exact recovery. Uncertain tickets keep
+their original identity, command, receipt and admission. Held proofs stay owned
+by their producer. Neither an observer timeout nor budget closure permits early
+Cell shutdown, heartbeat withdrawal or workspace cleanup. The new scan, budget
+and server lifecycle source files are included in RepositoryModule's code digest.
+
+The final-source library run executes 618 unique cases: **613 pass and five
+fail**, with exit 101 retained. All 324 publication cases, seven startup cases
+and four real production recovery families pass; two nested subprocess summaries
+are excluded. The failing set remains exactly the five unconverted legacy
+`objects` readers. Warnings-denied workspace/all-target Clippy passes in 28.72
+seconds. Nine additional workspace/lifecycle cases pass in 3.62 seconds,
+including cancelled prebound startup; their command takes 43.49 seconds with
+compilation. Combined coverage is 627 unique cases executed, 622 pass and five
+fail. Focused cases are not counted again. The server build passes in 29.38
+seconds, formatting in 1.14 seconds, and static/diff checks pass with 451 frozen
+source/schema/manifest files including 439 Rust files, 148 local documentation
+links, exact SDK pins and unchanged protected index/archive. Evidence is
+`/tmp/canopy-resident-recovery-validation.json`.
+
+Retained draft diagnostics include sibling-module shutdown/target visibility
+errors, the regression's immediate uncertainty observation, and Clippy's
+`int_plus_one` rejection. The test uses its actual repository target and observes
+the later terminal result without requesting recovery; the comparison now uses
+`>` without addition/overflow. No diagnostic is treated as a passing run. No
+compatibility table or green-result substitution is introduced.
+
+Full producer/reader/final-DDL conversion, admitted custody-history frames/exact
+lookup, certified serving generation ownership, retained-input takeover/adoption,
+scanner panic/restart and provider/owner-loss campaigns, typed GC/backup/isolated
+restore, OS containment, native acceleration/physical rewrite/fair continuous
+maintenance, signed completion/cold clone, file attribution and full-history plus
+10,000-developer capacity qualification remain mandatory. This branch remains
+local, unpublished and unreleasable.
+
+## Current-root selection and exact serving drain checkpoint
+
+Production registers bounded current-Read query 48 to observe the joint
+catalog/ref head without allocating retention. The existing exact pin remains
+immutable across head advances. Acquisition/renewal dispatch copies now share
+their original encoded custody intent through an Arc, preserving identity while
+avoiding duplicated command bodies.
+
+`ServingDrainAdmission` excludes new production work while admitting only a
+bounded set of exact serving releases. Busy reservation changes no existing
+admission. Closure requires every selected token's observed successful release
+and a fully idle coordinator. Global close waits for that owner; dropping the
+guard preserves admitted originals, recovery credits and sticky closure. A
+reused reader ID with another admission sequence cannot satisfy the drain.
+These are scheduling primitives; production generation pooling, ownership
+handoff and residency/shutdown ordering remain unimplemented.
+
+Eleven focused families pass in 1.21 seconds. They cover both object formats,
+current Read/public access and revocation, exact repository identity, joint head
+selection with immutable older retention, indexed lookup, bounded framing,
+busy/invalid reservations, exact-token exclusion, held dispatch, all three
+release transport fault modes, lost observers, denied releases, global close,
+guard cancellation and original-command recovery. The earlier fixture compile
+failures are retained as diagnostics and are not passing qualification.
+
+Final frozen-source library qualification executes 651 unique cases: **646 pass
+and five fail**, with exit 101 retained. All 357 publication, seven startup and
+four production resident-recovery cases pass. Two nested subprocess summaries
+are excluded; focused tests are not counted again. Nine additional workspace
+and lifecycle tests pass in 3.44 seconds. Combined coverage is 660 unique cases,
+655 pass and five fail. Every failure remains one of the five unconverted
+legacy `objects` readers; no compatibility table or green-result substitution
+was introduced. Warnings-denied workspace/all-target Clippy passes in 24.07
+seconds, the server build in 31.51 seconds and formatting in 1.08 seconds.
+Static checks verify 463 frozen source/schema/manifest files, including
+450 Rust files, 152 local doc links, exact SDK pins and unchanged protected
+index/archive. Evidence uses `/tmp/canopy-serving-selection-drain-*`. The draft
+diagnostic summary explicitly records the overwritten initial focused log; the
+final frozen-source logs qualify this source. No capacity or complete production
+reader claim follows from these results.
+
+## Durable serving command checkpoint
+
+Serving acquisition and renewal now use the existing durable custody journal and
+publication queue through `ReadyServingCommand`. Raw 44/45 receivers are excluded
+from production registration. Fresh command codecs 41/42/43 and authenticated
+intent/stop domains use version 2; the journal key, indexed discovery and MACs
+bind creating versus serving purpose. Registration requires Read for serving,
+while acquisition allocates no creating namespace. The original logical account
+and request digest persist through renewal. Exact known serving grants and
+denials remain immutable knowledge rather than fresh physical read authority.
+
+Renewal retains a shared physical-drain guard through factory ownership, held
+admission, dispatch and uncertainty. The queue reuses its foreground/account/node
+budgets with the existing 28 KiB custody reservation; release/stop keep their
+reserved maintenance class. Separate job kinds prevent collisions among serving
+commands, serving stops, releases and creating requests with the same real ID.
+The existing scanner visits both purposes and stops expired unexecuted originals
+without deleting accepted serving roots. The [serving contract](design/certified-serving-pins.md)
+details protocol bounds and the still-missing resident ownership handoff.
+
+Final-source macOS/Rust 1.98.0 qualification executes 640 unique workspace
+library cases: **635 pass and five fail**, with exit 101 retained. All 346
+publication, seven startup and four production resident-recovery cases pass;
+two nested subprocess summaries are excluded. The ten new serving integration
+and codec families are included in that total. Nine additional workspace and
+lifecycle cases pass in 3.60 seconds, including canceled prebound startup.
+Combined: 649 unique executed, 644 pass and five fail. The failure set remains
+exactly the five legacy `objects` readers awaiting certified-root conversion.
+
+The new families cover both formats, all six registration/execution transport
+fault modes, canceled and closed observation, held discard, atomic late/ignored
+phase rollback, recorded revocation, actual cold owner restoration after SDK
+expiry, same-ID purpose separation, page-one scanner traversal, immutable
+identity/shared pending quota, framing, role mismatch and v2-only decoding. The
+first eight-family run passed in 3.32 seconds. Preliminary enum-size, moved-test-
+guard and invalid UUID fixture diagnostics remain under the draft/pre-UUID log
+prefixes; they are not passing qualification. No compatibility fallback or lint
+suppression was introduced.
+
+Warnings-denied workspace/all-target Clippy passes in 25.42 seconds, the server
+build in 29.78 seconds and formatting in 1.07 seconds. Static/diff checks verify
+461 frozen source/schema/manifest files including 448 Rust files, 152 local doc
+links, the five SDK manifest/six lock pins, a clean SDK and unchanged protected
+original index/archive. Proof and final-source logs use the
+`/tmp/canopy-serving-custody-*` prefix. The qualification driver terminates with
+zero only after explicitly recording the failed library run and passing the
+remaining checks; this is not a green workspace test result.
+
+Production resident acquisition/renewal ownership and bounded generation pooling,
+physical handoff before detached observers, all object/ref/graph/native/stream
+consumer conversion, old-owner physical fencing/adoption/quota recovery and
+admitted immutable custody history with exact lookup remain immediate priorities.
+All full producer/final-DDL, typed GC/backup/isolated restore, OS containment,
+native acceleration/physical rewrite/fair maintenance, signed completion/cold
+clone, file attribution and full-history/10,000-SDE capacity gates remain open.
+This local branch remains unpublished and unreleasable.
+
+## Certified serving pin foundation
+
+The [serving contract](design/certified-serving-pins.md) describes the new atomic
+Read-only generation receiver, separate bounded retention table, owner-checked
+metadata capability and tracked physical-drain/release protocol. It is not yet
+connected to production acquisition/renewal, object/native/stream consumers or
+snapshot caching. Expired serving pins remain retained until authenticated drain;
+no expiry/epoch-only cleanup is introduced. The original goal remains active.
+Final-source macOS/Rust 1.98.0 qualification passes all twelve focused serving
+families (1.63 seconds), including independent-context duplicate exclusion,
+blocked-provider cancellation/revocation, real owner restoration, and original
+release absence/lost-reply/panic in both object formats. Initialization's recovery
+floor is retired through its authentic terminal release before checking serving
+reaping. A separate typed scheduler key prevents logical-ID collisions with held
+preparation jobs while retaining the shared node/class/account budgets.
+
+The full workspace library remains **failed** (exit 101): 625 pass and the same
+five unconverted `objects` readers fail, out of 630 unique cases. All 336
+publication, seven startup and four production resident-recovery cases pass
+within that run; two nested subprocess summaries are excluded. Nine additional
+workspace/lifecycle cases pass in 4.42 seconds, including prebound cancellation.
+Combined: 639 unique executed, 634 passed, five failed. Clippy workspace/all-targets
+with warnings denied (23.28 seconds), server build (30.96 seconds), formatting
+(1.08 seconds), diff/static checks, 459 frozen source/schema/manifest files
+(446 Rust), 151 local doc links, exact five SDK manifest/six lock pins and the
+protected original index/archive checks pass. Retained proof and logs use the
+`/tmp/canopy-serving-pins-*` prefix. Draft diagnostics are retained, not counted
+as passing qualification.
+
+The bounded process-wide owner registry closes the duplicate-drain-counter gap:
+all contexts reject a second constructor for an owned exact pin, including with
+an independent budget. It retains only weak entries, caps live owners at 4,096,
+and holds no async/provider work under its lock. This local physical exclusion
+is not a durable acquisition ledger. Expired/old-owner SQL roots deliberately
+remain retained until their actual ownership is resolved; automatic expiry or
+new-epoch cleanup would violate correctness.
+
+Highest next: a production serving owner must retain exact acquisition/renewal
+commands, coalesce a bounded set of generation capabilities, and carry their
+worker/stream lifetime through actual eviction/shutdown. Convert all actual
+object/ref/cache/graph/browser/policy/check/merge consumers, including the five
+failures. Complete owned HTTP/SSH/generated producers and final hard-cutover DDL;
+admitted immutable custody history/exact lookup, retained physical-input
+adoption and scanner/fault campaigns remain required. Typed GC/backup/isolated
+restore, OS containment, native acceleration/physical rewrite/fair maintenance,
+signed completion/cold clone, file-attribution endpoint/UI/cache/index, and full
+Linux/Kubernetes/Chromium plus 10,000-engineer mixed-load/recovery/capacity gates
+remain mandatory. The branch is local, unpublished and unreleasable; no capacity
+claim or whole-goal completion is made.
+
+## Shared node publication budget
+
+Repository dispatchers now require an explicit `PublicationBudget`, reusing the
+existing limits profile, private ready values and exact SDK command ownership.
+Clones share operation, command-byte and per-account reservations across
+repositories. Foreground and maintenance retain independent shares; maintenance
+account admission leaves room for another account. Separate account and class
+transport gates are acquired before copying the dispatch body. Account waiters
+cannot consume the node slots needed by another account. Uncertainty releases
+transport capacity but retains command credits; a known result or proven held
+discard drops retained resources before returning credits. Closing the node
+budget rejects new admission and preserves activation/recovery of originals
+already admitted. The repository queues retain their FIFO/account rotation and
+class-burst behavior. See the [dispatch contract](design/shared-publication-dispatch.md#shared-node-admission-and-transport).
+
+Six new regression families cover aggregate account/byte/class admission,
+transport headroom and FIFO progress, partial-gate cancellation, invalid/overflow
+bounds, exact returned ready identities, and actual cross-repository dispatch in
+both object formats. Existing absent/lost-reply/panic recovery now also checks
+that the node budget remains charged through closure and returns credits only
+after exact resolution. The native held-discard regression checks node credit
+return after dropping the verified proof. All 82 constructor call sites now
+supply a budget. The first draft had missing exports and three fixture ownership
+references; the first focused run had a test awaiting a later gate waiter before
+its existing FIFO predecessor. Those diagnostics are retained; the fixture now
+observes the real FIFO order without changing the implementation or capacity.
+
+Final-source macOS/Rust 1.98.0 qualification passes the focused eight-test run
+in 0.91 seconds and all 320 publication plus seven startup cases within the
+full workspace library. The library remains **failed** (exit 101): 605 pass and
+the same five unconverted `objects` readers fail, out of 610 unique cases;
+two nested subprocess summaries are excluded. Nine additional real
+workspace/lifecycle cases pass in 3.36 seconds, including prebound startup.
+The combined result is 619 unique cases executed, 614 pass and five fail;
+focused cases are not counted twice. Warnings-denied workspace/all-target
+Clippy (25.83 seconds), the server build (32.10 seconds), formatting/diff,
+447 unchanged source/schema/manifest hashes including 435 Rust files,
+141 local documentation links, exact SDK pins and protected index/archive
+checks pass. Evidence is `/tmp/canopy-node-publication-validation.json`.
+
+At the preceding `4d67294` checkpoint this was an admission primitive without
+production wiring. The resident recovery increment above now supplies the shared
+owner, read-round admission and release/drain lifecycle. Integration of every
+remaining production consumer and provider/resource qualification remain open. The wire
+credits do not qualify whole-process heap/RSS, native descendants, provider
+traffic or capacity. The full producer/reader/final-schema cutover, admitted
+history archival/exact lookup, retained-input adoption, certified serving
+ownership, typed GC/backup/isolated restore, OS containment, continuous fair
+maintenance/native acceleration/physical rewrite, signed completion/cold clone,
+file attribution and complete Linux/Kubernetes/Chromium/10,000-developer mixed
+load remain mandatory. This local checkpoint remains unpublished and
+unreleasable.
+
+## Automatic staging retirement in progress
+
+The local staging coordinator now owns one bounded read-only probe over its admitted uncertain custody commands. Exact ordinal plus authenticated intent fingerprint finds an old stopped original even after a successor becomes the latest head. Only authenticated logical stop schedules existing exact recovery; absent commands, unavailable/corrupt private metadata and known execution phases alone retain their original reservations. Checkpoint/final commands keep separate owners. The existing fence/drain path joins running callbacks and drops retained resources before returning worker and operation admission. Observer drop and service closure do not discard this ownership. Probe failures/restarts/recovery scheduling are visible in bounded service counters. See the [lifecycle contract](design/staging-service-lifecycle.md#automatic-observation-of-custody-retirement).
+
+The original regression timed out after a genuine stop because manual staging recovery was still required (`/tmp/canopy-stage-stop-red.log`). The first draft compile caught a changed helper signature used by publication observation; the signature is preserved and probing starts only for custody uncertainty. The corrected regression passes. Seven added regression families now pass, including all seven custody actions in both formats, closed-service observer loss, staging/bound callbacks and retained-result drop ordering, private-query failure and known-phase non-retry, exact old-ordinal lookup after a successor, malformed facts and bad-head repair/fair progress, checkpoint exclusion, and 130 admitted operations over multiple pages plus restart at an earlier key after idle. Initial extended fixture failures are retained: the warm test observed the previous binding; the checkpoint test assumed a nonexistent result accessor and tried the fresh-operation factory against an existing journal; the page test used a forbidden all-zero operation ID. The fixtures now wait for the actual uncertain renewal, use the existing checkpoint wait API and an explicit registered successor, and use valid nonzero keys without changing production guards.
+
+Final-source macOS/Rust 1.98.0 checks pass the seven-family focused run in 46.08 seconds and all 314 publication plus seven startup cases within the full library run. The full library remains **failed** (exit 101): 599 pass and the same five unconverted legacy readers fail, out of 604 unique cases; two nested subprocess results are excluded. Nine real workspace/lifecycle cases pass in 3.35 seconds, including the prebound-listener regression. This is 613 unique Rust cases executed, 608 pass and five fail; focused cases are not counted twice. Workspace/all-target Clippy with warnings denied (24.38 seconds), server build (29.14 seconds), formatting/diff, 444 frozen source/schema/manifest files including 432 Rust files, 140 local documentation links, exact SDK pins and protected index/archive checks pass. Evidence is `/tmp/canopy-stage-stop-validation.json`. This is not production HTTP/SSH producer conversion, general repository scanner lifecycle wiring, whole-process memory/I/O qualification or large-team capacity. Those gates and the five known unconverted legacy-reader failures remain open.
+
+## Owned staging and preparation conversion in progress
+
+The local staging service now prepares both the exact custody original and its exact registrar for all seven custody actions. The fair preparation dispatcher uses the same owner for Claim/Renew, including original-head reconstruction. Direct caller-owned raw session/base renewal APIs have been removed; base renewals prepare a ready command for transfer to the service. Jobs retain both originals through uncertainty, observer cancellation and closure. Recorded phase knowledge precedes SDK expiry and local guards. Restored renewals on an existing session/base retain the original shared fence; a failed fresh query fences all of its existing resolvers. New execution after authoritative absence checks the local fence, deadline and residence ceiling.
+
+Custody reservation is 28 KiB; an admitted staging checkpoint raises it to 32 KiB. Existing operation, worker, actor, class and global byte caps have not increased. Twenty-seven staging service tests pass, including original reply loss/expiry, renewal/revocation, actual owner Claim, registrar loss before submission/after acceptance/panic, canceled observers and closed-service recovery in both formats. At checkpoint `1a11162`, final-source macOS/Rust 1.98.0 checks passed: 286 publication cases in 214.01 seconds and nine real startup/workspace lifecycle cases in 5.17 seconds, totaling 295 unique focused Rust tests. All-target workspace Clippy passes with warnings denied, the server binary builds, formatting/diff checks pass, and 423 Rust source hashes plus 90 local documentation links and the unchanged protected checkout/SDK pins are verified. The proof is `/tmp/canopy-registered-services-validation.json`. These checks qualify this local service checkpoint, not the whole production cutover or team capacity.
+
+Cold session construction now carries mandatory `PreparationAuthority`, bound to the exact Cell target and backed in production by startup's validated Cell Control/live node advertisement. It checks actual incarnation/epoch before and after the lease query; staging probes, bound handoff, base catalog/frontier loading and standalone positive recovery share this source. An owner observation failure permanently fences existing shared sessions, while original known outcomes remain recoverable. New registered Claim can restore current-owner custody. The regression set includes prior-owner cold restore, genuine current-owner takeover and missing/corrupt Control records in both formats. Final-source macOS/Rust 1.98.0 qualification passes 289 publication cases in 176.00 seconds and nine real startup/workspace lifecycle cases in 3.61 seconds, totaling 298 unique focused Rust tests. All-target workspace Clippy with warnings denied, the server build, formatting/diff checks, 424 frozen Rust-source hashes, 134 local documentation links, the five manifest/six lockfile SDK pins and protected index/archive checks pass. Evidence is `/tmp/canopy-owner-validation.json`; the original failing regression is retained in `/tmp/canopy-cold-owner-red.log`. These checks do not establish the full hard cutover or large-team capacity. The following cold-staging increment reconstructs registered custody heads and qualifies shared-fence callback drain. The next custody priorities are bounded unresolved-head stop/scan, settled-history archival and production takeover/input adoption. The full producer/reader/final-schema cutover, serving retention, typed collection/backup/restore, resource containment, maintenance/acceleration and full-history/team capacity gates remain open.
+
+Cold staging now reconstructs the latest authentic registered custody head through `ReadyStaging::restore` for every staging/preparation Begin/Claim/Renew and Bind. Original evidence and positive/negative receipts remain observable before fresh owner/lease probes and after fencing or shutdown. Native work requires fresh custody; old clocks cannot open sessions. Absent old-token Renew/Bind settle their exact original stale denial under a new owner; expired unresolved originals remain uncertain and charged instead of being replaced. The shared session now signals its permanent fence to in-flight bound callbacks and late subscribers. Cancellation joins callbacks and drops resources before returning their existing worker credits. Seven SHA-1/SHA-256 regression families pass in the focused run (17.88 seconds); the real owner-loss worker test failed before the signal was added (`/tmp/canopy-cold-staging-worker-red-fixed.log`). Final-source macOS/Rust 1.98.0 qualification passes 296 publication tests in 181.99 seconds plus nine real startup/workspace lifecycle tests in 3.16 seconds: 305 unique focused Rust tests. Workspace/all-target Clippy with warnings denied, the server build, formatting/diff checks, 426 frozen Rust-source hashes, 134 local documentation links, the five manifest/six lockfile SDK pins and unchanged protected index/archive checks pass. Evidence is `/tmp/canopy-cold-staging-validation.json`. These results qualify the local recovery/callback checkpoint, not the full cutover or large-team capacity. The 28 KiB custody/32 KiB checkpoint command-wire reservations and existing operation/actor/worker caps are unchanged; whole-process resident use and native OS containment are not qualified. This checkpoint does not reconstruct input inventories or production producers/readers. Bounded unresolved-head stop/scan and settled-history archival remain the immediate custody priorities.
+
+The proposed [directory file attribution](design/file-attribution.md) uses commit-pinned asynchronous page batches and bounded history caching, with an optional shared immutable index. Its native experiment passes 101 path comparisons across 17 commit states. Its production endpoint, UI, cache/index and load qualification remain unimplemented.
+
+## Bounded expired-custody retirement in progress
+
+The local cutover now has a separate authenticated stop record for expired unresolved custody originals. It preserves the original command identity, bytes, SDK expiry and absence of an execution result while freeing pending-head quota; it grants no native work, generation retention or remote deletion. Command 43 rechecks the exact intent, receiver expiry and actual owner atomically. Known original results and first-writer stops remain immutable. An explicit successor can advance from logical closure without rewriting old history. The typed stop outcome distinguishes the original custody evidence, retirement invocation, first-writer fact and any genuinely known invocation receipt.
+
+`CustodySupervisor` reuses bounded recovery limits and seeks only operation keys through the existing partial pending index. It advances past corrupt heads and wraps for new/failed keys, using the existing account-fair maintenance dispatcher rather than a second outbox. Existing maintenance slots/worker shares and the 8 KiB wire reservation are unchanged. Exact uncertain retirement commands are recovered even when their accepted marker removes the key from discovery. Existing staging recovery observes a typed stop and drains without a fabricated original reply. Eleven focused families pass (19.77 seconds), including authenticated-record transplant rejection and retirement alongside its own pending preparation. The dispatcher uses a distinct retirement key kind with the same real operation ID; it resumes only a preparation whose exact original evidence matches the stop, fencing that shared session before releasing admission. Final-source macOS/Rust 1.98.0 qualification passes all 307 publication tests (191.91 seconds), nine real startup/workspace lifecycle tests (3.24 seconds), warnings-denied workspace/all-target Clippy, the server build and formatting. The full workspace library run passes 585 cases and fails five (590 unique cases; nested subprocess runs excluded): four legacy object-read tests and one fetch-reachability test query the removed `objects` table. That table was already absent from the preceding checkpoint schema; these consumers still require the planned authoritative-reader conversion. The failure is retained in `/tmp/canopy-custody-stop-workspace-library-final.log`; no legacy schema fallback has been added. The 307 focused publication cases are contained in the library run and are not added to its total. Static qualification verifies 441 frozen source/schema/manifest files including 429 Rust files, 135 local documentation links, the exact SDK pins and the unchanged protected index/archive. Evidence is `/tmp/canopy-custody-stop-validation.json`. Production lifecycle wiring and automatic staging/startup resumption outside the preparation dispatcher, settled-history archival and removal of redundant first-admission columns remain required. The full producer/reader/schema, retention/GC/backup/restore, OS containment, maintenance/acceleration, attribution and full-history/team capacity gates remain open.
+
+## Production startup retirement in progress
+
+The production initializer now recognizes authenticated stopped originals and chooses an explicit successor from a receipt-watermarked indexed observation of the current operation. It distinguishes a wholly absent operation from inconsistent repository identity, actor, digest, generation or token metadata. Its existing tracked/account-bounded transition can retire its own expired unresolved head through the shared private stop factory/exact completion; known original grants/denials still take precedence over SDK expiry. This does not instantiate general resident-repository discovery or automatic staging recovery. No new native authority comes from retirement, and no compatibility schema or synthetic original result is introduced.
+
+The original regression returns `InvocationError::Pending` after an authentic manual stop against the preceding initializer (`/tmp/canopy-startup-stop-red-fixed-fixture.log`). The first composed four-family run passes in 11.77 seconds. The subsequent expanded run passes six and fails one fixture setup because its injected SQL edit reserved zero mailbox bytes; the fixture now charges its actual SQL bytes using the existing SDK admission contract. Final-source macOS/Rust 1.98.0 qualification passes all seven startup families in 16.12 seconds, including automatic retirement after real owner restoration. The full workspace library run passes 592 cases and fails only the same five unconverted readers (597 unique library cases; two nested subprocess results excluded). All 307 publication and seven new startup cases are contained in that run and are not added again. Nine real startup/workspace lifecycle cases pass in 3.48 seconds: 606 unique cases executed, 601 passed and five failed. Workspace/all-target Clippy with warnings denied (30.31 seconds), the server build (34.58 seconds), formatting, diff checks, 442 frozen source/schema/manifest files including 430 Rust files, 137 local documentation links, exact SDK pins and protected index/archive checks pass. The proof is `/tmp/canopy-startup-stop-validation.json`. General production scanner ownership/drain, stopped staging resumption, retained-input adoption and admitted history archival remain immediate custody work. The five legacy reader failures from the previous full library run still require the planned reader conversion. All remaining full producer/reader/final-schema, serving retention, typed GC/backup/isolated restore, OS containment, maintenance/acceleration, file attribution and full-history/team capacity gates remain open.
+
+## Durable custody command journal started locally
+
+The production cutover now registers exact custody metadata before an upload namespace exists. The journal reuses the SDK snapshot/body contract, authenticated carrier, `Stamp`, `Recorded`, domain admission logic and namespace/pin allocator. Command 41 first-writer registration and command 42 exact execution cover preparation/staging Begin, Claim and Renew plus Bind. Positive and denied results share domain writes and SDK acceptance atomically. Late errors or ignored SQL writes leave SDK resolution absent; exact retry preserves the original identity. Corrupt metadata, `Unknown` and `Expired` are never treated as absence. Historical grants do not grant current custody or become new generation-retention roots. See the [durable custody contract](design/durable-custody-command-intents.md).
+
+Actual repository startup now discovers its latest custody head before preparing another original identity, including lost Begin and successor Claim results. It requires the current owner and a fresh custody query before using a historical grant; known denied final attempts require explicit registered Claim. Indexed authenticated historical grants allow fresh allocation after successor reaping without restoring an old namespace/pin. Production unbinds raw custody commands 11–13, 24–26 and 28; their domain methods are reused inside command 42 and explicit qualification fixtures. The production registry now has 16 commands and nine queries, including separate expired-custody retirement command 43. No old custody contract is retained as a production fallback.
+
+The journal uses a bounded command relation rather than per-object metadata: 4 KiB intents, 1 KiB phases with 512-byte replies, at most one unresolved head per operation, 1,024 pending heads and a 65,535 ordinal ceiling. Primary/partial grant indexes bound discovery. Registering every custody transition currently adds a mutation before execution. This local append history remains conservatively retained; before release, compact settled metadata into immutable per-operation frames with exact historical lookup. Count actual commands and metadata growth in capacity gates. Do not publish this partial cutover merely because primitive tests pass.
+
+The preceding custody-journal checkpoint `dcef9c8` passed **283 publication tests** in 169.10 seconds and **nine workspace/lifecycle tests** in 3.58 seconds: **292 unique focused cases**, excluding repeated reruns. All-target workspace Clippy passes with warnings denied in 22.03 seconds; the server binary builds. Formatting/diff, 422 frozen Rust hashes, protected index/archive, clean SDK checkout and five-manifest/six-lock-entry SDK pins pass. Evidence is `/tmp/canopy-custody-intent-validation.json`; logs retain compilation failures, the deliberately rejected late writes and the initial query-plan failure. Twelve SHA-1/SHA-256 families cover original identities/receipts, pre-namespace persistence, denials, first-writer races, every transition, cold owner restore with deleted SQLite, actual SDK expiry, joint initialized bases, reaped successors, forgery/corruption, indexed lookup, late abort and silently ignored SQL writes. Real workspace tests check certified startup and byte-identical journal restore. The partial cutover still requires complete runtime/provider/Linux and capacity qualification.
+
+Highest priority remains production service conversion: StagingCoordinator, preparation/publication ready factories and direct session renewal must preserve these original intents under fair admission and process-loss reconstruction before their raw qualification bindings can be removed. Then close terminal history archival/retention, complete producer/reader conversion and final DDL removal, serving-generation ownership, typed collection/backup/restore, OS containment, continuous maintenance, physical rewrite/accelerated reads and full Linux/Kubernetes/Chromium histories with the 10,000-developer mixed-load gates. Unresolved expired identities remain protected; bounded orphan discovery and explicit lifecycle recovery remain open. No whole-goal or capacity claim is made.
+
+## First accepted preparation admission checkpoint
+
+The local cutover now retains the first accepted `BeginPreparation` in the existing logical request row, using the same private bounded admission record, MAC, `Stamp` and `Recorded` result as staging. The two receipt kinds have separate purposes, columns and validators. Preparation records the actual command sequence, which can differ from the attempt sequence when Begin observes an already-bound staging attempt. Immutable SQL guards retain the first result through later admission, Claim, completion and reaping. Receipt encoding or the final insert/update failing rolls back allocation, custody and SDK acceptance together.
+
+Pending initialization looks up this original admission before another Begin. Reuse requires the actual current owner fence and a fresh custody query at the original receipt; historical clocks grant no lease. Explicit Claim can authenticate and recreate a reaped original operation using a new namespace/pin under the executing owner and current catalog floor. It cannot displace an active successor or recreate a completed logical outcome. Admission-only rows are accepted by pristine initialization and matching compaction; current codecs are 11/2, 12/2, 22/2 and 31/3. Source hashing includes both shared and preparation-specific receipt implementations. See the [first preparation admission contract](design/initial-preparation-receipts.md).
+
+Seven new SHA-1/SHA-256 families pass focused qualification. They cover actual receipt sequences, an existing bound staging attempt, first-result immutability, insert/update rollback and exact retry, deleting local SQLite before fresh-owner restoration, real SDK expiry, reaping, forged tokens, completed-request refusal, revoked/expired custody, MAC corruption, purpose separation and no invented knowledge for denied or unexecuted Begin. The first broader audit finds old outcome-count assumptions and a late-failure trigger attached to INSERT rather than the current UPDATE. The fixture corrections count selected outcomes, preserve complete state hashing including both initial receipts, and require the actual injected error, SDK absence and exact original retry. The source-independent purpose test keeps scope/actor/operation/digest/MAC valid and varies only the purpose.
+
+Final frozen-source qualification passes all **271 publication tests** in 188.32 seconds and all **three actual production workspace/startup tests** in 3.97 seconds: **274 unique focused Rust cases**. Workspace/all-target Clippy passes with warnings denied in 105 seconds; the server binary builds in 34.71 seconds. Formatting/diff, 418 unchanged Rust source hashes, 41 checked local documentation links, protected original index/archive and five-manifest/six-lock-entry SDK pins pass. The original missing-receipt regression, pristine-state integration failures and subsequent fixture failures are retained in `/tmp/canopy-preparation-admission-*.log`. Proof is `/tmp/canopy-preparation-admission-validation.json`. These checks do not qualify the entire workspace runtime, provider compatibility, full histories or team capacity on this partial cutover.
+
+This remains an unpublished, unreleasable checkpoint. Denied Begin, competing raw Begin identities, pre-dispatch process loss and subsequent Claim/Renew still need durable original snapshots/results. A lost successor Claim is not attributed to the original Begin. Full production producer/reader conversion and final DDL removal, typed collection/backup/isolated restore, resource containment, continuous maintenance, accelerated reads/physical rewriting and full-history/10,000-developer capacity remain mandatory. Historical capacity results below do not qualify this increment.
+
+## Production hard cutover started locally
+
+The isolated `codex/packed-production-cutover` branch is aligned with merged PR #33 at `9438bb865959fb975d5349ba8b9908b461653821`. Its first production change wraps the existing `RootPurpose` at the unchanged `canopy-root-v1.json` key in the required `canopy-pack-v1` envelope. There is no legacy decoder. The root remains bounded to 4 KiB, including envelope overhead. Encoding borrows the original purpose and bounds source/pin strings before serialization. Reservations and completion still use the original conditional create/ETag CAS.
+
+Startup performs a read-only root/serving-purpose check before opening or reclaiming local state, storage probes, identity/release writes or Cell activation. It preserves the concurrent-initializer recheck when identity appears after the first marker read. Local workspaces use `canopy-pack-v1/` and the same format marker. An existing `runtime-v1` directory is rejected and retained; missing/unknown markers in the new directory are rejected before cleanup. Existing owner/worker exclusion and descendant fencing are preserved. Source/release hashing now includes the deployment format and workspace/startup code. All fixture and benchmark paths follow the new directory.
+
+Four new unit regressions fail against the original code. A real startup regression also fails because an unversioned deployment was admitted. After the change, all 16 deployment and nine workspace tests pass. The real startup and durable restart pair pass, including old/missing/unknown formats, completed backup and unfinished restore rejection before any workspace or identity writes. The final envelope-boundary regression passes in the full library audit: all 516 server library tests pass. All 96 Python qualification tests pass in 41.507 seconds. The first broad multi-server audit records 104 passed and one macOS `AddrInUse` failure in the late SSH publication-refusal family. The original error remains retained. That family passes alone; holding a competing listener in its released HTTP-port gap deterministically reproduces the same error. Retaining and handing off the bound listener refuses the competing bind and passes all three original refusal scenarios. The shared fixture and all three restore starts in that family now retain their listeners. Temporary diagnostics are removed. The uninstrumented broader integration rerun passes all 105 multi-server cases with four test threads in 419.98 seconds, including the original cancelled-startup and late SSH refusal cases. Owner restart, Repository Cell and Smart HTTP pass. Combined with the preceding unchanged-source library/CLI/contract runs, all 661 unique current workspace Rust cases pass; child-process summaries and focused reruns are excluded. Workspace/all-target Clippy passes with warnings denied in 45.68 seconds. All eight isolated RustFS compatibility cases pass on this same source, including the 4,096-ref mirror, SHA-256 native candidates, signed HTTP/SSH, filtered clones and SSH LFS. Workspace doctests finish successfully with no cases; the server binary builds in 26.91 seconds. The separate large-transfer gate still needs at least 40 GiB free on both scratch and provider volumes; complete histories and 10,000-developer capacity remain unqualified. Formatting/diff checks, all 409 frozen Rust-source hashes, three changed scripts’ syntax and 116 local documentation links pass.
+
+The next local increment selects `packs::publication::SCHEMA` through one `REPOSITORY_SCHEMA` constant for production RepositoryModule migrations, actual repository acquisition and maintenance recovery. Production and publication qualification share the same 20 command and nine query descriptors, deriving actual codec versions and bounded envelopes from the typed operations. Legacy Git commands 3–10 and inline publication/completion 18/19/query20 are excluded from production binding; the latter remain explicit qualification-only bindings until their callers and DDL are removed. Production creation now obtains an actual preparation lease, constructs the private empty-catalog proof and atomically publishes catalog/ref roots through command 31 before exposing the repository as Ready. Ready restoration verifies the exact retained initialization and authenticated immutable metadata without another Begin or artifact allocation. Only a known Stale/Expired Begin refusal allows an explicit Claim of the observed original attempt. Uncertain errors remain errors; they cannot select a fresh admission within that invocation. Initialization work remains owned by the existing tracked repository-transition task through HTTP cancellation and shutdown.
+
+The new real HTTP creation regression initially fails because production still selects the old `objects` table. Its bootstrap portion then passes for SHA-1/SHA-256. Extending it to fresh-disk restoration exposes a test read error: ordinary SQLite bypasses Cellule's authenticated sparse VFS and reads an incomplete placeholder. The restored HTTP load itself succeeds. The fixture now inspects the exact published immutable Cell root with Cellule's supported read-only reader. The missing-catalog fixture initially joins a nested key as one escaped path component, so it deletes a different key; using the same scoped provider and proving HEAD absence corrects that injection. Final missing-initial-catalog cold loads return exactly HTTP 503 without advancing catalog generation or artifact allocation. The lint audit also catches a synchronous read-only connection guard spanning awaits; lexical query scopes release it before artifact I/O. No production workaround or lint suppression is added.
+
+All 254 publication tests pass in 154.86 seconds, including the shared production-registry contract, using four threads and standard stacks. The final three workspace integration tests pass in 2.45 seconds, including both formats, fresh-disk restoration, missing retained metadata and the deployment/workspace exclusions. Workspace/all-target Clippy passes with warnings denied in 7.85 seconds. These are focused local checks. The broad full-workspace, provider and capacity results above remain attributed to their earlier source; unconverted production Git paths cannot be qualified by this increment.
+
+**This is local, unpublished work and is not a releasable packed deployment.** Production Git pushes, cache/object/ref readers and generated producers still call legacy storage APIs, whose tables and bindings are absent from the selected production contract. Their conversion, product graph/policy/check/review consumers, and deletion of temporary SQL refs and inline response/certificate/plan adapters must complete together before release. Final initialization now uses the same exact registered recovery protocol as policy/root publication; initial Begin/Claim/Renew and failure before registration remain incomplete. Typed initialization terminal retirement now releases eligible closed pins through the shared immutable receipt archive, preserving exact original receipts. Reconstruction of older orphan attempts still needs complete production background-service wiring. The new bootstrap is not proof of the complete recovery or retention protocol. Actual typed collection/backup/isolated restore, retained-input adoption/repreparation, OS containment, accelerated reads/rewrites, continuous fair maintenance and complete repository/team qualification remain required. Format checks, startup fixtures and primitive publication tests do not prove that wider completion.
+
+## Typed initialization retirement in the local cutover
+
+The terminal archive now reuses one immutable `catalog_recovery_receipts` row per original incarnation/admission sequence for both selected push completion and closed initialization. The original authenticated `Record`, `Bundle`, journal, predecessor frames and release receipt are unchanged in role; no durable queue or per-object ledger is added. Command 40 advances to codec 2 and purpose v2 without a compatibility decoder. SQL guards prohibit archive mutation, replacement and deletion, and require the exact archived certificate/phase before pin deletion.
+
+Positive retirement checks the immutable selected initialization, verifies its complete typed empty catalog/directory/ref graph, then inserts the archive and deletes only the exact original pin in the same SDK transaction. The immutable initialization fact stores its original pin key for indexed closed-attempt discovery. A known negative can retire only after its exact active binding closes; a successor of the same logical operation retains a separate namespace and original receipt. Unknown attempts remain pinned. The existing retiring scanner defers active negative initialization without allocating another SDK command and recovers uncertain release jobs even after their pin disappears.
+
+Actual repository startup retires the successful initial pin before serving, including recovered closed positive publication and a known denied original after successful Claim. Its existing tracked transition retains this bounded work through cancellation. Maintenance fencing is read from validated durable Cell Control with a live node advertisement, and the release receiver independently requires its actual admitted fence and current Admin. Both startup and retirement use the same typed empty-graph verifier. Fresh Ready restoration allocates neither a new preparation nor another artifact namespace.
+
+The original red regression fails with `Context` against the preceding code because completed initialization cannot retire. Six new families cover SHA-1/SHA-256, immutable archives, distinct old/new pin identity, actual Admin/fence rejection, rollback at the last delete, missing catalog/directory/ref metadata, known expiry after Claim and later positive publication, losing release identity, lost acknowledgement, saved-body loss, SDK expiry, real fresh-disk owner restore, and automatic recovery after pin disappearance. The first broad audit passes 261 and fails three existing live-owner scanner assertions: their unrelated completed initialization now legitimately retires. Their shared rooted setup now performs the same initialization retirement as production startup; push-retirement archive counts select the exact original pin rather than all archived operations. Original failure logs are retained. The first corrected setup covered only standalone policy fixtures; a second native setup required the same retirement. That audit then exposed 17 shared native assertions expecting a permanent second pin. An unchanged-source isolated reproduction confirms completed publication followed by a total-pin assertion failure (one actual pin versus two expected). Four native assertion helpers now select the original push incarnation/admission sequence and still require its active-operation and pin counts. Their custody checks retain only a copied token after dropping the original session; no ownership lifetime is extended.
+
+The complete frozen-source publication suite passes **264 tests in 175.94 seconds** with four threads and standard stacks, including all six new families and the original native uncertainty/retirement/policy-history cases. The last-write fixture requires the exact injected SQLite failure plus original SDK absence, so a prior gate refusal cannot satisfy the rollback assertion. Three actual production workspace/startup tests pass in 2.93 seconds, covering both formats, archived initialization with no generation-zero pin, fresh-disk restoration without another namespace, missing retained metadata refusal and deployment/workspace exclusions: **267 unique focused Rust cases**. Focused and child-process reruns are excluded. Workspace/all-target Clippy passes with warnings denied in 23.77 seconds; the server binary builds in 40.93 seconds. Formatting/diff checks, all 415 frozen Rust-source hashes, local documentation links, the protected checkout/archive and exact Cellule pins pass. No stack, SDK lifetime, deadline, resource or capacity threshold is widened. Complete initial Begin/Claim/Renew and pre-registration process loss, background service reconstruction for older orphan attempts, production producers/readers/final DDL, typed collection/backup/isolated restore and full-history/team capacity remain open. This is a local unreleasable checkpoint.
+
+## Exact final initialization recovery in the local cutover
+
+Command 31 now requires authenticated exact registration before its domain action. The existing `Record`, `Bundle`, `SavedCommand`, `Journal`, `Frame`, immutable body/header roots and independent preparation pin carry `Kind::Initialization`; there is no separate durable queue or metadata authority. The unpublished protocol purpose advances to v4, initialization codec to 2 and recovery-registration codec to 4, with no compatibility decoder. Other published final-command codecs remain unchanged.
+
+`PreparedCatalog::ready_initialization` freezes the private proof and original SDK command while retaining its owner. After durable registration it binds into the existing account-fair dispatcher, charging 20 KiB through uncertainty. Actual startup uses its already bounded tracked transition admission and retains the same original session through exact registered completion. Pending startup discovers the current operation's registered original before Begin; only a known original Stale/Expired denial permits a new Claim. Ready startup continues to verify the retained initialization without another admission.
+
+Original phase results and sequences commit atomically with catalog/ref initialization or a definitive typed denial. Unregistered/competing identities leave SDK and domain/phase state absent. Late SQL failure rolls back every effect. Cold final initialization restores only after authoritative SDK absence and delegates current owner/Admin/expiry/pin/checkpoint/pristine checks to that exact receiver. It performs no new preparation/native work and does not require a fresh Write query that could hide a definitive expiry/revocation denial. Live bound work still checks its original shared clock and lifecycle fence. Known journal knowledge wins before body/custody reads and retains the original receipt after SDK expiry or owner loss.
+
+The unregistered-command regression first publishes generation one against the old code, then passes with SDK/domain absence after the receiver gate. A cold expiry regression first stops at an inactive custody query, then passes with the definitive original denial after the recovery change. Eight initialization families cover both formats, late rollback, competing identity, lost registration acknowledgement, lost final acknowledgement, removal of local SQLite before real owner restoration, and original receipt recovery after SDK expiry, current permission revocation and saved-body loss. The original live/fair admission retains its 20 KiB reservation through uncertainty and closed-service recovery.
+
+The broader audit exposes one shared policy initializer that still submits command 31 without registration, plus queries that assume only one recovery pin exists. The initializer now registers first. Native recovery/retirement fixtures select the exact original attempt and verify unrelated recovery headers/phases remain unchanged. The final complete publication run passes **258 tests in 173.96 seconds** with four threads and standard stacks. Three actual workspace/startup tests pass in 2.57 seconds, including real registered initialization, SHA-1/SHA-256 creation, fresh-disk restoration and missing-root refusal: **261 unique focused Rust cases**. Focused reruns are excluded. Workspace/all-target Clippy passes with warnings denied in 31.97 seconds; the server builds in 33.76 seconds. Production and integration sources are unchanged after those integration/build checks; subsequent edits affect four qualification fixture files only. Formatting, diff checks, all 414 frozen Rust-source hashes, local documentation links, the protected checkout/archive and exact Cellule pin checks pass. No stack, SDK lifetime, deadline, resource or capacity threshold is widened.
+
+At this earlier registration checkpoint, initial Begin/Claim/Renew, pre-registration process loss and initial terminal retirement remain release blockers. Retaining the initialization pin indefinitely would prevent later catalog generation collection; the following local retirement increment removes the selected closed initial pin. The full production cutover, provider and repository/team capacity gates remain open. This checkpoint is local and unpublished.
 
 ## Mandatory publication registration qualified locally
 
@@ -14,7 +847,7 @@ The ten standalone fixtures now use actual native packs in admitted namespaces, 
 
 The final frozen-source macOS ARM64 workspace passes **655 unique Rust tests**: 531 library tests (6 Git-format / 14 object-storage / 511 server), 104 multi-server tests and 20 CLI/contract/recovery/Smart HTTP tests. The server library completes in 235.55 seconds and multi-server in 376.05 seconds. Eight isolated RustFS compatibility cases pass; the large-transfer case remains a dedicated-volume gate. All 96 Python qualification tests pass in 40.924 seconds, and workspace/all-target Clippy passes with warnings denied in 24.00 seconds. The server binary builds in 80 seconds. Formatting, diff, 409 frozen Rust-source hashes, exact dependency and protected-checkout checks pass. Earlier stack overflows are avoided through owned qualification and synchronous future construction, reducing the common ARM64 debug native poll frame from roughly 951 KiB to 707 KiB with standard stacks. A retirement expiry assertion failed once; its isolated control passed four milliseconds after expiry with unchanged identity. The fixture now verifies actual wall-clock expiry before resolution; the original timing cause remains unproven. Probes are removed, and no stacks, SDK lifetimes, production deadlines, resource limits or capacity thresholds were widened.
 
-The increment is prepared for a new PR to main after merged #32. Exact-head Linux/provider CI is required for publication qualification. Production registration, startup/HTTP/SSH/generated producers and readers, and fresh-schema hard cutover remain the highest-priority next work. Initial/Claim/Renew/denied/pre-admission recovery, retained-input adoption/repreparation, typed collection/backup/isolated restore, resource containment, accelerated reads/physical rewriting, fair continuous maintenance and full repository/team qualification also remain open. The full objective remains open.
+PR #33 is merged at `9438bb865959fb975d5349ba8b9908b461653821`. Both exact-head Linux [push Verify](https://github.com/crabbuild/canopy/actions/runs/37164049029) and [PR Verify](https://github.com/crabbuild/canopy/actions/runs/37164077931) pass at `32f5559216432c0437ac3e864d71c454ee779e1e`, each with 659 unique workspace tests, all eight RustFS compatibility cases, harness, formatting, all-target Clippy and server build. The original cancellation and all four controlled-fork cases pass. Main and the published head have the identical full tree `aacb41ee48e953cf106c75f8319667fa83639b96`, proving every published registration change is included. These results qualify that tree, not the current local format changes. Production registration, startup/HTTP/SSH/generated producers and readers, and fresh-schema hard cutover remain the highest-priority next work. Initial/Claim/Renew/denied/pre-admission recovery, retained-input adoption/repreparation, typed collection/backup/isolated restore, resource containment, accelerated reads/physical rewriting, fair continuous maintenance and full repository/team qualification also remain open. The full objective remains open.
 
 ## Linux listener ownership qualified at PR #32
 

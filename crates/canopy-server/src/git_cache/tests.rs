@@ -629,7 +629,6 @@ async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign
         pack: reader.upload(pack).await?,
         index: reader.upload(index).await?,
         approved: false,
-        covered_through: 0,
     };
     let target = GitCache::create(
         root.path().into(),

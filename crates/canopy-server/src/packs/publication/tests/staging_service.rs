@@ -1,5 +1,8 @@
 mod bound;
+mod physical;
 mod publication;
+pub(super) mod restore;
+mod retirement;
 use super::*;
 use tokio::{
     sync::oneshot,
@@ -45,6 +48,134 @@ async fn changed_lease(ticket: &StagingTicket, old: i64) -> Result<StagingLease>
 }
 
 #[tokio::test]
+async fn staged_service_registrar_loss_retains_both_commands_through_cancellation_and_close()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [4, 5, 6] {
+            let f = Fixture::new(format).await?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+            c.fault_for_test(fault);
+            let ticket = submit(&f, &c, [fault + 120; 16], "owner").await?;
+            let StagingState::Uncertain(error) = terminal(&ticket).await? else {
+                return Err("registrar loss not retained".into());
+            };
+            let (original, registrar) = ticket
+                .custody_evidence_for_test()
+                .ok_or("custody command missing")?;
+            let registrar = registrar.ok_or("registrar missing")?;
+            assert_ne!(original, registrar);
+            if fault != 6 {
+                let StagingError::Custody { evidence, source } = &*error else {
+                    return Err("registrar source lost".into());
+                };
+                assert_eq!(**evidence, original);
+                let CustodyError::Registration(source) = &**source else {
+                    return Err("wrong protocol phase".into());
+                };
+                let InvocationError::Pending(evidence) = &**source else {
+                    return Err("registrar original lost".into());
+                };
+                assert_eq!(**evidence, registrar);
+            }
+            assert!(matches!(
+                f.client().resolve(&original).await?,
+                cellule_runtime::Resolution::Absent
+            ));
+            assert_eq!(f.counts().await?, (0, 0));
+            assert_eq!(c.stats().command_bytes, super::super::custody::RESERVATION);
+            drop(ticket);
+            let retained = c
+                .pending([fault + 120; 16])
+                .ok_or("observer dropped admitted work")?;
+            assert_eq!(c.close_and_drain().await.len(), 1);
+            assert_eq!(
+                retained.custody_evidence_for_test(),
+                Some((original.clone(), Some(registrar.clone())))
+            );
+            c.recover(&retained)?;
+            assert!(matches!(terminal(&retained).await?, StagingState::Stopped));
+            let saved = RegisteredCustody::load_latest(&f.client(), &f.target, [fault + 120; 16])
+                .await?
+                .ok_or("registered original missing")?;
+            assert_eq!(saved.evidence(), &original);
+            let result = saved.recover_staging(&f.client()).await?;
+            assert!(matches!(result.output, StagingReply::Granted(_)));
+            assert!(matches!(
+                f.client().resolve(&registrar).await?,
+                cellule_runtime::Resolution::Committed(_)
+            ));
+            assert_eq!(f.counts().await?, (1, 1));
+            assert_eq!(c.stats().admitted, 0);
+            assert_eq!(c.stats().command_bytes, 0);
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn staged_service_renew_and_bind_registrar_loss_never_replaces_either_identity() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [4, 5, 6] {
+            let f = Fixture::new(format).await?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+            let ticket = submit(&f, &c, [fault + 130; 16], "owner").await?;
+            let staged = active(&ticket).await?;
+            c.fault_for_test(fault);
+            ticket.renew_for_test();
+            assert!(matches!(
+                terminal(&ticket).await?,
+                StagingState::Uncertain(_)
+            ));
+            let renewal = ticket
+                .custody_evidence_for_test()
+                .ok_or("renewal originals lost")?;
+            assert!(matches!(
+                f.client().resolve(&renewal.0).await?,
+                cellule_runtime::Resolution::Absent
+            ));
+            c.recover(&ticket)?;
+            assert_eq!(active(&ticket).await?.token, staged.token);
+            let registered =
+                RegisteredCustody::load_latest(&f.client(), &f.target, staged.token.operation)
+                    .await?
+                    .ok_or("renewal registration missing")?;
+            assert_eq!(registered.evidence(), &renewal.0);
+            c.fault_for_test(fault);
+            ticket.seal()?;
+            assert!(matches!(
+                terminal(&ticket).await?,
+                StagingState::Uncertain(_)
+            ));
+            let binding = ticket
+                .custody_evidence_for_test()
+                .ok_or("bind originals lost")?;
+            assert_ne!(binding, renewal);
+            c.recover(&ticket)?;
+            let StagingState::Bound(bound) = terminal(&ticket).await? else {
+                return Err("bind not recovered".into());
+            };
+            let registered =
+                RegisteredCustody::load_latest(&f.client(), &f.target, staged.token.operation)
+                    .await?
+                    .ok_or("bind registration missing")?;
+            assert_eq!(registered.evidence(), &binding.0);
+            assert_eq!(
+                registered.recover_preparation(&f.client()).await?.receipt,
+                bound.receipt
+            );
+            assert_eq!(bound.lease.token, staged.token);
+            assert_eq!(f.counts().await?, (1, 1));
+            assert!(c.close_and_drain().await.is_empty());
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing_uploads() -> Result
 {
     for (format, fault) in [
@@ -54,8 +185,11 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
         (ObjectFormat::Sha256, 3),
     ] {
         let fixture = Fixture::new(format).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let request = fixture.begin([219; 16]);
         let mut mutation = identity()?;
         mutation.expires_at_ms = mutation.issued_at_ms + 2_000;
@@ -73,7 +207,10 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
             return Err("missing original Begin evidence".into());
         };
         let evidence = (**evidence).clone();
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         assert!(matches!(
             ticket.spawn(|_| async { Ok(()) }),
             Err(StagingError::Inactive)
@@ -84,7 +221,9 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
             return Err("lost acknowledgement did not follow an accepted Begin".into());
         };
         let mut decoder = BoundedDecoder::new(original.result(), 4096)?;
-        let StagingReply::Granted(lease) = StagingReply::decode(&mut decoder)? else {
+        let CustodyReply::Staging(StagingReply::Granted(lease)) =
+            CustodyReply::decode(&mut decoder)?
+        else {
             return Err("original admission was not granted".into());
         };
         decoder.finish()?;
@@ -141,7 +280,11 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
 async fn staged_service_canceled_observers_keep_workers_and_results_until_single_handoff() -> Result
 {
     let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [220; 16], "owner").await?;
     let initial = active(&ticket).await?;
     let (release, wait) = oneshot::channel();
@@ -193,8 +336,11 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
 -> Result {
     for fault in [1, 2, 3] {
         let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         coordinator.fault_for_test(fault);
         let ticket = submit(&fixture, &coordinator, [221; 16], "owner").await?;
         assert!(matches!(
@@ -202,7 +348,10 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
             StagingState::Uncertain(_)
         ));
         assert_eq!(coordinator.stats().admitted, 1);
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&ticket)?;
         let original = active(&ticket).await?;
         assert_eq!(original.token.artifact_operation, artifact_number(1));
@@ -231,7 +380,10 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
         let evidence = (**evidence).clone();
         let pending = timeout(Duration::from_secs(10), coordinator.close_and_drain()).await?;
         assert_eq!(pending.len(), 1);
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&pending[0])?;
         let StagingState::Bound(bound) = terminal(&pending[0]).await? else {
             return Err("bind did not resolve".into());
@@ -259,7 +411,11 @@ async fn staged_service_replayed_renewal_is_not_a_new_clock_or_permission_after_
         "INSERT INTO repository_members VALUES('writer','write')",
     )
     .await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [222; 16], "writer").await?;
     active(&ticket).await?;
     let (entered, started) = oneshot::channel();
@@ -311,6 +467,7 @@ async fn staged_service_account_operation_and_worker_bounds_preserve_rejected_re
             workers_per_actor: 1,
             ..StagingLimits::default()
         },
+        fixture.authority(),
     )?;
     let first = submit(&fixture, &coordinator, [223; 16], "owner").await?;
     active(&first).await?;
@@ -368,8 +525,11 @@ async fn staged_service_worker_failure_and_panic_fence_before_binding_and_releas
 -> Result {
     for panic in [false, true] {
         let fixture = Fixture::new(ObjectFormat::Sha1).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ticket = submit(&fixture, &coordinator, [226; 16], "owner").await?;
         let lease = active(&ticket).await?;
         let work = ticket.spawn(move |_| async move {
@@ -405,8 +565,11 @@ async fn staged_service_owned_native_verification_hands_off_to_the_existing_priv
     use cellule_ltx::DiskBudget;
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ticket = submit(&fixture, &coordinator, [227; 16], "owner").await?;
         let initial = active(&ticket).await?;
         let provider: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
@@ -454,7 +617,7 @@ async fn staged_service_owned_native_verification_hands_off_to_the_existing_priv
         let bound_work = {
             let root = root.clone();
             let budget = budget.clone();
-            ticket.spawn_bound(move |_| async move {
+            ticket.spawn_bound(move |_, _context| async move {
                 async {
                     let mut assembler =
                         CatalogPreparation::new(root.path(), budget.clone(), base, limits())
@@ -495,6 +658,7 @@ async fn staged_service_automatic_renewal_runs_without_an_observer_or_manual_tic
             renew_before_ms: DEFAULT_LEASE_MS - 1000,
             ..StagingLimits::default()
         },
+        fixture.authority(),
     )?;
     let ticket = submit(&fixture, &coordinator, [228; 16], "owner").await?;
     let lease = active(&ticket).await?;
@@ -569,11 +733,15 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         },
     ] {
         assert!(matches!(
-            StagingCoordinator::new(fixture.target.clone(), limits),
+            StagingCoordinator::new(fixture.target.clone(), limits, fixture.authority(),),
             Err(StagingError::InvalidLimits)
         ));
     }
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -599,7 +767,11 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         .ok_or("duplicate accepted")?;
     assert!(matches!(error, StagingError::Duplicate));
     let foreign = Fixture::new(ObjectFormat::Sha256).await?;
-    let other = StagingCoordinator::new(foreign.target.clone(), StagingLimits::default())?;
+    let other = StagingCoordinator::new(
+        foreign.target.clone(),
+        StagingLimits::default(),
+        foreign.authority(),
+    )?;
     let (error, _) = other.submit(ready).err().ok_or("foreign accepted")?;
     assert!(matches!(error, StagingError::Foreign));
     assert!(matches!(other.recover(&ticket), Err(StagingError::Foreign)));
@@ -643,7 +815,11 @@ async fn staged_service_revocation_drops_completed_owned_results_before_releasin
         "INSERT INTO repository_members VALUES('writer','write')",
     )
     .await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [231; 16], "writer").await?;
     active(&ticket).await?;
     let dropped = Arc::new(AtomicBool::new(false));

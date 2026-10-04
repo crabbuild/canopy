@@ -20,8 +20,11 @@ async fn held_native_proof_survives_canceled_observation_and_closed_activation()
             limits(),
         ))
         .await?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let ticket = coordinator.try_reserve(ready)?;
         drop(prepared);
         let observer = ticket.clone();
@@ -102,14 +105,22 @@ async fn held_discard_drops_native_proof_before_credit_and_never_executes() -> R
             limits(),
         ))
         .await?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let ticket = coordinator.try_reserve(ready)?;
         drop(prepared);
         assert_eq!(coordinator.close_and_drain().await.len(), 1);
         ticket.discard_held().await?;
         assert!(matches!(ticket.wait().await, PublicationState::Discarded));
         assert!(weak.upgrade().is_none());
+        let node = fixture.publication_budget.stats();
+        assert_eq!(
+            (node.foreground, node.command_bytes, node.accounts),
+            (0, 0, 0)
+        );
         cleaned(graph.root.path(), &graph.budget).await?;
         assert_eq!(coordinator.reservations_for_test().await, (0, 0, 0));
         assert!(coordinator.pending([60; 16]).await.is_none());
@@ -152,6 +163,7 @@ async fn held_admission_uses_existing_account_bytes_and_returns_refused_ready() 
             maintenance_in_flight: 1,
             foreground_burst: 3,
         },
+        fixture.publication_budget.clone(),
     )?;
     let mut attempts = Vec::new();
     for (n, actor) in [
@@ -179,6 +191,7 @@ async fn held_admission_uses_existing_account_bytes_and_returns_refused_ready() 
             fixture.repository,
         )?,
         PublicationLimits::default(),
+        fixture.publication_budget.clone(),
     )?;
     let failure = foreign
         .try_reserve(attempts[0].3.take().unwrap())
@@ -244,8 +257,11 @@ async fn held_admission_uses_existing_account_bytes_and_returns_refused_ready() 
         .err()
         .ok_or("refused admission unexpectedly accepted")?;
     assert_eq!(failure.reason, PublicationScheduleError::Closed);
-    let successor =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let successor = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let ticket = successor.try_reserve(failure.ready)?;
     ticket.activate().await?;
     finished(timeout(Duration::from_secs(10), ticket.wait()).await?)?;
@@ -271,8 +287,11 @@ async fn activated_held_command_recovers_exact_receipt_or_checks_absent_authorit
                 limits(),
             ))
             .await?;
-            let coordinator =
-                PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+            let coordinator = PublicationCoordinator::new(
+                fixture.target.clone(),
+                PublicationLimits::default(),
+                fixture.publication_budget.clone(),
+            )?;
             let ticket = coordinator.try_reserve(ready)?;
             assert!(matches!(ticket.state(), PublicationState::Held));
             coordinator.fault_for_test(fault);
@@ -361,8 +380,11 @@ async fn activated_held_command_recovers_exact_receipt_or_checks_absent_authorit
 #[tokio::test]
 async fn held_activation_and_discard_race_selects_one_exact_disposition() -> Result {
     let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-    let coordinator =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let coordinator = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let mut published = 0;
     for n in 100..108 {
         let (prepared, root, budget) = empty(&fixture, [n; 16], "owner").await?;

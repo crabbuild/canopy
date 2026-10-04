@@ -99,7 +99,7 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
     run_git(Some(&source), &["-c", AUTH, "push", &url, "main"]).await?;
     let expected = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
     tokio::fs::remove_dir_all(&source).await?;
-    let database_root = workspace.path().join("first/runtime-v1");
+    let database_root = workspace.path().join("first/canopy-pack-v1");
     let database_bytes = tokio::task::spawn_blocking(
         move || -> std::result::Result<u64, Box<dyn std::error::Error + Send + Sync>> {
             for entry in std::fs::read_dir(database_root)? {

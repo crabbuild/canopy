@@ -16,8 +16,10 @@ Retrieve the producer's StagingTask result before waiting for publication. Await
 
 ```rust,ignore
 let base = Arc::new(stage.open_base(indexes, files).await?);
-let work = stage.spawn_bound(move |_| async move {
+let work = stage.spawn_bound(move |_, context| async move {
+    context.ensure_live()?;
     // Build/verify with existing admitted native/disk/reader primitives.
+    // Retain context ownership in physical jobs that can outlive this future.
     // Return a private ready_push, ready_root_push or ready_compaction value.
     prepare_ready(base).await
 })?;

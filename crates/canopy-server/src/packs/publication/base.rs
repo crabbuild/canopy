@@ -14,12 +14,12 @@ use tokio::time::{Instant, timeout_at};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PreparationBaseError {
+    #[error("authoritative owner observation failed")]
+    Owner(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("authoritative preparation query failed")]
     Query(#[source] Box<InvocationError<Option<PreparationLease>>>),
     #[error("authoritative preparation frontier query failed")]
     Frontier(#[source] Box<InvocationError<Option<PreparationFrontier>>>),
-    #[error("preparation renewal failed")]
-    Command(#[source] Box<InvocationError<PreparationReply>>),
     #[error("preparation catalog loading failed")]
     Catalog(#[from] IndexError),
     #[error("preparation has no active matching lease")]
@@ -45,8 +45,9 @@ impl PreparationBaseResolver {
         indexes: Arc<CatalogIndexes>,
         files: Arc<CatalogFiles>,
         minimum: Option<Receipt>,
+        authority: PreparationAuthority,
     ) -> Result<Self, PreparationBaseError> {
-        let session = PreparationSession::open(client, target, check, minimum).await?;
+        let session = PreparationSession::open(client, target, check, minimum, authority).await?;
         Self::from_session(session, indexes, files).await
     }
     pub(super) async fn from_session(
@@ -54,6 +55,7 @@ impl PreparationBaseResolver {
         indexes: Arc<CatalogIndexes>,
         files: Arc<CatalogFiles>,
     ) -> Result<Self, PreparationBaseError> {
+        session.check_owner().await?;
         let (lease, deadline) = session.live_lease()?;
         if indexes.store().repository() != lease.token.repository
             || indexes.sources().format() != lease.format
@@ -69,6 +71,7 @@ impl PreparationBaseResolver {
         } else {
             None
         };
+        session.check_owner().await?;
         session.live_lease()?;
         Ok(Self {
             session,
@@ -127,6 +130,7 @@ impl PreparationBaseResolver {
     /// Select only facts read through the exact active attempt. The original
     /// floor, namespace, deadline and renewal fence are shared by all selections.
     pub(super) async fn select_current(&self) -> Result<Self, PreparationBaseError> {
+        self.session.check_owner().await?;
         let (_, deadline) = self.live_lease()?;
         timeout_at(deadline, async {
             let started = Instant::now();
@@ -177,6 +181,7 @@ impl PreparationBaseResolver {
                     None => None,
                 }
             };
+            self.session.check_owner().await?;
             self.live_lease()?;
             if Instant::now() >= deadline {
                 return Err(PreparationBaseError::Inactive);
@@ -192,12 +197,19 @@ impl PreparationBaseResolver {
         .await
         .map_err(|_| PreparationBaseError::Inactive)?
     }
-    pub async fn renew(
+    /// Preparation does not submit a command. The caller transfers this exact
+    /// renewal into the service-owned publication coordinator.
+    pub async fn ready_renew(
         &self,
         identity: MutationIdentity,
         lease_ms: u64,
-    ) -> Result<(), PreparationBaseError> {
-        self.session.renew(identity, lease_ms).await
+    ) -> Result<ReadyPreparation, PreparationReadyError> {
+        Arc::new(self.session.clone())
+            .ready_renew(identity, lease_ms)
+            .await
+    }
+    pub async fn restore_renewal(&self) -> Result<ReadyPreparation, PreparationReadyError> {
+        Arc::new(self.session.clone()).restore_renewal().await
     }
 }
 impl BaseResolver for PreparationBaseResolver {

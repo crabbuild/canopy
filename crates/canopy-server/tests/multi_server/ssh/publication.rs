@@ -20,10 +20,16 @@ async fn fixture() -> Result<Fixture> {
         ssh_key::private::Ed25519Keypair::from_seed(&[12; 32]).into(),
         "test",
     )?;
-    let address = available_address().await?;
-    let server = CanopyServer::start(
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    // Retain the advertised port across asynchronous startup; another test
+    // must not be able to claim it between address selection and serving.
+    let competition = TcpListener::bind(address).await.unwrap_err();
+    assert_eq!(competition.kind(), std::io::ErrorKind::AddrInUse);
+    let server = CanopyServer::start_with_listener(
         server_config(address, workspace.path().join("server"), &host)?,
         store.clone(),
+        listener,
     )
     .await?;
     create_repository(address, "publication").await?;
@@ -192,10 +198,12 @@ async fn late_ssh_push_refusals_report_both_refs_and_survive_restore() -> Result
         assert_eq!(generation(&client, address).await?, before);
         server.shutdown().await?;
 
-        let address = available_address().await?;
-        let restored = CanopyServer::start(
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let restored = CanopyServer::start_with_listener(
             server_config(address, workspace.path().join("restored"), &host)?,
             store,
+            listener,
         )
         .await?;
         let ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
@@ -303,10 +311,12 @@ async fn disconnected_ssh_push_finishes_publication_before_shutdown_releases_cel
     store.proceed.notify_one();
     tokio::time::timeout(Duration::from_secs(20), draining).await???;
 
-    let address = available_address().await?;
-    let restored = CanopyServer::start(
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let restored = CanopyServer::start_with_listener(
         server_config(address, workspace.path().join("restored"), &host)?,
         store,
+        listener,
     )
     .await?;
     let ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;
@@ -341,10 +351,12 @@ async fn cold_ssh_push_preparation_failure_reports_rejection_before_any_refs_cha
     } = fixture().await?;
     git(Some(&source), &ssh, &["push", &url, "main"]).await?;
     server.shutdown().await?;
-    let address = available_address().await?;
-    let restored = CanopyServer::start(
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let restored = CanopyServer::start_with_listener(
         server_config(address, workspace.path().join("cold"), &host)?,
         store.clone(),
+        listener,
     )
     .await?;
     let ssh_address = restored.ssh_addr().ok_or("SSH listener missing")?;

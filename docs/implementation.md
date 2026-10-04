@@ -89,7 +89,7 @@ See [native pack policy](contracts.md#native-pack-resource-policy) and
 
 ### Local workspace and shutdown
 
-The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
+The node locks its `data_dir` and owns `canopy-pack-v1/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
 stop startup. Keep the lock files in place; files outside the managed runtime

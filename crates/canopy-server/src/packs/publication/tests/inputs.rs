@@ -48,7 +48,11 @@ pub(super) async fn active(
     fixture: &Fixture,
     operation: [u8; 16],
 ) -> Result<(StagingCoordinator, StagingTicket)> {
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -408,7 +412,11 @@ async fn source_pin_expiry_after_reconstruction_refuses_final_adoption() -> Resu
         .await?;
     old_ticket.stop();
     assert!(old_coordinator.close_and_drain().await.is_empty());
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::claim(
         fixture.client(),
         fixture.target.clone(),
@@ -513,6 +521,7 @@ async fn bound_preparation_claim_adopts_exact_input_root_without_copying_nodes()
                 actor: "owner".into(),
             },
             Some(claimed.receipt),
+            fixture.authority(),
         )
         .await?,
     );
@@ -523,8 +532,11 @@ async fn bound_preparation_claim_adopts_exact_input_root_without_copying_nodes()
         adopted.token()?.artifact_operation,
         prior.token()?.artifact_operation
     );
-    let publisher =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let publisher = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let ready = session.ready_inputs(identity()?, adopted.clone()).await?;
     let registered = publisher.submit(ready).await?;
     let PublicationState::Finished(Ok(PublicationOutcome::Inputs(result))) =
@@ -552,8 +564,11 @@ async fn claimed_staging_retains_exact_dispatch_after_absence_lost_ack_and_panic
         };
         old_ticket.stop();
         assert!(old_coordinator.close_and_drain().await.is_empty());
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         coordinator.fault_for_test(fault);
         let ready = ReadyStaging::claim(
             fixture.client(),
@@ -587,7 +602,10 @@ async fn claimed_staging_retains_exact_dispatch_after_absence_lost_ack_and_panic
         let retained = coordinator
             .pending(old.token.operation)
             .ok_or("retained claim")?;
-        assert_eq!(coordinator.stats().command_bytes, 8192);
+        assert_eq!(
+            coordinator.stats().command_bytes,
+            super::super::custody::RESERVATION
+        );
         coordinator.recover(&retained)?;
         let StagingState::Active(next) = timeout(Duration::from_secs(10), retained.wait()).await?
         else {
@@ -672,7 +690,11 @@ async fn restored_owner_claims_and_adopts_only_a_retained_exact_input_checkpoint
         check(&client, &fixture.target, proof.token()?).await?,
         Some(proof.clone())
     );
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::claim(
         client.clone(),
         fixture.target.clone(),
@@ -859,7 +881,10 @@ async fn service_checkpoint_retains_exact_identity_after_cancellation_absence_lo
             assert!(
                 matches!(retained.wait().await, Err(e) if matches!(&*e, StagingError::Checkpoint(_)))
             );
-            assert_eq!(coordinator.stats().command_bytes, 3 * 4096);
+            assert_eq!(
+                coordinator.stats().command_bytes,
+                super::super::custody::RESERVATION + 4096
+            );
             // Closing retains unknown registrations and their charged command.
             let pending = timeout(Duration::from_secs(10), coordinator.close_and_drain()).await?;
             assert_eq!(pending.len(), 1);

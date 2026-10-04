@@ -40,14 +40,19 @@ async fn restart_scan_seeks_bounded_keys_and_revisits_corrupt_pins_without_starv
         assert!(details.iter().all(|value| !value.contains("TEMP B-TREE")), "{details:?}");
         Ok(Vec::new())
     }).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let store = ArtifactStore::new(Arc::new(InMemory::new()), f.repository);
     let service = RecoverySupervisor::start(
         f.client(),
         f.target.clone(),
         store.clone(),
         queue.clone(),
-        scan_limits(17),
+        f.scans(scan_limits(17)),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.passes >= 2).await?;
     assert!(stats.scanned >= 600);
@@ -76,7 +81,8 @@ async fn restart_scan_seeks_bounded_keys_and_revisits_corrupt_pins_without_starv
             f.target.clone(),
             foreign,
             queue.clone(),
-            scan_limits(1)
+            f.scans(scan_limits(1)),
+            f.authority(),
         ),
         Err(RootRecoveryError::Context)
     ));
@@ -94,7 +100,8 @@ pub(super) async fn leaves_live_owner(
         f.target.clone(),
         store.clone(),
         queue.clone(),
-        scan_limits(1),
+        f.scans(scan_limits(1)),
+        f.authority(),
         super::terminal_retention::maintenance(&f.handle, f.repository).await?,
     )?;
     let stats = scanned(&service, |stats| stats.deferred > 0).await?;
@@ -138,7 +145,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         // identity binding before bundle I/O; the later valid head still runs.
         edit(f, "INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,expires_at_ms,recovery) SELECT zeroblob(16),1,zeroblob(16),x'0000000000000001',randomblob(16),0,recovery FROM catalog_leases WHERE recovery IS NOT NULL LIMIT 1").await?;
     }
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(fault);
     let (release, entered) = queue.pause_for_test().await;
     let service = RecoverySupervisor::start(
@@ -146,10 +157,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         f.target.clone(),
         store.clone(),
         queue.clone(),
-        RecoveryScanLimits {
+        f.scans(RecoveryScanLimits {
             page: 1,
             interval: Duration::from_secs(1),
-        },
+        }),
+        f.authority(),
     )?;
     timeout(Duration::from_secs(10), entered).await??;
     let observer = queue
@@ -178,10 +190,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
             f.target.clone(),
             store.clone(),
             queue.clone(),
-            RecoveryScanLimits {
+            f.scans(RecoveryScanLimits {
                 page: 1,
                 interval: Duration::from_secs(1),
-            },
+            }),
+            f.authority(),
         )?
     } else {
         service
@@ -210,13 +223,18 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
     // Destroy local SQL and factory state. A new owner's scanner recognizes
     // the settled head without dispatching or claiming an old-owner command.
     let (runtime, _, client) = super::durable_recovery::restore_owner(f, &check).await?;
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let service = RecoverySupervisor::start(
         client.clone(),
         f.target.clone(),
         store.clone(),
         queue.clone(),
-        scan_limits(1),
+        f.scans(scan_limits(1)),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.settled > 0).await?;
     assert_eq!(stats.submitted, 0);
@@ -225,7 +243,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         .await?
         .ok_or("settled pin lost on owner restore")?;
     assert_eq!(restored.evidence(), &original);
-    let recovered = restored.dispatch(&client, store).await?;
+    let recovered = restored.dispatch(&client, store, &f.authority()).await?;
     assert_eq!(recovered.receipt, completed.receipt);
     assert_eq!(recovered.output, completed.output);
     let lookup = BeginRequest {
@@ -256,10 +274,18 @@ pub(super) async fn advanced_head(
     original: &RegisteredRootRecovery,
     expected: &cellule_runtime::Committed<RefPolicyReply>,
 ) -> Result {
-    let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let queue = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     queue.fault_for_test(2);
     let observer = queue
-        .submit(original.clone().ready(client.clone(), store.clone())?)
+        .submit(
+            original
+                .clone()
+                .ready(client.clone(), store.clone(), f.authority())?,
+        )
         .await
         .map_err(|error| format!("historical admission: {:?}", error.reason))?;
     assert!(matches!(
@@ -272,7 +298,8 @@ pub(super) async fn advanced_head(
         f.target.clone(),
         store.clone(),
         queue.clone(),
-        scan_limits(1),
+        f.scans(scan_limits(1)),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.recovered > 0 || stats.deferred > 0).await?;
     assert!(
@@ -311,4 +338,78 @@ pub(super) fn qualify_native<'a>(
         }
         _ => unreachable!("native recovery qualifier role"),
     }
+}
+
+#[tokio::test]
+async fn resident_scanners_pause_independently_and_resume_live_indexed_discovery() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        edit(&f, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<30) INSERT INTO catalog_leases(incarnation,admission_sequence,operation,owner_epoch,artifact_operation,expires_at_ms,recovery) SELECT zeroblob(16),x,zeroblob(16),x'0000000000000001',randomblob(16),0,x'01' FROM n").await?;
+        edit(&f, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<30) INSERT INTO catalog_custody_commands(purpose,operation,step,incarnation,request_id,intent) SELECT 0, CAST(printf('%016d',x) AS BLOB),0,zeroblob(16),CAST(printf('%016d',x) AS BLOB),x'01' FROM n").await?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
+        let roots = RecoverySupervisor::start(
+            f.client(),
+            f.target.clone(),
+            ArtifactStore::new(Arc::new(InMemory::new()), f.repository),
+            queue.clone(),
+            f.scans(scan_limits(1)),
+            f.authority(),
+        )?;
+        let custody = CustodySupervisor::start(
+            f.client(),
+            f.target.clone(),
+            queue.clone(),
+            f.scans(scan_limits(1)),
+            f.authority(),
+        )?;
+        scanned(&roots, |stats| stats.scanned > 0).await?;
+        tokio::join!(roots.pause(), custody.pause());
+        let root_before = roots.stats();
+        let custody_before = custody.stats();
+        assert_eq!(f.scan_budget.in_flight(), 0);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(roots.stats().scanned, root_before.scanned);
+        assert_eq!(custody.stats().scanned, custody_before.scanned);
+        assert_eq!(roots.stats().passes, root_before.passes);
+        assert_eq!(custody.stats().passes, custody_before.passes);
+        assert_eq!(queue.stats().await.admitted, 0);
+        // Resuming one owner must not restart its independently paused sibling.
+        roots.resume();
+        scanned(&roots, |stats| stats.scanned > root_before.scanned).await?;
+        assert_eq!(custody.stats().scanned, custody_before.scanned);
+        roots.pause().await;
+        let paused = roots.stats();
+        custody.resume();
+        timeout(Duration::from_secs(10), async {
+            while custody.stats().scanned <= custody_before.scanned {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        assert_eq!(roots.stats().scanned, paused.scanned);
+        custody.pause().await;
+        assert_eq!(f.scan_budget.in_flight(), 0);
+        roots.resume();
+        custody.resume();
+        scanned(&roots, |stats| stats.passes > root_before.passes).await?;
+        timeout(Duration::from_secs(10), async {
+            while custody.stats().passes <= custody_before.passes {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let (root_final, custody_final) = tokio::join!(roots.shutdown(), custody.shutdown());
+        let root_final = root_final?;
+        let custody_final = custody_final?;
+        assert_eq!(root_final.scanned, root_final.failures);
+        assert_eq!(custody_final.scanned, custody_final.failures);
+        assert_eq!(f.scan_budget.in_flight(), 0);
+        assert!(queue.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
 }

@@ -16,7 +16,11 @@ async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_
         let fixture = Fixture::new(format).await?;
         let inventory = seed(&fixture, 2).await?;
         let before_refs = refs(&fixture.handle).await?;
-        let stages = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let stages = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ready = ReadyStaging::new(
             fixture.client(),
             fixture.target.clone(),
@@ -49,7 +53,7 @@ async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_
         let owned_root = root.clone();
         let owned_budget = budget.clone();
         let mutation = identity()?;
-        let work = ticket.spawn_bound(move |_| async move {
+        let work = ticket.spawn_bound(move |_, _context| async move {
             let prepared = Arc::new(
                 PreparedCompaction::prepare(
                     owned_root.path(),
@@ -76,8 +80,11 @@ async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_
             Ok((ready, weak))
         })?;
         let (ready, weak) = work.wait().await.map_err(|e| e.to_string())?;
-        let publications =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let publications = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let (release, entered) = publications.pause_for_test().await;
         let observer = ticket.publish(&publications, ready)?;
         timeout(Duration::from_secs(10), entered).await??;
@@ -124,8 +131,11 @@ async fn uncertain_compaction_retains_exact_command_and_recovers_original_receip
             let compact = Arc::new(prepared.compact);
             let weak = Arc::downgrade(&compact);
             let ready = compact.ready_compaction(identity()?).await?;
-            let coordinator =
-                PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+            let coordinator = PublicationCoordinator::new(
+                fixture.target.clone(),
+                PublicationLimits::default(),
+                fixture.publication_budget.clone(),
+            )?;
             coordinator.fault_for_test(fault);
             let ticket = coordinator.try_reserve(ready)?;
             assert_eq!(ticket.class(), PublicationClass::Maintenance);
@@ -236,6 +246,7 @@ async fn reserved_classes_and_actor_quotas_keep_mixed_admission_bounded() -> Res
             maintenance_in_flight: 1,
             foreground_burst: 3,
         },
+        fixture.publication_budget.clone(),
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let mut entered = Some(entered);
@@ -372,8 +383,11 @@ async fn queued_compaction_rechecks_admin_and_canceled_observer_cannot_cancel_pu
         let prepared = prepare_compaction(&fixture, &inventory, 180, &[0, 1]).await?;
         let compact = Arc::new(prepared.compact);
         let weak = Arc::downgrade(&compact);
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let (release, entered) = coordinator.pause_for_test().await;
         let ticket = coordinator
             .submit(compact.ready_compaction(identity()?).await?)
@@ -424,6 +438,7 @@ async fn maintenance_concurrency_cap_keeps_foreground_progressing() -> Result {
             maintenance_in_flight: 1,
             ..PublicationLimits::default()
         },
+        fixture.publication_budget.clone(),
     )?;
     let (release, entered) = coordinator.pause_for_test().await;
     let a = coordinator

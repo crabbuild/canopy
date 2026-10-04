@@ -84,7 +84,12 @@ pub(super) struct Journal {
 impl Journal {
     fn validate(&self, record: &Record) -> Result<(), CodecError> {
         if let Some(primary) = &self.primary {
-            let denied = if record.kind == Kind::Policy {
+            let denied = if record.kind == Kind::Initialization {
+                matches!(
+                    primary.decode_reply::<InitializationReply>()?,
+                    InitializationReply::Denied(_)
+                )
+            } else if record.kind == Kind::Policy {
                 matches!(
                     primary.decode_reply::<RefPolicyReply>()?,
                     RefPolicyReply::Denied(_)
@@ -140,7 +145,12 @@ impl Journal {
         let Some(primary) = &self.primary else {
             return Ok(false);
         };
-        Ok(if record.kind == Kind::Policy {
+        Ok(if record.kind == Kind::Initialization {
+            matches!(
+                primary.decode_reply::<InitializationReply>()?,
+                InitializationReply::Denied(_)
+            )
+        } else if record.kind == Kind::Policy {
             matches!(primary.decode_reply::<RefPolicyReply>()?, RefPolicyReply::Registered(value) if value.valid)
         } else {
             matches!(
@@ -340,7 +350,7 @@ impl RegisteredRootRecovery {
         let sql =
             SqlCell::<RepositoryModule>::new(client.clone(), self.evidence().target().clone())?;
         let result = sql.query(None, SqlBatch { statements: vec![
-            SqlStatement { sql: "SELECT recovery,recovery_phase FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 UNION ALL SELECT recovery,recovery_phase FROM pushes WHERE id=?3 AND recovery IS NOT NULL AND NOT EXISTS(SELECT 1 FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2)".into(), parameters: vec![blob(self.token().owner.incarnation.as_bytes()), number(self.token().attempt)?, blob(self.token().operation)] },
+            SqlStatement { sql: "SELECT recovery,recovery_phase FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 UNION ALL SELECT recovery,recovery_phase FROM catalog_recovery_receipts WHERE incarnation=?1 AND admission_sequence=?2 AND operation=?3 AND NOT EXISTS(SELECT 1 FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2)".into(), parameters: vec![blob(self.token().owner.incarnation.as_bytes()), number(self.token().attempt)?, blob(self.token().operation)] },
             SqlStatement { sql: "SELECT push_cert_seed FROM repository_identity WHERE singleton=1".into(), parameters: vec![] },
         ] }).await.map_err(|error| RootRecoveryError::Query(Box::new(error)))?;
         let Some([SqlValue::Blob(bytes), saved]) = rows(&result.output)?.first().map(Vec::as_slice)

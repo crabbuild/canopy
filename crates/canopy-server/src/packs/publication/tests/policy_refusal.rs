@@ -45,6 +45,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     let expected =
         crate::push::report::rejected_report(&request.response, crate::push::report::REJECTED)?;
     let session = Arc::new(ticket.bound_session()?);
+    let attempt_token = session.check.token;
     let operation = session.check.token.operation;
     assert!(
         session
@@ -96,7 +97,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     page.refusal_fault_for_test(fault);
     let registered = page.persist_recovery(store, identity()?, None).await?;
     let page = page.bind_recovery(registered, store)?;
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     p.fault_for_test(1);
     drop(ticket.register_policy_page(&p, page)?);
     let StagingState::Uncertain(error) = settled(ticket, true).await? else {
@@ -218,7 +223,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         assert!(matches!(outcome, PublicationState::Finished(Err(error))
             if matches!(&*error, PublicationError::RootPush(InvocationError::Rejected(value)) if value.output==RootCompletionReply::Denied(PreparationDenial::Expired))));
         assert!(observer.root_response(store).await.is_err());
-        assert_eq!(f.counts().await?, (1, 2));
+        assert_eq!(f.counts_for(attempt_token).await?, (1, 1));
     } else {
         let PublicationState::Finished(Ok(PublicationOutcome::RootPush(committed))) = outcome
         else {
@@ -256,7 +261,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         assert_eq!(body, expected.body);
         assert_eq!(body.windows(3).filter(|p| *p == b"ng ").count(), 257);
         assert!(!body.windows(3).any(|p| p == b"ok "));
-        assert_eq!(f.counts().await?, (0, 2));
+        assert_eq!(f.counts_for(attempt_token).await?, (0, 1));
     }
     let Resolution::Committed(page) = f.client().resolve(&page_evidence).await? else {
         return Err("original registered page receipt missing".into());
@@ -340,13 +345,18 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
             .await?,
     );
     let session = Arc::new(ticket.bound_session()?);
+    let attempt_token = session.check.token;
     let refusal = Arc::new(
         session
             .ready_root_refusal(identity()?, store, root, budget.clone(), None)
             .await?,
     );
     let evidence = refusal.evidence_for_test();
-    let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let p = PublicationCoordinator::new(
+        f.target.clone(),
+        PublicationLimits::default(),
+        f.publication_budget.clone(),
+    )?;
     let mut head = None;
     for offset in [0, 128, 256] {
         let page = pending
@@ -471,7 +481,7 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
         let after: Vec<serde_json::Value> = serde_json::from_slice(&state(&f.handle).await?)?;
         assert_eq!(before[..6], after[..6]);
     }
-    assert_eq!(f.counts().await?, (0, 2));
+    assert_eq!(f.counts_for(attempt_token).await?, (0, 1));
     assert!(staging.close_and_drain().await.is_empty());
     assert!(p.close_and_drain().await.is_empty());
     assert_eq!(p.reservations_for_test().await, (0, 0, 0));
@@ -492,7 +502,7 @@ async fn owned_positive(
     let directory = root.to_path_buf();
     let mutation = identity()?;
     Ok(ticket
-        .spawn_bound(move |_| async move {
+        .spawn_bound(move |_, _context| async move {
             owner
                 .ready_root_push(mutation, &guard, &directory, budget, limits(), None)
                 .await

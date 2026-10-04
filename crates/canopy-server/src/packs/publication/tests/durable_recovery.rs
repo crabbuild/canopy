@@ -154,12 +154,13 @@ async fn qualify_ready(
             .evidence(),
         &original
     );
+    let token = check.token;
     let persisted = f
         .handle
-        .query(0, 1024, |db| {
+        .query(0, 1024, move |db| {
             Ok(db.query_row(
-                "SELECT recovery FROM catalog_leases WHERE recovery IS NOT NULL",
-                [],
+                "SELECT recovery FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                 |row| row.get::<_, Vec<u8>>(0),
             )?)
         })
@@ -187,7 +188,11 @@ async fn qualify_ready(
             .is_err()
     );
     let original_result = if fault == 2 {
-        Some(registered.dispatch(&f.client(), store).await?)
+        Some(
+            registered
+                .dispatch(&f.client(), store, &f.authority())
+                .await?,
+        )
     } else {
         None
     };
@@ -218,17 +223,25 @@ async fn qualify_ready(
         .await?
         .ok_or("durable record missing after restore")?;
     assert_eq!(loaded.evidence(), &original);
-    let result = loaded.dispatch(&client, store).await;
+    let result = loaded.dispatch(&client, store, &f.authority()).await;
     if fault == 2 {
         let result = result?;
         assert!(
             matches!(&result.output, RootCompletionReply::Completed(value) if value.completion.publication.is_some() == publishing)
         );
         let expected = original_result.ok_or("original outcome missing")?;
-        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
         queue.fault_for_test(2);
         let observer = queue
-            .submit(loaded.clone().ready(client.clone(), store.clone())?)
+            .submit(
+                loaded
+                    .clone()
+                    .ready(client.clone(), store.clone(), f.authority())?,
+            )
             .await
             .map_err(|failure| format!("durable admission: {:?}", failure.reason))?;
         assert!(
@@ -250,7 +263,10 @@ async fn qualify_ready(
             (expected.output, expected.receipt)
         );
         assert_eq!(
-            loaded.dispatch(&client, store).await?.receipt,
+            loaded
+                .dispatch(&client, store, &f.authority(),)
+                .await?
+                .receipt,
             result.receipt
         );
         if revoked {
@@ -267,7 +283,10 @@ async fn qualify_ready(
             ));
             // Known results still resolve; this grants no current response read.
             assert_eq!(
-                loaded.dispatch(&client, store).await?.receipt,
+                loaded
+                    .dispatch(&client, store, &f.authority(),)
+                    .await?
+                    .receipt,
                 result.receipt
             );
         } else {
@@ -289,7 +308,7 @@ async fn qualify_ready(
                         .output
                         .is_none()
                 );
-                assert_pin_retained(&handle).await?;
+                assert_pin_retained(&handle, check.token).await?;
                 runtime.shutdown().await?;
                 return Ok(());
             }
@@ -299,7 +318,9 @@ async fn qualify_ready(
             denied.output,
             RootCompletionReply::Denied(PreparationDenial::Stale)
         );
-        assert!(matches!(loaded.dispatch(&client, store).await,
+        assert!(matches!(loaded.dispatch(&client,
+store,
+&f.authority(),).await,
             Err(PublicationError::RootPush(InvocationError::Rejected(replayed))) if replayed.receipt == denied.receipt && replayed.output == denied.output));
         assert!(
             client
@@ -309,7 +330,7 @@ async fn qualify_ready(
                 .is_none()
         );
     }
-    assert_pin_retained(&handle).await?;
+    assert_pin_retained(&handle, check.token).await?;
     runtime.shutdown().await?;
     Ok(())
 }
@@ -326,26 +347,26 @@ pub(super) async fn read_response(
         body,
     })
 }
-async fn assert_pin_retained(handle: &CellHandle) -> Result {
+async fn assert_pin_retained(handle: &CellHandle, token: PreparationToken) -> Result {
     handle
-        .query(0, 32, |db| {
+        .query(0, 32, move |db| {
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |row| row.get::<_, u64>(0)
                 )?,
                 1
             );
             assert!(
                 db.execute(
-                    "UPDATE catalog_leases SET recovery=NULL WHERE recovery IS NOT NULL",
-                    []
+                    "UPDATE catalog_leases SET recovery=NULL WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt]
                 )
                 .is_err()
             );
             assert!(
-                db.execute("DELETE FROM catalog_leases WHERE recovery IS NOT NULL", [])
+                db.execute("DELETE FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt])
                     .is_err()
             );
             Ok(Vec::new())
@@ -357,6 +378,12 @@ async fn assert_pin_retained(handle: &CellHandle) -> Result {
 pub(super) async fn restore_owner(
     f: &Fixture,
     check: &LeaseCheck,
+) -> Result<(CellRuntime, CellHandle, CellClient)> {
+    restore_owner_fence(f, check.token.owner).await
+}
+pub(super) async fn restore_owner_fence(
+    f: &Fixture,
+    old: OwnerFence,
 ) -> Result<(CellRuntime, CellHandle, CellClient)> {
     f.handle.drain().await?;
     f.runtime.shutdown().await?;
@@ -394,7 +421,7 @@ pub(super) async fn restore_owner(
             },
         )
         .await?;
-    assert!(handle.owner_fence().epoch > check.token.owner.epoch);
+    assert!(handle.owner_fence().epoch > old.epoch);
     let client = CellClient::local(f.registry.clone(), handle.clone());
     Ok((runtime, handle, client))
 }

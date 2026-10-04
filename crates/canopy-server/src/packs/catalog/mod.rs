@@ -16,6 +16,9 @@ use canopy_object_storage::artifact::{
 use std::sync::Arc;
 
 mod codec;
+pub(in crate::packs) mod graph_spool;
+mod native;
+pub use native::{NativeFileStats, NativeReadError};
 mod files;
 pub use files::{CatalogFileLimits, CatalogFileStats, CatalogFiles, MAX_OPEN_CATALOG_FILES};
 mod reader;
@@ -116,3 +119,6 @@ impl CatalogSnapshot {
 
 #[cfg(test)]
 pub(in crate::packs) mod tests;
+
+#[cfg(test)]
+pub(crate) mod serving_fixture;

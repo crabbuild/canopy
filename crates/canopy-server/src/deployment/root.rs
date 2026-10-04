@@ -70,19 +70,72 @@ pub(super) struct RootClaim {
     token: ETag,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootEnvelope<P> {
+    format: String,
+    purpose: P,
+}
+
+fn encode(purpose: &RootPurpose) -> Result<Bytes> {
+    if matches!(purpose, RootPurpose::Backup { source, pin, .. } | RootPurpose::Restore { source, pin, .. }
+        if source.len() > 4096 || pin.len() > 4096)
+    {
+        return Err(Error::Backup("root reservation exceeds size limit"));
+    }
+    let body = Bytes::from(serde_json::to_vec(&RootEnvelope {
+        format: STORAGE_FORMAT.into(),
+        purpose,
+    })?);
+    if body.len() > 4096 {
+        return Err(Error::Backup("root reservation exceeds size limit"));
+    }
+    Ok(body)
+}
+
 fn path(root: &Path) -> Path {
     root.clone().join("canopy-root-v1.json")
 }
 
 pub(super) async fn load(store: &Store, root: &Path) -> Result<Option<RootClaim>> {
     match store.get_with_etag_bounded(&path(root), 4096).await {
-        Ok((bytes, token)) => Ok(Some(RootClaim {
-            purpose: serde_json::from_slice(&bytes)?,
-            token,
-        })),
+        Ok((bytes, token)) => {
+            let envelope: RootEnvelope<RootPurpose> = serde_json::from_slice(&bytes)?;
+            if envelope.format != STORAGE_FORMAT {
+                return Err(Error::Backup("unrecognized Canopy storage format"));
+            }
+            Ok(Some(RootClaim {
+                purpose: envelope.purpose,
+                token,
+            }))
+        }
         Err(StorageError::NotFound { .. }) => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+pub(super) async fn validate_service(store: &Store, root: &Path) -> Result<()> {
+    let mut claim = load(store, root).await?;
+    if claim.is_none()
+        && ApplicationIdentityStore::new(store.clone(), root.clone())
+            .load()
+            .await?
+            .is_some()
+    {
+        // A concurrent initializer reserves its marker before its identity.
+        claim = load(store, root).await?;
+        if claim.is_none() {
+            return Err(Error::Backup(
+                "destination already contains an application identity",
+            ));
+        }
+    }
+    if claim.is_some_and(|claim| !claim.purpose.permits_service()) {
+        return Err(Error::Backup(
+            "backup or unfinished restore prefix cannot serve",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn reserve(store: &Store, root: &Path, purpose: RootPurpose) -> Result<RootClaim> {
@@ -99,10 +152,7 @@ pub(super) async fn reserve(store: &Store, root: &Path, purpose: RootPurpose) ->
             "destination already contains an application identity",
         ));
     }
-    let body = Bytes::from(serde_json::to_vec(&purpose)?);
-    if body.len() > 4096 {
-        return Err(Error::Backup("root reservation exceeds size limit"));
-    }
+    let body = encode(&purpose)?;
     match store.create_strict_with_etag(&path(root), body).await {
         Ok(token) => Ok(RootClaim { purpose, token }),
         Err(error) => match load(store, root).await? {
@@ -131,14 +181,7 @@ impl RootClaim {
             }
             RootPurpose::Service => return Err(Error::Backup("service root cannot finish a copy")),
         }
-        match store
-            .update(
-                &path(root),
-                Bytes::from(serde_json::to_vec(&next)?),
-                self.token,
-            )
-            .await
-        {
+        match store.update(&path(root), encode(&next)?, self.token).await {
             Ok(_) => Ok(()),
             Err(error) => match load(store, root).await? {
                 Some(current) if current.purpose == next => Ok(()),

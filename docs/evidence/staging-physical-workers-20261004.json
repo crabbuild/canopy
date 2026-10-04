@@ -1,0 +1,649 @@
+{
+  "checkpoint": "staging physical worker ownership and publication-phase ceiling qualification",
+  "parent": "6101d5869f71dd836876266ba8d5aec0ac7965b0",
+  "validation": {
+    "source_files": 488,
+    "rust_files": 474,
+    "source_hash_digest": "c76cad71a122baa769df897444e87eb8d7ef4a3b8e46ecaedbb2a9e35ff833fa",
+    "release_qualified": false,
+    "execution_complete": true,
+    "phases": [
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 32.272,
+        "log": "/tmp/canopy-stage-physical-clippy-final.log",
+        "log_sha256": "3df8a565e1aa6a6df71d04cf363c444c0bacaaf546f61fc85236f6da9013b45d",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked",
+          "--",
+          "physical_creating_worker",
+          "physical_bound_worker",
+          "git_http::capture::tests::",
+          "native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss",
+          "native_receive_prepares_bounded_immutable_root_completion_from_registered_custody",
+          "bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_inflight_workers",
+          "closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clone_drops",
+          "staging_service::publication::bound_final_ceiling",
+          "staging_service::publication::bound_final_queued_transport",
+          "staging_service::publication::bound_final_exact_recovery",
+          "--test-threads=4"
+        ],
+        "exit_code": 0,
+        "seconds": 86.42,
+        "log": "/tmp/canopy-stage-physical-focused-final.log",
+        "log_sha256": "75f1fbb56b460e9397fd77702b61a9bb1741172473478a80e339cc08e12ed239",
+        "summaries": [
+          [
+            11,
+            0,
+            0,
+            0,
+            684
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "libraries",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--lib",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 271.387,
+        "log": "/tmp/canopy-stage-physical-libraries-final.log",
+        "log_sha256": "60b9957c10e2c28124efe01fb0e0c891d7fe7e3a9cad7e6f1daa5c2865da6001",
+        "summaries": [
+          [
+            6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            14,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            694
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            694
+          ],
+          [
+            695,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "directory",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--test",
+          "directory_cell",
+          "--locked"
+        ],
+        "exit_code": 101,
+        "seconds": 53.858,
+        "log": "/tmp/canopy-stage-physical-directory-final.log",
+        "log_sha256": "d5101da1851c49576bdd6498999584dd657e2d2dfd9c8660320beb854df5ca09",
+        "summaries": [
+          [
+            12,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": [
+          "directory_reservations_recover_two_distinct_repository_cells"
+        ]
+      },
+      {
+        "label": "binary",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--bin",
+          "canopy",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 6.919,
+        "log": "/tmp/canopy-stage-physical-binary-final.log",
+        "log_sha256": "8b2e1fa03ccf2587724ee53f19dfed77dc4d216c29d6bc9922b15bec6c25114d",
+        "summaries": [
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 62.313,
+        "log": "/tmp/canopy-stage-physical-build-final.log",
+        "log_sha256": "962e16493d5d1c437445aa2436052d9ac082faf97a33efdfa21519f783b70a06",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.222,
+        "log": "/tmp/canopy-stage-physical-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.066,
+        "log": "/tmp/canopy-stage-physical-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 41.298,
+        "log": "/tmp/canopy-stage-physical-harness-final.log",
+        "log_sha256": "87b82abdb6530000635d38f0cc5f7acb83a174027f6f59c207fa93ab1eb4ce2b",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ]
+  },
+  "unique_rust_executed": 730,
+  "rust_passed": 729,
+  "rust_failed": 1,
+  "library_unique_passed": 715,
+  "server_library_unique_passed": 695,
+  "publication_unique_passed": 400,
+  "focused_passed": 11,
+  "binary_passed": 2,
+  "directory_passed": 12,
+  "directory_failed": 1,
+  "python_passed": 96,
+  "counts_exclude": "focused reruns and nested subprocess summaries; preceding-source isolated reruns are historical evidence only",
+  "release_qualified": false,
+  "remote_preceding_head_ci": [
+    {
+      "head": "6101d5869f71dd836876266ba8d5aec0ac7965b0",
+      "run": 37241921975,
+      "rust_job": 111552187935,
+      "conclusion": "failure",
+      "server_library_passed": 693,
+      "binary_passed": 2,
+      "directory_passed": 12,
+      "directory_failed": 1,
+      "failure": "directory_reservations_recover_two_distinct_repository_cells: retired ingestion command descriptor is unavailable",
+      "log": {
+        "path": "/tmp/canopy-pr34-6101d58-failed.log",
+        "sha256": "a89ae34ea371c2a33e537ccfa7d32febce559acb2fbabea896bc639d10ea5900"
+      }
+    },
+    {
+      "head": "6101d5869f71dd836876266ba8d5aec0ac7965b0",
+      "run": 37241919745,
+      "rust_job": 111552180632,
+      "conclusion": "failure",
+      "server_library_passed": 693,
+      "binary_passed": 2,
+      "directory_passed": 12,
+      "directory_failed": 1,
+      "failure": "directory_reservations_recover_two_distinct_repository_cells: retired ingestion command descriptor is unavailable",
+      "log": {
+        "path": "/tmp/canopy-pr34-6101d58-secondary-failed.log",
+        "sha256": "52cfc5d915246bdee2a28a824278713a3f8377241204a91018284e69b15fc7ed"
+      }
+    }
+  ],
+  "failed_drafts": [
+    {
+      "reason": "new fixture observed Bound as a terminal phase instead of waiting for the actual expiry fence",
+      "validation": {
+        "source_files": 488,
+        "rust_files": 474,
+        "source_hash_digest": "39b90a9b5aafabc8d5273d314105690a9ee943f883e350d797bba348f10270b2",
+        "release_qualified": false,
+        "execution_complete": false,
+        "phases": [
+          {
+            "label": "clippy",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "clippy",
+              "--workspace",
+              "--all-targets",
+              "--locked",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "exit_code": 0,
+            "seconds": 0.963,
+            "log": "/tmp/canopy-stage-physical-clippy-final.log",
+            "log_sha256": "a7642a0867425c6137f6fda230ee0c5445d5148745ccd7b4f5b0b4f2b4540d91",
+            "summaries": [],
+            "failed_cases": []
+          },
+          {
+            "label": "focused",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "-p",
+              "canopy-server",
+              "--lib",
+              "--locked",
+              "--",
+              "physical_creating_worker",
+              "physical_bound_worker",
+              "git_http::capture::tests::",
+              "native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss",
+              "native_receive_prepares_bounded_immutable_root_completion_from_registered_custody",
+              "--test-threads=4"
+            ],
+            "exit_code": 101,
+            "seconds": 108.937,
+            "log": "/tmp/canopy-stage-physical-focused-final.log",
+            "log_sha256": "eabbdba76d268803f8da2bc5e1dc7cafc4274155d67a4a693c3284e7369876bd",
+            "summaries": [
+              [
+                5,
+                1,
+                0,
+                0,
+                689
+              ]
+            ],
+            "failed_cases": [
+              "packs::publication::tests::staging_service::physical::physical_bound_worker_outlives_custody_fence_async_abort_and_observer_drop"
+            ]
+          }
+        ]
+      },
+      "validation_file": {
+        "path": "/tmp/canopy-stage-physical-before-fence-wait-validation.json",
+        "sha256": "067facbdc2f16ec424fbb918608d7fdf88e704b59ba1527de8ec4e12062061df"
+      }
+    },
+    {
+      "reason": "the old phase fixture retained its newly owned context across Bind; an unrelated serving timeout passed in exact isolation",
+      "validation": {
+        "source_files": 488,
+        "rust_files": 474,
+        "source_hash_digest": "d7b3210e3a0011a39eb1aad7c257ceb6fc7490752e52c59edf21bb8df08a1e9b",
+        "release_qualified": false,
+        "execution_complete": false,
+        "phases": [
+          {
+            "label": "clippy",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "clippy",
+              "--workspace",
+              "--all-targets",
+              "--locked",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "exit_code": 0,
+            "seconds": 51.379,
+            "log": "/tmp/canopy-stage-physical-clippy-final.log",
+            "log_sha256": "376d4d7ca543747510c2717416f9c17db2c89cfd726d864a4bc5270edba5175a",
+            "summaries": [],
+            "failed_cases": []
+          },
+          {
+            "label": "focused",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "-p",
+              "canopy-server",
+              "--lib",
+              "--locked",
+              "--",
+              "physical_creating_worker",
+              "physical_bound_worker",
+              "git_http::capture::tests::",
+              "native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss",
+              "native_receive_prepares_bounded_immutable_root_completion_from_registered_custody",
+              "--test-threads=4"
+            ],
+            "exit_code": 0,
+            "seconds": 118.525,
+            "log": "/tmp/canopy-stage-physical-focused-final.log",
+            "log_sha256": "8b2d825152bcc50f2364b87e033da72fd0b1e937c3ec5c33cbc9e0bf31d1c7d6",
+            "summaries": [
+              [
+                6,
+                0,
+                0,
+                0,
+                689
+              ]
+            ],
+            "failed_cases": []
+          },
+          {
+            "label": "libraries",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "--workspace",
+              "--lib",
+              "--locked"
+            ],
+            "exit_code": 101,
+            "seconds": 261.895,
+            "log": "/tmp/canopy-stage-physical-libraries-final.log",
+            "log_sha256": "24a23f9ccccd15fdc51cff98a3a8327b4cf6ce14172c6fb33c1e5fffb6a55c44",
+            "summaries": [
+              [
+                6,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                14,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                1,
+                0,
+                0,
+                0,
+                694
+              ],
+              [
+                1,
+                0,
+                0,
+                0,
+                694
+              ],
+              [
+                693,
+                2,
+                0,
+                0,
+                0
+              ]
+            ],
+            "failed_cases": [
+              "packs::publication::tests::serving::lifecycle::closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clone_drops",
+              "packs::publication::tests::staging_service::bound::bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_inflight_workers"
+            ]
+          }
+        ]
+      },
+      "validation_file": {
+        "path": "/tmp/canopy-stage-physical-before-context-release-validation.json",
+        "sha256": "6b4d88f8b900addaf95f5163c0115b25d70027c3c5a715984f9d86e8936f3b36"
+      }
+    },
+    {
+      "reason": "the one-second test ceiling sometimes expired during Bind setup; same limit is now applied after Bind before the publication scenario",
+      "validation": {
+        "source_files": 488,
+        "rust_files": 474,
+        "source_hash_digest": "56c289487ff8c16d5b1640e6ede2ce66a5a1b56232eeda0ea10daf4bebf1072c",
+        "release_qualified": false,
+        "execution_complete": false,
+        "phases": [
+          {
+            "label": "clippy",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "clippy",
+              "--workspace",
+              "--all-targets",
+              "--locked",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "exit_code": 0,
+            "seconds": 43.779,
+            "log": "/tmp/canopy-stage-physical-clippy-final.log",
+            "log_sha256": "8157545edd7feebc907ecf0ac53538f3288bb13543ef8e50ef3ad9cbb1d4aa52",
+            "summaries": [],
+            "failed_cases": []
+          },
+          {
+            "label": "focused",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "-p",
+              "canopy-server",
+              "--lib",
+              "--locked",
+              "--",
+              "physical_creating_worker",
+              "physical_bound_worker",
+              "git_http::capture::tests::",
+              "native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss",
+              "native_receive_prepares_bounded_immutable_root_completion_from_registered_custody",
+              "bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_inflight_workers",
+              "closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clone_drops",
+              "--test-threads=4"
+            ],
+            "exit_code": 0,
+            "seconds": 86.05,
+            "log": "/tmp/canopy-stage-physical-focused-final.log",
+            "log_sha256": "a3e58e61ad3fa19d2d97b74b3403c93c20fc3a8e294436ac18dc5eaf8b349c52",
+            "summaries": [
+              [
+                8,
+                0,
+                0,
+                0,
+                687
+              ]
+            ],
+            "failed_cases": []
+          },
+          {
+            "label": "libraries",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "--workspace",
+              "--lib",
+              "--locked"
+            ],
+            "exit_code": 101,
+            "seconds": 218.733,
+            "log": "/tmp/canopy-stage-physical-libraries-final.log",
+            "log_sha256": "97848e431c678c2655439767556515e9d41c7da966f738c343a10ebe861e6918",
+            "summaries": [
+              [
+                6,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                14,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                1,
+                0,
+                0,
+                0,
+                694
+              ],
+              [
+                1,
+                0,
+                0,
+                0,
+                694
+              ],
+              [
+                694,
+                1,
+                0,
+                0,
+                0
+              ]
+            ],
+            "failed_cases": [
+              "packs::publication::tests::staging_service::publication::bound_final_ceiling_discards_held_proof_and_drops_result_before_worker_credit"
+            ]
+          }
+        ]
+      },
+      "validation_file": {
+        "path": "/tmp/canopy-stage-physical-before-ceiling-phase-validation.json",
+        "sha256": "8311028376a090240019592b2cb3e29986b4cf289e849185dcd54ce055242a5e"
+      }
+    }
+  ],
+  "isolated_draft_runs": [
+    {
+      "path": "/tmp/canopy-stage-physical-isolated-failures.log",
+      "sha256": "124d50cd9af13b02685fef4453139f8bdef7f25d52a5e1c9573e5f6c11f33160"
+    },
+    {
+      "path": "/tmp/canopy-stage-physical-ceiling-isolated.log",
+      "sha256": "1d6b30e98ad6bc6efd1acfaf57cb0621dafd22493eb579e892bcdac79c347936"
+    }
+  ],
+  "initial_compile_diagnostic": {
+    "path": "/tmp/canopy-stage-physical-clippy-draft.log",
+    "sha256": "14ac3609200cff14279207a03ac327991f4dc4583cefbd660f80bda05a1b81bf"
+  },
+  "initial_compile_diagnostic_scope": "pre-qualification moved-value and result-alias mistakes; no passing qualification is attributed to this draft",
+  "remaining_ci_failure": "The real write path and directory fixture still use retired loose-object ingestion. Do not restore that command/schema or skip the case; convert the actual native producers before their fixtures.",
+  "unrun": [
+    "complete latest-source workspace command beyond the directory failure",
+    "remaining integration binaries and doctests",
+    "full Linux/RustFS provider workflow",
+    "full histories, OS containment and 10000-engineer mixed-load/recovery capacity",
+    "adopted old-owner inputs through authenticated retained selection"
+  ],
+  "next_priorities": [
+    "resident StagingCoordinator ownership and actual HTTP/SSH/generated producers",
+    "request/metadata/policy physical-owner propagation and bounded persisted metadata replay using existing structures",
+    "mandatory joint-root policy/outcome completion and real consumer fixture conversion",
+    "full Linux/provider CI, owner-aware authoritative consumers and physically fenced adoption",
+    "full remaining hard-cutover, custody history, GC/backup/restore, resource containment, native maintenance/hot-cache, capacity and attribution scope"
+  ],
+  "protected_index_sha256": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+  "protected_archive_sha256": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+}

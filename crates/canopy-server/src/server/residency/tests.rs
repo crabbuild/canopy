@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, convert::Infallible, future::poll_fn};
 
 use super::*;
+mod recovery;
+mod serving;
 
 struct Frames(VecDeque<Frame<Bytes>>);
 

@@ -23,6 +23,7 @@ cellule-store = { git = "https://github.com/crabbuild/cellule.git", rev = "16106
 ed25519-dalek = "2"
 flate2 = "1.1"
 futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 hex = "0.4"
 http-body = "1"
 object_store = "0.14.1"

@@ -46,6 +46,7 @@ pub struct CatalogFileStats {
 /// Shared across catalog generations in one worker. Creating a loader does not
 /// certify its catalogs, grant access, or pin remote generations against GC.
 pub struct CatalogFiles {
+    native: Option<super::native::NativeFiles>,
     root: Arc<tempfile::TempDir>,
     store: Arc<ArtifactStore>,
     format: ObjectFormat,
@@ -121,6 +122,7 @@ impl CatalogFiles {
             .prefix("canopy-catalog-files-")
             .tempdir_in(workspace)?;
         Ok(Self {
+            native: None,
             root: Arc::new(root),
             store,
             format,
@@ -132,6 +134,91 @@ impl CatalogFiles {
             cache_hits: AtomicU64::new(0),
             downloaded_files: AtomicU64::new(0),
         })
+    }
+    /// Configure native serving with the node's shared resource scope. Metadata
+    /// preparation alone does not need or implicitly create a native service.
+    pub(crate) fn with_native(mut self, native: crate::native_resources::NativeScope) -> Self {
+        self.native = Some(super::native::NativeFiles::new(
+            Arc::clone(&self.root),
+            self.budget.clone(),
+            Arc::clone(&self.store),
+            self.format,
+            native,
+        ));
+        self
+    }
+    pub(in crate::packs) async fn workspace(
+        &self,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+        head: String,
+    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .workspace(owner, cleanup, head)
+            .await
+    }
+    pub(in crate::packs) async fn write_workspace(
+        &self,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+        head: String,
+        objects: Arc<crate::git_cache::GitCache>,
+    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .workspace_with_objects(owner, cleanup, head, Some(objects))
+            .await
+    }
+    pub(in crate::packs) async fn install_workspace(
+        &self,
+        cache: Arc<crate::git_cache::GitCache>,
+        source: super::super::sources::NativePackDescriptor,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .install(cache, source, owner)
+            .await
+    }
+    pub(in crate::packs) async fn graph_spool(
+        &self,
+        maximum: u64,
+        cache_kib: u32,
+        owner: crate::git_objects::ReadOwner,
+        cleanup: crate::git_objects::ReadOwner,
+    ) -> Result<Arc<Mutex<super::graph_spool::GraphSpool>>, MetadataError> {
+        let (root, budget) = (self.root.clone(), self.budget.clone());
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            Ok(Arc::new(Mutex::new(super::graph_spool::GraphSpool::new(
+                root, budget, maximum, cache_kib, cleanup,
+            )?)))
+        })
+        .await?
+    }
+    pub(in crate::packs) async fn body(
+        &self,
+        object: ResolvedObject,
+        limit: usize,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<Vec<u8>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .body(object, limit, owner)
+            .await
+    }
+    pub fn native_stats(
+        &self,
+    ) -> Result<Option<super::native::NativeFileStats>, super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .map(super::native::NativeFiles::stats)
+            .transpose()
     }
     pub fn stats(&self) -> Result<CatalogFileStats, MetadataError> {
         Ok(CatalogFileStats {

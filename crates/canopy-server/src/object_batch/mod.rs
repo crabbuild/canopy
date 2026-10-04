@@ -18,6 +18,7 @@ pub(crate) const MAX_OBJECTS: usize = 128;
 // Publication amortizes durable commits independently of bounded read pages.
 pub(crate) const MAX_BATCH_OBJECTS: usize = 2048;
 pub(crate) const VERIFY_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
 pub(crate) const INPUT_LIMIT: u32 = 4 * 1024 * 1024;
 // Leave room for record metadata inside Cellule's bounded command wire format.
 const INLINE_BATCH_BYTES: usize = 3 * 1024 * 1024;

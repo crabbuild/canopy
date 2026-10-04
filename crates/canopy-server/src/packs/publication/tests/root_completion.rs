@@ -501,13 +501,14 @@ pub(super) async fn qualify(
         },
         expected
     );
-    let facts = fixture.handle.query(0, 128, |db| {
-        let counts: (i64,i64,i64,i64,i64) = db.query_row("SELECT (SELECT count(*) FROM refs),(SELECT count(*) FROM push_responses),(SELECT count(*) FROM push_response_chunks),(SELECT count(*) FROM catalog_operations),(SELECT count(*) FROM catalog_leases)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))?;
+    let token = prepared.token();
+    let facts = fixture.handle.query(0, 128, move |db| {
+        let counts: (i64,i64,i64,i64,i64) = db.query_row("SELECT (SELECT count(*) FROM refs),(SELECT count(*) FROM push_responses),(SELECT count(*) FROM push_response_chunks),(SELECT count(*) FROM catalog_operations),(SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2)",rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))?;
         Ok(serde_json::to_vec(&counts).unwrap())
     }).await?;
     assert_eq!(
         serde_json::from_slice::<(i64, i64, i64, i64, i64)>(&facts)?,
-        (0, 0, 0, 0, 2)
+        (0, 0, 0, 0, 1)
     );
     if mode == CompletionMode::WriteRevoked {
         edit(
@@ -535,7 +536,9 @@ pub(super) async fn qualify(
         fixture.client().resolve(competing.evidence()).await?,
         Resolution::Absent
     ));
-    let known = registered.dispatch(&fixture.client(), store).await?;
+    let known = registered
+        .dispatch(&fixture.client(), store, &fixture.authority())
+        .await?;
     assert_eq!(known.output, committed.output);
     assert_eq!(known.receipt, committed.receipt);
     assert_eq!(
@@ -625,7 +628,10 @@ pub(super) async fn restored(
         client.resolve(competing.evidence()).await?,
         Resolution::Absent
     ));
-    let known = replay.registered.dispatch(&client, store).await?;
+    let known = replay
+        .registered
+        .dispatch(&client, store, &fixture.authority())
+        .await?;
     assert_eq!(known.output, replay.committed.output);
     assert_eq!(known.receipt, replay.committed.receipt);
     assert_eq!(state(&handle).await?, before);

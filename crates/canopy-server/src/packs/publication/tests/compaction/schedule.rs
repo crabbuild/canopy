@@ -13,8 +13,11 @@ async fn geometric_planner_drains_native_ingress_and_level_debt_without_changing
             urgent_burst: 2,
         };
         let mut planner = CompactionPlanner::new(policy)?;
-        let coordinator =
-            PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+        let coordinator = PublicationCoordinator::new(
+            fixture.target.clone(),
+            PublicationLimits::default(),
+            fixture.publication_budget.clone(),
+        )?;
         let mut expected = None;
         let mut first_catalog = None;
         let mut jobs = 0;

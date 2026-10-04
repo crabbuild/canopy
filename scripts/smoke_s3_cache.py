@@ -113,7 +113,7 @@ def warm_ref_pages(source, url, work_dir, log, report, *, extra_tombstones=0):
 
 def cached_objects(data):
     objects = {}
-    for cache in (data / "runtime-v1").glob("canopy-git-*/repo.git"):
+    for cache in (data / "canopy-pack-v1").glob("canopy-git-*/repo.git"):
         if (cache / "objects/info/alternates").exists():
             continue
         for path in (cache / "objects").glob("*/*"):

@@ -26,8 +26,16 @@ impl CanonicalVerifier {
         format: ObjectFormat,
         native: &crate::native_resources::NativeScope,
     ) -> Result<Self, ObjectReadError> {
+        Self::new_owned(git_dir, format, native, std::sync::Arc::new(()))
+    }
+    pub(crate) fn new_owned(
+        git_dir: &Path,
+        format: ObjectFormat,
+        native: &crate::native_resources::NativeScope,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<Self, ObjectReadError> {
         Ok(Self {
-            native: GitObjects::batch(git_dir, native)?,
+            native: GitObjects::batch_owned(git_dir, native, owner)?,
             format,
         })
     }

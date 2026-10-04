@@ -151,7 +151,7 @@ pub struct BeginPreparation;
 impl Command for BeginPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 11;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = BeginRequest;
     type Output = PreparationReply;
     fn execute(
@@ -188,8 +188,10 @@ impl Command for BeginPreparation {
             }
             check_pin(context, &existing)?;
             let base = fact(context, input.repository, format, existing.generation)?;
+            let lease = grant(&existing, format, base, now)?;
+            super::preparation_receipt::save(context, &input, lease)?;
             return Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
-                grant(&existing, format, base, now)?,
+                lease,
             ))));
         }
         if !quota(context, true)? {
@@ -205,13 +207,15 @@ impl Command for BeginPreparation {
         insert_lease(context, new_token, Some(base.generation), expires)?;
         context.sql(&statement("INSERT INTO catalog_operations(id,actor,request_digest,incarnation,owner_epoch,admission_sequence,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",vec![blob(input.operation),SqlValue::Text(input.actor.clone()),blob(input.request_digest),blob(new_token.owner.incarnation.as_bytes()),blob(new_token.owner.epoch.to_be_bytes()),number(new_token.attempt)?,blob(new_token.artifact_operation),number(base.generation)?,SqlValue::Integer(expires)]))?;
         let row = Operation {
-            actor: input.actor,
+            actor: input.actor.clone(),
             token: new_token,
             generation: Some(base.generation),
             expires,
         };
+        let lease = grant(&row, format, base, now)?;
+        super::preparation_receipt::save(context, &input, lease)?;
         Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
-            grant(&row, format, base, now)?,
+            lease,
         ))))
     }
 }
@@ -220,7 +224,7 @@ pub struct ClaimPreparation;
 impl Command for ClaimPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 12;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 3;
     type Input = LeaseRequest;
     type Output = PreparationReply;
     fn execute(
@@ -238,7 +242,44 @@ impl Command for ClaimPreparation {
             return Ok(denied(PreparationDenial::Unauthorized));
         };
         let Some(existing) = load(context, check.token)? else {
-            return Ok(denied(PreparationDenial::Missing));
+            if !super::preparation_receipt::restart_matches(context, &check)?
+                && !super::custody::restart_matches(context, &check, false)?
+            {
+                return Ok(denied(PreparationDenial::Missing));
+            }
+            let begin = BeginRequest {
+                repository: check.token.repository,
+                operation: check.token.operation,
+                request_digest: check.token.request_digest,
+                actor: check.actor.clone(),
+                lease_ms: input.lease_ms,
+            };
+            if !logical_available(context, &begin)? {
+                return Ok(denied(PreparationDenial::Conflict));
+            }
+            if !quota(context, true)? {
+                return Ok(denied(PreparationDenial::Capacity));
+            }
+            let now = now(context.now_ms())?;
+            let expires = expiry(now, input.lease_ms)?;
+            let base = fact(context, check.token.repository, format, None)?;
+            let next = token(
+                context,
+                check.token.repository,
+                check.token.operation,
+                check.token.request_digest,
+            )?;
+            insert_lease(context, next, Some(base.generation), expires)?;
+            context.sql(&statement("INSERT INTO catalog_operations(id,actor,request_digest,incarnation,owner_epoch,admission_sequence,artifact_operation,generation,expires_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", vec![blob(next.operation),SqlValue::Text(check.actor.clone()),blob(next.request_digest),blob(next.owner.incarnation.as_bytes()),blob(next.owner.epoch.to_be_bytes()),number(next.attempt)?,blob(next.artifact_operation),number(base.generation)?,SqlValue::Integer(expires)]))?;
+            let row = Operation {
+                actor: check.actor,
+                token: next,
+                generation: Some(base.generation),
+                expires,
+            };
+            return Ok(CommandResult::Success(PreparationReply::Granted(Box::new(
+                grant(&row, format, base, now)?,
+            ))));
         };
         if !matched(&existing, &check) {
             return Ok(denied(PreparationDenial::Stale));
@@ -453,7 +494,7 @@ impl Query for CheckPreparationFrontier {
 }
 
 pub struct ReapPreparation;
-pub(super) const REAP_GENERATIONS: &str = "DELETE FROM catalog_generations WHERE generation IN (SELECT g.generation FROM catalog_generations g WHERE g.generation>0 AND g.generation<(SELECT generation FROM catalog_state WHERE singleton=1) AND g.generation<COALESCE((SELECT min(generation) FROM catalog_leases),9223372036854775807) ORDER BY g.generation LIMIT ?1)";
+pub(super) const REAP_GENERATIONS: &str = "DELETE FROM catalog_generations WHERE generation IN (SELECT g.generation FROM catalog_generations g WHERE g.generation>0 AND g.generation<(SELECT generation FROM catalog_state WHERE singleton=1) AND g.generation<COALESCE((SELECT min(generation) FROM catalog_leases),9223372036854775807) AND NOT EXISTS(SELECT 1 FROM catalog_serving_pins r WHERE r.generation=g.generation) ORDER BY g.generation LIMIT ?1)";
 impl Command for ReapPreparation {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 16;

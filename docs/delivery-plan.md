@@ -1822,7 +1822,7 @@ qualification remain open.
 ### Managed local runtime recovery qualification
 
 On 2026-09-26, `src/server/workspace.rs` replaced anonymous node directories with
-one marked `runtime-v1/` directory beneath a locked `data_dir`. The manager retains
+one marked `canopy-pack-v1/` directory beneath a locked `data_dir`. The manager retains
 that owner with detached request work. Git caches use a recognizable prefix and
 per-cache worker locks. On Unix, native Git and its descendants inherit the lock
 descriptor across exec. Startup acquires every abandoned worker fence before

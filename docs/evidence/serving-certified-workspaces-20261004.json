@@ -1,0 +1,259 @@
+{
+  "source_files": 487,
+  "rust_files": 473,
+  "source_hash_digest": "e618d9b235bdb2ad6b67c0168b8c6a65cf824c23196c54fb1aab0ad0d4ee1063",
+  "release_qualified": false,
+  "execution_complete": true,
+  "phases": [
+    {
+      "label": "clippy",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 37.712,
+      "log": "/tmp/canopy-certified-workspace-clippy.log",
+      "log_sha256": "07eb3a24ed1f02c718862c62e27198d6464d8d5c009ccd20d84d0ee18a91ac00"
+    },
+    {
+      "label": "focused-final",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--lib",
+        "--locked",
+        "--",
+        "graph_spool::",
+        "serving::workspace::",
+        "certified_http_clone",
+        "native_receive_root_dispatch_preserves_known",
+        "final_current_policies_use",
+        "closed_owner_keeps_borrowed_generation",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 107.869,
+      "log": "/tmp/canopy-certified-workspace-focused-final.log",
+      "log_sha256": "420662234ec1a0de1f0f0b624b3644b505ee80bac92e228f0f73335346bbd188",
+      "passed": 17
+    },
+    {
+      "label": "library",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "--workspace",
+        "--lib",
+        "--locked"
+      ],
+      "exit_code": 101,
+      "seconds": 249.575,
+      "log": "/tmp/canopy-certified-workspace-library.log",
+      "log_sha256": "14961c459967e3e27007b4b4e2d8d55a596171e4016ed333f0d01af59078af4f",
+      "passed": 704,
+      "failed": 4,
+      "known_failures": [
+        "object_reads::tests::byte_limited_page_advances_only_over_the_selected_prefix",
+        "object_reads::tests::duplicate_rollback_and_deletion_do_not_hide_subsequent_inserts",
+        "object_reads::tests::insertion_cursor_finds_lower_oids_and_excludes_later_publications",
+        "object_reads::tests::small_increment_uses_bounded_sql_work_after_large_history"
+      ],
+      "nested_summaries_excluded": 2,
+      "publication_passed": 396
+    },
+    {
+      "label": "workspace",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "workspace::",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 53.432,
+      "log": "/tmp/canopy-certified-workspace-workspace.log",
+      "log_sha256": "73b6822d72f4082f55f1e7e9a41b391505acdcd32135bd96cade3328ffb7764e",
+      "passed": 3
+    },
+    {
+      "label": "lifecycle",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::fork::",
+        "lifecycle::cancelled_prebound_startup",
+        "lifecycle::runtime_destruction",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.329,
+      "log": "/tmp/canopy-certified-workspace-lifecycle.log",
+      "log_sha256": "0b4f00db1414c119cb201e5c2a0f6aaa128b669858235b5da46bea25dfce9116",
+      "passed": 2
+    },
+    {
+      "label": "drain",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::cancelled_startup_keeps_workspace",
+        "lifecycle::dropped_handle_and_cancelled_shutdown",
+        "lifecycle::failed_drain_retains_workspace",
+        "lifecycle::startup_rejects_ignored_conditional",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.741,
+      "log": "/tmp/canopy-certified-workspace-drain.log",
+      "log_sha256": "bd7b880b7b6c18aa2c032b4a8e8a9ea49264c27be7f8d470e77d35eaf7115142",
+      "passed": 4
+    },
+    {
+      "label": "build",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "build",
+        "--locked",
+        "--bin",
+        "canopy"
+      ],
+      "exit_code": 0,
+      "seconds": 45.288,
+      "log": "/tmp/canopy-certified-workspace-build.log",
+      "log_sha256": "7eb95615ce99baf93cad6677aa35eee0068d1b026c92548557f1e9bf85c41e08"
+    },
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.254,
+      "log": "/tmp/canopy-certified-workspace-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.175,
+      "log": "/tmp/canopy-certified-workspace-diff.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "harness",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_code": 0,
+      "seconds": 42.079,
+      "log": "/tmp/canopy-certified-workspace-harness.log",
+      "log_sha256": "5c8dac6c3a6376c2b124e1f6299548a0bed36a10123d54d3d403631f18b8633f"
+    }
+  ],
+  "unique_workspace_cases": 717,
+  "unique_workspace_passed": 713,
+  "unique_workspace_failed": 4,
+  "sdk_revision": "161067f5a21703b3e257024bcb64e565fd9657b4",
+  "sdk_manifest_pins": 5,
+  "sdk_lock_pins": 6,
+  "protected_hashes": {
+    "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+    "/Users/haipingfu/.codex/worktrees/packed-catalog-publication-pr/canopy/docs/archive/pr20-progress-through-8bb0ee7.md": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+  },
+  "new_families": 13,
+  "relocated_cases": 1,
+  "harness_cases": 96,
+  "platform": "macOS / Rust 1.98.0; Linux-only fork cases not executed locally",
+  "scope": "Owned complete native forward workspaces and local HTTP/SSH fetch consumers. Real HTTP clones cover both formats; 10,000 ref names and a 532-parent merge qualify bounded traversal. Physical native verification plus trusted joint-fact installation isolates consumer semantics; not live write production, remote routing, large-history cold latency, workspace coalescing or large-team capacity.",
+  "validated_source_parent": "cc4a963c750d03c22483d6a9f12099a525114385",
+  "fetched_main": "9438bb865959fb975d5349ba8b9908b461653821",
+  "draft_diagnostics": [
+    {
+      "source_hash_digest": "29c7cf4dcf3a11e828bcdbccbfee3798be2fad6e745ba8b94618d16fe787caff",
+      "exit_code": 101,
+      "server_passed": 683,
+      "server_failed": 5,
+      "reason": "Four legacy object readers and new short-lease workspace renewal case failed under broad parallel load. Metadata warmup moved before the short lease; returned workspace lifetime and completed construction remain asserted; ordinary body/membership reads have separate deadline tests.",
+      "log_sha256": "94125f6d417dc0c0f6d9e326af7d1f7ea38c8e49d2a3b5071c6ea0ea8c60e723"
+    },
+    {
+      "source_hash_digest": "9618001776be59674c040b4f5a7df9b9ab4759043d8bf6a2bd286dbbaff40f4b",
+      "exit_code": 101,
+      "server_passed": 681,
+      "server_failed": 7,
+      "reason": "Initial full library run exposed three existing lease-setup/renewal timing assumptions beyond four legacy readers. Actual owned fixture renewal, controlled real-clock expiry injection at recovery, and event-based renewal assertions replace those assumptions.",
+      "log_sha256": "987a5aa5410a0a5bac22ac825bd53abb0b48d3566a6a72b784e156b3d6477a91"
+    }
+  ],
+  "isolated_timing_diagnostic": {
+    "passed": 3,
+    "exit_code": 0,
+    "log_sha256": "b183db4c52e2c7e051fea2837594765f115e580754e079dbaf0e809c693888cd",
+    "not_replacement_for_failed_broad_run": true
+  },
+  "prior_ci": {
+    "head": "cc4a963c750d03c22483d6a9f12099a525114385",
+    "runs": [
+      37232379168,
+      37232376754
+    ],
+    "rust": "Both actual failed logs contain exactly five legacy objects reader failures; 670 server cases pass in each.",
+    "harness": "both pass",
+    "not_qualification_for_new_source": true,
+    "primary_log_sha256": "0d45c1f7145930e379d62f4c82ca68f9b7c4d067f122f2221e5507abb90005e9",
+    "secondary_log_sha256": "335496d75b03b7e0efae9ba7221a8a9dfcaffcab505d95854634dd23b2a242c3"
+  },
+  "checked_local_documentation_links": 97
+}

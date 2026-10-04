@@ -47,6 +47,7 @@ use crate::{
 };
 
 mod catalog_admission;
+mod catalog_initialization;
 mod discovery;
 mod lifecycle;
 mod listeners;
@@ -67,6 +68,10 @@ pub(crate) const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("packed repository recovery failed")]
+    CatalogRecovery(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("packed repository initialization failed")]
+    CatalogInitialization(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("invalid SSH host key")]
     SshKey(#[source] Box<directory::SshKeyError>),
     #[error("Cellule runtime failed")]
@@ -172,6 +177,7 @@ struct RunningServer {
     listeners: listeners::ListenerReservations,
     local: Arc<workspace::Workspace>,
     native: crate::native_resources::NativeResources,
+    repositories: Arc<RepositoryManager>,
 }
 
 pub(crate) struct RepositoryManager {
@@ -197,7 +203,17 @@ pub(crate) struct RepositoryManager {
     residency_admission: AccountAdmission,
     transfers: AccountAdmission,
     tasks: TaskTracker,
-    maintenance_stop: CancellationToken,
+    publication_budget: crate::packs::publication::PublicationBudget,
+    recovery_scans: crate::packs::publication::RecoveryScanBudget,
+    serving_reads: crate::packs::publication::ServingReadBudget,
+    serving_stop: CancellationToken,
+    #[cfg(test)]
+    serving_construction_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 pub(crate) enum MembershipOutcome {
@@ -438,12 +454,13 @@ impl RunningServer {
             listeners.http = Some(reservation);
             socket
         });
+        let store = Store::new(Arc::clone(&raw_store));
+        crate::deployment::validate_service_root(&store, &config.store_prefix).await?;
         let data_dir = config.data_dir.clone();
         let local = Arc::new(
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
         );
         listeners.workspace = Some(Arc::clone(&local));
-        let store = Store::new(Arc::clone(&raw_store));
         storage::probe(&store, &config.store_prefix.clone().join("canopy-probe")).await?;
         let application = Arc::new(CanopyApplication::compile(build_descriptor(
             include_bytes!("../../../../Cargo.lock"),
@@ -638,7 +655,20 @@ impl RunningServer {
                     "account repository activations",
                 ),
                 tasks: tasks.clone(),
-                maintenance_stop: maintenance_stop.clone(),
+                publication_budget: crate::packs::publication::PublicationBudget::new(
+                    crate::packs::publication::PublicationLimits::default(),
+                )
+                .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                recovery_scans: crate::packs::publication::RecoveryScanBudget::new(
+                    8,
+                    tasks.clone(),
+                )
+                .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                serving_reads: crate::packs::publication::ServingReadBudget::new(64, tasks.clone())
+                    .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+                serving_stop: CancellationToken::new(),
+                #[cfg(test)]
+                serving_construction_gate: Mutex::new(None),
             });
             let api = Arc::new(RepositoryHttp::new(Arc::clone(&manager), tasks.clone()));
             deployment.require_ready().await?;
@@ -673,6 +703,7 @@ impl RunningServer {
         let ingress_stop = CancellationToken::new();
         let ssh_serving = match (ssh_config, ssh_listener) {
             (Some(config), Some(listener)) => {
+                let manager = Arc::clone(&manager);
                 let stop = ingress_stop.clone();
                 let tasks = tasks.clone();
                 let release = release_stop.clone();
@@ -713,6 +744,7 @@ impl RunningServer {
             listeners,
             local,
             native,
+            repositories: manager,
         })
     }
 }

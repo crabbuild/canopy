@@ -456,13 +456,24 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             .await?
             .finish()
             .await?;
-        fixture
-            .client()
-            .command::<InitializeCatalogRefs>(
-                &fixture.target,
+        let (command, registered) = super::initialization::registered(
+            &fixture,
+            &empty,
+            empty.empty_ref_initialization().await?,
+            identity()?,
+        )
+        .await?;
+        command.execute().await?;
+        // Match actual startup before building later native policy work.
+        registered
+            .ready_terminal_release(
+                fixture.client(),
+                &store,
+                super::terminal_retention::maintenance(&fixture.handle, fixture.repository).await?,
                 identity()?,
-                empty.empty_ref_initialization().await?,
             )
+            .await?
+            .complete()
             .await?;
         drop(empty);
         cleaned(root.path(), &budget).await?;
@@ -565,17 +576,11 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     )
     .await?;
     let request_digest = encoded.identity().request_digest;
-    let mut staging_limits = StagingLimits::default();
-    if matches!(
-        mode,
-        CompletionMode::Dispatch {
-            loss: super::root_dispatch::Loss::Expiry,
-            ..
-        }
-    ) {
-        staging_limits.bound_lifetime_ms = 5000;
-    }
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), staging_limits)?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -623,7 +628,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             .await
             .map_err(|error| StagingError::Input(Box::new(error)))?;
         let response = producer
-            .run_native_receive(preflight.into_native_request())
+            .run_native_receive(&context, preflight.into_native_request())
             .await
             .map_err(|error| StagingError::Input(Box::new(error)))?;
         let inputs = producer
@@ -832,17 +837,30 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     }
     let physical_root = Arc::new(tempfile::TempDir::new()?);
     let physical_disk = DiskBudget::new(256 << 20);
-    let mut verifier = PhysicalVerifier::download(
-        physical_root.path(),
-        physical_disk.clone(),
-        &store,
-        inputs[0],
-        physical_limits(),
-        native.scope(NativeClass::Foreground),
-    )
-    .await?;
-    let segment = verifier.inspect_next_shard(inputs[0].object_count).await?;
-    let witness = verifier.finish().await?;
+    let verify_root = physical_root.clone();
+    let verify_disk = physical_disk.clone();
+    let verify_store = store.clone();
+    let verify_native = native.clone();
+    let work = ticket.spawn(move |context| async move {
+        let result = async {
+            let mut verifier = PhysicalVerifier::download_staged(
+                &context,
+                verify_root.path(),
+                verify_disk,
+                &verify_store,
+                inputs[0],
+                physical_limits(),
+                verify_native.scope(NativeClass::Foreground),
+            )
+            .await?;
+            let segment = verifier.inspect_next_shard(inputs[0].object_count).await?;
+            let witness = verifier.finish().await?;
+            Ok::<_, crate::packs::verification::PhysicalError>((witness, segment))
+        }
+        .await;
+        result.map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let (witness, segment) = work.wait().await.map_err(|error| error.to_string())?;
     ticket.seal()?;
     assert!(matches!(
         timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
@@ -930,7 +948,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     let producer_root = Arc::clone(&physical_root);
     let producer_disk = physical_disk.clone();
     let publication_identity = identity()?;
-    let work = ticket.spawn_bound(move |_| async move {
+    let work = ticket.spawn_bound(move |_, _context| async move {
         let result = async {
             let mut builder = CatalogPreparation::new(
                 producer_root.path(),
@@ -960,8 +978,11 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         .wait()
         .await
         .map_err(|error| format!("native receive stage: {error:?}"))?;
-    let publications =
-        PublicationCoordinator::new(fixture.target.clone(), PublicationLimits::default())?;
+    let publications = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
     let observer = ticket.publish(&publications, ready)?;
     let completed =
         super::coordinator::finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;
@@ -1093,7 +1114,11 @@ async fn native_capture_rejects_scope_limits_mutation_and_active_native_workers(
         Arc::new(InMemory::new()),
         fixture.repository,
     ));
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),

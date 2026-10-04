@@ -16,6 +16,7 @@ use cellule_runtime::{
 };
 pub(in crate::packs::publication) mod archive;
 mod codec;
+mod initialization;
 mod ready;
 mod supervisor;
 pub use archive::{
@@ -34,10 +35,12 @@ pub(in crate::packs::publication) use phase::execute;
 pub(in crate::packs::publication) use phase::normalize_root;
 
 const ROOT_BYTES: u32 = 8192;
-const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v3\0";
+const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("closed initialization graph failed")]
+    Initialization(#[from] super::initialization::InitializationVerificationError),
     #[error("closed native audit graph failed")]
     Audit(#[from] NativeResultError),
     #[error("terminal release command preparation failed")]
@@ -74,10 +77,13 @@ pub(super) enum Kind {
     Publish,
     Outcome,
     Policy,
+    Initialization,
 }
 impl Kind {
     fn body_limit(self) -> u32 {
-        if self == Self::Policy {
+        if self == Self::Initialization {
+            INITIALIZATION_BYTES
+        } else if self == Self::Policy {
             REF_POLICY_PAGE_BYTES
         } else {
             ROOT_COMPLETION_BYTES
@@ -305,27 +311,33 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
-        self.dispatch_root(client, store, None).await
+        self.dispatch_root(client, store, authority, None).await
     }
     async fn dispatch_root(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
         let result = match self.record.kind {
             Kind::Publish => {
-                self.dispatch_command::<CompleteRootPush>(client, store, false, original)
+                self.dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
                     .await
             }
             Kind::Outcome => {
-                self.dispatch_command::<CompleteRootOutcome>(client, store, false, original)
-                    .await
+                self.dispatch_command::<CompleteRootOutcome>(
+                    client, store, authority, false, original,
+                )
+                .await
             }
-            Kind::Policy => Err(AttemptError::Invocation(InvocationError::NotStarted(
-                Error::Command("policy recovery requires phase dispatch"),
-            ))),
+            Kind::Policy | Kind::Initialization => {
+                Err(AttemptError::Invocation(InvocationError::NotStarted(
+                    Error::Command("recovery kind requires typed phase dispatch"),
+                )))
+            }
         };
         match result {
             Ok(value) => phase::normalize_root(Ok(value)).map_err(PublicationError::RootPush),
@@ -336,11 +348,13 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusing: &std::sync::atomic::AtomicBool,
     ) -> Result<PublicationOutcome, PublicationError> {
         self.dispatch_bound(
             client,
             store,
+            authority,
             refusing,
             None,
             #[cfg(test)]
@@ -352,19 +366,29 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusing: &std::sync::atomic::AtomicBool,
         original: Option<&PreparationSession>,
         #[cfg(test)] refusal_fault: Option<&std::sync::atomic::AtomicU8>,
     ) -> Result<PublicationOutcome, PublicationError> {
+        if self.record.kind == Kind::Initialization {
+            return self
+                .dispatch_initialization(client, store, authority, original)
+                .await
+                .map(PublicationOutcome::Initialization);
+        }
         if self.record.kind != Kind::Policy {
             let result = match original {
-                Some(original) => self.dispatch_root(client, store, Some(original)).await,
-                None => self.dispatch(client, store).await,
+                Some(original) => {
+                    self.dispatch_root(client, store, authority, Some(original))
+                        .await
+                }
+                None => self.dispatch(client, store, authority).await,
             };
             return result.map(PublicationOutcome::RootPush);
         }
         let result = self
-            .dispatch_command::<RegisterRefPolicyPage>(client, store, false, original)
+            .dispatch_command::<RegisterRefPolicyPage>(client, store, authority, false, original)
             .await;
         let refused = match &result {
             Ok(value) => {
@@ -417,7 +441,7 @@ impl RegisteredRootRecovery {
                 )));
             }
             let outcome = self
-                .dispatch_command::<CompleteRootOutcome>(client, store, true, original)
+                .dispatch_command::<CompleteRootOutcome>(client, store, authority, true, original)
                 .await;
             #[cfg(test)]
             if fault == 2 {
@@ -475,6 +499,7 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusal: bool,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<C::Output>, AttemptError<C::Output>> {
@@ -517,31 +542,39 @@ impl RegisteredRootRecovery {
         // would change both fencing semantics and refusal behavior: the final
         // transaction must still be able to select rejection after ACL loss.
         // Standalone recovery reacquires custody for positive work.
-        let session = if refusal_only || original.is_some() {
-            None
-        } else {
-            match PreparationSession::open(
-                client.clone(),
-                self.evidence().target().clone(),
-                self.record.check.clone(),
-                None,
-            )
-            .await
-            {
-                Ok(session) => Some(session),
-                Err(error) => {
-                    if let Some(known) = self.known::<C>(client, store, refusal).await? {
-                        return Ok(known);
+        // Initialization performs no new preparation or native work. Its
+        // frozen receiver checks Admin, the actual owner, live pin, checkpoint
+        // and pristine roots in the committing transaction. Requiring a fresh
+        // Write query here would hide an expired/revoked attempt before that
+        // original command could record its definitive denial. Bound live
+        // initialization still retains and checks its original local guard.
+        let session =
+            if refusal_only || self.record.kind == Kind::Initialization || original.is_some() {
+                None
+            } else {
+                match PreparationSession::open(
+                    client.clone(),
+                    self.evidence().target().clone(),
+                    self.record.check.clone(),
+                    None,
+                    authority.clone(),
+                )
+                .await
+                {
+                    Ok(session) => Some(session),
+                    Err(error) => {
+                        if let Some(known) = self.known::<C>(client, store, refusal).await? {
+                            return Ok(known);
+                        }
+                        return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                            Error::Facility {
+                                name: "publication recovery custody",
+                                source: Box::new(error),
+                            },
+                        )));
                     }
-                    return Err(AttemptError::Invocation(InvocationError::NotStarted(
-                        Error::Facility {
-                            name: "publication recovery custody",
-                            source: Box::new(error),
-                        },
-                    )));
                 }
-            }
-        };
+            };
         // A command can settle while body I/O or custody acquisition is in flight.
         if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);

@@ -168,7 +168,7 @@ impl Deployment {
                         let (module, schema) = if entry.namespace() == directory::DIRECTORY {
                             (DirectoryModule::NAME, directory::SCHEMA)
                         } else if entry.namespace() == REPOSITORIES {
-                            (RepositoryModule::NAME, include_str!("../schema.sql"))
+                            (RepositoryModule::NAME, crate::REPOSITORY_SCHEMA)
                         } else {
                             return Err(Error::Release("unknown maintenance Cell namespace").into());
                         };

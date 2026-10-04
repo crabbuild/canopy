@@ -104,6 +104,7 @@ struct Storage {
     file: Option<AdmittedFile>,
     bytes: u64,
     failed: bool,
+    _owner: crate::git_objects::ReadOwner,
 }
 
 /// One append-only dependency file for a bounded native-object batch. Each
@@ -117,6 +118,13 @@ pub(super) struct EdgeSpool {
 }
 impl EdgeSpool {
     pub(super) fn new(root: &Path, budget: DiskBudget) -> Self {
+        Self::new_owned(root, budget, Arc::new(()))
+    }
+    pub(super) fn new_owned(
+        root: &Path,
+        budget: DiskBudget,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Self {
         Self {
             root: root.to_owned(),
             budget,
@@ -124,6 +132,7 @@ impl EdgeSpool {
                 file: None,
                 bytes: 0,
                 failed: false,
+                _owner: owner,
             })),
             writing: Arc::new(AtomicBool::new(false)),
         }

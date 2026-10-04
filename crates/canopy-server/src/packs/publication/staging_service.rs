@@ -1,5 +1,6 @@
 //! Service-owned, bounded input custody. Never infer a live deadline from a
 //! replayed command, discard ambiguous evidence, or let an observer cancel work.
+use super::custody::OwnedCustody;
 use super::*;
 use crate::packs::catalog::{CatalogFiles, CatalogIndexes};
 use cellule_runtime::{
@@ -20,6 +21,8 @@ use tokio::{
 mod bound;
 use bound::accept_bound;
 mod publication;
+mod restore;
+mod retirement;
 pub use publication::{StagedPublicationFailure, StagedPublicationTicket};
 
 const COMMAND_BYTES: u32 = 4096;
@@ -108,15 +111,17 @@ pub enum StagingError {
     BoundRenew(#[source] Box<InvocationError<PreparationReply>>),
     #[error("bound preparation claim failed")]
     BoundClaim(#[source] Box<InvocationError<PreparationReply>>),
+    #[error("restored staging custody command failed")]
+    Restoration(#[source] Box<InvocationError<CustodyReply>>),
     #[error("staging bind failed")]
     Bind(#[source] Box<InvocationError<PreparationReply>>),
-    #[error("initial staging receipt recovery failed")]
-    ReceiptRecovery {
+    #[error("staging custody preparation failed")]
+    CustodyReady(#[source] Box<CustodyError>),
+    #[error("staging custody protocol failed")]
+    Custody {
         evidence: Box<cellule_runtime::PendingMutation>,
-        source: Box<StagingReceiptError>,
+        source: Box<CustodyError>,
     },
-    #[error("initial staging receipt lookup failed")]
-    ReceiptLookup(#[source] Box<StagingReceiptError>),
     #[error("staging query failed")]
     Query(#[source] Box<InvocationError<Option<StagingLease>>>),
     #[error("bound base failed")]
@@ -126,9 +131,9 @@ pub enum StagingError {
     #[error("final publication failed: {0}")]
     Publication(#[source] Arc<PublicationError>),
 }
-impl From<StagingReceiptError> for StagingError {
-    fn from(error: StagingReceiptError) -> Self {
-        Self::ReceiptLookup(Box::new(error))
+impl From<CustodyError> for StagingError {
+    fn from(error: CustodyError) -> Self {
+        Self::CustodyReady(Box::new(error))
     }
 }
 impl StagingError {
@@ -142,7 +147,8 @@ impl StagingError {
         match self {
             Self::Begin(e) | Self::Renew(e) | Self::Claim(e) | Self::Checkpoint(e) => unknown(e),
             Self::Bind(e) | Self::BoundRenew(e) | Self::BoundClaim(e) => unknown(e),
-            Self::ReceiptRecovery { .. } => true,
+            Self::Restoration(e) => unknown(e),
+            Self::Custody { source, .. } => source.uncertain(),
             _ => false,
         }
     }
@@ -204,23 +210,25 @@ impl ReadyStaging {
         request
             .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
             .map_err(|_| StagingError::Context)?;
-        if StagingAdmission::load(&client, &target, request.operation)
+        if RegisteredCustody::load_latest(&client, &target, request.operation)
             .await?
             .is_some()
         {
             return Err(StagingError::Duplicate);
         }
-        let command = client
-            .prepare_command::<BeginStaging>(&target, identity, request.clone())
-            .await
-            .map_err(|e| StagingError::Begin(Box::new(e)))?;
-        let operation = request.operation;
+        let command = OwnedCustody::prepare(
+            &client,
+            &target,
+            CustodyAction::BeginStaging(request.clone()),
+            identity,
+        )
+        .await?;
         Ok(Self {
             inner: Box::new(StagingRequest {
                 client,
                 target,
                 request,
-                command: Exact::Begin(command, operation),
+                command: Exact::Begin(command),
                 bound_source: None,
             }),
         })
@@ -249,10 +257,13 @@ impl ReadyStaging {
         request
             .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
             .map_err(|_| StagingError::Context)?;
-        let command = client
-            .prepare_command::<ClaimStaging>(&target, identity, request)
-            .await
-            .map_err(|e| StagingError::Claim(Box::new(e)))?;
+        let command = OwnedCustody::prepare(
+            &client,
+            &target,
+            CustodyAction::ClaimStaging(request),
+            identity,
+        )
+        .await?;
         Ok(Self {
             inner: Box::new(StagingRequest {
                 client,
@@ -288,10 +299,13 @@ impl ReadyStaging {
             .encode(&mut BoundedEncoder::new(COMMAND_BYTES).map_err(|_| StagingError::Context)?)
             .map_err(|_| StagingError::Context)?;
         let source = request.check.clone();
-        let command = client
-            .prepare_command::<ClaimPreparation>(&target, identity, request)
-            .await
-            .map_err(|e| StagingError::BoundClaim(Box::new(e)))?;
+        let command = OwnedCustody::prepare(
+            &client,
+            &target,
+            CustodyAction::ClaimPreparation(request),
+            identity,
+        )
+        .await?;
         Ok(Self {
             inner: Box::new(StagingRequest {
                 client,
@@ -310,10 +324,16 @@ struct ActorAdmission {
 #[derive(Default)]
 struct Admission {
     closed: bool,
+    retirement_probe: bool,
+    retirement_probes: u64,
+    retirement_failures: u64,
+    retirement_recoveries: u64,
+    retirement_restarts: u64,
     jobs: HashMap<[u8; 16], Arc<Job>>,
     actors: HashMap<String, ActorAdmission>,
 }
 struct Inner {
+    authority: PreparationAuthority,
     target: CellTarget,
     limits: StagingLimits,
     admission: Mutex<Admission>,
@@ -329,6 +349,7 @@ struct Local {
     bound_started: Option<Instant>,
     bound_result: Option<Arc<StagingBound>>,
     bound_renewal: Option<Committed<PreparationReply>>,
+    restored_outcome: Option<Arc<Committed<CustodyReply>>>,
     policy_receipt: Option<Receipt>,
     finishing: bool,
     deadline: Instant,
@@ -350,10 +371,12 @@ struct WorkSlots {
     slots: HashMap<u64, Arc<dyn RetainedWork>>,
 }
 struct Job {
+    authority: PreparationAuthority,
     client: CellClient,
     target: CellTarget,
     actor: String,
     operation: [u8; 16],
+    restored_evidence: Option<cellule_runtime::PendingMutation>,
     actor_workers: Arc<Semaphore>,
     local: Mutex<Local>,
     work: Mutex<WorkSlots>,
@@ -365,16 +388,18 @@ struct Job {
 }
 #[derive(Clone)]
 enum Exact {
-    Begin(PreparedCommand<BeginStaging>, [u8; 16]),
-    Claim(PreparedCommand<ClaimStaging>),
+    Restored(OwnedCustody),
+    Begin(OwnedCustody),
+    Claim(OwnedCustody),
     Checkpoint(PreparedCommand<RegisterStagedInputs>),
     BoundCheckpoint(PreparedCommand<RegisterStagedInputs>),
-    Renew(PreparedCommand<RenewStaging>),
-    Bind(PreparedCommand<BindStaging>),
-    BoundClaim(PreparedCommand<ClaimPreparation>),
-    BoundRenew(PreparedCommand<RenewPreparation>),
+    Renew(OwnedCustody),
+    Bind(OwnedCustody),
+    BoundClaim(OwnedCustody),
+    BoundRenew(OwnedCustody),
 }
 enum Outcome {
+    Restored(Box<Committed<CustodyReply>>),
     Stage(Committed<StagingReply>),
     Bound(Committed<PreparationReply>),
     BoundClaim(Committed<PreparationReply>),
@@ -382,10 +407,40 @@ enum Outcome {
     Checkpoint(Committed<StagingReply>),
     BoundCheckpoint(Committed<StagingReply>),
 }
+fn custody_guard(job: &Job) -> Result<(), Error> {
+    let local = job
+        .local
+        .lock()
+        .map_err(|_| Error::Command("staging custody poisoned"))?;
+    let now = Instant::now();
+    if local.fenced
+        || now >= local.lifetime
+        || ((local.lease.is_some() || local.bound.is_some()) && now >= local.deadline)
+    {
+        return Err(Error::Command("staging custody inactive"));
+    }
+    Ok(())
+}
+
 impl Exact {
+    fn custody_original(&self) -> Option<&OwnedCustody> {
+        match self {
+            Self::Restored(c)
+            | Self::Begin(c)
+            | Self::Claim(c)
+            | Self::Renew(c)
+            | Self::Bind(c)
+            | Self::BoundClaim(c)
+            | Self::BoundRenew(c) => Some(c),
+            Self::Checkpoint(_) | Self::BoundCheckpoint(_) => None,
+        }
+    }
     fn pending(&self) -> StagingError {
         match self {
-            Self::Begin(c, _) => StagingError::Begin(Box::new(InvocationError::Pending(Box::new(
+            Self::Restored(c) => StagingError::Restoration(Box::new(InvocationError::Pending(
+                Box::new(c.evidence().clone()),
+            ))),
+            Self::Begin(c) => StagingError::Begin(Box::new(InvocationError::Pending(Box::new(
                 c.evidence().clone(),
             )))),
             Self::Claim(c) => StagingError::Claim(Box::new(InvocationError::Pending(Box::new(
@@ -408,41 +463,93 @@ impl Exact {
             )))),
         }
     }
+    async fn custody<T>(
+        command: OwnedCustody,
+        client: &CellClient,
+        recover: bool,
+        fault: u8,
+        job: &Job,
+        project: fn(CustodyReply) -> Option<T>,
+        role: fn(Box<InvocationError<T>>) -> StagingError,
+    ) -> Result<Committed<T>, StagingError> {
+        let result = command
+            .invoke(client, recover, fault, || custody_guard(job))
+            .await
+            .map_err(|source| StagingError::Custody {
+                evidence: Box::new(command.evidence().clone()),
+                source: Box::new(source),
+            })?;
+        super::custody::project(result, project).map_err(|error| role(Box::new(error)))
+    }
     async fn execute(
         self,
         client: CellClient,
+        job: Arc<Job>,
         recover: bool,
         fault: u8,
     ) -> Result<Outcome, StagingError> {
+        fn stage(reply: CustodyReply) -> Option<StagingReply> {
+            match reply {
+                CustodyReply::Staging(reply) => Some(reply),
+                _ => None,
+            }
+        }
+        fn preparation(reply: CustodyReply) -> Option<PreparationReply> {
+            match reply {
+                CustodyReply::Preparation(reply) => Some(reply),
+                _ => None,
+            }
+        }
         match self {
-            Self::Begin(c, operation) => {
-                if recover {
-                    let known = async {
-                        match StagingAdmission::load(&client, c.evidence().target(), operation)
-                            .await?
-                        {
-                            Some(saved) => saved.original(c.evidence()),
-                            None => Ok(None),
-                        }
-                    }
-                    .await
-                    .map_err(|source| StagingError::ReceiptRecovery {
-                        evidence: Box::new(c.evidence().clone()),
-                        source: Box::new(source),
-                    })?;
-                    if let Some(value) = known {
-                        return Ok(Outcome::Stage(value));
-                    }
-                }
-                super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
+            Self::Restored(c) => restore::dispatch(c, &client, &job, recover, fault).await,
+            Self::Begin(c) => {
+                Self::custody(c, &client, recover, fault, &job, stage, StagingError::Begin)
                     .await
                     .map(Outcome::Stage)
-                    .map_err(|e| StagingError::Begin(Box::new(e)))
             }
-            Self::Claim(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::Stage)
-                .map_err(|e| StagingError::Claim(Box::new(e))),
+            Self::Claim(c) => {
+                Self::custody(c, &client, recover, fault, &job, stage, StagingError::Claim)
+                    .await
+                    .map(Outcome::Stage)
+            }
+            Self::Renew(c) => {
+                Self::custody(c, &client, recover, fault, &job, stage, StagingError::Renew)
+                    .await
+                    .map(Outcome::Stage)
+            }
+            Self::Bind(c) => Self::custody(
+                c,
+                &client,
+                recover,
+                fault,
+                &job,
+                preparation,
+                StagingError::Bind,
+            )
+            .await
+            .map(Outcome::Bound),
+            Self::BoundClaim(c) => Self::custody(
+                c,
+                &client,
+                recover,
+                fault,
+                &job,
+                preparation,
+                StagingError::BoundClaim,
+            )
+            .await
+            .map(Outcome::BoundClaim),
+            Self::BoundRenew(c) => Self::custody(
+                c,
+                &client,
+                recover,
+                fault,
+                &job,
+                preparation,
+                StagingError::BoundRenew,
+            )
+            .await
+            .map(Outcome::BoundRenew),
             Self::Checkpoint(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
                 .await
                 .map(Outcome::Checkpoint)
@@ -453,22 +560,6 @@ impl Exact {
                     .map(Outcome::BoundCheckpoint)
                     .map_err(|e| StagingError::Checkpoint(Box::new(e)))
             }
-            Self::Renew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::Stage)
-                .map_err(|e| StagingError::Renew(Box::new(e))),
-            Self::BoundClaim(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::BoundClaim)
-                .map_err(|e| StagingError::BoundClaim(Box::new(e))),
-            Self::BoundRenew(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::BoundRenew)
-                .map_err(|e| StagingError::BoundRenew(Box::new(e))),
-            Self::Bind(c) => super::exact::invoke(&client, c, recover, COMMAND_BYTES, fault)
-                .await
-                .map(Outcome::Bound)
-                .map_err(|e| StagingError::Bind(Box::new(e))),
         }
     }
 }
@@ -493,12 +584,26 @@ pub struct StagingStats {
     pub uncertain: usize,
     pub command_bytes: u64,
     pub closed: bool,
+    /// Read-only exact-original probes, outside the command wire reservation.
+    pub retirement_probes: u64,
+    pub retirement_failures: u64,
+    pub retirement_recoveries: u64,
+    pub retirement_restarts: u64,
+    pub retirement_running: bool,
 }
 impl StagingCoordinator {
-    pub fn new(target: CellTarget, limits: StagingLimits) -> Result<Self, StagingError> {
+    pub fn new(
+        target: CellTarget,
+        limits: StagingLimits,
+        authority: PreparationAuthority,
+    ) -> Result<Self, StagingError> {
         limits.validate()?;
+        if !authority.matches(&target) {
+            return Err(StagingError::Context);
+        }
         Ok(Self {
             inner: Arc::new(Inner {
+                authority,
                 target,
                 limits,
                 admission: Mutex::new(Admission::default()),
@@ -519,7 +624,9 @@ impl StagingCoordinator {
             Some(StagingError::Foreign)
         } else if admission.closed {
             Some(StagingError::Closed)
-        } else if ready.inner.request.lease_ms != self.inner.limits.lease_ms {
+        } else if !matches!(ready.inner.command, Exact::Restored(_))
+            && ready.inner.request.lease_ms != self.inner.limits.lease_ms
+        {
             Some(StagingError::Context)
         } else if admission.jobs.contains_key(&ready.inner.request.operation) {
             Some(StagingError::Duplicate)
@@ -548,19 +655,28 @@ impl StagingCoordinator {
         actor.operations += 1;
         let actor_workers = Arc::clone(&actor.workers);
         let now = Instant::now();
+        let restored_evidence = match &ready.inner.command {
+            Exact::Restored(command) => Some(command.evidence().clone()),
+            _ => None,
+        };
         let job = Arc::new(Job {
+            authority: self.inner.authority.clone(),
             client: ready.inner.client,
             target: ready.inner.target,
             actor: ready.inner.request.actor,
             operation: ready.inner.request.operation,
+            restored_evidence,
             actor_workers,
             local: Mutex::new(Local {
                 lease: None,
                 bound: None,
                 bound_source: ready.inner.bound_source.clone(),
-                bound_started: ready.inner.bound_source.as_ref().map(|_| now),
+                bound_started: (ready.inner.bound_source.is_some()
+                    || matches!(ready.inner.command, Exact::Restored(_)))
+                .then_some(now),
                 bound_result: None,
                 bound_renewal: None,
+                restored_outcome: None,
                 policy_receipt: None,
                 finishing: false,
                 deadline: now,
@@ -625,12 +741,17 @@ impl StagingCoordinator {
                 .jobs
                 .values()
                 .map(|job| {
-                    let copies =
-                        2 + u64::from(job.checkpoint.lock().expect("staging checkpoint").is_some());
-                    copies * COMMAND_BYTES as u64
+                    super::custody::RESERVATION
+                        + u64::from(job.checkpoint.lock().expect("staging checkpoint").is_some())
+                            * u64::from(COMMAND_BYTES)
                 })
                 .sum(),
             closed: a.closed,
+            retirement_probes: a.retirement_probes,
+            retirement_failures: a.retirement_failures,
+            retirement_recoveries: a.retirement_recoveries,
+            retirement_restarts: a.retirement_restarts,
+            retirement_running: a.retirement_probe,
         }
     }
     /// Stop admission and renew while accepted workers drain. Uncertain exact
@@ -722,6 +843,29 @@ impl StagedInputsTicket {
     }
 }
 impl StagingTicket {
+    #[cfg(test)]
+    pub(super) fn custody_evidence_for_test(
+        &self,
+    ) -> Option<(
+        cellule_runtime::PendingMutation,
+        Option<cellule_runtime::PendingMutation>,
+    )> {
+        let exact = self.job.exact.lock().expect("staging exact");
+        let command = match exact.as_ref()? {
+            Exact::Restored(command)
+            | Exact::Begin(command)
+            | Exact::Claim(command)
+            | Exact::Renew(command)
+            | Exact::Bind(command)
+            | Exact::BoundClaim(command)
+            | Exact::BoundRenew(command) => command,
+            Exact::Checkpoint(_) | Exact::BoundCheckpoint(_) => return None,
+        };
+        Some((
+            command.evidence().clone(),
+            command.registration_evidence().cloned(),
+        ))
+    }
     /// Synchronously transfer one bounded checkpoint request into service
     /// custody. A dropped observer cannot cancel or replace its exact identity.
     pub fn register_inputs(
@@ -893,6 +1037,20 @@ impl StagingTicket {
             .bound_result
             .clone()
     }
+    /// Original registered identity retained even when fresh custody fails.
+    /// This is historical evidence, never upload or preparation permission.
+    pub fn restored_evidence(&self) -> Option<&cellule_runtime::PendingMutation> {
+        self.job.restored_evidence.as_ref()
+    }
+    /// Original positive or negative outcome, retained before fresh probes.
+    pub fn restored_outcome(&self) -> Option<Arc<Committed<CustodyReply>>> {
+        self.job
+            .local
+            .lock()
+            .expect("staging local")
+            .restored_outcome
+            .clone()
+    }
     pub fn bound_renewal(&self) -> Option<Committed<PreparationReply>> {
         self.job
             .local
@@ -916,12 +1074,12 @@ impl StagingTicket {
     /// slots, cancellation/drain and typed result ownership as staging inputs.
     pub fn spawn_bound<F, Fut, T>(&self, producer: F) -> Result<StagingTask<T>, StagingError>
     where
-        F: FnOnce(Arc<PreparationSession>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<PreparationSession>, StagingContext) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, StagingError>> + Send + 'static,
         T: Send + 'static,
     {
         let session = self.bound_session()?;
-        self.spawn_in_phase(true, move |_| producer(session))
+        self.spawn_in_phase(true, move |context| producer(session, context))
     }
     fn spawn_in_phase<F, Fut, T>(
         &self,
@@ -939,7 +1097,7 @@ impl StagingTicket {
         let actor_permit = Arc::clone(&self.job.actor_workers)
             .try_acquire_owned()
             .map_err(|_| StagingError::Capacity)?;
-        let context = {
+        let (token, format) = {
             let mut l = self.job.local.lock().expect("staging local");
             if (l.seal && !bound)
                 || l.finishing
@@ -966,18 +1124,20 @@ impl StagingTicket {
                 (lease.token, lease.format)
             };
             l.workers += 1;
-            StagingContext {
-                job: Arc::clone(&self.job),
-                token,
-                format,
-                bound,
-            }
+            (token, format)
         };
-        let guard = Activity {
+        let guard = Arc::new(Activity {
             inner: Arc::clone(&self.inner),
             job: Arc::clone(&self.job),
             permit: Some(permit),
             actor_permit: Some(actor_permit),
+        });
+        let context = StagingContext {
+            job: Arc::clone(&self.job),
+            token,
+            format,
+            bound,
+            activity: Arc::clone(&guard),
         };
         let mut work = self.job.work.lock().expect("staging work");
         let id = work.next.checked_add(1).ok_or(StagingError::Capacity)?;
@@ -1050,6 +1210,77 @@ impl StagingTicket {
         })
     }
     #[cfg(test)]
+    pub(super) async fn renew_with_identity_for_test(
+        &self,
+        identity: MutationIdentity,
+    ) -> Result<(), StagingError> {
+        let (token, bound) = {
+            let local = self.job.local.lock().expect("staging local");
+            if local.fenced {
+                return Err(StagingError::Inactive);
+            }
+            match &local.bound {
+                Some(session) => (session.live_lease()?.0.token, true),
+                None => (local.lease.ok_or(StagingError::NotReady)?.token, false),
+            }
+        };
+        let lease = LeaseRequest {
+            check: LeaseCheck {
+                token,
+                actor: self.job.actor.clone(),
+            },
+            lease_ms: self.inner.limits.lease_ms,
+        };
+        let action = if bound {
+            CustodyAction::RenewPreparation(lease)
+        } else {
+            CustodyAction::RenewStaging(lease)
+        };
+        let command =
+            OwnedCustody::prepare(&self.job.client, &self.job.target, action, identity).await?;
+        let mut exact = self.job.exact.lock().expect("staging exact");
+        assert!(exact.is_none(), "test renewal replaced an original");
+        *exact = Some(if bound {
+            Exact::BoundRenew(command)
+        } else {
+            Exact::Renew(command)
+        });
+        drop(exact);
+        self.job.changed.notify_one();
+        Ok(())
+    }
+    /// Inject a short custody ceiling only after a test reaches its intended
+    /// recovery phase. The real clock and normal fence/drain path still run.
+    #[cfg(test)]
+    pub(super) fn limit_bound_ceiling_for_test(
+        &self,
+        remaining: Duration,
+    ) -> Result<Instant, StagingError> {
+        let mut local = self.job.local.lock().expect("staging local");
+        if local.workers != 0 || local.finishing || remaining.is_zero() {
+            return Err(StagingError::Context);
+        }
+        let mut session = (**local.bound.as_ref().ok_or(StagingError::NotReady)?).clone();
+        session.live_lease()?;
+        let ceiling = (Instant::now() + remaining).min(local.lifetime);
+        session.ceiling = Some(ceiling);
+        local.bound = Some(Arc::new(session));
+        local.lifetime = ceiling;
+        self.job.changed.notify_one();
+        Ok(ceiling)
+    }
+    #[cfg(test)]
+    pub(super) fn expire_bound_for_test(&self) -> Result<Instant, StagingError> {
+        let mut local = self.job.local.lock().expect("staging local");
+        let session = local.bound.as_ref().ok_or(StagingError::NotReady)?;
+        let deadline = (Instant::now() + Duration::from_millis(100)).min(session.live_lease()?.1);
+        *session.deadline.lock().expect("bound deadline") = deadline;
+        local.deadline = deadline;
+        local.lifetime = local.lifetime.min(deadline);
+        self.job.changed.notify_one();
+        Ok(deadline)
+    }
+    #[cfg(test)]
     pub(super) fn renew_for_test(&self) {
         self.job.local.lock().expect("staging local").renew = true;
         self.job.changed.notify_one();
@@ -1076,8 +1307,16 @@ pub struct StagingContext {
     token: PreparationToken,
     format: ObjectFormat,
     bound: bool,
+    // Clones share the original worker admission. Detached blocking jobs,
+    // native descendants and provider readers must retain it until they drain.
+    activity: Arc<Activity>,
 }
 impl StagingContext {
+    /// Lifetime ownership only; it grants no custody or publication authority.
+    /// Keep this in every physical worker that can outlive its async observer.
+    pub(crate) fn physical_owner(&self) -> crate::git_objects::ReadOwner {
+        self.activity.clone()
+    }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, LeaseCheck) {
         (
             &self.job.client,
@@ -1099,6 +1338,9 @@ impl StagingContext {
         let l = self.job.local.lock().expect("staging local");
         if l.fenced
             || l.bound.is_some() != self.bound
+            || l.bound
+                .as_ref()
+                .is_some_and(|session| session.live_lease().is_err())
             || l.deadline <= Instant::now()
             || l.lifetime <= Instant::now()
         {
@@ -1110,24 +1352,40 @@ impl StagingContext {
     async fn fenced(&self) {
         let mut status = self.job.status.subscribe();
         loop {
-            let deadline = {
+            let (deadline, session) = {
                 let l = self.job.local.lock().expect("staging local");
                 if l.fenced || l.bound.is_some() != self.bound {
                     return;
                 }
-                l.deadline.min(l.lifetime)
+                let mut deadline = l.deadline.min(l.lifetime);
+                if let Some(session) = &l.bound {
+                    let Ok((_, usable_until)) = session.live_lease() else {
+                        return;
+                    };
+                    deadline = deadline.min(usable_until);
+                }
+                (deadline, l.bound.clone())
             };
             if Instant::now() >= deadline {
                 return;
             }
-            tokio::select! { _ = sleep_until(deadline) => {}, result = status.changed() => { if result.is_err() { return; } } }
+            tokio::select! {
+                _ = sleep_until(deadline) => {},
+                _ = async {
+                    match session {
+                        Some(session) => session.wait_fenced().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => return,
+                result = status.changed() => { if result.is_err() { return; } }
+            }
         }
     }
 }
 struct WorkSlot<T> {
     result: Mutex<Option<Result<T, Arc<StagingError>>>>,
     ready: watch::Sender<bool>,
-    guard: Mutex<Option<Activity>>,
+    guard: Mutex<Option<Arc<Activity>>>,
 }
 impl<T: Send + 'static> RetainedWork for WorkSlot<T> {
     fn erased(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
@@ -1187,6 +1445,7 @@ async fn probe(job: &Job, minimum: Receipt) -> Result<(StagingLease, Instant), S
         Some(l) => l.token,
         None => return Err(StagingError::Context),
     };
+    job.authority.check(&job.target, token.owner).await?;
     let lease = job
         .client
         .query::<CheckStaging>(
@@ -1211,6 +1470,10 @@ async fn probe(job: &Job, minimum: Receipt) -> Result<(StagingLease, Instant), S
         + Duration::from_millis((lease.expires_at_ms - lease.observed_at_ms) as u64)
             .min(Duration::from_millis(MAX_LEASE_MS));
     if deadline <= Instant::now() {
+        return Err(StagingError::Inactive);
+    }
+    job.authority.check(&job.target, token.owner).await?;
+    if Instant::now() >= deadline {
         return Err(StagingError::Inactive);
     }
     Ok((lease, deadline))
@@ -1251,6 +1514,9 @@ async fn supervise(inner: Arc<Inner>, job: Arc<Job>) {
         job.status
             .send_replace(StagingState::Uncertain(Arc::new(exact.pending())));
         inner.drained.notify_waiters();
+        if exact.custody_original().is_some() {
+            retirement::start(Arc::clone(&inner));
+        }
         await_recovery(&job).await;
         recover = true;
     }
@@ -1301,15 +1567,27 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             let fault = inner.fault.swap(0, std::sync::atomic::Ordering::AcqRel);
             #[cfg(not(test))]
             let fault = 0;
+            let custody = command.custody_original().is_some();
             let pending = command.pending();
-            let result = tokio::spawn(command.execute(job.client.clone(), recover, fault))
-                .await
-                .unwrap_or(Err(pending));
+            let result =
+                tokio::spawn(command.execute(job.client.clone(), Arc::clone(&job), recover, fault))
+                    .await
+                    .unwrap_or(Err(pending));
             match result {
+                Ok(Outcome::Restored(value)) => {
+                    job.exact.lock().expect("staging exact").take();
+                    if !restore::accept(&inner, &job, *value).await {
+                        return;
+                    }
+                    recover = false;
+                }
                 Err(error) if error.uncertain() => {
                     job.status
                         .send_replace(StagingState::Uncertain(Arc::new(error)));
                     inner.drained.notify_waiters();
+                    if custody {
+                        retirement::start(Arc::clone(&inner));
+                    }
                     await_recovery(&job).await;
                     recover = true;
                     continue;
@@ -1410,6 +1688,7 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         | Outcome::BoundCheckpoint(_) => {
                             unreachable!()
                         }
+                        Outcome::Restored(_) => unreachable!("restored outcome handled above"),
                     };
                     let StagingReply::Granted(lease) = value.output else {
                         job.exact.lock().expect("staging exact").take();
@@ -1680,12 +1959,15 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 job.status.send_replace(StagingState::Binding);
                 let identity = crate::server::mutation_identity().map_err(|_| StagingError::Clock);
                 let result = match identity {
-                    Ok(id) => job
-                        .client
-                        .prepare_command::<BindStaging>(&job.target, id, check)
-                        .await
-                        .map(Exact::Bind)
-                        .map_err(|e| StagingError::Bind(Box::new(e))),
+                    Ok(id) => OwnedCustody::prepare(
+                        &job.client,
+                        &job.target,
+                        CustodyAction::BindStaging(check),
+                        id,
+                    )
+                    .await
+                    .map(Exact::Bind)
+                    .map_err(StagingError::from),
                     Err(e) => Err(e),
                 };
                 match result {
@@ -1701,19 +1983,18 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Next::BoundRenew(check) => {
                 let identity = crate::server::mutation_identity().map_err(|_| StagingError::Clock);
                 let result = match identity {
-                    Ok(id) => job
-                        .client
-                        .prepare_command::<RenewPreparation>(
-                            &job.target,
-                            id,
-                            LeaseRequest {
-                                check,
-                                lease_ms: inner.limits.lease_ms,
-                            },
-                        )
-                        .await
-                        .map(Exact::BoundRenew)
-                        .map_err(|e| StagingError::BoundRenew(Box::new(e))),
+                    Ok(id) => OwnedCustody::prepare(
+                        &job.client,
+                        &job.target,
+                        CustodyAction::RenewPreparation(LeaseRequest {
+                            check,
+                            lease_ms: inner.limits.lease_ms,
+                        }),
+                        id,
+                    )
+                    .await
+                    .map(Exact::BoundRenew)
+                    .map_err(StagingError::from),
                     Err(e) => Err(e),
                 };
                 match result {
@@ -1729,19 +2010,18 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
             Next::Renew(check) => {
                 let identity = crate::server::mutation_identity().map_err(|_| StagingError::Clock);
                 let result = match identity {
-                    Ok(id) => job
-                        .client
-                        .prepare_command::<RenewStaging>(
-                            &job.target,
-                            id,
-                            LeaseRequest {
-                                check,
-                                lease_ms: inner.limits.lease_ms,
-                            },
-                        )
-                        .await
-                        .map(Exact::Renew)
-                        .map_err(|e| StagingError::Renew(Box::new(e))),
+                    Ok(id) => OwnedCustody::prepare(
+                        &job.client,
+                        &job.target,
+                        CustodyAction::RenewStaging(LeaseRequest {
+                            check,
+                            lease_ms: inner.limits.lease_ms,
+                        }),
+                        id,
+                    )
+                    .await
+                    .map(Exact::Renew)
+                    .map_err(StagingError::from),
                     Err(e) => Err(e),
                 };
                 match result {

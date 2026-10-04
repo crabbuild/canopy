@@ -77,7 +77,8 @@ pub(super) fn attempt<'a>(
             *uuid::Uuid::new_v4().as_bytes(),
         )
         .await?;
-        let staging = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let staging =
+            StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let ticket = staging
             .submit(
                 ReadyStaging::new(

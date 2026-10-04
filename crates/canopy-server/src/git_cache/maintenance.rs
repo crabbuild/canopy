@@ -1,9 +1,13 @@
 //! Immutable cache generations: never repack/delete files beneath an active reader.
 use super::*;
+#[cfg(test)]
 use crate::git_http::{GitHttpError, GitProcess, WORKER_DEADLINE, read_bounded};
+#[cfg(test)]
 use std::process::Stdio;
+#[cfg(test)]
 use tokio::io::AsyncWriteExt;
 
+#[cfg(test)]
 fn worker_error(error: GitHttpError) -> CacheError {
     io::Error::other(error).into()
 }
@@ -247,6 +251,7 @@ impl GitCache {
     }
     /// Reuse only packs whose *every* object was verified and durably recorded
     /// during this ingestion. Extra/unverified objects disable this optimization.
+    #[cfg(test)]
     pub(crate) async fn retain_verified_packs(
         self: &Arc<Self>,
         source: Arc<Self>,
@@ -318,6 +323,7 @@ impl GitCache {
 
     /// Enumerate a captured cache into a new self-contained pack. Old objects
     /// and packs are untouched; dropping the last old reader reclaims them.
+    #[cfg(test)]
     pub(crate) async fn repacked(
         self: &Arc<Self>,
         root: PathBuf,
@@ -346,7 +352,6 @@ impl GitCache {
         next.reservation()?
             .try_grow(reserve)
             .map_err(io::Error::other)?;
-        let coverage = self.prepared.lock().await.clone();
         let durable = self
             .durable_packs
             .read()
@@ -497,7 +502,6 @@ impl GitCache {
         result.map_err(worker_error)?;
         next.pack_files
             .store(1, std::sync::atomic::Ordering::Relaxed);
-        *next.prepared.lock().await = coverage;
         *next
             .durable_packs
             .write()
@@ -506,6 +510,7 @@ impl GitCache {
     }
 }
 
+#[cfg(test)]
 async fn finish<T: Send + 'static>(
     process: &mut GitProcess<T>,
     stderr: Vec<u8>,

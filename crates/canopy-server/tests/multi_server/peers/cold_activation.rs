@@ -236,7 +236,10 @@ async fn qualify_competing_cold_gateways(delay_claim_reply: bool) -> Result {
         .load(target.cell_id())
         .await?
         .ok_or("missing control")?;
-    let local_path = format!("runtime-v1/{}/repository.sqlite", repository_id.simple());
+    let local_path = format!(
+        "canopy-pack-v1/{}/repository.sqlite",
+        repository_id.simple()
+    );
     let local_owners = ["first", "second"]
         .into_iter()
         .filter(|name| files.path().join(name).join(&local_path).exists())
