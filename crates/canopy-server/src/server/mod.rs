@@ -438,12 +438,13 @@ impl RunningServer {
             listeners.http = Some(reservation);
             socket
         });
+        let store = Store::new(Arc::clone(&raw_store));
+        crate::deployment::validate_service_root(&store, &config.store_prefix).await?;
         let data_dir = config.data_dir.clone();
         let local = Arc::new(
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??,
         );
         listeners.workspace = Some(Arc::clone(&local));
-        let store = Store::new(Arc::clone(&raw_store));
         storage::probe(&store, &config.store_prefix.clone().join("canopy-probe")).await?;
         let application = Arc::new(CanopyApplication::compile(build_descriptor(
             include_bytes!("../../../../Cargo.lock"),

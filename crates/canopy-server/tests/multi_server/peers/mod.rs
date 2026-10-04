@@ -173,7 +173,7 @@ async fn two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_direct
         let node = if name == "left" { "first" } else { "second" };
         let other = if node == "first" { "second" } else { "first" };
         let path = format!(
-            "runtime-v1/{}/repository.sqlite",
+            "canopy-pack-v1/{}/repository.sqlite",
             hex::encode(id.as_bytes())
         );
         assert!(files.path().join(node).join(&path).exists());

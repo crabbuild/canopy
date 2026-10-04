@@ -3,6 +3,46 @@ use super::*;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
+fn legacy_runtime_prevents_cutover_and_preserves_every_file() -> Result {
+    let directory = tempfile::TempDir::new()?;
+    let legacy = directory.path().join("runtime-v1");
+    fs::create_dir(&legacy)?;
+    fs::write(legacy.join(MARKER), b"canopy-runtime-v1\n")?;
+    fs::write(legacy.join("important"), b"retain old state")?;
+    assert!(
+        Workspace::open(directory.path())
+            .is_err_and(|error| error.kind() == io::ErrorKind::InvalidData)
+    );
+    assert_eq!(fs::read(legacy.join("important"))?, b"retain old state");
+    assert!(!directory.path().join("canopy-pack-v1").exists());
+    Ok(())
+}
+
+#[test]
+fn packed_workspace_checks_format_before_reclaiming_any_file() -> Result {
+    for marker in [
+        None,
+        Some(b"canopy-runtime-v1\n".as_slice()),
+        Some(b"unknown-format"),
+    ] {
+        let directory = tempfile::TempDir::new()?;
+        let root = directory.path().join("canopy-pack-v1");
+        fs::create_dir(&root)?;
+        fs::write(root.join("important"), b"retain unrecognized state")?;
+        if let Some(marker) = marker {
+            fs::write(root.join(MARKER), marker)?;
+        }
+        assert!(Workspace::open(directory.path()).is_err());
+        assert_eq!(
+            fs::read(root.join("important"))?,
+            b"retain unrecognized state"
+        );
+        assert!(!directory.path().join("runtime-v1").exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn releasing_ownership_unlocks_descriptors_retained_by_an_unrelated_child() -> Result {
     let directory = tempfile::TempDir::new()?;
     let workspace = Workspace::open(directory.path())?;
@@ -58,7 +98,7 @@ fn live_owner_blocks_cleanup_and_restart_reclaims_only_managed_state() -> Result
 #[test]
 fn unrecognized_runtime_is_never_reclaimed() -> Result {
     let directory = tempfile::TempDir::new()?;
-    let root = directory.path().join("runtime-v1");
+    let root = directory.path().join(crate::deployment::STORAGE_FORMAT);
     fs::create_dir(&root)?;
     fs::write(root.join("important"), b"retain")?;
     assert!(Workspace::open(directory.path()).is_err());
@@ -78,9 +118,12 @@ fn runtime_symlink_is_rejected_and_nested_symlinks_do_not_delete_targets() -> Re
     let directory = tempfile::TempDir::new()?;
     let outside = tempfile::TempDir::new()?;
     fs::write(outside.path().join("important"), b"retain")?;
-    symlink(outside.path(), directory.path().join("runtime-v1"))?;
+    symlink(
+        outside.path(),
+        directory.path().join(crate::deployment::STORAGE_FORMAT),
+    )?;
     assert!(Workspace::open(directory.path()).is_err());
-    fs::remove_file(directory.path().join("runtime-v1"))?;
+    fs::remove_file(directory.path().join(crate::deployment::STORAGE_FORMAT))?;
     let workspace = Workspace::open(directory.path())?;
     symlink(outside.path(), workspace.path().join("nested"))?;
     drop(workspace);

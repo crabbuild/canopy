@@ -184,6 +184,10 @@ impl CellModule for RepositoryModule {
             source_digest: {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
+                source.update(include_bytes!("deployment/mod.rs"));
+                source.update(include_bytes!("deployment/root.rs"));
+                source.update(include_bytes!("server/mod.rs"));
+                source.update(include_bytes!("server/workspace/mod.rs"));
                 source.update(include_bytes!("../../canopy-git-format/src/lib.rs"));
                 source.update(include_bytes!(
                     "../../canopy-git-format/src/pack_index/mod.rs"

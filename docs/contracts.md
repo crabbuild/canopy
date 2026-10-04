@@ -1134,7 +1134,7 @@ complete OOM/CPU/process/crash fault matrix require separate qualification.
 
 `data_dir/.canopy-owner.lock` prevents concurrent nodes from using one local
 directory. The server and repository manager retain the lock throughout their
-lifetime, including detached request work. `data_dir/runtime-v1/` is private to
+lifetime, including detached request work. `data_dir/canopy-pack-v1/` is private to
 the node (created with mode 0700 on Unix) and identified by a version marker.
 Startup validates that marker and reclaims local SQLite files, Git caches and
 spools before opening Cells or advertising the node. These are disposable copies;
@@ -2647,8 +2647,14 @@ with the release still Ready provide a quiet capture window. A successful source
 pin UUID identifies one immutable cut; repeating create reuses it.
 
 `<prefix>/canopy-root-v1.json` is a bounded, conditional-write reservation with
-Service, Backup or Restore purpose. Backup/Restore bind the source prefix and
-pin UUID. Service initialization competes on this same key. Every reservation,
+the exact `{"format":"canopy-pack-v1","purpose":...}` envelope containing
+the existing Service, Backup or Restore purpose. Missing/unknown formats and
+unversioned purpose records are rejected, and the previous top-level-purpose
+decoder rejects the new envelope. Backup/Restore bind the source prefix and
+pin UUID. Startup checks format and serving eligibility before local workspace
+reclamation, storage probes, identity/release writes and Cell activation.
+Legacy `runtime-v1` directories and missing/unknown current workspace markers
+are retained and rejected; operators select a fresh data directory. Service initialization competes on this same key. Every reservation,
 including Service, rejects an existing application identity without a root marker.
 Current initialization writes the marker first; admission rechecks it after
 reading an identity to allow a concurrent current-format creator. Copies also

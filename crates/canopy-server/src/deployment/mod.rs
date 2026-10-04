@@ -19,6 +19,14 @@ mod recovery;
 mod root;
 pub use recovery::WorkerConfig;
 
+/// Incompatible repository deployment and local cache format.
+pub const STORAGE_FORMAT: &str = "canopy-pack-v1";
+
+/// Read-only admission before local reclamation, probes or Cell activation.
+pub(crate) async fn validate_service_root(store: &Store, prefix: &Path) -> Result<()> {
+    root::validate_service(store, prefix).await
+}
+
 /// Application-wide admission shared by nodes and offline administration.
 #[derive(Clone)]
 pub struct Deployment {
