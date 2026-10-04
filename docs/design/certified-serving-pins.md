@@ -93,6 +93,14 @@ does not expose its target/owner; SQL repository identity scopes the query,
 and the service verifies the configured target and fresh actual owner before
 artifact I/O. A pin query result alone grants no serving authority.
 
+`SelectServingGeneration` (query 48, codec 1) observes the current joint
+catalog/ref head under current Read access. Input is bounded at 1 KiB and output
+at 512 bytes; repository identity scopes the query and its head lookup uses the
+singleton/catalog primary keys. It returns no root before joint initialization.
+Selection allocates no pin or creating namespace. Its `GenerationFact` is only
+an observation: callers must acquire/check an exact serving pin and verify the
+actual owner before artifact I/O. A head advance never changes an existing pin.
+
 Every exact pin also has one process-wide physical owner. A private Arc guard
 is reserved before tracked construction and retained by the pin, detached
 workers and release proofs. Duplicate construction is refused even through
@@ -145,6 +153,24 @@ Absent/lost-reply/panic recovery resolves its exact evidence and retains credits
 through uncertainty. Known outcomes clear the retained command before credit
 return; a known successful release permanently closes the pin. A caller cannot
 reopen it by replaying acquisition or by cloning an old receipt.
+
+An eviction owner can reserve `ServingDrainAdmission` only while the common
+coordinator is idle, after pausing its serving producers and borrows. The
+reservation accepts at most 16 distinct exact tokens from that repository and
+admits only their privately prepared releases. Matching a reader ID alone is
+insufficient: owner, original admission sequence and generation must also match.
+Current receiver authorization and physical-drain proofs remain mandatory.
+Busy reservation leaves all existing admission and commands unchanged.
+
+The guard closes the coordinator only after every selected token has an observed
+successful release and no held, dispatched or uncertain work remains. Denial,
+absence and detached observers cannot satisfy this condition. Global queue
+closure waits for the guard to finish or be dropped so selected releases can
+still be admitted. Guard cancellation resumes ordinary admission but never
+cancels accepted work, returns its credits or reopens an already closed queue.
+The caller must keep serving producers paused through guard completion/drop.
+This scheduling primitive is not wired into production residency yet; production
+shutdown must also keep the node publication budget open until releases finish.
 
 A new owner cannot renew/release old-owner pins merely because its epoch is newer.
 They remain roots until actual physical fencing/drain and an authenticated

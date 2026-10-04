@@ -55,6 +55,47 @@ maintenance, signed completion/cold clone, file attribution and full-history plu
 10,000-developer capacity qualification remain mandatory. This branch remains
 local, unpublished and unreleasable.
 
+## Current-root selection and exact serving drain checkpoint
+
+Production registers bounded current-Read query 48 to observe the joint
+catalog/ref head without allocating retention. The existing exact pin remains
+immutable across head advances. Acquisition/renewal dispatch copies now share
+their original encoded custody intent through an Arc, preserving identity while
+avoiding duplicated command bodies.
+
+`ServingDrainAdmission` excludes new production work while admitting only a
+bounded set of exact serving releases. Busy reservation changes no existing
+admission. Closure requires every selected token's observed successful release
+and a fully idle coordinator. Global close waits for that owner; dropping the
+guard preserves admitted originals, recovery credits and sticky closure. A
+reused reader ID with another admission sequence cannot satisfy the drain.
+These are scheduling primitives; production generation pooling, ownership
+handoff and residency/shutdown ordering remain unimplemented.
+
+Eleven focused families pass in 1.21 seconds. They cover both object formats,
+current Read/public access and revocation, exact repository identity, joint head
+selection with immutable older retention, indexed lookup, bounded framing,
+busy/invalid reservations, exact-token exclusion, held dispatch, all three
+release transport fault modes, lost observers, denied releases, global close,
+guard cancellation and original-command recovery. The earlier fixture compile
+failures are retained as diagnostics and are not passing qualification.
+
+Final frozen-source library qualification executes 651 unique cases: **646 pass
+and five fail**, with exit 101 retained. All 357 publication, seven startup and
+four production resident-recovery cases pass. Two nested subprocess summaries
+are excluded; focused tests are not counted again. Nine additional workspace
+and lifecycle tests pass in 3.44 seconds. Combined coverage is 660 unique cases,
+655 pass and five fail. Every failure remains one of the five unconverted
+legacy `objects` readers; no compatibility table or green-result substitution
+was introduced. Warnings-denied workspace/all-target Clippy passes in 24.07
+seconds, the server build in 31.51 seconds and formatting in 1.08 seconds.
+Static checks verify 463 frozen source/schema/manifest files, including
+450 Rust files, 152 local doc links, exact SDK pins and unchanged protected
+index/archive. Evidence uses `/tmp/canopy-serving-selection-drain-*`. The draft
+diagnostic summary explicitly records the overwritten initial focused log; the
+final frozen-source logs qualify this source. No capacity or complete production
+reader claim follows from these results.
+
 ## Durable serving command checkpoint
 
 Serving acquisition and renewal now use the existing durable custody journal and

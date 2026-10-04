@@ -9,7 +9,9 @@ pub use command_owner::ReadyServingCommand;
 mod ownership;
 pub use ownership::MAX_SERVING_OWNERS;
 mod session;
-pub use commands::{AcquireServingPin, CheckServingPin, ReleaseServingPin, RenewServingPin};
+pub use commands::{
+    AcquireServingPin, CheckServingPin, ReleaseServingPin, RenewServingPin, SelectServingGeneration,
+};
 pub use session::{
     ReadyServingRelease, ServingContext, ServingPin, ServingReadBudget, ServingReadError,
 };
@@ -29,6 +31,12 @@ pub struct AcquireServingRequest {
     pub reader: [u8; 16],
     pub actor: Option<String>,
     pub lease_ms: u64,
+}
+/// Observe a current joint root. This neither retains it nor grants artifact I/O.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServingSelection {
+    pub repository: [u8; 16],
+    pub actor: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServingCheck {

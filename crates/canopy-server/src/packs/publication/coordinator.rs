@@ -33,9 +33,11 @@ pub use roots::{ReadyRootPush, RootPushReadyError};
 mod recovery;
 pub use recovery::{ReadyBoundRecovery, RecoveryBindingFailure};
 mod preparation;
+mod serving_drain;
 pub use preparation::{
     PreparationCommandKind, PreparationCommandOutcome, PreparationReadyError, ReadyPreparation,
 };
+pub use serving_drain::ServingDrainAdmission;
 mod budget;
 pub use budget::{PublicationBudget, PublicationBudgetStats};
 mod work;
@@ -363,6 +365,7 @@ struct Inner {
     state: Mutex<State>,
     drained: Notify,
     changed: Notify,
+    serving_drain: std::sync::Mutex<Option<serving_drain::Gate>>,
     #[cfg(test)]
     gate: Mutex<Option<TestGate>>,
     #[cfg(test)]
@@ -421,6 +424,7 @@ impl PublicationCoordinator {
                 state: Mutex::new(State::default()),
                 drained: Notify::new(),
                 changed: Notify::new(),
+                serving_drain: std::sync::Mutex::new(None),
                 #[cfg(test)]
                 gate: Mutex::new(None),
                 #[cfg(test)]
@@ -482,7 +486,7 @@ impl PublicationCoordinator {
         };
         let reason = if target != &self.inner.target {
             Some(PublicationScheduleError::Foreign)
-        } else if state.closed {
+        } else if state.closed || !self.inner.drain_allows(&ready) {
             Some(PublicationScheduleError::Closed)
         } else if state.jobs.contains_key(&(request.operation, kind)) {
             Some(PublicationScheduleError::Duplicate)
@@ -646,6 +650,20 @@ impl PublicationCoordinator {
             wake.as_mut().enable();
             {
                 let mut state = self.inner.state.lock().await;
+                // An eviction owner must submit its remaining exact releases
+                // before global closure. Do not strand that owner's admission.
+                if !state.closed
+                    && self
+                        .inner
+                        .serving_drain
+                        .lock()
+                        .expect("serving drain admission")
+                        .is_some()
+                {
+                    drop(state);
+                    wake.await;
+                    continue;
+                }
                 state.closed = true;
                 if !state.worker {
                     return state
@@ -665,7 +683,15 @@ impl PublicationCoordinator {
     /// their admission and may resume discovery without replacing commands.
     pub(crate) async fn close_if_idle(&self) -> bool {
         let mut state = self.inner.state.lock().await;
-        if state.worker || !state.jobs.is_empty() {
+        if state.worker
+            || !state.jobs.is_empty()
+            || self
+                .inner
+                .serving_drain
+                .lock()
+                .expect("serving drain admission")
+                .is_some()
+        {
             return false;
         }
         state.closed = true;
@@ -1077,9 +1103,21 @@ async fn finish(inner: &Inner, job: &Job, outcome: DispatchResult) {
             .send_replace(PublicationState::Uncertain(Arc::new(outcome.unwrap_err())));
     } else {
         // Drop large resources before making their admission reusable.
-        job.ready.lock().await.take();
+        let retained = job.ready.lock().await.take();
+        let released = if matches!(&outcome, Ok(PublicationOutcome::ServingRelease(value)) if value.output == ServingReleaseReply::Released)
+        {
+            retained
+                .as_ref()
+                .and_then(ReadyPublication::serving_release_token)
+        } else {
+            None
+        };
+        drop(retained);
         let mut state = inner.state.lock().await;
         release(&mut state, job);
+        if let Some(token) = released {
+            inner.observe_serving_release(token);
+        }
         // A retired original may itself occupy a foreground uncertainty slot.
         // Resume only that exact preparation evidence, never unrelated work.
         if let Ok(PublicationOutcome::CustodyStop(value)) = &outcome

@@ -80,6 +80,22 @@ impl WireValue for AcquireServingRequest {
         Ok(value)
     }
 }
+impl WireValue for ServingSelection {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        crate::validate_repository_id(self.repository).map_err(|_| invalid())?;
+        actor(&self.actor)?;
+        e.write_bytes(&self.repository)?;
+        self.actor.encode(e)
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        let value = Self {
+            repository: fixed(d)?,
+            actor: Option::<String>::decode(d)?,
+        };
+        value.encode(&mut BoundedEncoder::new(1024)?)?;
+        Ok(value)
+    }
+}
 impl WireValue for ServingCheck {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         actor(&self.actor)?;

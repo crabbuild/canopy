@@ -130,6 +130,13 @@ impl From<ReadyPreparation> for ReadyPublication {
     }
 }
 impl ReadyPublication {
+    pub(super) fn serving_release_token(&self) -> Option<ServingToken> {
+        match self {
+            Self::ServingRelease(ready) => Some(ready.token()),
+            _ => None,
+        }
+    }
+
     pub(super) fn job_kind(&self) -> JobKind {
         match self {
             Self::CustodyStop(ready) if ready.purpose() == CustodyPurpose::Serving => {

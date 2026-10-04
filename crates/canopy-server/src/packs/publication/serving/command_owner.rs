@@ -8,7 +8,7 @@ pub struct ReadyServingCommand {
     client: CellClient,
     target: CellTarget,
     request: BeginRequest,
-    original: OwnedCustody,
+    original: Arc<OwnedCustody>,
     // Renewal is owned physical work from preparation until known disposition.
     _guard: Option<Arc<super::session::Active>>,
 }
@@ -38,7 +38,7 @@ impl ReadyServingCommand {
             client,
             target,
             request,
-            original,
+            original: Arc::new(original),
             _guard: None,
         })
     }
@@ -60,7 +60,7 @@ impl ReadyServingCommand {
             client,
             target,
             request: context,
-            original,
+            original: Arc::new(original),
             _guard: Some(guard),
         })
     }
@@ -82,7 +82,7 @@ impl ReadyServingCommand {
             client,
             target,
             request,
-            original,
+            original: Arc::new(original),
             _guard: None,
         })
     }

@@ -222,6 +222,41 @@ impl Query for CheckServingPin {
         Ok(Some(grant(token, fact, format, now, expires)?))
     }
 }
+pub struct SelectServingGeneration;
+impl Query for SelectServingGeneration {
+    const MODULE: &'static str = RepositoryModule::NAME;
+    const ID: u32 = 48;
+    const CODEC_VERSION: u32 = 1;
+    type Input = ServingSelection;
+    type Output = Option<GenerationFact>;
+    fn execute(
+        context: &mut QueryContext<'_>,
+        input: Self::Input,
+    ) -> cellule_runtime::Result<Self::Output> {
+        input.encode(&mut BoundedEncoder::new(1024)?)?;
+        if rows(&context.sql(&access(&input.actor)?)?)?.is_empty() {
+            return Ok(None);
+        }
+        let Some(format) = identity(
+            &context.sql(&statement(IDENTITY, vec![]))?,
+            input.repository,
+        )?
+        else {
+            return Ok(None);
+        };
+        // Both immutable roots come from one indexed head observation. A caller
+        // must acquire/check its own exact serving retention before artifact I/O.
+        let fact = generation(
+            &context.sql(&statement(CURRENT, vec![]))?,
+            input.repository,
+            format,
+        )?;
+        if fact.generation == 0 || fact.catalog.is_none() || fact.refs.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(fact))
+    }
+}
 pub struct ReleaseServingPin;
 impl Command for ReleaseServingPin {
     const MODULE: &'static str = RepositoryModule::NAME;

@@ -18,9 +18,9 @@ mod serving;
 pub use serving::{
     AcquireServingPin, AcquireServingRequest, CheckServingPin, MAX_SERVING_OWNERS,
     MAX_SERVING_PINS, ReadyServingCommand, ReadyServingRelease, ReleaseServingPin, RenewServingPin,
-    RenewServingRequest, ServingCheck, ServingContext, ServingDenial, ServingDrainProof,
-    ServingLease, ServingPin, ServingReadBudget, ServingReadError, ServingReleaseReply,
-    ServingReply, ServingToken,
+    RenewServingRequest, SelectServingGeneration, ServingCheck, ServingContext, ServingDenial,
+    ServingDrainProof, ServingLease, ServingPin, ServingReadBudget, ServingReadError,
+    ServingReleaseReply, ServingReply, ServingSelection, ServingToken,
 };
 mod owner;
 pub(crate) mod registry;
@@ -76,7 +76,7 @@ pub use coordinator::{
     PublicationTicket, ReadyBoundRecovery, ReadyCatalogCompaction, ReadyCatalogPush,
     ReadyInitialization, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
     ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError, RefPolicyRefusalFailure,
-    RegisteredNativeInputs, RootPushReadyError,
+    RegisteredNativeInputs, RootPushReadyError, ServingDrainAdmission,
 };
 pub use scan::{RecoveryScanBudget, RecoveryScanSettings};
 mod commands;
@@ -245,6 +245,7 @@ pub struct MaintenanceRequest {
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
+    registry.bind_query::<SelectServingGeneration>()?;
     registry.bind_command::<RegisterCustodyIntent>()?;
     registry.bind_command::<ExecuteCustody>()?;
     registry.bind_command::<StopCustodyIntent>()?;

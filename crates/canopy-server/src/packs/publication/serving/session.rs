@@ -443,6 +443,10 @@ pub struct ReadyServingRelease {
     digest: [u8; 32],
 }
 impl ReadyServingRelease {
+    pub(in crate::packs::publication) fn token(&self) -> ServingToken {
+        self.inner.lease.token
+    }
+
     pub fn evidence(&self) -> &cellule_runtime::PendingMutation {
         self.command.evidence()
     }

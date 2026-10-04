@@ -42,7 +42,7 @@ pub(crate) const COMMANDS: [OperationDescriptor; 17] = [
     command::<StopCustodyIntent>(1024, 128),
     command::<ReleaseServingPin>(1024, 128),
 ];
-pub(crate) const QUERIES: [OperationDescriptor; 10] = [
+pub(crate) const QUERIES: [OperationDescriptor; 11] = [
     crate::operation(2),
     query::<CheckPreparation>(4096, 4096),
     query::<CheckPreparationFrontier>(4096, 4096),
@@ -53,6 +53,7 @@ pub(crate) const QUERIES: [OperationDescriptor; 10] = [
     query::<CheckRefPolicyGuard>(4096, 128),
     query::<CheckCompletedRootPush>(4096, 512),
     query::<CheckServingPin>(1024, 1024),
+    query::<SelectServingGeneration>(1024, 512),
 ];
 
 #[cfg(test)]
@@ -92,7 +93,7 @@ mod tests {
                 .iter()
                 .map(|operation| operation.id)
                 .collect::<Vec<_>>(),
-            vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47]
+            vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47, 48]
         );
         for (id, codec, input, output) in [
             (
