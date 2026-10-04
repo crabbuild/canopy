@@ -68,6 +68,7 @@ pub(super) async fn opened(
             Arc::clone(&indexes),
             Arc::clone(&files),
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?,
     );

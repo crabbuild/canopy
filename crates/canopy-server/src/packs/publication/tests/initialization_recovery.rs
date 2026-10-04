@@ -105,7 +105,10 @@ async fn lost_initialization_registration_is_discovered_after_fresh_disk_owner_r
         Resolution::Absent
     ));
     let before = state(&handle).await?;
-    let denied = match saved.recover_initialization(&client, &store).await {
+    let denied = match saved
+        .recover_initialization(&client, &store, &f.authority())
+        .await
+    {
         Err(PublicationError::Initialization(InvocationError::Rejected(value))) => value,
         other => {
             return Err(format!("cold original must settle its stale owner: {other:?}").into());
@@ -116,9 +119,9 @@ async fn lost_initialization_registration_is_discovered_after_fresh_disk_owner_r
         InitializationReply::Denied(PreparationDenial::Stale)
     );
     assert_eq!(state(&handle).await?, before);
-    assert!(
-        matches!(saved.recover_initialization(&client, &store).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==denied.receipt)
-    );
+    assert!(matches!(saved.recover_initialization(&client,
+&store,
+&f.authority(),).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==denied.receipt));
     // Only a definitive original denial permits a new owner to claim. It gets
     // its own namespace; the original pin and result remain unchanged.
     let started = client
@@ -156,6 +159,7 @@ async fn lost_initialization_registration_is_discovered_after_fresh_disk_owner_r
             indexes,
             files,
             Some(started.receipt),
+            f.authority(),
         )
         .await?,
     );
@@ -171,9 +175,9 @@ async fn lost_initialization_registration_is_discovered_after_fresh_disk_owner_r
     assert!(
         matches!(result.output, InitializationReply::Initialized(ref fact) if fact.generation==1)
     );
-    assert!(
-        matches!(saved.recover_initialization(&client, &store).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==denied.receipt)
-    );
+    assert!(matches!(saved.recover_initialization(&client,
+&store,
+&f.authority(),).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==denied.receipt));
     handle
         .query(0, 128, |db| {
             assert_eq!(
@@ -278,14 +282,16 @@ async fn original_initialization_receipt_survives_lost_ack_expiry_body_loss_and_
         .ok_or("original initialization pin absent")?;
     assert_eq!(loaded.evidence(), &original);
     let before = state(&handle).await?;
-    let result = loaded.recover_initialization(&client, &store).await?;
+    let result = loaded
+        .recover_initialization(&client, &store, &f.authority())
+        .await?;
     assert_eq!(
         (result.output, result.receipt),
         (expected.output.clone(), expected.receipt)
     );
     let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let observer = queue
-        .submit(loaded.ready(client, (*store).clone())?)
+        .submit(loaded.ready(client, (*store).clone(), f.authority())?)
         .await
         .map_err(|failure| format!("cold initialization admission: {:?}", failure.reason))?;
     assert!(

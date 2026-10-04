@@ -373,7 +373,8 @@ async fn physical_inputs_verified_before_binding_feed_the_existing_catalog_proof
                 check(staged.token),
                 Arc::clone(&indexes),
                 Arc::clone(&files),
-                None
+                None,
+                fixture.authority(),
             )
             .await,
             Err(PreparationBaseError::Inactive)
@@ -397,6 +398,7 @@ async fn physical_inputs_verified_before_binding_feed_the_existing_catalog_proof
                 indexes,
                 files,
                 Some(bound.receipt),
+                fixture.authority(),
             )
             .await?,
         );

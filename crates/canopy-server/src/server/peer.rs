@@ -118,7 +118,7 @@ impl NodePeer {
             .is_some_and(|owner| owner.session() != self.0.session))
     }
 
-    pub(super) async fn current_owner_fence(
+    pub(crate) async fn current_owner_fence(
         &self,
         target: &CellTarget,
     ) -> Result<cellule_runtime::registry::OwnerFence, ServerError> {

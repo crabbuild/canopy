@@ -140,8 +140,9 @@ pub(super) async fn qualify(context: Context<'_>) -> Result {
         not_started(f, refusal_command).await?;
         let original = Box::pin(command.clone().execute()).await?;
         assert!(matches!(original.output, RefPolicyReply::Registered(value) if value.valid));
-        let PublicationOutcome::PolicyPage(recovered) =
-            registered.dispatch_any(&f.client(), store, &flag).await?
+        let PublicationOutcome::PolicyPage(recovered) = registered
+            .dispatch_any(&f.client(), store, &f.authority(), &flag)
+            .await?
         else {
             return Err("registered page lost its original result".into());
         };
@@ -178,8 +179,9 @@ pub(super) async fn qualify(context: Context<'_>) -> Result {
         matches!(&original.output, RootCompletionReply::Completed(value)
         if !value.completion.rejected && value.completion.publication.is_some())
     );
-    let PublicationOutcome::RootPush(recovered) =
-        registered.dispatch_any(&f.client(), store, &flag).await?
+    let PublicationOutcome::RootPush(recovered) = registered
+        .dispatch_any(&f.client(), store, &f.authority(), &flag)
+        .await?
     else {
         return Err("registered root lost its original result".into());
     };

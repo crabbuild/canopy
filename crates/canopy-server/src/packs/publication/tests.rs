@@ -144,6 +144,9 @@ struct Fixture {
     handle: CellHandle,
 }
 impl Fixture {
+    fn authority(&self) -> PreparationAuthority {
+        PreparationAuthority::local(self.layout.clone(), self.target.clone())
+    }
     async fn new(format: ObjectFormat) -> Result<Self> {
         Self::with_artifact_sequence(format, 0).await
     }
@@ -1067,6 +1070,7 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
             Arc::clone(&native.indexes),
             Arc::clone(&files),
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?;
         let base = resolver.context().base.ok_or("base")?;
@@ -1148,7 +1152,8 @@ async fn authoritative_base_resolution_uses_live_queried_facts_and_fences_failed
                 check(granted.token),
                 Arc::clone(&native.indexes),
                 Arc::clone(&files),
-                None
+                None,
+                fixture.authority(),
             )
             .await,
             Err(PreparationBaseError::Inactive)

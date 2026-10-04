@@ -12,6 +12,7 @@ use tokio::time::Instant;
 
 #[derive(Clone)]
 pub struct PreparationSession {
+    pub(super) authority: PreparationAuthority,
     pub(super) client: CellClient,
     pub(super) target: CellTarget,
     pub(super) check: LeaseCheck,
@@ -26,6 +27,7 @@ impl PreparationSession {
         target: CellTarget,
         check: LeaseCheck,
         minimum: Option<Receipt>,
+        authority: PreparationAuthority,
     ) -> Result<Self, PreparationBaseError> {
         if crate::repository_target(
             target.tenant(),
@@ -34,11 +36,13 @@ impl PreparationSession {
         )
         .map_err(|_| PreparationBaseError::Context)?
             != target
+            || !authority.matches(&target)
         {
             return Err(PreparationBaseError::Context);
         }
-        let (lease, deadline) = probe(&client, &target, &check, minimum).await?;
+        let (lease, deadline) = probe(&client, &target, &check, minimum, &authority).await?;
         Ok(Self {
+            authority,
             client,
             target,
             check,
@@ -62,6 +66,16 @@ impl PreparationSession {
         }
         Ok((self.lease, deadline))
     }
+    pub(super) async fn check_owner(&self) -> Result<(), PreparationBaseError> {
+        let result = self
+            .authority
+            .check(&self.target, self.check.token.owner)
+            .await;
+        if result.is_err() {
+            self.fence();
+        }
+        result
+    }
     pub(super) fn fence(&self) {
         self.fenced.store(true, Ordering::Release);
     }
@@ -78,8 +92,14 @@ impl PreparationSession {
         {
             return Err(PreparationBaseError::Inactive);
         }
-        let (lease, deadline) =
-            probe(&self.client, &self.target, &self.check, Some(minimum)).await?;
+        let (lease, deadline) = probe(
+            &self.client,
+            &self.target,
+            &self.check,
+            Some(minimum),
+            &self.authority,
+        )
+        .await?;
         if lease.token != self.lease.token
             || lease.base != self.lease.base
             || lease.format != self.lease.format
@@ -104,10 +124,12 @@ async fn probe(
     target: &CellTarget,
     check: &LeaseCheck,
     minimum: Option<Receipt>,
+    authority: &PreparationAuthority,
 ) -> Result<(PreparationLease, Instant), PreparationBaseError> {
     // Start before the query, not after its reply, so transport/queue time can
     // only shorten the usable lease. Queries do not replay stored commands.
     let started = Instant::now();
+    authority.check(target, check.token.owner).await?;
     let lease = client
         .query::<CheckPreparation>(target, minimum, check.clone())
         .await
@@ -124,6 +146,10 @@ async fn probe(
     let deadline = started
         .checked_add(Duration::from_millis(remaining.min(MAX_LEASE_MS)))
         .ok_or(PreparationBaseError::Context)?;
+    if Instant::now() >= deadline {
+        return Err(PreparationBaseError::Inactive);
+    }
+    authority.check(target, check.token.owner).await?;
     if Instant::now() >= deadline {
         return Err(PreparationBaseError::Inactive);
     }

@@ -33,6 +33,7 @@ pub struct ReadyPreparation {
 }
 #[derive(Clone)]
 struct PreparationRequest {
+    authority: PreparationAuthority,
     client: CellClient,
     target: CellTarget,
     check: LeaseCheck,
@@ -78,6 +79,7 @@ impl ReadyPreparation {
         client: CellClient,
         target: CellTarget,
         operation: [u8; 16],
+        authority: PreparationAuthority,
     ) -> Result<Self, PreparationReadyError> {
         let command = OwnedCustody::restore(&client, &target, operation).await?;
         let (request, renew) = match command.action()? {
@@ -86,8 +88,12 @@ impl ReadyPreparation {
             _ => return Err(CustodyError::Context.into()),
         };
         validate(&target, &request)?;
+        if !authority.matches(&target) {
+            return Err(PreparationBaseError::Context.into());
+        }
         Ok(Self {
             inner: Box::new(PreparationRequest {
+                authority,
                 client,
                 target,
                 check: request.check,
@@ -109,8 +115,12 @@ impl ReadyPreparation {
         target: CellTarget,
         request: LeaseRequest,
         identity: MutationIdentity,
+        authority: PreparationAuthority,
     ) -> Result<Self, PreparationReadyError> {
         validate(&target, &request)?;
+        if !authority.matches(&target) {
+            return Err(PreparationBaseError::Context.into());
+        }
         let check = request.check.clone();
         let command = OwnedCustody::prepare(
             &client,
@@ -121,6 +131,7 @@ impl ReadyPreparation {
         .await?;
         Ok(Self {
             inner: Box::new(PreparationRequest {
+                authority,
                 client,
                 target,
                 check,
@@ -215,6 +226,7 @@ impl ReadyPreparation {
                         actor: inner.check.actor.clone(),
                     },
                     Some(committed.receipt),
+                    inner.authority.clone(),
                 )
                 .await?;
                 if session.lease.base != lease.base || session.lease.format != lease.format {
@@ -254,6 +266,7 @@ impl PreparationSession {
         }
         Ok(ReadyPreparation {
             inner: Box::new(PreparationRequest {
+                authority: self.authority.clone(),
                 client: self.client.clone(),
                 target: self.target.clone(),
                 check: self.check.clone(),
@@ -288,6 +301,7 @@ impl PreparationSession {
         self.live_lease()?;
         Ok(ReadyPreparation {
             inner: Box::new(PreparationRequest {
+                authority: self.authority.clone(),
                 client: self.client.clone(),
                 target: self.target.clone(),
                 check: self.check.clone(),

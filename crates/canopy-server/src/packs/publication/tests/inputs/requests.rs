@@ -116,8 +116,11 @@ impl Request {
             operation,
         )
         .await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ticket = coordinator
             .submit(
                 ReadyStaging::new(
@@ -371,8 +374,11 @@ async fn request_checkpoint_owner_restore_adopts_original_bytes_after_source_pin
         )
         .await?;
     let client = CellClient::local(request.fixture.registry.clone(), handle.clone());
-    let coordinator =
-        StagingCoordinator::new(request.fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        request.fixture.target.clone(),
+        StagingLimits::default(),
+        request.fixture.authority(),
+    )?;
     let old = retained.token()?;
     let ticket = coordinator
         .submit(

@@ -16,7 +16,11 @@ async fn maintenance_final_publication_uses_shared_bound_lifecycle_and_reserved_
         let fixture = Fixture::new(format).await?;
         let inventory = seed(&fixture, 2).await?;
         let before_refs = refs(&fixture.handle).await?;
-        let stages = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let stages = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ready = ReadyStaging::new(
             fixture.client(),
             fixture.target.clone(),

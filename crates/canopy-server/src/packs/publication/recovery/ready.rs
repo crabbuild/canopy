@@ -8,6 +8,7 @@ pub struct ReadyRootRecovery {
     recovery: std::sync::Arc<RegisteredRootRecovery>,
     client: CellClient,
     store: ArtifactStore,
+    authority: PreparationAuthority,
     refusing: std::sync::Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     refusal_fault: std::sync::Arc<std::sync::atomic::AtomicU8>,
@@ -20,9 +21,15 @@ impl RegisteredRootRecovery {
         self,
         client: CellClient,
         store: ArtifactStore,
+        authority: PreparationAuthority,
     ) -> Result<ReadyRootRecovery, RootRecoveryError> {
         target_matches(self.evidence().target(), &store, &self.record.check)?;
-        Ok(ReadyRootRecovery::from_verified(self, client, store))
+        if !authority.matches(self.evidence().target()) {
+            return Err(RootRecoveryError::Context);
+        }
+        Ok(ReadyRootRecovery::from_verified(
+            self, client, store, authority,
+        ))
     }
 }
 impl ReadyRootRecovery {
@@ -41,11 +48,13 @@ impl ReadyRootRecovery {
         recovery: RegisteredRootRecovery,
         client: CellClient,
         store: ArtifactStore,
+        authority: PreparationAuthority,
     ) -> Self {
         Self {
             recovery: std::sync::Arc::new(recovery),
             client,
             store,
+            authority,
             refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(test)]
             refusal_fault: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
@@ -126,6 +135,7 @@ impl ReadyRootRecovery {
                     .dispatch_bound(
                         &self.client,
                         &self.store,
+                        &self.authority,
                         &self.refusing,
                         Some(original),
                         #[cfg(test)]
@@ -135,7 +145,7 @@ impl ReadyRootRecovery {
             }
             None => {
                 self.recovery
-                    .dispatch_any(&self.client, &self.store, &self.refusing)
+                    .dispatch_any(&self.client, &self.store, &self.authority, &self.refusing)
                     .await
             }
         };

@@ -50,7 +50,8 @@ async fn staged_service_registrar_loss_retains_both_commands_through_cancellatio
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for fault in [4, 5, 6] {
             let f = Fixture::new(format).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             c.fault_for_test(fault);
             let ticket = submit(&f, &c, [fault + 120; 16], "owner").await?;
             let StagingState::Uncertain(error) = terminal(&ticket).await? else {
@@ -115,7 +116,8 @@ async fn staged_service_renew_and_bind_registrar_loss_never_replaces_either_iden
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for fault in [4, 5, 6] {
             let f = Fixture::new(format).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = submit(&f, &c, [fault + 130; 16], "owner").await?;
             let staged = active(&ticket).await?;
             c.fault_for_test(fault);
@@ -180,8 +182,11 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
         (ObjectFormat::Sha256, 3),
     ] {
         let fixture = Fixture::new(format).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let request = fixture.begin([219; 16]);
         let mut mutation = identity()?;
         mutation.expires_at_ms = mutation.issued_at_ms + 2_000;
@@ -272,7 +277,11 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
 async fn staged_service_canceled_observers_keep_workers_and_results_until_single_handoff() -> Result
 {
     let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [220; 16], "owner").await?;
     let initial = active(&ticket).await?;
     let (release, wait) = oneshot::channel();
@@ -324,8 +333,11 @@ async fn staged_service_resolves_begin_renew_and_bind_exactly_after_absence_lost
 -> Result {
     for fault in [1, 2, 3] {
         let fixture = Fixture::new(ObjectFormat::Sha256).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         coordinator.fault_for_test(fault);
         let ticket = submit(&fixture, &coordinator, [221; 16], "owner").await?;
         assert!(matches!(
@@ -396,7 +408,11 @@ async fn staged_service_replayed_renewal_is_not_a_new_clock_or_permission_after_
         "INSERT INTO repository_members VALUES('writer','write')",
     )
     .await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [222; 16], "writer").await?;
     active(&ticket).await?;
     let (entered, started) = oneshot::channel();
@@ -448,6 +464,7 @@ async fn staged_service_account_operation_and_worker_bounds_preserve_rejected_re
             workers_per_actor: 1,
             ..StagingLimits::default()
         },
+        fixture.authority(),
     )?;
     let first = submit(&fixture, &coordinator, [223; 16], "owner").await?;
     active(&first).await?;
@@ -505,8 +522,11 @@ async fn staged_service_worker_failure_and_panic_fence_before_binding_and_releas
 -> Result {
     for panic in [false, true] {
         let fixture = Fixture::new(ObjectFormat::Sha1).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ticket = submit(&fixture, &coordinator, [226; 16], "owner").await?;
         let lease = active(&ticket).await?;
         let work = ticket.spawn(move |_| async move {
@@ -542,8 +562,11 @@ async fn staged_service_owned_native_verification_hands_off_to_the_existing_priv
     use cellule_ltx::DiskBudget;
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let fixture = Fixture::new(format).await?;
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ticket = submit(&fixture, &coordinator, [227; 16], "owner").await?;
         let initial = active(&ticket).await?;
         let provider: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
@@ -632,6 +655,7 @@ async fn staged_service_automatic_renewal_runs_without_an_observer_or_manual_tic
             renew_before_ms: DEFAULT_LEASE_MS - 1000,
             ..StagingLimits::default()
         },
+        fixture.authority(),
     )?;
     let ticket = submit(&fixture, &coordinator, [228; 16], "owner").await?;
     let lease = active(&ticket).await?;
@@ -706,11 +730,15 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         },
     ] {
         assert!(matches!(
-            StagingCoordinator::new(fixture.target.clone(), limits),
+            StagingCoordinator::new(fixture.target.clone(), limits, fixture.authority(),),
             Err(StagingError::InvalidLimits)
         ));
     }
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -736,7 +764,11 @@ async fn staged_service_rejects_invalid_profiles_foreign_targets_and_duplicate_l
         .ok_or("duplicate accepted")?;
     assert!(matches!(error, StagingError::Duplicate));
     let foreign = Fixture::new(ObjectFormat::Sha256).await?;
-    let other = StagingCoordinator::new(foreign.target.clone(), StagingLimits::default())?;
+    let other = StagingCoordinator::new(
+        foreign.target.clone(),
+        StagingLimits::default(),
+        foreign.authority(),
+    )?;
     let (error, _) = other.submit(ready).err().ok_or("foreign accepted")?;
     assert!(matches!(error, StagingError::Foreign));
     assert!(matches!(other.recover(&ticket), Err(StagingError::Foreign)));
@@ -780,7 +812,11 @@ async fn staged_service_revocation_drops_completed_owned_results_before_releasin
         "INSERT INTO repository_members VALUES('writer','write')",
     )
     .await?;
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ticket = submit(&fixture, &coordinator, [231; 16], "writer").await?;
     active(&ticket).await?;
     let dropped = Arc::new(AtomicBool::new(false));

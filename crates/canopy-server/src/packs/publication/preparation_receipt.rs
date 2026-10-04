@@ -71,6 +71,7 @@ impl PreparationAdmission {
         client: CellClient,
         lease_ms: u64,
         identity: MutationIdentity,
+        authority: PreparationAuthority,
     ) -> Result<ReadyPreparation, PreparationReadyError> {
         ReadyPreparation::claim(
             client,
@@ -83,6 +84,7 @@ impl PreparationAdmission {
                 lease_ms,
             },
             identity,
+            authority,
         )
         .await
     }

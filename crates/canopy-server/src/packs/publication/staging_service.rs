@@ -323,6 +323,7 @@ struct Admission {
     actors: HashMap<String, ActorAdmission>,
 }
 struct Inner {
+    authority: PreparationAuthority,
     target: CellTarget,
     limits: StagingLimits,
     admission: Mutex<Admission>,
@@ -359,6 +360,7 @@ struct WorkSlots {
     slots: HashMap<u64, Arc<dyn RetainedWork>>,
 }
 struct Job {
+    authority: PreparationAuthority,
     client: CellClient,
     target: CellTarget,
     actor: String,
@@ -552,10 +554,18 @@ pub struct StagingStats {
     pub closed: bool,
 }
 impl StagingCoordinator {
-    pub fn new(target: CellTarget, limits: StagingLimits) -> Result<Self, StagingError> {
+    pub fn new(
+        target: CellTarget,
+        limits: StagingLimits,
+        authority: PreparationAuthority,
+    ) -> Result<Self, StagingError> {
         limits.validate()?;
+        if !authority.matches(&target) {
+            return Err(StagingError::Context);
+        }
         Ok(Self {
             inner: Arc::new(Inner {
+                authority,
                 target,
                 limits,
                 admission: Mutex::new(Admission::default()),
@@ -606,6 +616,7 @@ impl StagingCoordinator {
         let actor_workers = Arc::clone(&actor.workers);
         let now = Instant::now();
         let job = Arc::new(Job {
+            authority: self.inner.authority.clone(),
             client: ready.inner.client,
             target: ready.inner.target,
             actor: ready.inner.request.actor,
@@ -1266,6 +1277,7 @@ async fn probe(job: &Job, minimum: Receipt) -> Result<(StagingLease, Instant), S
         Some(l) => l.token,
         None => return Err(StagingError::Context),
     };
+    job.authority.check(&job.target, token.owner).await?;
     let lease = job
         .client
         .query::<CheckStaging>(
@@ -1290,6 +1302,10 @@ async fn probe(job: &Job, minimum: Receipt) -> Result<(StagingLease, Instant), S
         + Duration::from_millis((lease.expires_at_ms - lease.observed_at_ms) as u64)
             .min(Duration::from_millis(MAX_LEASE_MS));
     if deadline <= Instant::now() {
+        return Err(StagingError::Inactive);
+    }
+    job.authority.check(&job.target, token.owner).await?;
+    if Instant::now() >= deadline {
         return Err(StagingError::Inactive);
     }
     Ok((lease, deadline))

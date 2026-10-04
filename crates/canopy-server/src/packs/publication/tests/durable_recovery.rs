@@ -188,7 +188,11 @@ async fn qualify_ready(
             .is_err()
     );
     let original_result = if fault == 2 {
-        Some(registered.dispatch(&f.client(), store).await?)
+        Some(
+            registered
+                .dispatch(&f.client(), store, &f.authority())
+                .await?,
+        )
     } else {
         None
     };
@@ -219,7 +223,7 @@ async fn qualify_ready(
         .await?
         .ok_or("durable record missing after restore")?;
     assert_eq!(loaded.evidence(), &original);
-    let result = loaded.dispatch(&client, store).await;
+    let result = loaded.dispatch(&client, store, &f.authority()).await;
     if fault == 2 {
         let result = result?;
         assert!(
@@ -229,7 +233,11 @@ async fn qualify_ready(
         let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
         queue.fault_for_test(2);
         let observer = queue
-            .submit(loaded.clone().ready(client.clone(), store.clone())?)
+            .submit(
+                loaded
+                    .clone()
+                    .ready(client.clone(), store.clone(), f.authority())?,
+            )
             .await
             .map_err(|failure| format!("durable admission: {:?}", failure.reason))?;
         assert!(
@@ -251,7 +259,10 @@ async fn qualify_ready(
             (expected.output, expected.receipt)
         );
         assert_eq!(
-            loaded.dispatch(&client, store).await?.receipt,
+            loaded
+                .dispatch(&client, store, &f.authority(),)
+                .await?
+                .receipt,
             result.receipt
         );
         if revoked {
@@ -268,7 +279,10 @@ async fn qualify_ready(
             ));
             // Known results still resolve; this grants no current response read.
             assert_eq!(
-                loaded.dispatch(&client, store).await?.receipt,
+                loaded
+                    .dispatch(&client, store, &f.authority(),)
+                    .await?
+                    .receipt,
                 result.receipt
             );
         } else {
@@ -300,7 +314,9 @@ async fn qualify_ready(
             denied.output,
             RootCompletionReply::Denied(PreparationDenial::Stale)
         );
-        assert!(matches!(loaded.dispatch(&client, store).await,
+        assert!(matches!(loaded.dispatch(&client,
+store,
+&f.authority(),).await,
             Err(PublicationError::RootPush(InvocationError::Rejected(replayed))) if replayed.receipt == denied.receipt && replayed.output == denied.output));
         assert!(
             client

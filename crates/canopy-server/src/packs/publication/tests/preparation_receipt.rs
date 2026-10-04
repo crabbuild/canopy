@@ -210,7 +210,7 @@ async fn initial_preparation_receipt_cold_owner_and_sdk_expiry_preserve_actual_r
         let ticket = coordinator
             .submit(
                 known
-                    .ready_claim(client.clone(), DEFAULT_LEASE_MS, identity()?)
+                    .ready_claim(client.clone(), DEFAULT_LEASE_MS, identity()?, f.authority())
                     .await?,
             )
             .await?;
@@ -279,7 +279,8 @@ async fn initial_preparation_receipt_reaped_restart_claim_checks_original_and_ro
                 f.client(),
                 f.target.clone(),
                 check(old.token),
-                Some(original.receipt)
+                Some(original.receipt),
+                f.authority(),
             )
             .await
             .is_err()
@@ -386,7 +387,8 @@ async fn initial_preparation_receipt_knowledge_does_not_restore_revoked_or_expir
                     f.client(),
                     f.target.clone(),
                     check(old.token),
-                    Some(original.receipt)
+                    Some(original.receipt),
+                    f.authority(),
                 )
                 .await
                 .is_err()

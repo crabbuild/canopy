@@ -586,7 +586,8 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     ) {
         staging_limits.bound_lifetime_ms = 5000;
     }
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), staging_limits)?;
+    let coordinator =
+        StagingCoordinator::new(fixture.target.clone(), staging_limits, fixture.authority())?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),
@@ -1104,7 +1105,11 @@ async fn native_capture_rejects_scope_limits_mutation_and_active_native_workers(
         Arc::new(InMemory::new()),
         fixture.repository,
     ));
-    let coordinator = StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
     let ready = ReadyStaging::new(
         fixture.client(),
         fixture.target.clone(),

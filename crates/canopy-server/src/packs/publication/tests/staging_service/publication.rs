@@ -30,7 +30,11 @@ async fn bound_final_waits_for_exact_renewal_and_adopted_checkpoint_recovery_bef
                     return Err("source binding lost".into());
                 };
                 assert!(source.close_and_drain().await.is_empty());
-                let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+                let c = StagingCoordinator::new(
+                    f.target.clone(),
+                    StagingLimits::default(),
+                    f.authority(),
+                )?;
                 let p =
                     PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
                 let ticket = super::bound::claim(&f, &c, original.lease.token, identity()?).await?;
@@ -124,7 +128,7 @@ async fn bound_final_publication_drains_retained_work_and_due_renewal_through_cl
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
-        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
         let ticket = super::bound::bind(&f, &c, [231; 16], "owner").await?;
         let session = ticket.bound_session()?;
@@ -224,6 +228,7 @@ async fn exact_case(format: ObjectFormat, fault: u8, expired: bool) -> Result {
             bound_lifetime_ms: 1000,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let ticket = super::bound::bind(&f, &c, [232; 16], "owner").await?;
@@ -337,6 +342,7 @@ async fn bound_final_ceiling_discards_held_proof_and_drops_result_before_worker_
             bound_lifetime_ms: 1000,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let ticket = super::bound::bind(&f, &c, [233; 16], "owner").await?;
@@ -381,7 +387,7 @@ async fn bound_final_ceiling_discards_held_proof_and_drops_result_before_worker_
 async fn bound_final_refusals_keep_exact_ready_and_require_shared_session_and_final_kind() -> Result
 {
     let f = Fixture::new(ObjectFormat::Sha256).await?;
-    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let ticket = super::bound::bind(&f, &c, [234; 16], "owner").await?;
     let session = ticket.bound_session()?;
@@ -391,6 +397,7 @@ async fn bound_final_refusals_keep_exact_ready_and_require_shared_session_and_fi
             f.target.clone(),
             check(session.lease.token),
             None,
+            f.authority(),
         )
         .await?,
     );
@@ -457,6 +464,7 @@ async fn bound_final_queued_transport_rechecks_ceiling_before_initial_execution(
             bound_lifetime_ms: 1000,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let ticket = super::bound::bind(&f, &c, [236; 16], "owner").await?;
@@ -490,7 +498,7 @@ async fn bound_final_queued_transport_rechecks_ceiling_before_initial_execution(
 async fn bound_final_observes_shared_coordinator_recovery_without_losing_lifecycle_admission()
 -> Result {
     let f = Fixture::new(ObjectFormat::Sha256).await?;
-    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     let ticket = super::bound::bind(&f, &c, [237; 16], "owner").await?;
     let session = ticket.bound_session()?;

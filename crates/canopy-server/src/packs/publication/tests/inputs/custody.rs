@@ -62,8 +62,11 @@ impl Recovered {
         checkpoint.wait().await.map_err(|e| e.to_string())?;
         old_ticket.stop();
         assert!(old_coordinator.close_and_drain().await.is_empty());
-        let coordinator =
-            StagingCoordinator::new(fixture.target.clone(), StagingLimits::default())?;
+        let coordinator = StagingCoordinator::new(
+            fixture.target.clone(),
+            StagingLimits::default(),
+            fixture.authority(),
+        )?;
         let ready = ReadyStaging::claim(
             fixture.client(),
             fixture.target.clone(),

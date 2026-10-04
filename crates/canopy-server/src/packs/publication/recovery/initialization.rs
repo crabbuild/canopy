@@ -56,13 +56,16 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
     ) -> Result<Committed<InitializationReply>, PublicationError> {
-        self.dispatch_initialization(client, store, None).await
+        self.dispatch_initialization(client, store, authority, None)
+            .await
     }
     pub(in crate::packs::publication) async fn dispatch_initialization(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<InitializationReply>, PublicationError> {
         if self.record.kind != Kind::Initialization {
@@ -72,7 +75,7 @@ impl RegisteredRootRecovery {
             });
         }
         let result = self
-            .dispatch_command::<InitializeCatalogRefs>(client, store, false, original)
+            .dispatch_command::<InitializeCatalogRefs>(client, store, authority, false, original)
             .await
             .map_err(|error| {
                 error.publication(self.evidence(), PublicationError::Initialization)

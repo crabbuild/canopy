@@ -59,6 +59,7 @@ impl Bound {
                         lease_ms: DEFAULT_LEASE_MS,
                     },
                     identity()?,
+                    fixture.authority(),
                 )
                 .await?,
             )
@@ -247,6 +248,7 @@ async fn bound_checkpoint_canceled_observer_and_foreign_duplicate_closed_admissi
                 actor: "owner".into(),
             },
             Some(result.registration.receipt),
+            fixture.authority(),
         )
         .await?,
     );
@@ -423,6 +425,7 @@ async fn bound_checkpoint_real_retained_pair_publishes_after_source_pin_expiry_i
                 indexes,
                 files,
                 Some(registered.registration.receipt),
+                bound.fixture.authority(),
             )
             .await?,
         );

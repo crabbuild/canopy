@@ -62,6 +62,7 @@ async fn bound_service_automatic_renewal_keeps_canceled_worker_and_result_owned_
             renew_before_ms: DEFAULT_LEASE_MS - 1000,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let ticket = bind(&f, &c, [203; 16], "owner").await?;
     let original = ticket.bound_result().ok_or("binding receipt")?;
@@ -135,7 +136,8 @@ async fn bound_service_renewal_retains_exact_absent_lost_and_panicked_commands_t
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         for fault in [1, 2, 3] {
             let f = Fixture::new(format).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = bind(&f, &c, [204; 16], "owner").await?;
             let original = ticket.bound_result().ok_or("binding")?;
             let shared = ticket.bound_session()?;
@@ -206,7 +208,8 @@ async fn bound_service_claim_retains_exact_identity_and_new_namespace_through_cl
         for fault in [1, 2, 3] {
             let f = Fixture::new(format).await?;
             let old = new_token(&f, [205; 16]).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let mutation = identity()?;
             c.fault_for_test(fault);
             let ticket = claim(&f, &c, old, mutation).await?;
@@ -256,7 +259,8 @@ async fn bound_service_known_renewal_receipts_survive_revocation_expiry_and_supe
     for committed in [false, true] {
         for mode in [0, 1, 2] {
             let f = Fixture::new(ObjectFormat::Sha256).await?;
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = bind(&f, &c, [206; 16], "owner").await?;
             let session = ticket.bound_session()?;
             let binding = ticket.bound_result().ok_or("binding")?;
@@ -343,7 +347,7 @@ async fn bound_service_phase_handoff_and_residence_cap_fence_existing_bases_and_
     let native =
         crate::packs::catalog::tests::prepared_for_repository(f.format, f.repository).await?;
     f.install_catalog(1, native.stored).await?;
-    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+    let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
     let ticket = submit(&f, &c, [207; 16], "owner").await?;
     active(&ticket).await?;
     let work = ticket.spawn(|ctx| async { Ok(ctx) })?;
@@ -431,6 +435,7 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
             workers_per_actor: 1,
             ..StagingLimits::default()
         },
+        f.authority(),
     )?;
     let a = bind(&f, &c, [208; 16], "owner").await?;
     let b = bind(&f, &c, [209; 16], "owner").await?;
@@ -470,7 +475,8 @@ async fn bound_service_worker_caps_results_and_failure_reuse_staging_admission()
                 StagingLimits {
                     bound_lifetime_ms: invalid,
                     ..StagingLimits::default()
-                }
+                },
+                f.authority(),
             )
             .is_err()
         );
@@ -499,7 +505,8 @@ async fn bound_service_checkpoint_shares_renewal_order_exact_recovery_and_origin
                 return Err("source bind".into());
             };
             assert!(source.close_and_drain().await.is_empty());
-            let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+            let c =
+                StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
             let ticket = claim(&f, &c, old.lease.token, identity()?).await?;
             assert!(matches!(terminal(&ticket).await?, StagingState::Bound(_)));
             let session = ticket.bound_session()?;
@@ -625,7 +632,7 @@ async fn bound_service_restored_owner_claim_retains_old_pin_and_owns_new_session
             )
             .await?;
         let client = CellClient::local(f.registry.clone(), handle.clone());
-        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let mutation = identity()?;
         c.fault_for_test(2);
         let ready = ReadyStaging::claim_bound(

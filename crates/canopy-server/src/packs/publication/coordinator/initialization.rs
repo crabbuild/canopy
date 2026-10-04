@@ -89,7 +89,12 @@ impl ReadyInitialization {
         }
         let client = self.owner.base.capability().0;
         let result = registered
-            .dispatch_initialization(client, store, Some(&self.owner.base.session))
+            .dispatch_initialization(
+                client,
+                store,
+                &self.owner.base.session.authority,
+                Some(&self.owner.base.session),
+            )
             .await;
         drop(self.owner);
         result

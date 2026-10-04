@@ -73,7 +73,7 @@ async fn reject(
         )
     ));
     let recovered = registered
-        .recover_initialization(&fixture.client(), store)
+        .recover_initialization(&fixture.client(), store, &fixture.authority())
         .await;
     assert!(
         matches!(recovered,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==result.receipt && value.output==result.output)
@@ -142,7 +142,7 @@ async fn cold_initialization_records_original_expiry_and_revocation_denials() ->
         edit(&fixture, sql).await?;
         let before = state(&fixture.handle).await?;
         let result = registered
-            .recover_initialization(&fixture.client(), &store)
+            .recover_initialization(&fixture.client(), &store, &fixture.authority())
             .await;
         assert!(
             matches!(result,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output==InitializationReply::Denied(reason)),
@@ -253,7 +253,7 @@ async fn fresh_initialization_commits_joint_empty_roots_and_enables_first_ref_pr
             Err(InvocationError::NotStarted(_))
         ));
         let recovered = registered
-            .recover_initialization(&fixture.client(), &store)
+            .recover_initialization(&fixture.client(), &store, &fixture.authority())
             .await?;
         assert_eq!(
             (recovered.output, recovered.receipt),
@@ -510,7 +510,7 @@ async fn initialization_late_failure_rolls_back_roots_checkpoint_and_outcome_and
             .is_none()
     );
     let recovered = registered_loser
-        .recover_initialization(&client, &first.base.indexes().store())
+        .recover_initialization(&client, &first.base.indexes().store(), &fixture.authority())
         .await;
     assert!(
         matches!(recovered,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.receipt==losing.receipt && value.output==losing.output)
@@ -583,7 +583,7 @@ async fn initialization_exact_outcome_survives_owner_restore_and_pending_old_att
         Err(InvocationError::NotStarted(_))
     ));
     let recovered = registered_a
-        .recover_initialization(&client, &first.base.indexes().store())
+        .recover_initialization(&client, &first.base.indexes().store(), &fixture.authority())
         .await?;
     assert_eq!(
         (recovered.output, recovered.receipt),
@@ -593,7 +593,11 @@ async fn initialization_exact_outcome_survives_owner_restore_and_pending_old_att
     // Cold recovery must settle the absent original under the new owner. It
     // cannot depend on opening the old owner's now-invalid live capability.
     let denied = registered_b
-        .recover_initialization(&client, &second.base.indexes().store())
+        .recover_initialization(
+            &client,
+            &second.base.indexes().store(),
+            &fixture.authority(),
+        )
         .await;
     assert!(
         matches!(denied,Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output==InitializationReply::Denied(PreparationDenial::Stale)),

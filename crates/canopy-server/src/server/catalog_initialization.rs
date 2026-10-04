@@ -7,9 +7,9 @@ use crate::{
         publication::{
             BeginRequest, CatalogPreparation, CheckInitializedCatalog, CheckPreparation,
             CustodyAction, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
-            LeaseRequest, MaintenanceRequest, PreparationBaseResolver, PreparationDenial,
-            PreparationReply, PreparationToken, PreparedCustody, PublicationError,
-            RegisteredCustody, RegisteredRootRecovery, TerminalReleaseReply,
+            LeaseRequest, MaintenanceRequest, PreparationAuthority, PreparationBaseResolver,
+            PreparationDenial, PreparationReply, PreparationToken, PreparedCustody,
+            PublicationError, RegisteredCustody, RegisteredRootRecovery, TerminalReleaseReply,
         },
     },
 };
@@ -90,15 +90,24 @@ async fn verify(
 /// The caller's tracked cold-transition task owns this work through cancellation.
 /// Ready repositories only observe their immutable initialization; they cannot
 /// reconstruct missing ownership or publish a new empty catalog during restore.
+pub(super) struct InitializationCustody {
+    pub authority: PreparationAuthority,
+    pub maintenance: MaintenanceRequest,
+}
+
 pub(super) async fn ensure(
+    custody: InitializationCustody,
     repository: &RepositoryCell,
     client: CellClient,
-    maintenance: MaintenanceRequest,
     provider: Arc<dyn ObjectStore>,
     workspace: &Path,
     budget: DiskBudget,
     pending: bool,
 ) -> Result<(), Failure> {
+    let InitializationCustody {
+        authority,
+        maintenance,
+    } = custody;
     let owner = maintenance.actor.as_str();
     let input = request(repository, owner);
     let target = &repository.target;
@@ -117,7 +126,10 @@ pub(super) async fn ensure(
     let recovered =
         RegisteredRootRecovery::load_initialization(&client, target, &store, &input).await?;
     let claim = if let Some(ref recovered) = recovered {
-        match recovered.recover_initialization(&client, &store).await {
+        match recovered
+            .recover_initialization(&client, &store, &authority)
+            .await
+        {
             Ok(committed) => {
                 let InitializationReply::Initialized(fact) = committed.output else {
                     return Err(Error::Command("invalid recovered initialization reply").into());
@@ -293,6 +305,7 @@ pub(super) async fn ensure(
             indexes,
             files,
             Some(started.receipt),
+            authority.clone(),
         )
         .await?,
     );

@@ -102,7 +102,9 @@ pub(super) async fn qualify(
             assert_eq!(failure.original.evidence_for_test(), evidence);
             assert_eq!(failure.registered.evidence(), &evidence);
         }
-        let cold = registered.clone().ready(f.client(), store.clone())?;
+        let cold = registered
+            .clone()
+            .ready(f.client(), store.clone(), f.authority())?;
         let failure = ticket
             .publish(&queue, cold)
             .err()
@@ -233,6 +235,7 @@ pub(super) async fn qualify(
             .dispatch_any(
                 &f.client(),
                 store,
+                &f.authority(),
                 &std::sync::atomic::AtomicBool::new(false),
             )
             .await?;
@@ -321,7 +324,7 @@ pub(super) async fn qualify(
             .await?
             .ok_or("durable terminal record")?;
         assert_eq!(loaded.evidence(), &evidence);
-        let actual = loaded.dispatch(&f.client(), store).await?;
+        let actual = loaded.dispatch(&f.client(), store, &f.authority()).await?;
         assert_eq!(
             (&actual.output, actual.receipt),
             (&value.output, value.receipt)

@@ -26,6 +26,7 @@ async fn opened(fixture: &Fixture, operation: [u8; 16]) -> Result<Arc<Preparatio
             fixture.target.clone(),
             check(token),
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?,
     ))

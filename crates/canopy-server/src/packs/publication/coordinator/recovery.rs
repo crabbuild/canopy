@@ -45,10 +45,11 @@ impl ReadyBoundRecovery {
         store: &ArtifactStore,
     ) -> Self {
         let client = owner.capability().0.clone();
+        let authority = owner.session().authority.clone();
         Self {
             owner,
             intent,
-            ready: ReadyRootRecovery::from_verified(registered, client, store.clone()),
+            ready: ReadyRootRecovery::from_verified(registered, client, store.clone(), authority),
             refusal,
         }
     }

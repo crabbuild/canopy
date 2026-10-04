@@ -102,6 +102,7 @@ pub(super) async fn empty_in_store(
             indexes,
             files,
             Some(started.receipt),
+            fixture.authority(),
         )
         .await?,
     );

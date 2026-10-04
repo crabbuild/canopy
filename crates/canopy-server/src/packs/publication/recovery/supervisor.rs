@@ -79,8 +79,9 @@ impl RecoverySupervisor {
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
         limits: RecoveryScanLimits,
+        authority: PreparationAuthority,
     ) -> Result<Self, RootRecoveryError> {
-        Self::start_inner(client, target, store, coordinator, limits, None)
+        Self::start_inner(client, target, store, coordinator, limits, authority, None)
     }
     /// The service supplies current repository administration and actual owner
     /// custody. Closed attempts release through the same fair maintenance queue;
@@ -91,6 +92,7 @@ impl RecoverySupervisor {
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
         limits: RecoveryScanLimits,
+        authority: PreparationAuthority,
         maintenance: MaintenanceRequest,
     ) -> Result<Self, RootRecoveryError> {
         if maintenance.repository != store.repository() {
@@ -103,6 +105,7 @@ impl RecoverySupervisor {
             store,
             coordinator,
             limits,
+            authority,
             Some(maintenance),
         )
     }
@@ -112,10 +115,12 @@ impl RecoverySupervisor {
         store: ArtifactStore,
         coordinator: PublicationCoordinator,
         limits: RecoveryScanLimits,
+        authority: PreparationAuthority,
         maintenance: Option<MaintenanceRequest>,
     ) -> Result<Self, RootRecoveryError> {
         limits.validate()?;
-        if !coordinator.matches_target(&target)
+        if !authority.matches(&target)
+            || !coordinator.matches_target(&target)
             || crate::repository_target(target.tenant(), target.application(), store.repository())?
                 != target
         {
@@ -130,6 +135,7 @@ impl RecoverySupervisor {
                 target,
                 store,
                 coordinator,
+                authority,
                 maintenance,
             },
             sql,
@@ -211,6 +217,7 @@ struct Scan {
     target: CellTarget,
     store: ArtifactStore,
     coordinator: PublicationCoordinator,
+    authority: PreparationAuthority,
     maintenance: Option<MaintenanceRequest>,
 }
 impl Scan {
@@ -302,7 +309,11 @@ impl Scan {
         }
         match self
             .coordinator
-            .submit(registered.ready(self.client.clone(), self.store.clone())?)
+            .submit(registered.ready(
+                self.client.clone(),
+                self.store.clone(),
+                self.authority.clone(),
+            )?)
             .await
         {
             Ok(_) => stats.submitted = stats.submitted.saturating_add(1),

@@ -55,6 +55,7 @@ pub(super) async fn accept_bound(
             actor: job.actor.clone(),
         },
         Some(value.receipt),
+        job.authority.clone(),
     )
     .await;
     let mut session = match session {

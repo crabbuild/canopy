@@ -328,13 +328,19 @@ impl RepositoryManager {
                 ));
             }
             super::catalog_initialization::ensure(
+                super::catalog_initialization::InitializationCustody {
+                    authority: crate::packs::publication::PreparationAuthority::node(
+                        self.peer.clone(),
+                        repository.target.clone(),
+                    ),
+                    maintenance: crate::packs::publication::MaintenanceRequest {
+                        repository: entry.repository_id,
+                        actor: entry.owner.clone(),
+                        owner: self.peer.current_owner_fence(&repository.target).await?,
+                    },
+                },
                 &repository,
                 client,
-                crate::packs::publication::MaintenanceRequest {
-                    repository: entry.repository_id,
-                    actor: entry.owner.clone(),
-                    owner: self.peer.current_owner_fence(&repository.target).await?,
-                },
                 Arc::clone(&self.external_store),
                 self.local.path(),
                 self.disk_budget.clone(),

@@ -120,7 +120,8 @@ async fn initial_staging_receipt_cold_restore_requires_actual_claim_and_keeps_or
                 .await,
             PreparationDenial::Stale,
         );
-        let coordinator = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let coordinator =
+            StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let ticket = coordinator
             .submit(
                 saved
@@ -185,7 +186,8 @@ async fn initial_staging_receipt_survives_reaping_but_does_not_restore_expired_c
             .ok_or("reaped receipt missing")?;
         assert_eq!(saved.receipt(), original.receipt);
         assert_eq!(saved.lease(), *lease);
-        let coordinator = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let coordinator =
+            StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         let ticket = coordinator
             .submit(
                 saved
@@ -227,7 +229,8 @@ async fn initial_staging_receipt_is_internal_knowledge_after_write_revocation() 
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let input = f.begin([215; 16]);
-        let coordinator = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let coordinator =
+            StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         coordinator.fault_for_test(2);
         let ticket = coordinator
             .submit(
@@ -271,7 +274,8 @@ async fn staging_custody_intent_corruption_keeps_original_evidence_and_reservati
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let input = f.begin([214; 16]);
-        let coordinator = StagingCoordinator::new(f.target.clone(), StagingLimits::default())?;
+        let coordinator =
+            StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
         coordinator.fault_for_test(2);
         let ticket = coordinator
             .submit(

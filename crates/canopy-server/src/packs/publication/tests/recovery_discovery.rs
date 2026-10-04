@@ -48,6 +48,7 @@ async fn restart_scan_seeks_bounded_keys_and_revisits_corrupt_pins_without_starv
         store.clone(),
         queue.clone(),
         scan_limits(17),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.passes >= 2).await?;
     assert!(stats.scanned >= 600);
@@ -76,7 +77,8 @@ async fn restart_scan_seeks_bounded_keys_and_revisits_corrupt_pins_without_starv
             f.target.clone(),
             foreign,
             queue.clone(),
-            scan_limits(1)
+            scan_limits(1),
+            f.authority(),
         ),
         Err(RootRecoveryError::Context)
     ));
@@ -95,6 +97,7 @@ pub(super) async fn leaves_live_owner(
         store.clone(),
         queue.clone(),
         scan_limits(1),
+        f.authority(),
         super::terminal_retention::maintenance(&f.handle, f.repository).await?,
     )?;
     let stats = scanned(&service, |stats| stats.deferred > 0).await?;
@@ -150,6 +153,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
             page: 1,
             interval: Duration::from_secs(1),
         },
+        f.authority(),
     )?;
     timeout(Duration::from_secs(10), entered).await??;
     let observer = queue
@@ -182,6 +186,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
                 page: 1,
                 interval: Duration::from_secs(1),
             },
+            f.authority(),
         )?
     } else {
         service
@@ -217,6 +222,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         store.clone(),
         queue.clone(),
         scan_limits(1),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.settled > 0).await?;
     assert_eq!(stats.submitted, 0);
@@ -225,7 +231,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8) -> Result {
         .await?
         .ok_or("settled pin lost on owner restore")?;
     assert_eq!(restored.evidence(), &original);
-    let recovered = restored.dispatch(&client, store).await?;
+    let recovered = restored.dispatch(&client, store, &f.authority()).await?;
     assert_eq!(recovered.receipt, completed.receipt);
     assert_eq!(recovered.output, completed.output);
     let lookup = BeginRequest {
@@ -259,7 +265,11 @@ pub(super) async fn advanced_head(
     let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     queue.fault_for_test(2);
     let observer = queue
-        .submit(original.clone().ready(client.clone(), store.clone())?)
+        .submit(
+            original
+                .clone()
+                .ready(client.clone(), store.clone(), f.authority())?,
+        )
         .await
         .map_err(|error| format!("historical admission: {:?}", error.reason))?;
     assert!(matches!(
@@ -273,6 +283,7 @@ pub(super) async fn advanced_head(
         store.clone(),
         queue.clone(),
         scan_limits(1),
+        f.authority(),
     )?;
     let stats = scanned(&service, |stats| stats.recovered > 0 || stats.deferred > 0).await?;
     assert!(

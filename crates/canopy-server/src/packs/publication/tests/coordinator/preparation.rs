@@ -1,5 +1,192 @@
 use super::*;
 
+#[tokio::test]
+async fn cold_original_renewal_keeps_history_but_cannot_grant_previous_owner_custody() -> Result {
+    let mut observations = Vec::new();
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let original_session = session(&f, [209; 16]).await?;
+        let coordinator =
+            PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let ticket = coordinator
+            .submit(
+                original_session
+                    .ready_renew(identity()?, DEFAULT_LEASE_MS)
+                    .await?,
+            )
+            .await?;
+        let original = changed(ticket.wait().await)?.committed;
+        assert!(coordinator.close_and_drain().await.is_empty());
+        let old_owner = original_session.lease.token.owner;
+        let (runtime, handle, client) =
+            super::super::durable_recovery::restore_owner(&f, &original_session.check).await?;
+        assert_ne!(handle.owner_fence(), old_owner);
+        // SQL still has the original operation and pin. Such historical facts
+        // are not an observation of the current admitted owner epoch.
+        let historical = client
+            .query::<CheckPreparation>(
+                &f.target,
+                Some(original.receipt),
+                original_session.check.clone(),
+            )
+            .await?
+            .output;
+        let restored = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let ticket = restored
+            .submit(
+                ReadyPreparation::restore(client, f.target.clone(), [209; 16], f.authority())
+                    .await?,
+            )
+            .await?;
+        let outcome = changed(ticket.wait().await)?;
+        assert_eq!(outcome.committed, original);
+        observations.push((format, historical.is_some(), outcome.session.is_ok()));
+        assert!(restored.close_and_drain().await.is_empty());
+        runtime.shutdown().await?;
+    }
+    assert!(
+        observations.iter().all(|(_, _, usable)| !usable),
+        "previous owner became usable after cold restoration: {observations:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_takeover_fences_shared_old_session_and_restores_current_claim() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let old = session(&f, [210; 16]).await?;
+        let shared = old.clone();
+        let (runtime, handle, client) =
+            super::super::durable_recovery::restore_owner(&f, &old.check).await?;
+        assert!(matches!(
+            old.check_owner().await,
+            Err(PreparationBaseError::Inactive)
+        ));
+        assert!(matches!(
+            shared.live_lease(),
+            Err(PreparationBaseError::Inactive)
+        ));
+        let queue = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+        let ready = ReadyPreparation::claim(
+            client.clone(),
+            f.target.clone(),
+            request_for(&old),
+            identity()?,
+            f.authority(),
+        )
+        .await?;
+        let result = changed(queue.submit(ready).await?.wait().await)?;
+        let current = result
+            .session
+            .as_ref()
+            .map_err(|e| format!("current claim: {e}"))?;
+        assert_eq!(current.lease.token.owner, handle.owner_fence());
+        assert_ne!(
+            current.lease.token.artifact_operation,
+            old.lease.token.artifact_operation
+        );
+        assert_eq!(current.lease.token.operation, old.lease.token.operation);
+        let restored =
+            ReadyPreparation::restore(client.clone(), f.target.clone(), [210; 16], f.authority())
+                .await?;
+        let replay = changed(queue.submit(restored).await?.wait().await)?;
+        assert_eq!(replay.committed, result.committed);
+        replay
+            .session
+            .as_ref()
+            .map_err(|e| format!("restored current claim: {e}"))?
+            .live_lease()?;
+        // A fresh granted session can renew through the same registered service.
+        let renewed = changed(
+            queue
+                .submit(current.ready_renew(identity()?, DEFAULT_LEASE_MS).await?)
+                .await?
+                .wait()
+                .await,
+        )?;
+        assert_eq!(
+            renewed
+                .session
+                .as_ref()
+                .map_err(|e| format!("current renewal: {e}"))?
+                .lease
+                .token,
+            current.lease.token
+        );
+        assert!(shared.live_lease().is_err());
+        assert!(queue.close_and_drain().await.is_empty());
+        runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_or_corrupt_owner_preserves_original_outcome_and_permanently_fences_session()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for corrupt in [false, true] {
+            let f = Fixture::new(format).await?;
+            let original_session = session(&f, [211; 16]).await?;
+            let queue =
+                PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+            let original = changed(
+                queue
+                    .submit(
+                        original_session
+                            .ready_renew(identity()?, DEFAULT_LEASE_MS)
+                            .await?,
+                    )
+                    .await?
+                    .wait()
+                    .await,
+            )?
+            .committed;
+            let control_path = f.layout.control_path(f.target.cell_id().as_bytes());
+            let (control, _) = f.layout.store().get_with_etag(&control_path).await?;
+            if corrupt {
+                f.layout
+                    .store()
+                    .put_overwrite(&control_path, bytes::Bytes::from_static(b"invalid control"))
+                    .await?;
+            } else {
+                f.layout.store().delete(&control_path).await?;
+            }
+            let restored =
+                ReadyPreparation::restore(f.client(), f.target.clone(), [211; 16], f.authority())
+                    .await?;
+            let result = changed(queue.submit(restored).await?.wait().await)?;
+            assert_eq!(result.committed, original);
+            assert!(result.session.is_err());
+            assert!(original_session.refresh(original.receipt).await.is_err());
+            assert!(
+                original_session
+                    .fenced
+                    .load(std::sync::atomic::Ordering::Acquire)
+            );
+            // Repairing the durable source does not undo a previously observed
+            // session fence. A fresh constructor must reacquire authority.
+            f.layout
+                .store()
+                .put_overwrite(&control_path, control)
+                .await?;
+            assert!(original_session.refresh(original.receipt).await.is_err());
+            PreparationSession::open(
+                f.client(),
+                f.target.clone(),
+                original_session.check.clone(),
+                Some(original.receipt),
+                f.authority(),
+            )
+            .await?
+            .live_lease()?;
+            assert!(queue.close_and_drain().await.is_empty());
+            f.runtime.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
 async fn session(f: &Fixture, operation: [u8; 16]) -> Result<Arc<PreparationSession>> {
     let started = registered_preparation(f, operation).await?;
     let lease = lease(started.output)?;
@@ -9,6 +196,7 @@ async fn session(f: &Fixture, operation: [u8; 16]) -> Result<Arc<PreparationSess
             f.target.clone(),
             check(lease.token),
             Some(started.receipt),
+            f.authority(),
         )
         .await?,
     ))
@@ -27,7 +215,14 @@ async fn ready(
 ) -> Result<ReadyPreparation> {
     Ok(match kind {
         PreparationCommandKind::Claim => {
-            ReadyPreparation::claim(f.client(), f.target.clone(), request_for(s), mutation).await?
+            ReadyPreparation::claim(
+                f.client(),
+                f.target.clone(),
+                request_for(s),
+                mutation,
+                f.authority(),
+            )
+            .await?
         }
         PreparationCommandKind::Renew => s.ready_renew(mutation, DEFAULT_LEASE_MS).await?,
     })
@@ -324,16 +519,28 @@ async fn bound_lease_ready_rejects_invalid_context_size_duration_and_never_reviv
     let mut wrong = request_for(&s);
     wrong.check.token.repository = uuid::Uuid::new_v4().into_bytes();
     assert!(
-        ReadyPreparation::claim(f.client(), f.target.clone(), wrong, identity()?)
-            .await
-            .is_err()
+        ReadyPreparation::claim(
+            f.client(),
+            f.target.clone(),
+            wrong,
+            identity()?,
+            f.authority(),
+        )
+        .await
+        .is_err()
     );
     let mut huge = request_for(&s);
     huge.check.actor = "x".repeat(8192);
     assert!(
-        ReadyPreparation::claim(f.client(), f.target.clone(), huge, identity()?)
-            .await
-            .is_err()
+        ReadyPreparation::claim(
+            f.client(),
+            f.target.clone(),
+            huge,
+            identity()?,
+            f.authority(),
+        )
+        .await
+        .is_err()
     );
     let coordinator = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     coordinator.fault_for_test(2);
@@ -397,6 +604,7 @@ async fn bound_lease_claim_after_actual_owner_restore_uses_new_fence_and_preserv
                     f.target.clone(),
                     request_for(&original),
                     mutation,
+                    f.authority(),
                 )
                 .await?,
             )

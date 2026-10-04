@@ -14,7 +14,9 @@ use cellule_runtime::{
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
     registry::{CommandContext, CommandResult, OwnerFence, QueryContext},
 };
+mod owner;
 pub(crate) mod registry;
+pub use owner::PreparationAuthority;
 mod session;
 pub use session::PreparationSession;
 mod base;

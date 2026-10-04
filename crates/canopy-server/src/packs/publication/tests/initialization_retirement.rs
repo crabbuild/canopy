@@ -67,7 +67,9 @@ async fn initialized_repository_releases_zero_floor_and_recovers_original_receip
         let loaded = RegisteredRootRecovery::load(&f.client(), &f.target, &store, &check)
             .await?
             .ok_or("initial receipt archive missing")?;
-        let recovered = loaded.recover_initialization(&f.client(), &store).await?;
+        let recovered = loaded
+            .recover_initialization(&f.client(), &store, &f.authority())
+            .await?;
         assert_eq!(
             (recovered.output, recovered.receipt),
             (original.output, original.receipt)
@@ -191,7 +193,7 @@ async fn missing_typed_initial_metadata_cannot_authorize_retirement() -> Result 
         );
         assert_eq!(
             saved
-                .recover_initialization(&f.client(), &store)
+                .recover_initialization(&f.client(), &store, &f.authority(),)
                 .await?
                 .receipt,
             original.receipt
@@ -238,7 +240,10 @@ async fn denied_initial_attempt_retires_only_after_claim_and_keeps_its_receipt_a
         "UPDATE catalog_operations SET expires_at_ms=0; UPDATE catalog_leases SET expires_at_ms=0",
     )
     .await?;
-    let denied = match saved.recover_initialization(&f.client(), &store).await {
+    let denied = match saved
+        .recover_initialization(&f.client(), &store, &f.authority())
+        .await
+    {
         Err(PublicationError::Initialization(InvocationError::Rejected(value))) => value,
         other => return Err(format!("expected original expiry: {other:?}").into()),
     };
@@ -263,6 +268,7 @@ async fn denied_initial_attempt_retires_only_after_claim_and_keeps_its_receipt_a
             page: 1,
             interval: Duration::from_secs(1),
         },
+        f.authority(),
         admin.clone(),
     )?;
     timeout(Duration::from_secs(10), async {
@@ -321,9 +327,9 @@ async fn denied_initial_attempt_retires_only_after_claim_and_keeps_its_receipt_a
     let old = RegisteredRootRecovery::load(&f.client(), &f.target, &store, &old)
         .await?
         .ok_or("old denied archive absent")?;
-    assert!(
-        matches!(old.recover_initialization(&f.client(), &store).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output == denied.output && value.receipt == denied.receipt)
-    );
+    assert!(matches!(old.recover_initialization(&f.client(),
+&store,
+&f.authority(),).await, Err(PublicationError::Initialization(InvocationError::Rejected(ref value))) if value.output == denied.output && value.receipt == denied.receipt));
     f.handle
         .query(0, 128, |db| {
             assert_eq!(
@@ -417,7 +423,9 @@ async fn lost_initial_retirement_ack_keeps_original_receipts_after_expiry_body_l
     let restored = RegisteredRootRecovery::load(&client, &f.target, &store, &check)
         .await?
         .ok_or("restored archive absent")?;
-    let result = restored.recover_initialization(&client, &store).await?;
+    let result = restored
+        .recover_initialization(&client, &store, &f.authority())
+        .await?;
     assert_eq!(
         (result.output, result.receipt),
         (original.output, original.receipt)
@@ -451,6 +459,7 @@ async fn automatic_initialization_retirement_recovers_uncertainty_after_pin_disa
             page: 1,
             interval: Duration::from_secs(1),
         },
+        f.authority(),
         maintenance(&f.handle, f.repository).await?,
     )?;
     let observer = timeout(Duration::from_secs(10), async {
@@ -489,6 +498,7 @@ async fn automatic_initialization_retirement_recovers_uncertainty_after_pin_disa
             page: 1,
             interval: Duration::from_secs(1),
         },
+        f.authority(),
         maintenance(&f.handle, f.repository).await?,
     )?;
     timeout(Duration::from_secs(10), async {

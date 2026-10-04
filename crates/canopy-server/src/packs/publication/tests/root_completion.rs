@@ -536,7 +536,9 @@ pub(super) async fn qualify(
         fixture.client().resolve(competing.evidence()).await?,
         Resolution::Absent
     ));
-    let known = registered.dispatch(&fixture.client(), store).await?;
+    let known = registered
+        .dispatch(&fixture.client(), store, &fixture.authority())
+        .await?;
     assert_eq!(known.output, committed.output);
     assert_eq!(known.receipt, committed.receipt);
     assert_eq!(
@@ -626,7 +628,10 @@ pub(super) async fn restored(
         client.resolve(competing.evidence()).await?,
         Resolution::Absent
     ));
-    let known = replay.registered.dispatch(&client, store).await?;
+    let known = replay
+        .registered
+        .dispatch(&client, store, &fixture.authority())
+        .await?;
     assert_eq!(known.output, replay.committed.output);
     assert_eq!(known.receipt, replay.committed.receipt);
     assert_eq!(state(&handle).await?, before);

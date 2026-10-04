@@ -311,23 +311,27 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
-        self.dispatch_root(client, store, None).await
+        self.dispatch_root(client, store, authority, None).await
     }
     async fn dispatch_root(
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
         let result = match self.record.kind {
             Kind::Publish => {
-                self.dispatch_command::<CompleteRootPush>(client, store, false, original)
+                self.dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
                     .await
             }
             Kind::Outcome => {
-                self.dispatch_command::<CompleteRootOutcome>(client, store, false, original)
-                    .await
+                self.dispatch_command::<CompleteRootOutcome>(
+                    client, store, authority, false, original,
+                )
+                .await
             }
             Kind::Policy | Kind::Initialization => {
                 Err(AttemptError::Invocation(InvocationError::NotStarted(
@@ -344,11 +348,13 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusing: &std::sync::atomic::AtomicBool,
     ) -> Result<PublicationOutcome, PublicationError> {
         self.dispatch_bound(
             client,
             store,
+            authority,
             refusing,
             None,
             #[cfg(test)]
@@ -360,25 +366,29 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusing: &std::sync::atomic::AtomicBool,
         original: Option<&PreparationSession>,
         #[cfg(test)] refusal_fault: Option<&std::sync::atomic::AtomicU8>,
     ) -> Result<PublicationOutcome, PublicationError> {
         if self.record.kind == Kind::Initialization {
             return self
-                .dispatch_initialization(client, store, original)
+                .dispatch_initialization(client, store, authority, original)
                 .await
                 .map(PublicationOutcome::Initialization);
         }
         if self.record.kind != Kind::Policy {
             let result = match original {
-                Some(original) => self.dispatch_root(client, store, Some(original)).await,
-                None => self.dispatch(client, store).await,
+                Some(original) => {
+                    self.dispatch_root(client, store, authority, Some(original))
+                        .await
+                }
+                None => self.dispatch(client, store, authority).await,
             };
             return result.map(PublicationOutcome::RootPush);
         }
         let result = self
-            .dispatch_command::<RegisterRefPolicyPage>(client, store, false, original)
+            .dispatch_command::<RegisterRefPolicyPage>(client, store, authority, false, original)
             .await;
         let refused = match &result {
             Ok(value) => {
@@ -431,7 +441,7 @@ impl RegisteredRootRecovery {
                 )));
             }
             let outcome = self
-                .dispatch_command::<CompleteRootOutcome>(client, store, true, original)
+                .dispatch_command::<CompleteRootOutcome>(client, store, authority, true, original)
                 .await;
             #[cfg(test)]
             if fault == 2 {
@@ -489,6 +499,7 @@ impl RegisteredRootRecovery {
         &self,
         client: &CellClient,
         store: &ArtifactStore,
+        authority: &PreparationAuthority,
         refusal: bool,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<C::Output>, AttemptError<C::Output>> {
@@ -546,6 +557,7 @@ impl RegisteredRootRecovery {
                     self.evidence().target().clone(),
                     self.record.check.clone(),
                     None,
+                    authority.clone(),
                 )
                 .await
                 {

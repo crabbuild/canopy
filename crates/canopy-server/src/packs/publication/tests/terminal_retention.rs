@@ -110,7 +110,9 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
             .await
             .is_err()
     );
-    let completed = registered.dispatch(&f.client(), store).await?;
+    let completed = registered
+        .dispatch(&f.client(), store, &f.authority())
+        .await?;
     drop(ready);
     drop(session);
     assert!(staging.close_and_drain().await.is_empty());
@@ -241,7 +243,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
         .await?
         .ok_or("archived recovery missing after owner restore")?;
     assert_eq!(loaded.evidence(), &original);
-    let recovered = loaded.dispatch(&client, store).await?;
+    let recovered = loaded.dispatch(&client, store, &f.authority()).await?;
     assert_eq!(
         (&recovered.output, recovered.receipt),
         (&completed.output, completed.receipt)
@@ -295,7 +297,10 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, provider: Arc<InMem
     )
     .await?;
     assert_eq!(
-        loaded.dispatch(&client, store).await?.receipt,
+        loaded
+            .dispatch(&client, store, &f.authority(),)
+            .await?
+            .receipt,
         completed.receipt
     );
     assert!(matches!(
@@ -396,6 +401,7 @@ pub(super) async fn archive(
             store.clone(),
             queue.clone(),
             limits,
+            f.authority(),
             admin.clone(),
         )?;
         timeout(Duration::from_secs(10), entered).await??;
@@ -436,6 +442,7 @@ pub(super) async fn archive(
                 store.clone(),
                 queue.clone(),
                 limits,
+                f.authority(),
                 admin.clone(),
             )?;
             service.shutdown().await?;
@@ -447,6 +454,7 @@ pub(super) async fn archive(
             store.clone(),
             queue.clone(),
             limits,
+            f.authority(),
             admin.clone(),
         )?;
         // No caller recovery request: the supervisor retries the original
@@ -507,11 +515,13 @@ pub(super) async fn archive(
     let original = loaded.clone();
     let artifacts = store.clone();
     let reader = client.clone();
+    let authority = f.authority();
     let actual = tokio::spawn(async move {
         original
             .dispatch_any(
                 &reader,
                 &artifacts,
+                &authority,
                 &std::sync::atomic::AtomicBool::new(false),
             )
             .await
