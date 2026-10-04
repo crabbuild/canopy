@@ -7,6 +7,7 @@ mod durable_policy;
 mod durable_recovery;
 mod frontier;
 mod initialization;
+mod initialization_recovery;
 mod inputs;
 mod mandatory_registration;
 mod namespaces;

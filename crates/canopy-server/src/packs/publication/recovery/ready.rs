@@ -92,6 +92,10 @@ impl ReadyRootRecovery {
             PublicationError::RootPush(InvocationError::Pending(Box::new(
                 saved.snapshot.evidence().clone(),
             )))
+        } else if self.recovery.record.kind == Kind::Initialization {
+            PublicationError::Initialization(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
         } else if self.recovery.record.kind == Kind::Policy {
             PublicationError::PolicyPage(InvocationError::Pending(Box::new(
                 self.recovery.evidence().clone(),

@@ -126,6 +126,11 @@ impl phase::Journal {
     ) -> Result<Option<CompletedRootPush>, CodecError> {
         // Validation is required even when only a primary result is selected.
         self.may_advance(record)?;
+        if record.kind == Kind::Initialization {
+            // Initial catalog roots have no native push response/audit graph.
+            // Keep their recovery pin until typed initialization retirement.
+            return Ok(None);
+        }
         let result = if record.kind == Kind::Policy {
             if !self.refused(record)? {
                 return Ok(None);

@@ -12,6 +12,8 @@ const INITIAL_HEAD: &str = "refs/heads/main";
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitializationPreparationError {
+    #[error("initialization command preparation failed")]
+    Command(#[source] Box<InvocationError<InitializationReply>>),
     #[error("initialization preparation is inactive")]
     Base(#[from] PreparationBaseError),
     #[error("initialization snapshot failed")]

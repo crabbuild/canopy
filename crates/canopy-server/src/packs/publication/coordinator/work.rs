@@ -254,6 +254,7 @@ impl ReadyPublication {
 
 #[derive(Clone, Debug)]
 pub enum PublicationOutcome {
+    Initialization(Committed<InitializationReply>),
     Push(Committed<CatalogCompletionReply>),
     RootPush(Committed<RootCompletionReply>),
     /// Original page result/receipt only; fresh guard checks remain mandatory.
@@ -265,6 +266,8 @@ pub enum PublicationOutcome {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("repository initialization publication: {0}")]
+    Initialization(#[source] InvocationError<InitializationReply>),
     #[error("terminal recovery release: {0}")]
     TerminalRelease(#[source] InvocationError<TerminalReleaseReply>),
     #[error("durable publication phase could not be observed: {source}")]
@@ -298,6 +301,7 @@ impl PublicationError {
         }
         match self {
             Self::Recovery { .. } => "pending",
+            Self::Initialization(error) => kind(error),
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
             Self::PolicyPage(error) => kind(error),
@@ -316,6 +320,7 @@ impl PublicationError {
         }
         match self {
             Self::Recovery { .. } => true,
+            Self::Initialization(error) => unknown(error),
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),
             Self::PolicyPage(error) => unknown(error),

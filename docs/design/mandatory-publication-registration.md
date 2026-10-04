@@ -1,33 +1,44 @@
 # Mandatory publication registration
 
-Status: receiver and registered-admission increment qualified locally on 2026-10-03. All existing publication callers in the qualification fixtures now use exact registration. This contract defines the required hard cutover; production startup, producers, readers and fresh-schema conversion remain incomplete.
+Status: policy/root registration is published through PR #33. The unpublished production cutover extends this same protocol to final catalog initialization. Production producers, readers, complete startup recovery and final schema conversion remain incomplete.
 
 ## Receiver contract
 
-Commands 33, 36 and 38 must find an authenticated recovery record on their exact preparation pin before executing their domain action. The record must match the actual SDK mutation stamp, repository check, tenant, application and incarnation. A missing registration, a competing SDK identity, or a premature frozen refusal returns `NotStarted`, leaves SDK resolution `Absent`, and changes neither domain state nor the registration journal. Retrying the same original command after registration is allowed.
+Commands 31, 33, 36 and 38 must find an authenticated recovery record on their exact preparation pin before executing their domain action. The record must match the actual SDK mutation stamp, repository check, tenant, application and incarnation. A missing registration, a competing SDK identity, or a premature frozen refusal returns `NotStarted`, leaves SDK resolution `Absent`, and changes neither domain state nor the registration journal. Retrying the same original command after registration is allowed.
 
 Register the exact command body and SDK snapshot before submission. Reuse `Record`, `Bundle`, `SavedCommand`, `Journal`, `Frame`, immutable input roots and `catalog_leases.recovery`; no new durable queue or per-object table is needed. Each policy bundle contains its original page command and one pre-frozen refusal command. Successful pages share that refusal. Advancing the pin requires the authenticated settled predecessor, with strictly increasing steps and a known successful page. A refused policy page cannot advance into positive publication.
 
 Domain effects, the original result and sequence, and the phase revision commit in the same SDK transaction. A trusted domain denial is durable knowledge; normalize its typed root reply without inventing another receipt. A later SQL or encoding failure rolls back every effect and SDK acceptance. Retry the original prepared command after repair.
 
-Recovery resolves the authenticated journal and original SDK evidence before reopening bodies or checking fresh custody. Only authoritative absence can execute restored original bytes. Positive cold recovery requires valid custody; a frozen refusal retains its refusal-only role and still checks its actual owner, operation, pin, floor and checkpoint. Original known outcomes remain recoverable after SDK expiry or owner loss. Product response streaming separately requires current Read authorization.
+Recovery resolves the authenticated journal and original SDK evidence before reopening bodies or checking fresh custody. Only authoritative absence can execute restored original bytes. Positive root/policy cold recovery requires valid custody; a frozen refusal retains its refusal-only role and still checks its actual owner, operation, pin, floor and checkpoint. Original known outcomes remain recoverable after SDK expiry or owner loss. Product response streaming separately requires current Read authorization.
 
 An exact registration retry can refer to a predecessor that has already become historical. `settled_frame` must supply artifact storage to `current_journal` so the existing authenticated history reader can recover that predecessor's original journal. Current-head equality alone is insufficient. The reader checks MACs, matching checks and strictly decreasing steps one bounded frame at a time.
 
 ## Protocol and admission
 
-Use recovery purpose `canopy.publication-command-recovery.v3\0` and these command codecs:
+Use recovery purpose `canopy.publication-command-recovery.v4\0` and these command codecs in the unpublished hard cutover:
 
 | Command | ID | Codec |
 | --- | --- | --- |
+| InitializeCatalogRefs | 31 | 2 |
 | RegisterRefPolicyPage | 33 | 2 |
 | CompleteRootPush | 36 | 2 |
 | CompleteRootOutcome | 38 | 3 |
-| RegisterRootRecovery | 39 | 3 |
+| RegisterRootRecovery | 39 | 4 |
 
 Keep the existing record and artifact structures. Do not add a compatibility decoder or an unregistered execution fallback.
 
-Live factories persist their exact bundle, then bind it into `ReadyBoundRecovery`, preserving the original session, shared clock, lifecycle fence and policy intent. Cold registered work uses `ReadyRootRecovery`. Both use the existing fair publication queue. Raw `ReadyRootPush` and `ReadyRefPolicyPage` values have no admission variant or `From` conversion; persist and bind before submitting. Their private factory values remain available for exact registration and refusal composition. The obsolete direct dispatch code and unused per-page refusal-state allocation are removed. The current reservation formula charges two copies of the body, recovery header and optional refusal: 32 KiB for a final root command and 544 KiB for an armed policy page. Uncertain work stays charged through cancellation and service closure.
+Live factories persist their exact bundle, then bind it into `ReadyBoundRecovery`, preserving the original session, shared clock, lifecycle fence and policy intent. Cold registered work uses `ReadyRootRecovery`. Both use the existing fair publication queue. Raw `ReadyRootPush` and `ReadyRefPolicyPage` values have no admission variant or `From` conversion; persist and bind before submitting. Their private factory values remain available for exact registration and refusal composition. The obsolete direct dispatch code and unused per-page refusal-state allocation are removed. The current reservation formula charges two copies of the body, recovery header and optional refusal: 20 KiB for initialization, 32 KiB for a final root command and 544 KiB for an armed policy page. Uncertain work stays charged through cancellation and service closure.
+
+## Catalog initialization recovery
+
+`ReadyInitialization` derives the private empty proof from its retained `PreparedCatalog`, freezes command 31 and persists the same exact SDK snapshot/body/header before dispatch. Registration command 39 pins `Kind::Initialization` in the existing attempt namespace. Matching original capabilities can bind into the existing fair publication queue. Production repository startup instead retains this same owner through its already admitted, tracked repository transition. Unknown registration never authorizes final execution.
+
+Pending startup queries the current indexed operation/pin binding before issuing Begin. A recovered positive verifies the original empty catalog/directory/ref roots. Only a known original Stale/Expired final denial permits Claim of that observed attempt; other uncertainty propagates. Ready restoration observes the retained initialization fact without creating a new attempt.
+
+Cold initialization performs no new preparation or native work. After authoritative SDK absence it restores the exact original bytes and lets the final receiver atomically check actual owner, Admin, live pin, certificate/checkpoint and pristine roots. Requiring a fresh Write-dependent session first would prevent an expired or revoked original from recording its definitive denial. Live bound dispatch still checks its original shared clock/fence. Known journal outcomes retain their original sequence and receipt even after SDK expiry, owner loss, permission revocation and body loss; they grant no current write or read capability.
+
+This closes final-command registration and reconstruction only. Exact initial Begin/Claim/Renew and failure before final registration still need durable integration. Initialization has no native push response/audit graph, so push terminal retirement cannot release its pin. Its generation-zero recovery pin remains retained until typed initialization retirement is implemented; that floor prevents generation collection and is a release blocker. Include the immutable initialization roots, command metadata and receipts in typed collection, backup and isolated restore.
 
 ## Remaining implementation sequence
 

@@ -324,15 +324,14 @@ async fn root_outcome_preserves_plain_http_errors_without_verifying_or_publishin
         .await?
         .finish()
         .await?;
-        request
-            .fixture
-            .client()
-            .command::<InitializeCatalogRefs>(
-                &request.fixture.target,
-                identity()?,
-                initial.empty_ref_initialization().await?,
-            )
-            .await?;
+        let (command, _) = super::super::super::initialization::registered(
+            &request.fixture,
+            &initial,
+            initial.empty_ref_initialization().await?,
+            identity()?,
+        )
+        .await?;
+        command.execute().await?;
         drop(initial);
         super::super::super::prepare::cleaned(initial_root.path(), &initial_budget).await?;
         let before = super::super::super::publishing::state(&request.fixture.handle).await?;

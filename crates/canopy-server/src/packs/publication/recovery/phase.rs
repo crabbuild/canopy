@@ -84,7 +84,12 @@ pub(super) struct Journal {
 impl Journal {
     fn validate(&self, record: &Record) -> Result<(), CodecError> {
         if let Some(primary) = &self.primary {
-            let denied = if record.kind == Kind::Policy {
+            let denied = if record.kind == Kind::Initialization {
+                matches!(
+                    primary.decode_reply::<InitializationReply>()?,
+                    InitializationReply::Denied(_)
+                )
+            } else if record.kind == Kind::Policy {
                 matches!(
                     primary.decode_reply::<RefPolicyReply>()?,
                     RefPolicyReply::Denied(_)
@@ -140,7 +145,12 @@ impl Journal {
         let Some(primary) = &self.primary else {
             return Ok(false);
         };
-        Ok(if record.kind == Kind::Policy {
+        Ok(if record.kind == Kind::Initialization {
+            matches!(
+                primary.decode_reply::<InitializationReply>()?,
+                InitializationReply::Denied(_)
+            )
+        } else if record.kind == Kind::Policy {
             matches!(primary.decode_reply::<RefPolicyReply>()?, RefPolicyReply::Registered(value) if value.valid)
         } else {
             matches!(

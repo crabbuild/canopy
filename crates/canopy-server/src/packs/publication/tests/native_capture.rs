@@ -456,14 +456,14 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             .await?
             .finish()
             .await?;
-        fixture
-            .client()
-            .command::<InitializeCatalogRefs>(
-                &fixture.target,
-                identity()?,
-                empty.empty_ref_initialization().await?,
-            )
-            .await?;
+        let (command, _) = super::initialization::registered(
+            &fixture,
+            &empty,
+            empty.empty_ref_initialization().await?,
+            identity()?,
+        )
+        .await?;
+        command.execute().await?;
         drop(empty);
         cleaned(root.path(), &budget).await?;
     }

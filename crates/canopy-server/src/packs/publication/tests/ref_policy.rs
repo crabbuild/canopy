@@ -41,10 +41,9 @@ async fn rooted(format: ObjectFormat) -> Result<(Fixture, Graph)> {
         .finish()
         .await?;
     let proof = empty.empty_ref_initialization().await?;
-    fixture
-        .client()
-        .command::<InitializeCatalogRefs>(&fixture.target, identity()?, proof)
-        .await?;
+    let (command, _) =
+        super::initialization::registered(&fixture, &empty, proof, identity()?).await?;
+    command.execute().await?;
     drop(empty);
     cleaned(root.path(), &budget).await?;
     let graph = fixture::attempt(&fixture, provider, store).await?;

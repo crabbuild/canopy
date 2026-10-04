@@ -7,9 +7,9 @@ use crate::{
         metadata::MetadataLimits,
         publication::{
             BeginPreparation, BeginRequest, CatalogPreparation, CheckInitializedCatalog,
-            ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact, InitializationReply,
-            InitializeCatalogRefs, LeaseCheck, LeaseRequest, PreparationBaseResolver,
-            PreparationDenial, PreparationReply, PreparationToken,
+            ClaimPreparation, DEFAULT_LEASE_MS, GenerationFact, InitializationReply, LeaseCheck,
+            LeaseRequest, PreparationBaseResolver, PreparationDenial, PreparationReply,
+            PreparationToken, PublicationError, RegisteredRootRecovery,
         },
     },
 };
@@ -113,45 +113,86 @@ pub(super) async fn ensure(
         return Err(Error::Command("ready repository has no certified initialization").into());
     }
     let started_at = std::time::Instant::now();
-    let started = match client
-        .command::<BeginPreparation>(target, super::mutation_identity()?, input.clone())
-        .await
-    {
-        Ok(started) => started,
-        Err(InvocationError::Rejected(rejected))
-            if matches!(
-                rejected.output,
-                PreparationReply::Denied(PreparationDenial::Stale | PreparationDenial::Expired)
-            ) =>
-        {
-            // Claim only after a known domain refusal. Read the exact old
-            // binding; the Claim receiver verifies its pin and actual owner.
-            let check = prior_attempt(&client, repository, &input, rejected.receipt).await?;
-            client
-                .command::<ClaimPreparation>(
-                    target,
-                    super::mutation_identity()?,
-                    LeaseRequest {
-                        check,
-                        lease_ms: DEFAULT_LEASE_MS,
-                    },
-                )
-                .await?
-        }
-        Err(error) => {
-            // A logical initialization can win between the first query and
-            // Begin. Only a known conflict may use that exact retained result;
-            // uncertain command evidence stays an error, never fresh admission.
-            if matches!(&error, InvocationError::Rejected(value)
-                if value.output == PreparationReply::Denied(PreparationDenial::Conflict))
-                && let Some(fact) = client
-                    .query::<CheckInitializedCatalog>(target, None, input)
-                    .await?
-                    .output
-            {
-                return verify(fact, &store, repository.object_format).await;
+    let recovered =
+        RegisteredRootRecovery::load_initialization(&client, target, &store, &input).await?;
+    let claim = if let Some(recovered) = recovered {
+        match recovered.recover_initialization(&client, &store).await {
+            Ok(committed) => {
+                let InitializationReply::Initialized(fact) = committed.output else {
+                    return Err(Error::Command("invalid recovered initialization reply").into());
+                };
+                return verify(*fact, &store, repository.object_format).await;
             }
-            return Err(error.into());
+            Err(PublicationError::Initialization(InvocationError::Rejected(ref value)))
+                if matches!(
+                    value.output,
+                    InitializationReply::Denied(
+                        PreparationDenial::Stale | PreparationDenial::Expired
+                    )
+                ) =>
+            {
+                Some(LeaseCheck {
+                    token: recovered.token(),
+                    actor: owner.into(),
+                })
+            }
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        None
+    };
+    let started = if let Some(check) = claim {
+        client
+            .command::<ClaimPreparation>(
+                target,
+                super::mutation_identity()?,
+                LeaseRequest {
+                    check,
+                    lease_ms: DEFAULT_LEASE_MS,
+                },
+            )
+            .await?
+    } else {
+        match client
+            .command::<BeginPreparation>(target, super::mutation_identity()?, input.clone())
+            .await
+        {
+            Ok(started) => started,
+            Err(InvocationError::Rejected(rejected))
+                if matches!(
+                    rejected.output,
+                    PreparationReply::Denied(PreparationDenial::Stale | PreparationDenial::Expired)
+                ) =>
+            {
+                // Claim only after a known domain refusal. Read the exact old
+                // binding; the Claim receiver verifies its pin and actual owner.
+                let check = prior_attempt(&client, repository, &input, rejected.receipt).await?;
+                client
+                    .command::<ClaimPreparation>(
+                        target,
+                        super::mutation_identity()?,
+                        LeaseRequest {
+                            check,
+                            lease_ms: DEFAULT_LEASE_MS,
+                        },
+                    )
+                    .await?
+            }
+            Err(error) => {
+                // A logical initialization can win between the first query and
+                // Begin. Only a known conflict may use that exact retained result;
+                // uncertain command evidence stays an error, never fresh admission.
+                if matches!(&error, InvocationError::Rejected(value)
+                if value.output == PreparationReply::Denied(PreparationDenial::Conflict))
+                    && let Some(fact) = client
+                        .query::<CheckInitializedCatalog>(target, None, input)
+                        .await?
+                        .output
+                {
+                    return verify(fact, &store, repository.object_format).await;
+                }
+                return Err(error.into());
+            }
         }
     };
     let PreparationReply::Granted(lease) = started.output else {
@@ -183,14 +224,19 @@ pub(super) async fn ensure(
         )
         .await?,
     );
-    let prepared = CatalogPreparation::new(workspace, budget, base, MetadataLimits::default())
-        .await?
-        .finish()
+    let prepared = Arc::new(
+        CatalogPreparation::new(workspace, budget, base, MetadataLimits::default())
+            .await?
+            .finish()
+            .await?,
+    );
+    let ready = prepared
+        .ready_initialization(super::mutation_identity()?)
         .await?;
-    let proof = prepared.empty_ref_initialization().await?;
-    let committed = client
-        .command::<InitializeCatalogRefs>(target, super::mutation_identity()?, proof)
+    let registered = ready
+        .persist_recovery(&store, super::mutation_identity()?)
         .await?;
+    let committed = ready.complete(&registered, &store).await?;
     let InitializationReply::Initialized(fact) = committed.output else {
         return Err(Error::Command("repository initialization publication denied").into());
     };

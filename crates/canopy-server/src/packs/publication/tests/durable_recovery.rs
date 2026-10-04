@@ -154,12 +154,13 @@ async fn qualify_ready(
             .evidence(),
         &original
     );
+    let token = check.token;
     let persisted = f
         .handle
-        .query(0, 1024, |db| {
+        .query(0, 1024, move |db| {
             Ok(db.query_row(
-                "SELECT recovery FROM catalog_leases WHERE recovery IS NOT NULL",
-                [],
+                "SELECT recovery FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                 |row| row.get::<_, Vec<u8>>(0),
             )?)
         })
@@ -289,7 +290,7 @@ async fn qualify_ready(
                         .output
                         .is_none()
                 );
-                assert_pin_retained(&handle).await?;
+                assert_pin_retained(&handle, check.token).await?;
                 runtime.shutdown().await?;
                 return Ok(());
             }
@@ -309,7 +310,7 @@ async fn qualify_ready(
                 .is_none()
         );
     }
-    assert_pin_retained(&handle).await?;
+    assert_pin_retained(&handle, check.token).await?;
     runtime.shutdown().await?;
     Ok(())
 }
@@ -326,26 +327,26 @@ pub(super) async fn read_response(
         body,
     })
 }
-async fn assert_pin_retained(handle: &CellHandle) -> Result {
+async fn assert_pin_retained(handle: &CellHandle, token: PreparationToken) -> Result {
     handle
-        .query(0, 32, |db| {
+        .query(0, 32, move |db| {
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |row| row.get::<_, u64>(0)
                 )?,
                 1
             );
             assert!(
                 db.execute(
-                    "UPDATE catalog_leases SET recovery=NULL WHERE recovery IS NOT NULL",
-                    []
+                    "UPDATE catalog_leases SET recovery=NULL WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt]
                 )
                 .is_err()
             );
             assert!(
-                db.execute("DELETE FROM catalog_leases WHERE recovery IS NOT NULL", [])
+                db.execute("DELETE FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt])
                     .is_err()
             );
             Ok(Vec::new())

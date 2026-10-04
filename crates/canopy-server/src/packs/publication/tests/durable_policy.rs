@@ -73,8 +73,9 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
             f.client().resolve(&first_evidence).await?,
             Resolution::Absent
         ));
+        let token = check.token;
         f.handle
-            .query(0, 128, |db| {
+            .query(0, 128, move |db| {
                 assert_eq!(
                     db.query_row("SELECT count(*) FROM ref_policy_guards", [], |row| row
                         .get::<_, u64>(0))?,
@@ -82,8 +83,8 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
                 );
                 assert_eq!(
                     db.query_row(
-                        "SELECT count(*) FROM catalog_leases WHERE recovery_phase IS NOT NULL",
-                        [],
+                        "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery_phase IS NOT NULL",
+                        rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                         |row| row.get::<_, u64>(0)
                     )?,
                     0

@@ -61,8 +61,8 @@ pub use coordinator::{
     PreparationReadyError, PublicationAdmissionFailure, PublicationClass, PublicationCoordinator,
     PublicationError, PublicationLimits, PublicationOutcome, PublicationScheduleError,
     PublicationState, PublicationStats, PublicationTicket, ReadyBoundRecovery,
-    ReadyCatalogCompaction, ReadyCatalogPush, ReadyNativeInputs, ReadyPreparation,
-    ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
+    ReadyCatalogCompaction, ReadyCatalogPush, ReadyInitialization, ReadyNativeInputs,
+    ReadyPreparation, ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
     RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
 };
 mod commands;

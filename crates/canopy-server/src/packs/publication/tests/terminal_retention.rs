@@ -5,6 +5,16 @@ use canopy_object_storage::artifact::ArtifactStore;
 use cellule_runtime::{CellClient, Committed, Resolution};
 use tokio::time::{Duration, timeout};
 
+async fn unrelated_recovery_pins(handle: &CellHandle, token: PreparationToken) -> Result<Vec<u8>> {
+    Ok(handle.query(0, 64 << 10, move |db| {
+        let mut statement = db.prepare("SELECT incarnation,admission_sequence,recovery,recovery_phase,recovery_phase_revision FROM catalog_leases WHERE recovery IS NOT NULL AND NOT(incarnation=?1 AND admission_sequence=?2) ORDER BY incarnation,admission_sequence")?;
+        let pins = statement.query_map(rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |row| Ok((
+            row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?, row.get::<_, Vec<u8>>(2)?, row.get::<_, Option<Vec<u8>>>(3)?, row.get::<_, u64>(4)?
+        )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        serde_json::to_vec(&pins).map_err(|_| Error::Command("fixture unrelated recovery pins"))
+    }).await?)
+}
+
 pub(super) async fn maintenance(
     handle: &CellHandle,
     repository: [u8; 16],
@@ -318,6 +328,8 @@ pub(super) async fn archive(
     expected: &Committed<RootCompletionReply>,
     fault: u8,
 ) -> Result<ReadyTerminalRelease> {
+    let token = head.token();
+    let unrelated = unrelated_recovery_pins(handle, token).await?;
     let admin = maintenance(handle, f.repository).await?;
     // The certificate binds the original actor, but release needs CURRENT
     // repository administration and actual admitted owner custody separately.
@@ -349,7 +361,7 @@ pub(super) async fn archive(
         Resolution::Absent
     ));
     handle
-        .query(0, 128, |db| {
+        .query(0, 128, move |db| {
             assert_eq!(
                 db.query_row(
                     "SELECT count(*) FROM pushes WHERE recovery IS NOT NULL",
@@ -360,8 +372,8 @@ pub(super) async fn archive(
             );
             assert_eq!(
                 db.query_row(
-                    "SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL",
-                    [],
+                    "SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL",
+                    rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt],
                     |r| r.get::<_, u64>(0)
                 )?,
                 1
@@ -449,7 +461,10 @@ pub(super) async fn archive(
         assert!(stats.release_recovered > 0);
         assert_eq!(stats.failures, 0);
         if fault != 1 {
-            assert_eq!(stats.scanned, 0);
+            // A retired push has no pin. Any independent initialization pin
+            // remains settled and must not admit another publication/release.
+            assert_eq!(stats.scanned, stats.settled);
+            assert_eq!(stats.submitted, 0);
         }
     }
     let PublicationState::Finished(Ok(PublicationOutcome::TerminalRelease(released))) =
@@ -469,14 +484,15 @@ pub(super) async fn archive(
         (&recovered.output, recovered.receipt),
         (&released.output, released.receipt)
     );
-    handle.query(0, 128, |db| {
-        assert_eq!(db.query_row("SELECT count(*) FROM catalog_leases WHERE recovery IS NOT NULL", [], |r| r.get::<_, u64>(0))?, 0);
+    handle.query(0, 128, move |db| {
+        assert_eq!(db.query_row("SELECT count(*) FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2 AND recovery IS NOT NULL", rusqlite::params![token.owner.incarnation.as_bytes().as_slice(), token.attempt], |r| r.get::<_, u64>(0))?, 0);
         assert_eq!(db.query_row("SELECT count(*) FROM pushes WHERE recovery IS NOT NULL AND recovery_phase IS NOT NULL AND recovery_release IS NOT NULL", [], |r| r.get::<_, u64>(0))?, 1);
         for sql in ["UPDATE pushes SET recovery=NULL,recovery_phase=NULL,recovery_release=NULL WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_phase=x'01' WHERE recovery IS NOT NULL", "UPDATE pushes SET recovery_release=x'01' WHERE recovery IS NOT NULL", "DELETE FROM pushes WHERE recovery IS NOT NULL"] {
             assert!(db.execute(sql, []).is_err(), "{sql}");
         }
         Ok(Vec::new())
     }).await?;
+    assert_eq!(unrelated_recovery_pins(handle, token).await?, unrelated);
     let loaded = RegisteredRootRecovery::load(
         client,
         &f.target,
