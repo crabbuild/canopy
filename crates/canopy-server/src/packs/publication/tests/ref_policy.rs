@@ -1,17 +1,34 @@
 use super::*;
 use super::{
     prepare::{cleaned, opened},
-    publishing::{Graph, edit, plan, state, update},
-    reconcile::graph,
+    publishing::{Graph as CatalogGraph, edit, plan, state, update},
 };
 use crate::packs::metadata::tests::limits;
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
+use cellule_runtime::{PreparedCommand, Resolution};
+use tokio::sync::Mutex;
+use tokio::time::{Duration, timeout};
+mod fixture;
 
 mod cleanup;
 mod freshness;
 mod pages;
 
+struct Graph {
+    catalog: CatalogGraph,
+    staging: StagingCoordinator,
+    ticket: StagingTicket,
+    refusal: Arc<ReadyRootPush>,
+    head: Mutex<Option<RegisteredRootRecovery>>,
+    provider: Arc<dyn object_store::ObjectStore>,
+}
+impl std::ops::Deref for Graph {
+    type Target = CatalogGraph;
+    fn deref(&self) -> &Self::Target {
+        &self.catalog
+    }
+}
 async fn rooted(format: ObjectFormat) -> Result<(Fixture, Graph)> {
     let fixture = Fixture::new(format).await?;
     let provider: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
@@ -30,13 +47,93 @@ async fn rooted(format: ObjectFormat) -> Result<(Fixture, Graph)> {
         .await?;
     drop(empty);
     cleaned(root.path(), &budget).await?;
-    let graph = graph(&fixture, provider, store, [231; 16], 4).await?;
+    let graph = fixture::attempt(&fixture, provider, store).await?;
     Ok((fixture, graph))
 }
+async fn fresh(f: &Fixture, graph: &Graph) -> Result<Graph> {
+    let fresh = fixture::attempt(f, graph.provider.clone(), graph.store.clone()).await?;
+    assert_eq!((fresh.tip, fresh.blob), (graph.tip, graph.blob));
+    assert_ne!(
+        fresh.prepared.token().artifact_operation,
+        graph.prepared.token().artifact_operation
+    );
+    Ok(fresh)
+}
+async fn finish_graph(graph: Graph) -> Result {
+    graph.ticket.stop();
+    assert!(graph.staging.close_and_drain().await.is_empty());
+    let Graph { catalog, .. } = graph;
+    drop(catalog.prepared);
+    cleaned(catalog.root.path(), &catalog.budget).await?;
+    Ok(())
+}
 async fn close(fixture: Fixture, graph: Graph) -> Result {
-    drop(graph.prepared);
-    cleaned(graph.root.path(), &graph.budget).await?;
+    finish_graph(graph).await?;
     fixture.runtime.shutdown().await?;
+    Ok(())
+}
+async fn arm(
+    f: &Fixture,
+    graph: &Graph,
+    page: RefPolicyPage,
+) -> Result<PreparedCommand<RegisterRefPolicyPage>> {
+    let command = f
+        .client()
+        .prepare_command::<RegisterRefPolicyPage>(&f.target, identity()?, page)
+        .await?;
+    let mut head = graph.head.lock().await;
+    let registered = Box::pin(super::super::recovery::persist_full(
+        &graph.prepared.base.session,
+        &command,
+        super::super::recovery::Kind::Policy,
+        Some(
+            graph
+                .refusal
+                .refusal_command()
+                .ok_or("frozen policy fixture refusal")?,
+        ),
+        head.as_ref(),
+        &graph.store,
+        identity()?,
+        0,
+    ))
+    .await?;
+    *head = Some(registered);
+    Ok(command)
+}
+async fn denied(
+    f: &Fixture,
+    command: &PreparedCommand<RegisterRefPolicyPage>,
+    reason: PreparationDenial,
+) -> Result {
+    let before = state(&f.handle).await?;
+    let phase_before = super::mandatory_registration::registration_state(f).await?;
+    let value = Box::pin(command.clone().execute()).await?;
+    assert_eq!(value.output, RefPolicyReply::Denied(reason));
+    assert_eq!(state(&f.handle).await?, before);
+    let phase_after = super::mandatory_registration::registration_state(f).await?;
+    assert_ne!(phase_after, phase_before);
+    let Resolution::Committed(original) = f.client().resolve(command.evidence()).await? else {
+        return Err("registered negative page receipt missing".into());
+    };
+    assert!(matches!(
+        original,
+        cellule_runtime::cell::executor::StoredOutcome::Success { .. }
+    ));
+    let mut decoder = BoundedDecoder::new(original.result(), 512)?;
+    assert_eq!(RefPolicyReply::decode(&mut decoder)?, value.output);
+    decoder.finish()?;
+    assert_eq!(original.commit_sequence(), value.receipt.commit_sequence);
+    let replay = Box::pin(command.clone().execute()).await?;
+    assert_eq!(
+        (replay.output, replay.receipt),
+        (value.output, value.receipt)
+    );
+    assert_eq!(state(&f.handle).await?, before);
+    assert_eq!(
+        super::mandatory_registration::registration_state(f).await?,
+        phase_after
+    );
     Ok(())
 }
 fn run_sql(oid: crate::ObjectId, context: &str, version: u64, state: &str) -> String {
@@ -53,7 +150,11 @@ async fn registered(
     fixture: &Fixture,
     graph: &Graph,
     changes: crate::PushPlan,
-) -> Result<(RefPolicyPreparation, RefPolicyPage)> {
+) -> Result<(
+    RefPolicyPreparation,
+    RefPolicyPage,
+    PreparedCommand<RegisterRefPolicyPage>,
+)> {
     fn send<T: Send>(value: T) -> T {
         value
     }
@@ -65,12 +166,10 @@ async fn registered(
     ))
     .await?;
     let page = send(pending.page(&graph.prepared, 0)).await?;
-    let reply = fixture
-        .client()
-        .command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page.clone())
-        .await?;
+    let command = arm(fixture, graph, page.clone()).await?;
+    let reply = Box::pin(command.clone().execute()).await?;
     assert!(matches!(reply.output,RefPolicyReply::Registered(progress) if progress.ready()));
-    Ok((pending, page))
+    Ok((pending, page, command))
 }
 #[tokio::test]
 async fn guarded_root_binds_catalog_conditional_refs_and_original_intent_and_survives_unrelated_rebase()
@@ -82,16 +181,13 @@ async fn guarded_root_binds_catalog_conditional_refs_and_original_intent_and_sur
             update("refs/heads/main", None, Some(graph.tip)),
             update("refs/tags/example", None, Some(graph.initial)),
         ]);
-        let (pending, page) = registered(&fixture, &graph, changes.clone()).await?;
-        let receipt = fixture
-            .client()
-            .command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page.clone())
-            .await?;
-        let replay = fixture
-            .client()
-            .command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page.clone())
-            .await?;
-        assert_eq!(receipt.output, replay.output);
+        let (pending, page, command) = registered(&fixture, &graph, changes.clone()).await?;
+        let receipt = Box::pin(command.clone().execute()).await?;
+        let replay = Box::pin(command.clone().execute()).await?;
+        assert_eq!(
+            (receipt.output, receipt.receipt),
+            (replay.output, replay.receipt)
+        );
         let guard = pending.ready(&graph.prepared).await?;
         let old = graph.prepared.base().refs;
         fixture
@@ -155,7 +251,7 @@ async fn exact_check_dependencies_ignore_unrelated_and_older_reports_and_refuse_
     let (fixture, graph) = rooted(ObjectFormat::Sha256).await?;
     protect(&fixture, &graph).await?;
     let changes = plan(vec![update("refs/heads/main", None, Some(graph.tip))]);
-    let (pending, _) = registered(&fixture, &graph, changes.clone()).await?;
+    let (pending, _, _) = registered(&fixture, &graph, changes.clone()).await?;
     assert_ne!(graph.blob, graph.tip);
     edit(&fixture,&format!("{}; {}; UPDATE check_runs SET state='failure',version=2 WHERE number=1; DELETE FROM check_runs WHERE number=1",run_sql(graph.blob,"ci",1,"success"),run_sql(graph.tip,"ci",2,"failure"))).await?;
     assert!(pending.ready(&graph.prepared).await.is_ok());
@@ -165,21 +261,21 @@ async fn exact_check_dependencies_ignore_unrelated_and_older_reports_and_refuse_
         Err(RefPolicyPreparationError::Context)
     ));
     edit(&fixture,"UPDATE check_runs SET state='success',version=2 WHERE number=(SELECT max(number) FROM check_runs WHERE context_version=1)").await?;
-    let (pending, _) = registered(&fixture, &graph, changes.clone()).await?;
+    let (pending, _, _) = registered(&fixture, &graph, changes.clone()).await?;
     edit(&fixture,&format!("INSERT OR REPLACE INTO check_runs SELECT number,id,X'{}',context,context_version,reporter,state,version,summary,created_ms,updated_ms FROM check_runs WHERE oid=X'{}' AND context_version=1 ORDER BY number DESC LIMIT 1",hex::encode(graph.blob),hex::encode(graph.tip))).await?;
     assert!(matches!(
         pending.ready(&graph.prepared).await,
         Err(RefPolicyPreparationError::Context)
     ));
     edit(&fixture, &run_sql(graph.tip, "ci", 1, "success")).await?;
-    let (pending, _) = registered(&fixture, &graph, changes.clone()).await?;
+    let (pending, _, _) = registered(&fixture, &graph, changes.clone()).await?;
     edit(&fixture,&format!("INSERT OR REPLACE INTO check_runs(id,oid,context,context_version,reporter,state,version,summary,created_ms,updated_ms) SELECT id,X'{}',context,context_version,reporter,state,version,summary,created_ms,updated_ms FROM check_runs WHERE oid=X'{}' AND context_version=1 ORDER BY number DESC LIMIT 1",hex::encode(graph.blob),hex::encode(graph.tip))).await?;
     assert!(matches!(
         pending.ready(&graph.prepared).await,
         Err(RefPolicyPreparationError::Context)
     ));
     edit(&fixture, &run_sql(graph.tip, "ci", 1, "success")).await?;
-    let (pending, _) = registered(&fixture, &graph, changes).await?;
+    let (pending, _, _) = registered(&fixture, &graph, changes).await?;
     edit(
         &fixture,
         &format!(

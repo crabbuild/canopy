@@ -29,10 +29,12 @@ pub use ready::ReadyRootRecovery;
 mod registration;
 pub use registration::RegisterRootRecovery;
 pub(in crate::packs::publication) mod phase;
-pub(in crate::packs::publication) use phase::{execute, normalize_root};
+pub(in crate::packs::publication) use phase::execute;
+#[cfg(test)]
+pub(in crate::packs::publication) use phase::normalize_root;
 
 const ROOT_BYTES: u32 = 8192;
-const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v2\0";
+const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v3\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
@@ -336,7 +338,15 @@ impl RegisteredRootRecovery {
         store: &ArtifactStore,
         refusing: &std::sync::atomic::AtomicBool,
     ) -> Result<PublicationOutcome, PublicationError> {
-        self.dispatch_bound(client, store, refusing, None).await
+        self.dispatch_bound(
+            client,
+            store,
+            refusing,
+            None,
+            #[cfg(test)]
+            None,
+        )
+        .await
     }
     pub(super) async fn dispatch_bound(
         &self,
@@ -344,6 +354,7 @@ impl RegisteredRootRecovery {
         store: &ArtifactStore,
         refusing: &std::sync::atomic::AtomicBool,
         original: Option<&PreparationSession>,
+        #[cfg(test)] refusal_fault: Option<&std::sync::atomic::AtomicU8>,
     ) -> Result<PublicationOutcome, PublicationError> {
         if self.record.kind != Kind::Policy {
             let result = match original {
@@ -393,10 +404,33 @@ impl RegisteredRootRecovery {
                 })?
                 .snapshot
                 .evidence();
-            return match self
+            // The phase-specific probe is test-only and consumed once at
+            // the actual fallback boundary. Recovery retains this same command.
+            #[cfg(test)]
+            let fault = refusal_fault
+                .map(|fault| fault.swap(0, std::sync::atomic::Ordering::AcqRel))
+                .unwrap_or(0);
+            #[cfg(test)]
+            if fault == 1 {
+                return Err(PublicationError::RootPush(InvocationError::Pending(
+                    Box::new(evidence.clone()),
+                )));
+            }
+            let outcome = self
                 .dispatch_command::<CompleteRootOutcome>(client, store, true, original)
-                .await
-            {
+                .await;
+            #[cfg(test)]
+            if fault == 2 {
+                return Err(PublicationError::RootPush(InvocationError::Pending(
+                    Box::new(evidence.clone()),
+                )));
+            }
+            #[cfg(test)]
+            assert_ne!(
+                fault, 3,
+                "injected registered refusal panic after execution"
+            );
+            return match outcome {
                 Ok(value) => phase::normalize_root(Ok(value))
                     .map(PublicationOutcome::RootPush)
                     .map_err(PublicationError::RootPush),

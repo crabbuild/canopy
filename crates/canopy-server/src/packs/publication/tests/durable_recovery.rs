@@ -25,7 +25,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, revoked: bool) -> R
         )
         .await?;
     drop(session);
-    qualify_ready(context, ready, loser, fault, revoked, false).await
+    qualify_ready(context, ready, loser, fault, revoked, None).await
 }
 pub(super) async fn qualify_publish(
     context: super::root_dispatch::Context<'_>,
@@ -49,15 +49,15 @@ pub(super) async fn qualify_publish(
             crate::packs::metadata::tests::limits(),
         )
         .await?;
-    let mut offset = 0;
-    while offset < pending.plan().updates.len() {
-        let page = pending.page(&prepared, offset).await?;
-        offset += page.proof.plan.updates.len();
-        fixture
-            .client()
-            .command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page)
-            .await?;
-    }
+    let previous = Box::pin(super::mandatory_registration::register_native_pages(
+        fixture,
+        &prepared,
+        &pending,
+        store,
+        root,
+        budget.clone(),
+    ))
+    .await?;
     let guard = pending.ready(&prepared).await?;
     let ready = prepared
         .ready_root_push(
@@ -96,7 +96,7 @@ pub(super) async fn qualify_publish(
         loser,
         fault,
         false,
-        true,
+        Some(previous),
     )
     .await
 }
@@ -106,8 +106,9 @@ async fn qualify_ready(
     loser: ReadyRootPush,
     fault: u8,
     revoked: bool,
-    publishing: bool,
+    previous: Option<RegisteredRootRecovery>,
 ) -> Result {
+    let publishing = previous.is_some();
     let Context {
         fixture: f,
         store,
@@ -126,14 +127,14 @@ async fn qualify_ready(
         lease_ms: DEFAULT_LEASE_MS,
     };
     let original = ready.evidence_for_test();
-    assert!(
-        RegisteredRootRecovery::load(&f.client(), &f.target, store, &check)
-            .await?
-            .is_none()
+    let loaded = RegisteredRootRecovery::load(&f.client(), &f.target, store, &check).await?;
+    assert_eq!(
+        loaded.as_ref().map(RegisteredRootRecovery::evidence),
+        previous.as_ref().map(RegisteredRootRecovery::evidence),
     );
     let registered = if fault == 1 {
         assert!(
-            matches!(ready.persist_recovery_for_test(store, identity()?, 2).await,
+            matches!(persist_ready(&ready, store, previous.as_ref(), identity()?, 2).await,
             Err(RootRecoveryError::Registration(error)) if matches!(*error, InvocationError::Pending(_)))
         );
         assert!(matches!(
@@ -144,11 +145,13 @@ async fn qualify_ready(
             .await?
             .ok_or("uncertain registration did not persist its winner")?
     } else {
-        ready.persist_recovery(store, identity()?).await?
+        persist_ready(&ready, store, previous.as_ref(), identity()?, 0).await?
     };
     assert_eq!(registered.evidence(), &original);
     assert_eq!(
-        ready.persist_recovery(store, identity()?).await?.evidence(),
+        persist_ready(&ready, store, previous.as_ref(), identity()?, 0)
+            .await?
+            .evidence(),
         &original
     );
     let persisted = f
@@ -171,8 +174,10 @@ async fn qualify_ready(
         Err(InvocationError::Rejected(value)) if value.output == RootRecoveryReply::Denied(PreparationDenial::Unauthorized))
     );
     // A different final command cannot replace the registered exact identity.
-    assert!(matches!(loser.persist_recovery(store, identity()?).await,
-        Err(RootRecoveryError::Registration(error)) if matches!(&*error, InvocationError::Rejected(value) if value.output == RootRecoveryReply::Denied(PreparationDenial::Conflict))));
+    assert!(
+        matches!(persist_ready(&loser, store, previous.as_ref(), identity()?, 0).await,
+        Err(RootRecoveryError::Registration(error)) if matches!(&*error, InvocationError::Rejected(value) if value.output == RootRecoveryReply::Denied(PreparationDenial::Conflict)))
+    );
     drop(loser);
     let mut wrong_actor = check.clone();
     wrong_actor.actor = "another".into();
@@ -190,6 +195,8 @@ async fn qualify_ready(
     // stopped lifecycle session is never passed to the new owner. Only this
     // check identifies the original pin; it cannot select a root or grant ACK.
     drop(registered);
+    drop(loaded);
+    drop(previous);
     drop(ready);
     drop(session);
     if revoked {
@@ -390,4 +397,26 @@ pub(super) async fn restore_owner(
     assert!(handle.owner_fence().epoch > check.token.owner.epoch);
     let client = CellClient::local(f.registry.clone(), handle.clone());
     Ok((runtime, handle, client))
+}
+
+// Registration retries retain the same final command and settled predecessor.
+async fn persist_ready(
+    ready: &ReadyRootPush,
+    store: &canopy_object_storage::artifact::ArtifactStore,
+    previous: Option<&RegisteredRootRecovery>,
+    mutation: MutationIdentity,
+    fault: u8,
+) -> std::result::Result<RegisteredRootRecovery, RootRecoveryError> {
+    match previous {
+        Some(previous) => {
+            ready
+                .persist_recovery_after_for_test(store, mutation, previous, fault)
+                .await
+        }
+        None => {
+            ready
+                .persist_recovery_for_test(store, mutation, fault)
+                .await
+        }
+    }
 }

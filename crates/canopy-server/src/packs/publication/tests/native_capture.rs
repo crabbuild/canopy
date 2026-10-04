@@ -425,6 +425,12 @@ async fn native_receive_automatic_terminal_retirement_preserves_original_release
     native_receive(false, CompletionMode::TerminalRetention { fault: 4 }).await
 }
 
+#[tokio::test]
+async fn native_publication_requires_registered_original_policy_root_and_refusal_commands() -> Result
+{
+    native_receive(true, CompletionMode::MandatoryRegistration).await
+}
+
 async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         Box::pin(native_receive_case(format, rooted, mode)).await?;
@@ -477,7 +483,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
                 .filter(|p| p.extension().is_some_and(|e| e == "pack"))
         })
         .ok_or("pack")?;
-    let work_root = tempfile::TempDir::new()?;
+    let work_root = Arc::new(tempfile::TempDir::new()?);
     let disk = DiskBudget::new(256 << 20);
     let native = NativeResources::default();
     let backend = GitHttpBackend::initialize(
@@ -763,20 +769,34 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
             timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
             StagingState::Bound(_)
         ));
-        super::recovery_discovery::qualify_native(
-            super::root_outcome::Context {
-                fixture: &fixture,
-                store: &store,
-                staging: &coordinator,
-                ticket: &ticket,
-                root: work_root.path(),
-                budget: disk.clone(),
-                request: recovered,
-            },
-            mode,
-            provider,
-        )
-        .await?;
+        if let CompletionMode::TerminalRetention { fault } = mode {
+            super::terminal_retention::spawn_qualify(
+                fixture,
+                Arc::clone(&store),
+                coordinator.clone(),
+                ticket.clone(),
+                (Arc::clone(&work_root), disk.clone()),
+                recovered,
+                (fault, provider),
+            )
+            .await?
+            .map_err(|error| format!("terminal retention composition: {error}"))?;
+        } else {
+            super::recovery_discovery::qualify_native(
+                super::root_outcome::Context {
+                    fixture: &fixture,
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: work_root.path(),
+                    budget: disk.clone(),
+                    request: recovered,
+                },
+                mode,
+                provider,
+            )
+            .await?;
+        }
         cleaned(work_root.path(), &disk).await?;
         return Ok(());
     }
@@ -845,8 +865,19 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         builder.add_segment(segment).await?;
         builder.finish_pack().await?;
         let prepared = builder.finish().await?;
-        if let CompletionMode::StagedDurableRevoked { root } = mode {
-            Box::pin(super::staged_durable::qualify_revoked(
+        if matches!(
+            mode,
+            CompletionMode::MandatoryRegistration
+                | CompletionMode::StagedDurableRevoked { .. }
+                | CompletionMode::StagedDurableFence
+                | CompletionMode::StagedDurable { .. }
+                | CompletionMode::DurablePolicy { .. }
+                | CompletionMode::DurablePublish { .. }
+                | CompletionMode::PolicyRefusalDispatch { .. }
+                | CompletionMode::PolicyDispatch { .. }
+                | CompletionMode::Dispatch { .. }
+        ) {
+            let result = qualify_rooted(
                 super::root_dispatch::Context {
                     fixture: &fixture,
                     prepared: Arc::new(prepared),
@@ -857,172 +888,39 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
                     budget: physical_disk.clone(),
                     request: recovered,
                 },
-                root,
-            ))
-            .await?;
-            cleaned(work_root.path(), &disk).await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
+                mode,
+            )
+            .await;
+            if mode == CompletionMode::MandatoryRegistration {
+                assert!(coordinator.close_and_drain().await.is_empty());
+                fixture.runtime.shutdown().await?;
+            }
+            result?;
+            if matches!(
+                mode,
+                CompletionMode::PolicyRefusalDispatch { .. }
+                    | CompletionMode::PolicyDispatch { .. }
+                    | CompletionMode::Dispatch { .. }
+            ) {
+                cleaned(physical_root.path(), &physical_disk).await?;
+                fixture.runtime.shutdown().await?;
+            } else {
+                cleaned(work_root.path(), &disk).await?;
+                cleaned(physical_root.path(), &physical_disk).await?;
+            }
             return Ok(());
         }
-        if mode == CompletionMode::StagedDurableFence {
-            Box::pin(super::staged_durable::qualify_fence(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-            ))
-            .await?;
-            cleaned(work_root.path(), &disk).await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            return Ok(());
-        }
-        if let CompletionMode::StagedDurable {
-            fault,
-            refusal,
-            late_write,
-        } = mode
-        {
-            Box::pin(super::staged_durable::qualify(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                fault,
-                refusal,
-                late_write,
-            ))
-            .await?;
-            cleaned(work_root.path(), &disk).await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            return Ok(());
-        }
-        if let CompletionMode::DurablePolicy {
-            refusal,
-            late_write,
-        } = mode
-        {
-            Box::pin(super::durable_policy::qualify(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                refusal,
-                late_write,
-            ))
-            .await?;
-            cleaned(work_root.path(), &disk).await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            return Ok(());
-        }
-        if let CompletionMode::DurablePublish { fault } = mode {
-            Box::pin(super::durable_recovery::qualify_publish(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                fault,
-            ))
-            .await?;
-            cleaned(work_root.path(), &disk).await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            return Ok(());
-        }
-        if let CompletionMode::PolicyRefusalDispatch { fault, loss } = mode {
-            Box::pin(super::policy_refusal::qualify(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                fault,
-                loss,
-            ))
-            .await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            fixture.runtime.shutdown().await?;
-            return Ok(());
-        }
-        if let CompletionMode::PolicyDispatch { fault, loss } = mode {
-            Box::pin(super::policy_dispatch::qualify(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                fault,
-                loss,
-            ))
-            .await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            fixture.runtime.shutdown().await?;
-            return Ok(());
-        }
-        if let CompletionMode::Dispatch { fault, loss } = mode {
-            Box::pin(super::root_dispatch::qualify(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                fault,
-                loss,
-            ))
-            .await?;
-            cleaned(physical_root.path(), &physical_disk).await?;
-            fixture.runtime.shutdown().await?;
-            return Ok(());
-        }
-        let replay = Box::pin(super::root_completion::qualify(
-            &fixture,
-            &prepared,
-            &store,
+        let (fixture, replay) = super::root_completion::spawn_qualify(
+            fixture,
+            prepared,
+            Arc::clone(&store),
             recovered,
-            physical_root.path(),
+            Arc::clone(&physical_root),
             physical_disk.clone(),
             mode,
-        ))
-        .await
+        )
+        .await?
         .map_err(|error| format!("root composition: {error:?}"))?;
-        drop(prepared);
         cleaned(physical_root.path(), &physical_disk).await?;
         assert!(coordinator.close_and_drain().await.is_empty());
         super::root_completion::restored(&fixture, &store, replay).await?;
@@ -1313,4 +1211,47 @@ async fn rejection_checks(
     assert_eq!(first, replay);
     assert_eq!(first.len(), 1);
     Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+}
+
+// Construct each large qualifier outside the shared native setup poll frame.
+// This only moves future construction; every role retains its original inputs.
+fn qualify_rooted<'a>(
+    context: super::root_dispatch::Context<'a>,
+    mode: CompletionMode,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result> + 'a>> {
+    match mode {
+        CompletionMode::MandatoryRegistration => {
+            Box::pin(super::mandatory_registration::qualify(context))
+        }
+        CompletionMode::StagedDurableRevoked { root } => {
+            Box::pin(super::staged_durable::qualify_revoked(context, root))
+        }
+        CompletionMode::StagedDurableFence => {
+            Box::pin(super::staged_durable::qualify_fence(context))
+        }
+        CompletionMode::StagedDurable {
+            fault,
+            refusal,
+            late_write,
+        } => Box::pin(super::staged_durable::qualify(
+            context, fault, refusal, late_write,
+        )),
+        CompletionMode::DurablePolicy {
+            refusal,
+            late_write,
+        } => Box::pin(super::durable_policy::qualify(context, refusal, late_write)),
+        CompletionMode::DurablePublish { fault } => {
+            Box::pin(super::durable_recovery::qualify_publish(context, fault))
+        }
+        CompletionMode::PolicyRefusalDispatch { fault, loss } => {
+            Box::pin(super::policy_refusal::qualify(context, fault, loss))
+        }
+        CompletionMode::PolicyDispatch { fault, loss } => {
+            Box::pin(super::policy_dispatch::qualify(context, fault, loss))
+        }
+        CompletionMode::Dispatch { fault, loss } => {
+            Box::pin(super::root_dispatch::qualify(context, fault, loss))
+        }
+        _ => unreachable!("rooted qualifier role"),
+    }
 }

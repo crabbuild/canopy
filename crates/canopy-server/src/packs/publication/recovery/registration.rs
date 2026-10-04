@@ -5,7 +5,7 @@ pub struct RegisterRootRecovery;
 impl Command for RegisterRootRecovery {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 39;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = RootRecoveryCertificate;
     type Output = RootRecoveryReply;
     fn execute(

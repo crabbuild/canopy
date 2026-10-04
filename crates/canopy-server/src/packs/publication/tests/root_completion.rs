@@ -7,10 +7,11 @@ use crate::git_http::GitHttpResponse;
 use crate::packs::metadata::tests::limits;
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
-use cellule_runtime::Committed;
+use cellule_runtime::{Committed, Resolution};
 use std::path::Path;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletionMode {
+    MandatoryRegistration,
     TerminalRetention {
         fault: u8,
     },
@@ -75,6 +76,35 @@ pub(super) struct ReplayFixture {
     mutation: MutationIdentity,
     request: BeginRequest,
     expected: GitHttpResponse,
+    registered: RegisteredRootRecovery,
+}
+
+// Construct and poll this composition outside the large native setup future.
+// Ownership carries the original preparation, shared clock and artifact custody.
+pub(super) fn spawn_qualify(
+    fixture: Fixture,
+    prepared: PreparedCatalog,
+    store: Arc<ArtifactStore>,
+    request: PushCompletionRequest,
+    directory: Arc<tempfile::TempDir>,
+    budget: DiskBudget,
+    mode: CompletionMode,
+) -> tokio::task::JoinHandle<std::result::Result<(Fixture, ReplayFixture), String>> {
+    tokio::spawn(async move {
+        let replay = Box::pin(qualify(
+            &fixture,
+            &prepared,
+            &store,
+            request,
+            directory.path(),
+            budget,
+            mode,
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+        drop(prepared);
+        Ok((fixture, replay))
+    })
 }
 
 pub(super) async fn qualify(
@@ -104,15 +134,15 @@ pub(super) async fn qualify(
     let pending = prepared
         .ref_policy_preparation(plan.clone(), directory, budget.clone(), limits())
         .await?;
-    let mut start = 0;
-    while start < pending.plan().updates.len() {
-        let page = pending.page(prepared, start).await?;
-        start += page.proof.plan.updates.len();
-        fixture
-            .client()
-            .command::<RegisterRefPolicyPage>(&fixture.target, identity()?, page)
-            .await?;
-    }
+    let mut head = Box::pin(super::mandatory_registration::register_native_pages(
+        fixture,
+        prepared,
+        &pending,
+        store,
+        directory,
+        budget.clone(),
+    ))
+    .await?;
     let guard = pending.ready(prepared).await?;
     let before = state(&fixture.handle).await?;
     let mut completion = prepared
@@ -214,10 +244,22 @@ pub(super) async fn qualify(
         .await?;
     if !rejected {
         let before = state(&fixture.handle).await?;
-        let stale = fixture
+        let stale_command = fixture
             .client()
-            .command::<CompleteRootPush>(&fixture.target, identity()?, completion.clone())
-            .await;
+            .prepare_command::<CompleteRootPush>(&fixture.target, identity()?, completion.clone())
+            .await?;
+        head = Box::pin(super::super::recovery::persist_full(
+            &prepared.base.session,
+            &stale_command,
+            super::super::recovery::Kind::Publish,
+            None,
+            Some(&head),
+            store,
+            identity()?,
+            0,
+        ))
+        .await?;
+        let stale = super::super::recovery::normalize_root(Box::pin(stale_command.execute()).await);
         assert!(
             matches!(stale,Err(InvocationError::Rejected(value)) if value.output==RootCompletionReply::Denied(PreparationDenial::Conflict))
         );
@@ -275,6 +317,22 @@ pub(super) async fn qualify(
             edit(fixture, "INSERT INTO pushes(id,actor,request_digest) VALUES(zeroblob(16),'original',zeroblob(32)); INSERT INTO push_certificates VALUES(X'1111111111111111111111111111111111111111111111111111111111111111',zeroblob(16),'original','original','original key',1234,0)").await?;
         }
     }
+    let mutation = identity()?;
+    let command = fixture
+        .client()
+        .prepare_command::<CompleteRootPush>(&fixture.target, mutation, completion.clone())
+        .await?;
+    let registered = Box::pin(super::super::recovery::persist_full(
+        &prepared.base.session,
+        &command,
+        super::super::recovery::Kind::Publish,
+        None,
+        Some(&head),
+        store,
+        identity()?,
+        0,
+    ))
+    .await?;
     if mode == CompletionMode::WriteRevoked {
         edit(fixture, "UPDATE repository_identity SET owner='other' WHERE singleton=1; INSERT INTO repository_members VALUES('owner','read')").await?;
     }
@@ -308,21 +366,15 @@ pub(super) async fn qualify(
     for sql in faults {
         edit(fixture, sql).await?;
         let before = state(&fixture.handle).await?;
-        assert!(
-            fixture
-                .client()
-                .command::<CompleteRootPush>(&fixture.target, identity()?, completion.clone())
-                .await
-                .is_err()
-        );
+        assert!(Box::pin(command.clone().execute()).await.is_err());
+        assert!(matches!(
+            fixture.client().resolve(command.evidence()).await?,
+            Resolution::Absent
+        ));
         assert_eq!(state(&fixture.handle).await?, before);
         edit(fixture, "DROP TRIGGER fixture_root_fault").await?;
     }
-    let mutation = identity()?;
-    let committed = fixture
-        .client()
-        .command::<CompleteRootPush>(&fixture.target, mutation, completion.clone())
-        .await?;
+    let committed = super::super::recovery::normalize_root(Box::pin(command.execute()).await)?;
     let RootCompletionReply::Completed(ref output) = committed.output else {
         return Err("root publication denied".into());
     };
@@ -471,14 +523,21 @@ pub(super) async fn qualify(
     )
     .await?;
     let after_acl = state(&fixture.handle).await?;
-    assert_eq!(
-        fixture
-            .client()
-            .command::<CompleteRootPush>(&fixture.target, identity()?, completion.clone())
-            .await?
-            .output,
-        committed.output
-    );
+    let competing = fixture
+        .client()
+        .prepare_command::<CompleteRootPush>(&fixture.target, identity()?, completion.clone())
+        .await?;
+    assert!(matches!(
+        Box::pin(competing.clone().execute()).await,
+        Err(InvocationError::NotStarted(_))
+    ));
+    assert!(matches!(
+        fixture.client().resolve(competing.evidence()).await?,
+        Resolution::Absent
+    ));
+    let known = registered.dispatch(&fixture.client(), store).await?;
+    assert_eq!(known.output, committed.output);
+    assert_eq!(known.receipt, committed.receipt);
     assert_eq!(
         fixture
             .client()
@@ -511,6 +570,7 @@ pub(super) async fn qualify(
         mutation,
         request,
         expected,
+        registered,
     })
 }
 pub(super) async fn restored(
@@ -554,16 +614,23 @@ pub(super) async fn restored(
         (exact.output, exact.receipt),
         (replay.committed.output.clone(), replay.committed.receipt)
     );
-    assert_eq!(
-        client
-            .command::<CompleteRootPush>(&fixture.target, identity()?, replay.input.clone())
-            .await?
-            .output,
-        replay.committed.output
-    );
+    let competing = client
+        .prepare_command::<CompleteRootPush>(&fixture.target, identity()?, replay.input.clone())
+        .await?;
+    assert!(matches!(
+        Box::pin(competing.clone().execute()).await,
+        Err(InvocationError::NotStarted(_))
+    ));
+    assert!(matches!(
+        client.resolve(competing.evidence()).await?,
+        Resolution::Absent
+    ));
+    let known = replay.registered.dispatch(&client, store).await?;
+    assert_eq!(known.output, replay.committed.output);
+    assert_eq!(known.receipt, replay.committed.receipt);
     assert_eq!(state(&handle).await?, before);
-    // Trusted fixture resealing tests the actual fence independently of the
-    // missing-operation branch; product callers cannot mint this certificate.
+    // A resealed foreign logical operation cannot match the registered command.
+    // Actual absent-command owner fencing is qualified by durable recovery.
     let mut stale = replay.input;
     let mut data = stale.proof.certificate.data()?;
     data.token.operation = *uuid::Uuid::new_v4().as_bytes();
@@ -578,12 +645,17 @@ pub(super) async fn restored(
         .await?;
     let seed: [u8; 32] = seed.try_into().map_err(|_| "seed shape")?;
     stale.proof.certificate = CatalogCertificate::seal(&data, &seed)?;
-    let denied = client
-        .command::<CompleteRootPush>(&fixture.target, identity()?, stale)
-        .await;
-    assert!(
-        matches!(denied,Err(InvocationError::Rejected(value)) if value.output==RootCompletionReply::Denied(PreparationDenial::Stale))
-    );
+    let command = client
+        .prepare_command::<CompleteRootPush>(&fixture.target, identity()?, stale)
+        .await?;
+    assert!(matches!(
+        Box::pin(command.clone().execute()).await,
+        Err(InvocationError::NotStarted(_))
+    ));
+    assert!(matches!(
+        client.resolve(command.evidence()).await?,
+        Resolution::Absent
+    ));
     assert_eq!(state(&handle).await?, before);
     let mut response = replay_root_push_response(
         &client,

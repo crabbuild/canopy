@@ -108,24 +108,26 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             limits(),
         )
         .await?;
-    let mut offset = 0;
-    while offset < pending.plan().updates.len() {
-        let page = pending.page(&prepared, offset).await?;
-        offset += page.proof.plan.updates.len();
-        f.client()
-            .command::<RegisterRefPolicyPage>(&f.target, identity()?, page)
-            .await?;
-    }
+    let head = Box::pin(super::mandatory_registration::register_native_pages(
+        f,
+        &prepared,
+        &pending,
+        store,
+        root,
+        budget.clone(),
+    ))
+    .await?;
     let guard = pending.ready(&prepared).await?;
     drop(pending);
     let weak = Arc::downgrade(&prepared);
     let directory = root.to_owned();
+    let producer_store = store.clone();
     let producer = ticket.spawn_bound(move |session| async move {
         assert!(Arc::ptr_eq(
             &prepared.base.session.deadline,
             &session.deadline
         ));
-        prepared
+        let ready = prepared
             .ready_root_push(
                 identity().map_err(|_| StagingError::Worker)?,
                 &guard,
@@ -135,7 +137,17 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
                 None,
             )
             .await
-            .map_err(|error| StagingError::Input(Box::new(error)))
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let registered = Box::pin(ready.persist_recovery_after(
+            &producer_store,
+            identity().map_err(|_| StagingError::Worker)?,
+            &head,
+        ))
+        .await
+        .map_err(|error| StagingError::Input(Box::new(error)))?;
+        ready
+            .bind_recovery(registered, &producer_store)
+            .map_err(|error| StagingError::Input(error))
     })?;
     let ready = producer.wait().await.map_err(|error| error.to_string())?;
     drop(producer);
@@ -156,7 +168,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         failure.reason,
         StagingError::PublicationAdmission(PublicationScheduleError::Foreign)
     ));
-    let ReadyPublication::RootPush(ref retained) = failure.ready else {
+    let ReadyPublication::BoundRecovery(ref retained) = failure.ready else {
         return Err("root ready type lost".into());
     };
     assert_eq!(retained.evidence_for_test(), evidence);
@@ -180,7 +192,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     drop(observer);
     drop(worker);
     assert!(weak.upgrade().is_some());
-    assert_eq!(p.stats().await.command_bytes, 16 << 10);
+    assert_eq!(p.stats().await.command_bytes, 32 << 10);
     assert_eq!(p.stats().await.held, 1);
     let closing = c.clone();
     let mut close = Some(tokio::spawn(async move { closing.close_and_drain().await }));
@@ -218,7 +230,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         };
         assert_eq!(actual.as_ref(), &evidence);
         assert!(weak.upgrade().is_some());
-        assert_eq!(p.stats().await.command_bytes, 16 << 10);
+        assert_eq!(p.stats().await.command_bytes, 32 << 10);
         let known = resolved(f, &evidence).await?;
         assert_eq!(known.is_some(), fault != 1);
         match loss {

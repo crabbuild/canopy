@@ -9,6 +9,8 @@ pub struct ReadyRootRecovery {
     client: CellClient,
     store: ArtifactStore,
     refusing: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    refusal_fault: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 impl RegisteredRootRecovery {
     /// Submit through the existing PublicationCoordinator. This capability has
@@ -24,6 +26,15 @@ impl RegisteredRootRecovery {
     }
 }
 impl ReadyRootRecovery {
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn refusal_fault_for_test(&self, fault: u8) {
+        self.refusal_fault
+            .store(fault, std::sync::atomic::Ordering::Release);
+    }
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn evidence_for_test(&self) -> PendingMutation {
+        self.recovery.evidence().clone()
+    }
     /// Only after the original factory or public recovery entry validates the
     /// exact repository/artifact context. This does not bind a live lifecycle.
     pub(in crate::packs::publication) fn from_verified(
@@ -36,6 +47,8 @@ impl ReadyRootRecovery {
             client,
             store,
             refusing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(test)]
+            refusal_fault: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
         }
     }
     pub(in crate::packs::publication) fn matches_registered(
@@ -106,7 +119,14 @@ impl ReadyRootRecovery {
         let outcome = match original {
             Some(original) => {
                 self.recovery
-                    .dispatch_bound(&self.client, &self.store, &self.refusing, Some(original))
+                    .dispatch_bound(
+                        &self.client,
+                        &self.store,
+                        &self.refusing,
+                        Some(original),
+                        #[cfg(test)]
+                        Some(&self.refusal_fault),
+                    )
                     .await
             }
             None => {

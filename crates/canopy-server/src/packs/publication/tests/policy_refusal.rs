@@ -52,9 +52,17 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             .await
             .is_err()
     );
-    let input = session
-        .root_refusal_completion(store, root, budget.clone(), None)
+    let refusal = session
+        .ready_root_refusal(identity()?, store, root, budget.clone(), None)
         .await?;
+    let refusal_evidence = refusal.evidence_for_test();
+    let refusal_command = refusal
+        .refusal_command()
+        .ok_or("original frozen refusal")?
+        .clone();
+    let mut original = BoundedDecoder::new(refusal_command.input_bytes(), ROOT_COMPLETION_BYTES)?;
+    let input = RootOutcomeCompletion::decode(&mut original)?;
+    original.finish()?;
     assert!(input.refusal);
     assert_eq!(input.outcomes.ref_generation, 0);
     let mut encoded = BoundedEncoder::new(ROOT_COMPLETION_BYTES)?;
@@ -71,25 +79,6 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
             .encode(&mut BoundedEncoder::new(ROOT_COMPLETION_BYTES)?)
             .is_err()
     );
-    let before = state(&f.handle).await?;
-    // Both possible late writes must roll back; no terminal negative result
-    // can exist without consuming custody in the same Cell transaction.
-    if fault == 0 && loss == Loss::Policy {
-        for trigger in [
-            "BEFORE UPDATE OF response_root ON pushes",
-            "BEFORE DELETE ON catalog_operations",
-        ] {
-            edit(f, &format!("CREATE TRIGGER policy_refusal_fault {trigger} BEGIN SELECT RAISE(ABORT,'policy refusal late fault'); END;")).await?;
-            assert!(
-                f.client()
-                    .command::<CompleteRootOutcome>(&f.target, identity()?, input.clone())
-                    .await
-                    .is_err()
-            );
-            assert_eq!(state(&f.handle).await?, before);
-            edit(f, "DROP TRIGGER policy_refusal_fault").await?;
-        }
-    }
     let pending = Arc::new(
         prepared
             .ref_policy_preparation(
@@ -102,12 +91,11 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
     );
     let page = pending.ready_page(&prepared, identity()?, 0).await?;
     let page_evidence = page.evidence_for_test();
-    let refusal = session
-        .ready_root_refusal(identity()?, store, root, budget, None)
-        .await?;
-    let refusal_evidence = refusal.evidence_for_test();
+    let page_command = page.command_for_test().clone();
     let mut page = page.with_refusal(refusal)?;
     page.refusal_fault_for_test(fault);
+    let registered = page.persist_recovery(store, identity()?, None).await?;
+    let page = page.bind_recovery(registered, store)?;
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
     p.fault_for_test(1);
     drop(ticket.register_policy_page(&p, page)?);
@@ -120,7 +108,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         f.client().resolve(&page_evidence).await?,
         Resolution::Absent
     ));
-    assert_eq!(p.stats().await.command_bytes, 528 << 10);
+    assert_eq!(p.stats().await.command_bytes, 544 << 10);
     if loss == Loss::Write {
         edit(
             f,
@@ -135,6 +123,41 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         .await?;
     }
     let recovery_before = state(&f.handle).await?;
+    // Exercise both actual final writes only after the original registered
+    // page has committed its negative phase. A gate refusal is not this oracle.
+    if fault == 0 && loss == Loss::Policy {
+        let denied = Box::pin(page_command.clone().execute()).await?;
+        assert_eq!(
+            denied.output,
+            RefPolicyReply::Denied(PreparationDenial::Conflict)
+        );
+        for trigger in [
+            "BEFORE UPDATE OF response_root ON pushes",
+            "BEFORE DELETE ON catalog_operations",
+        ] {
+            edit(f, &format!("CREATE TRIGGER policy_refusal_fault {trigger} BEGIN SELECT RAISE(ABORT,'policy refusal late fault'); END;")).await?;
+            let phase = super::mandatory_registration::registration_state(f).await?;
+            let failed = Box::pin(refusal_command.clone().execute())
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{failed:?}").contains("policy refusal late fault"),
+                "{failed:?}"
+            );
+            assert!(matches!(
+                f.client().resolve(&refusal_evidence).await?,
+                Resolution::Absent
+            ));
+            assert_eq!(state(&f.handle).await?, recovery_before);
+            assert_eq!(
+                super::mandatory_registration::registration_state(f).await?,
+                phase
+            );
+            edit(f, "DROP TRIGGER policy_refusal_fault").await?;
+        }
+    }
+    drop(page_command);
+    drop(refusal_command);
     drop(pending);
     drop(prepared);
     drop(session);
@@ -156,7 +179,7 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         }).await?;
         assert!(matches!(&*error, StagingError::Publication(error)
             if matches!(&**error, PublicationError::RootPush(InvocationError::Pending(actual)) if actual.as_ref()==&refusal_evidence)));
-        assert_eq!(p.stats().await.command_bytes, 528 << 10);
+        assert_eq!(p.stats().await.command_bytes, 544 << 10);
         let original = match f.client().resolve(&refusal_evidence).await? {
             Resolution::Absent => None,
             Resolution::Committed(value) => {
@@ -235,11 +258,23 @@ pub(super) async fn qualify(context: Context<'_>, fault: u8, loss: Loss) -> Resu
         assert!(!body.windows(3).any(|p| p == b"ok "));
         assert_eq!(f.counts().await?, (0, 2));
     }
-    let page = f.client().resolve(&page_evidence).await?;
+    let Resolution::Committed(page) = f.client().resolve(&page_evidence).await? else {
+        return Err("original registered page receipt missing".into());
+    };
     assert!(matches!(
         page,
-        Resolution::Committed(cellule_runtime::cell::executor::StoredOutcome::Rejected { .. })
+        cellule_runtime::cell::executor::StoredOutcome::Success { .. }
     ));
+    let mut decoder = BoundedDecoder::new(page.result(), 512)?;
+    assert_eq!(
+        RefPolicyReply::decode(&mut decoder)?,
+        RefPolicyReply::Denied(if loss == Loss::Write {
+            PreparationDenial::Unauthorized
+        } else {
+            PreparationDenial::Conflict
+        })
+    );
+    decoder.finish()?;
     let before: Vec<serde_json::Value> = serde_json::from_slice(&recovery_before)?;
     let after: Vec<serde_json::Value> = serde_json::from_slice(&state(&f.handle).await?)?;
     assert_eq!(before[..8], after[..8]);
@@ -312,11 +347,16 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
     );
     let evidence = refusal.evidence_for_test();
     let p = PublicationCoordinator::new(f.target.clone(), PublicationLimits::default())?;
+    let mut head = None;
     for offset in [0, 128, 256] {
         let page = pending
             .ready_page(&prepared, identity()?, offset)
             .await?
             .with_refusal(refusal.clone())?;
+        let registered = page
+            .persist_recovery(store, identity()?, head.as_ref())
+            .await?;
+        let page = page.bind_recovery(registered.clone(), store)?;
         let observer = ticket.register_policy_page(&p, page)?;
         let PublicationState::Finished(Ok(PublicationOutcome::PolicyPage(value))) =
             observer.wait().await
@@ -338,7 +378,9 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
         ));
         assert_eq!(p.reservations_for_test().await, (0, 0, 0));
         assert_eq!(Arc::strong_count(&refusal), 1);
+        head = Some(registered);
     }
+    let head = head.ok_or("completed-page recovery head missing")?;
     let guard = Arc::new(pending.ready(&prepared).await?);
     let positive = owned_positive(ticket, &prepared, &guard, root, budget.clone()).await?;
     let positive_evidence = positive.evidence_for_test();
@@ -354,7 +396,10 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
     let before = state(&f.handle).await?;
     let observer = if loss == Loss::Live {
         let positive = owned_positive(ticket, &prepared, &guard, root, budget).await?;
-        ticket.publish(&p, positive)?
+        let registered = positive
+            .persist_recovery_after(store, identity()?, &head)
+            .await?;
+        ticket.publish(&p, positive.bind_recovery(registered, store)?)?
     } else {
         let changed = if loss == Loss::LateWrite {
             "UPDATE repository_identity SET owner='replacement' WHERE singleton=1"
@@ -363,8 +408,14 @@ async fn qualify_live(context: Context<'_>, loss: Loss) -> Result {
         };
         edit(f, changed).await?;
         assert!(pending.ready(&prepared).await.is_err());
+        let registered = refusal
+            .persist_recovery_after(store, identity()?, &head)
+            .await?;
+        let refusal =
+            Arc::try_unwrap(refusal).map_err(|_| "completed-page original refusal still held")?;
+        let ready = refusal.bind_recovery(registered, store)?;
         ticket.renew_for_test();
-        ticket.publish(&p, refusal.clone())?
+        ticket.publish(&p, ready)?
     };
     let PublicationState::Finished(Ok(PublicationOutcome::RootPush(value))) = observer.wait().await
     else {

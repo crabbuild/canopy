@@ -80,7 +80,7 @@ pub struct RegisterRefPolicyPage;
 impl Command for RegisterRefPolicyPage {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 33;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = RefPolicyPage;
     type Output = RefPolicyReply;
     fn execute(
@@ -96,7 +96,6 @@ impl Command for RegisterRefPolicyPage {
             context,
             &check,
             super::super::recovery::Kind::Policy,
-            RefPolicyReply::Denied,
             |context| Self::domain(context, input),
         )
     }

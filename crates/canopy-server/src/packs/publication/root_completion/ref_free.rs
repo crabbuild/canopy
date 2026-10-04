@@ -168,7 +168,7 @@ pub struct CompleteRootOutcome;
 impl Command for CompleteRootOutcome {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 38;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 3;
     type Input = RootOutcomeCompletion;
     type Output = RootCompletionReply;
     fn execute(
@@ -181,7 +181,6 @@ impl Command for CompleteRootOutcome {
             context,
             &check,
             super::super::recovery::Kind::Outcome,
-            RootCompletionReply::Denied,
             |context| Self::domain(context, input),
         )
     }

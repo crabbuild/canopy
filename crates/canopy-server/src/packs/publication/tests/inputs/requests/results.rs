@@ -302,6 +302,8 @@ async fn root_outcome_preserves_plain_http_errors_without_verifying_or_publishin
                 None,
             )
             .await?;
+        let registered = Box::pin(ready.persist_recovery(&request.store, identity()?)).await?;
+        let ready = ready.bind_recovery(registered, &request.store)?;
         // Advance the current root through genuine private initialization.
         // This response-only proof retains its original floor and must not
         // reopen/rebuild the new catalog or expose its unverified input packs.
@@ -407,6 +409,8 @@ async fn root_outcome_exact_recovery_preserves_commits_and_refuses_expired_input
                 )
                 .await?;
             let evidence = ready.evidence_for_test();
+            let registered = Box::pin(ready.persist_recovery(&request.store, identity()?)).await?;
+            let ready = ready.bind_recovery(registered, &request.store)?;
             let p = PublicationCoordinator::new(
                 request.fixture.target.clone(),
                 PublicationLimits::default(),

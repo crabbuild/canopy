@@ -58,7 +58,17 @@ pub(in crate::packs) async fn prepared_for_store(
     provider: Arc<dyn ObjectStore>,
     store: Arc<ArtifactStore>,
 ) -> Result<Prepared> {
-    let mut fixture = fixture(format, blobs).await?;
+    let fixture = fixture(format, blobs).await?;
+    upload_fixture(fixture, operation, provider, store).await
+}
+/// Upload the exact native fixture after admission assigns its namespace.
+pub(in crate::packs) async fn upload_fixture(
+    mut fixture: Fixture,
+    operation: [u8; 16],
+    provider: Arc<dyn ObjectStore>,
+    store: Arc<ArtifactStore>,
+) -> Result<Prepared> {
+    let format = fixture.identity.format;
     fixture.identity.repository = store.repository();
     fixture.identity.operation = operation;
     let path = std::fs::read_dir(fixture.root.path().join("objects/pack"))?

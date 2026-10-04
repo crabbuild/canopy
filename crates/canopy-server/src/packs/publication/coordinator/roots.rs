@@ -2,8 +2,6 @@
 use super::*;
 use crate::directory::DirectoryCell;
 
-pub(super) const ROOT_RESERVATION: u64 = 2 * ROOT_COMPLETION_BYTES as u64;
-
 #[derive(Debug, thiserror::Error)]
 pub enum RootPushReadyError {
     #[error("immutable root completion preparation failed")]
@@ -16,8 +14,9 @@ pub enum RootPushReadyError {
     Command(#[source] Box<InvocationError<RootCompletionReply>>),
 }
 
-/// Retain this exact private factory output on admission failure or uncertainty.
-/// Regenerating a completion allocates a different response ID and is not retry.
+/// Persist and bind this private factory output before publication admission.
+/// Retain the exact command if registration fails; regenerating a completion
+/// allocates a different response ID and SDK identity.
 #[must_use]
 pub struct ReadyRootPush {
     pub(super) owner: PushPreparation,
@@ -105,7 +104,6 @@ impl PreparationSession {
         })
     }
 }
-#[derive(Clone)]
 enum RootCommand {
     Publish(PreparedCommand<CompleteRootPush>),
     Outcome(PreparedCommand<CompleteRootOutcome>),
@@ -167,6 +165,27 @@ impl ReadyRootPush {
         identity: MutationIdentity,
         previous: &RegisteredRootRecovery,
     ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        self.persist_recovery_after_inner(store, identity, previous, 0)
+            .await
+    }
+    #[cfg(test)]
+    pub(in crate::packs::publication) async fn persist_recovery_after_for_test(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        previous: &RegisteredRootRecovery,
+        fault: u8,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
+        self.persist_recovery_after_inner(store, identity, previous, fault)
+            .await
+    }
+    async fn persist_recovery_after_inner(
+        &self,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+        identity: MutationIdentity,
+        previous: &RegisteredRootRecovery,
+        fault: u8,
+    ) -> Result<RegisteredRootRecovery, RootRecoveryError> {
         let session = self.owner.session();
         match &self.command {
             RootCommand::Publish(command) => {
@@ -178,7 +197,7 @@ impl ReadyRootPush {
                     Some(previous),
                     store,
                     identity,
-                    0,
+                    fault,
                 ))
                 .await
             }
@@ -191,7 +210,7 @@ impl ReadyRootPush {
                     Some(previous),
                     store,
                     identity,
-                    0,
+                    fault,
                 ))
                 .await
             }
@@ -250,45 +269,19 @@ impl ReadyRootPush {
         }
     }
 
-    pub(super) fn dispatch_copy(&self) -> Self {
-        Self {
-            owner: self.owner.clone(),
-            command: self.command.clone(),
-            refusal: self.refusal,
-        }
-    }
-    pub(super) fn pending(&self) -> PublicationError {
-        PublicationError::RootPush(InvocationError::Pending(Box::new(
-            self.command.evidence().clone(),
-        )))
-    }
     #[cfg(test)]
     pub(in crate::packs::publication) fn evidence_for_test(
         &self,
     ) -> cellule_runtime::PendingMutation {
         self.command.evidence().clone()
     }
-    pub(super) async fn dispatch(self, recover: bool, fault: u8) -> DispatchResult {
-        let client = self.owner.capability().0.clone();
-        let guard = move || {
-            self.owner
-                .session()
-                .live_lease()
-                .map(|_| ())
-                .map_err(|_| Error::Command("inactive immutable root preparation"))
-        };
-        let outcome = match self.command {
-            RootCommand::Publish(command) => {
-                super::super::exact::invoke_guarded(&client, command, recover, 512, fault, guard)
-                    .await
-            }
-            RootCommand::Outcome(command) => {
-                super::super::exact::invoke_guarded(&client, command, recover, 512, fault, guard)
-                    .await
-            }
-        };
-        super::super::recovery::normalize_root(outcome)
-            .map(PublicationOutcome::RootPush)
-            .map_err(PublicationError::RootPush)
+    #[cfg(test)]
+    pub(in crate::packs::publication) fn outcome_command_for_test(
+        &self,
+    ) -> Option<&PreparedCommand<CompleteRootOutcome>> {
+        match &self.command {
+            RootCommand::Outcome(command) => Some(command),
+            RootCommand::Publish(_) => None,
+        }
     }
 }

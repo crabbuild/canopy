@@ -238,15 +238,12 @@ pub(in crate::packs::publication) fn execute<T: WireValue>(
     context: &mut CommandContext<'_, '_>,
     check: &LeaseCheck,
     kind: Kind,
-    denied: impl FnOnce(PreparationDenial) -> T,
     action: impl FnOnce(&mut CommandContext<'_, '_>) -> cellule_runtime::Result<CommandResult<T>>,
 ) -> cellule_runtime::Result<CommandResult<T>> {
     let sets = context.sql(&statement("SELECT recovery,recovery_phase,recovery_phase_revision FROM catalog_leases WHERE incarnation=?1 AND admission_sequence=?2", vec![blob(check.token.owner.incarnation.as_bytes()), number(check.token.attempt)?]))?;
     let (bytes, saved, revision) = match rows(&sets)?.first().map(Vec::as_slice) {
         None | Some([SqlValue::Null, SqlValue::Null, SqlValue::Integer(0)]) => {
-            // Existing direct preparation callers are converted at the
-            // production cutover. Registered commands use the atomic path.
-            return action(context);
+            return Err(Error::Command("publication command is not registered"));
         }
         Some([SqlValue::Blob(bytes), saved, revision]) => (bytes, saved, revision),
         _ => return Err(Error::Command("invalid publication phase pin")),
@@ -268,7 +265,7 @@ pub(in crate::packs::publication) fn execute<T: WireValue>(
         || record.application != *context.target().application().as_bytes()
         || evidence.incarnation() != check.token.owner.incarnation
     {
-        return Ok(CommandResult::Rejected(denied(PreparationDenial::Conflict)));
+        return Err(Error::Command("publication registration context differs"));
     }
     let mut journal = journal(saved, &record)?;
     let revision = unsigned(revision)?;
@@ -284,7 +281,9 @@ pub(in crate::packs::publication) fn execute<T: WireValue>(
         }
         true
     } else {
-        return Ok(CommandResult::Rejected(denied(PreparationDenial::Conflict)));
+        return Err(Error::Command(
+            "publication command identity is not registered",
+        ));
     };
     if if refusal {
         journal.refusal.is_some()
@@ -391,7 +390,10 @@ impl RegisteredRootRecovery {
         client: &CellClient,
         store: &ArtifactStore,
     ) -> Result<StoredInputRoot, RootRecoveryError> {
-        let journal = self.current_journal(client, None).await?;
+        // An exact registration retry can refer to an already archived
+        // predecessor. Verify its original journal through the existing
+        // authenticated history rather than requiring it to remain the head.
+        let journal = self.current_journal(client, Some(store)).await?;
         if !journal.may_advance(&self.record)? {
             return Err(RootRecoveryError::Context);
         }
