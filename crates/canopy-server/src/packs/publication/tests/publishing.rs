@@ -401,7 +401,7 @@ async fn catalog_ref_membership_kind_and_tampered_bindings_cannot_publish() -> R
                     limits()
                 )
                 .await,
-            Err(RefProofError::Invalid)
+            Err(super::super::RefProofError::Invalid)
         ));
     }
     let input = proof(
@@ -573,7 +573,7 @@ async fn ancestry_growth_reuses_pairs_only_in_one_exact_native_catalog() -> Resu
                 &other.prepared.base
             )
             .await,
-            Err(RefProofError::Invalid)
+            Err(super::super::RefProofError::Invalid)
         ));
         assert!(matches!(
             walk.is_ancestor(
@@ -954,5 +954,112 @@ async fn expired_and_claimed_proofs_and_mutable_publication_facts_fail_closed() 
     drop(fresh.prepared);
     cleaned(fresh.root.path(), &fresh.budget).await?;
     fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reviewed_merge_requires_native_ancestry_without_a_fast_forward_branch_rule() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let graph = assembled(&fixture, [241; 16], 16).await?;
+        let changes = plan(vec![
+            update(
+                "refs/heads/merge",
+                Some((graph.initial, 1)),
+                Some(graph.tip),
+            ),
+            update(
+                "refs/heads/unrelated",
+                Some((graph.initial, 1)),
+                Some(graph.other),
+            ),
+            update(
+                "refs/heads/backwards",
+                Some((graph.tip, 1)),
+                Some(graph.initial),
+            ),
+            update(
+                "refs/heads/unchanged",
+                Some((graph.tip, 1)),
+                Some(graph.tip),
+            ),
+            update("refs/heads/created", None, Some(graph.tip)),
+            update("refs/heads/deleted", Some((graph.initial, 1)), None),
+        ]);
+        let before = state(&fixture.handle).await?;
+        let proof = graph
+            .prepared
+            .ref_proof_with_required_ancestry(
+                changes.clone(),
+                graph.root.path(),
+                graph.budget.clone(),
+                limits(),
+            )
+            .await?;
+        assert_eq!(
+            proof.ancestry,
+            vec![0b0011_1001],
+            "merges require native ancestry evidence even without a branch fast-forward rule"
+        );
+        assert_eq!(
+            proof.certificate.data()?.refs_digest,
+            Some(super::super::ref_proof::binding(&changes, &proof.ancestry)?)
+        );
+        assert_eq!(
+            state(&fixture.handle).await?,
+            before,
+            "proof construction must not publish or populate SQL refs"
+        );
+        let selective = graph
+            .prepared
+            .ref_proof(
+                changes.clone(),
+                graph.root.path(),
+                graph.budget.clone(),
+                limits(),
+            )
+            .await?;
+        assert_eq!(
+            selective.ancestry,
+            vec![0b0011_1000],
+            "ordinary pushes must retain policy-driven ancestry work"
+        );
+        assert_ne!(
+            proof.certificate.data()?.refs_digest,
+            selective.certificate.data()?.refs_digest
+        );
+        let mut forged = proof.clone();
+        forged.ancestry[0] |= 2;
+        assert_ne!(
+            forged.certificate.data()?.refs_digest,
+            Some(super::super::ref_proof::binding(
+                &forged.plan,
+                &forged.ancestry
+            )?),
+            "an unrelated history cannot become proven by changing transport bits"
+        );
+        let invalid = plan(vec![update(
+            "refs/heads/not-a-commit",
+            Some((graph.initial, 1)),
+            Some(graph.blob),
+        )]);
+        assert!(matches!(
+            graph
+                .prepared
+                .ref_proof_with_required_ancestry(
+                    invalid,
+                    graph.root.path(),
+                    graph.budget.clone(),
+                    limits(),
+                )
+                .await,
+            Err(super::super::RefProofError::Invalid)
+        ));
+        assert_eq!(state(&fixture.handle).await?, before);
+
+        drop(graph.prepared);
+        cleaned(graph.root.path(), &graph.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
     Ok(())
 }

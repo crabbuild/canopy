@@ -17,6 +17,50 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Mandatory native merge ancestry (2026-10-05 checkpoint)
+
+The ordinary ref-proof factory computes ancestry only for enabled fast-forward
+branch rules. Reviewed merges must prove base-to-target ancestry even on an
+unprotected branch. A new native catalog regression fails before the mandatory
+factory exists: the valid descendant bit is absent (56 instead of 57). This is a
+reproduction of missing preparation evidence, not a fixed merge endpoint.
+
+`PreparedCatalog::ref_proof_with_required_ancestry` now verifies every
+non-vacuous predicate independently of branch rules. It reuses the existing
+proof, signed plan/evidence binding, verified commit headers, disk-backed walker,
+lease/deadline, cancellation and scratch budget. Ordinary pushes retain selective
+ancestry work. No proof format, compatibility decoder, table or SQL ref/ancestry
+mirror is added.
+
+The genuine native catalog regression passes for SHA-1 and SHA-256. It covers
+descendants, unrelated and backwards histories, vacuous predicates, negative
+evidence binding, invalid branch tip kind and unchanged publication state. It
+does not qualify an immutable-root merge receiver or resident merge adapter.
+
+Frozen-source validation passes all 725 server library tests, all-target Clippy
+with warnings denied, server build, formatting/diff checks and all 96 Python
+harness cases. Multi-server remains at 82 passed / 24 failed / 9 ignored, and
+three standalone aggregates fail. Unique workspace totals are 845 passed /
+27 failed / 9 unexecuted ignores, excluding nested child summaries and focused
+reruns. The 510-file source digest is
+`8c242912a383fbfa5ef5c2023163b2491bf0013eb9c0d16b1256a7b3f89897d8`.
+The full failed run and failing-first regression are preserved in
+[ancestry evidence](evidence/native-merge-ancestry-ci-20261005.json).
+
+Parent `6fc9483` Linux PR and push Verify runs pass all 724 server library cases,
+formatting and Clippy; each fails multi-server at 83 passed / 27 failed /
+9 ignored. Three additional Linux failures involve durable HTTP/SSH push-option
+refusals. Both full logs are preserved in the ancestry evidence. Exact new-head
+Linux and RustFS qualification remain required; this PR is not green or release
+qualified.
+
+Atomic native merge publication remains the next implementation priority: bind
+these facts to the private conditional ref snapshot, commit joint roots, pull
+state and UUID result with fresh reviews/checks/access under the actual owner
+fence, and retain exact command recovery through cancellation and restart.
+Generated candidates/rebase, other writers and the full capacity goal remain
+open.
+
 ## Native review-policy and failed-startup supervision (2026-10-05 checkpoint)
 
 Review-policy still joined retired SQL refs after core pulls were converted. An

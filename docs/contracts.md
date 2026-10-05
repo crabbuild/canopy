@@ -1921,6 +1921,24 @@ The final merge command and generated Git producers still need native atomic
 publication and are not qualified by these read operations. Codec 2 is a hard
 cutover of this unreleased query; no old input decoder is retained.
 
+Native merge preparation has a separate
+`PreparedCatalog::ref_proof_with_required_ancestry` factory. Unlike ordinary
+`ref_proof`, it walks every non-vacuous base-to-target predicate regardless of
+branch rules. It reuses `RefPublicationProof`, the signed plan/evidence digest,
+verified native commit headers and the bounded disk-backed walker. False bits
+remain negative facts; a decoded bit vector grants no authority. Creation,
+deletion and identical tips retain the existing vacuous predicate semantics,
+with deletion permissions checked separately at publication. Ordinary pushes
+continue to compute ancestry only where their current policy requires it.
+
+Both factories retain the preparation's live lease, timeout, cancellation and
+scratch budget. Neither publishes roots or populates SQL refs/ancestry. A final
+native merge receiver must authenticate the exact proof and conditional ref
+snapshot, check current access/reviews/checks and ref versions, and commit joint
+roots, pull state and UUID result under the actual owner fence and durable
+recovery journal. That receiver and its resident adapter remain unfinished; the
+legacy operation 9 description below is not qualification of the native writer.
+
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation
 carries the repository UUID, checked against the resolved Cell. Create/review
