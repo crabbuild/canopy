@@ -394,7 +394,13 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|error| {
+            format!(
+                "{format:?}: warm owner readiness: {error}; {:?}",
+                warm.stats()
+            )
+        })?;
         let view = warm.snapshot(Some("owner".into())).await?;
         assert!(view.headers(&[oid]).await?[0].is_some());
         drop(view);
@@ -403,14 +409,20 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
             ServingOwnerPhase::Released
         );
         let mut input = f.begin([119; 16]);
-        input.lease_ms = 1000;
+        input.lease_ms = RENEWAL_LEASE_MS;
         let owner = ServingOwner::start(ctx, q.clone(), input, identity()?).await?;
         timeout(Duration::from_secs(8), async {
             while owner.stats().phase != ServingOwnerPhase::Ready {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|error| {
+            format!(
+                "{format:?}: short-lease readiness: {error}; {:?}",
+                owner.stats()
+            )
+        })?;
         let view = owner.snapshot(Some("owner".into())).await?;
         assert!(
             view.headers(&[oid])
@@ -422,10 +434,16 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
         let observer =
             tokio::spawn(async move { view.workspace(&[oid], WorkspaceLimits::default()).await });
         timeout(Duration::from_secs(8), provider.entered.acquire())
-            .await??
+            .await
+            .map_err(|error| {
+                format!(
+                    "{format:?}: constructor provider entry: {error}; {:?}",
+                    owner.stats()
+                )
+            })??
             .forget();
         owner.close();
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        tokio::time::sleep(Duration::from_millis(RENEWAL_LEASE_MS * 3 / 2)).await;
         timeout(Duration::from_secs(8), async {
             while owner.stats().renewals < 2 {
                 assert_eq!(
@@ -437,11 +455,23 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|error| {
+            format!(
+                "{format:?}: two closed-owner renewals: {error}; {:?}",
+                owner.stats()
+            )
+        })?;
         assert!(owner.stats().renewals >= 2, "{:?}", owner.stats());
         provider.proceed.add_permits(1);
         let workspace = timeout(Duration::from_secs(8), observer)
-            .await??
+            .await
+            .map_err(|error| {
+                format!(
+                    "{format:?}: renewed constructor completion: {error}; {:?}",
+                    owner.stats()
+                )
+            })??
             .map_err(|e| format!("renewed constructor: {e}"))?;
         // Construction's final fresh authority check proves the complete result;
         // short body/membership reads are exercised with their own deadline tests.
@@ -458,7 +488,13 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
         );
         drop(workspace);
         assert_eq!(
-            timeout(Duration::from_secs(8), drain).await??.phase,
+            timeout(Duration::from_secs(8), drain)
+                .await
+                .map_err(|error| format!(
+                    "{format:?}: returned workspace drain: {error}; {:?}",
+                    owner.stats()
+                ))??
+                .phase,
             ServingOwnerPhase::Released
         );
         assert_eq!(pin_count(&f).await?, 0);

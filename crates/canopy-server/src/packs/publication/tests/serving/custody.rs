@@ -38,14 +38,7 @@ async fn saved(f: &Fixture, reader: u8) -> Result<RegisteredCustody> {
     .ok_or("serving intent missing")?)
 }
 async fn expired(evidence: &PendingMutation) -> Result {
-    let now = sql::now(0)?;
-    if now <= evidence.identity().expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(u64::try_from(
-            evidence.identity().expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(evidence.identity().expires_at_ms).await
 }
 
 #[tokio::test]

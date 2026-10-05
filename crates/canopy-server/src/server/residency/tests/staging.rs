@@ -46,6 +46,243 @@ impl Drop for Release {
     }
 }
 
+struct DriverDropped(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for DriverDropped {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+fn driver_request(repository: &RepositoryCell, operation: u8) -> BeginRequest {
+    BeginRequest {
+        repository: repository.id,
+        operation: [operation; 16],
+        request_digest: [operation; 32],
+        actor: "canopy".into(),
+        lease_ms: DEFAULT_LEASE_MS,
+    }
+}
+
+#[tokio::test]
+async fn production_push_driver_survives_observer_loss_binds_and_joins_before_resident_release()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, _files) = server().await?;
+        let manager = server.repositories.clone();
+        let entry = create(&manager, "driver-bind", format).await?;
+        let (repository, _, service) = loaded(&manager, entry.repository_id).await?;
+        let coordinator = repository.staging_coordinator()?;
+        let request = driver_request(&repository, 180);
+        let ready = coordinator
+            .ready_request(request.clone(), mutation_identity()?)
+            .await?;
+        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+        // Join identity is checked even before Begin has produced a token.
+        assert!(coordinator.join_request(&request)?.is_some());
+        let mut wrong = request.clone();
+        wrong.request_digest[0] ^= 1;
+        assert!(coordinator.join_request(&wrong).is_err());
+        let mut wrong = request.clone();
+        wrong.actor = "another-account".into();
+        assert!(coordinator.join_request(&wrong).is_err());
+        let mut foreign = request.clone();
+        foreign.repository = *uuid::Uuid::new_v4().as_bytes();
+        assert!(coordinator.join_request(&foreign).is_err());
+        let (bound, bound_observer) = oneshot::channel();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let owned = DriverDropped(dropped.clone());
+        ticket.drive(move |ticket, publication| async move {
+            let _owned = owned;
+            if !matches!(ticket.wait().await, StagingState::Active(_)) {
+                return Err(StagingError::Context);
+            }
+            if publication.stats().await.closed {
+                return Err(StagingError::Closed);
+            }
+            let work = ticket.spawn(|context| async move { context.token() })?;
+            let _token = work
+                .wait()
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            ticket.seal()?;
+            if !matches!(ticket.wait_terminal().await, StagingState::Bound(_)) {
+                return Err(StagingError::Context);
+            }
+            let _ = bound.send(());
+            std::future::pending::<std::result::Result<(), StagingError>>().await
+        })?;
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attempt = called.clone();
+        assert!(matches!(
+            ticket.drive(move |_, _| async move {
+                attempt.store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            }),
+            Err(StagingError::Duplicate)
+        ));
+        drop(ticket);
+        timeout(Duration::from_secs(10), bound_observer).await??;
+        assert!(!called.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!dropped.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(
+            coordinator.stats().workers,
+            0,
+            "controller must not prevent its own Bind"
+        );
+        assert_eq!(coordinator.stats().admitted, 1);
+        assert!(!service.quiesce().await);
+        timeout(Duration::from_secs(10), server.shutdown()).await??;
+        assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(coordinator.stats().admitted, 0);
+        assert_eq!(manager.staging_budget.available(), (32, 64));
+        assert!(matches!(
+            coordinator
+                .ready_request(request.clone(), mutation_identity()?)
+                .await,
+            Err(StagingError::Closed)
+        ));
+        assert!(coordinator.join_request(&request)?.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_push_driver_cancellation_keeps_detached_physical_worker_and_node_owned_until_drain()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, files) = server().await?;
+        let manager = server.repositories.clone();
+        let entry = create(&manager, "driver-physical", format).await?;
+        let (repository, _, service) = loaded(&manager, entry.repository_id).await?;
+        let coordinator = repository.staging_coordinator()?;
+        let ready = coordinator
+            .ready_request(driver_request(&repository, 181), mutation_identity()?)
+            .await?;
+        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+        let (release, wait) = std::sync::mpsc::channel();
+        let release = Release(Some(release));
+        let (entered, running) = oneshot::channel();
+        let (transferred, transfer) = oneshot::channel();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let owned = DriverDropped(dropped.clone());
+        ticket.drive(move |ticket, _| async move {
+            let _owned = owned;
+            if !matches!(ticket.wait().await, StagingState::Active(_)) {
+                return Err(StagingError::Context);
+            }
+            let work = ticket.spawn(move |context| async move {
+                let owner = context.physical_owner();
+                Ok(tokio::task::spawn_blocking(move || {
+                    let _owner = owner;
+                    let _ = entered.send(());
+                    let _ = wait.recv();
+                }))
+            })?;
+            let _detached = work
+                .wait()
+                .await
+                .map_err(|error| StagingError::Input(Box::new(error)))?;
+            let _ = transferred.send(());
+            std::future::pending::<std::result::Result<(), StagingError>>().await
+        })?;
+        drop(ticket);
+        timeout(Duration::from_secs(5), running).await??;
+        timeout(Duration::from_secs(5), transfer).await??;
+        let node = server.node.clone();
+        let mut shutdown = tokio::spawn(server.shutdown());
+        timeout(Duration::from_secs(5), async {
+            while !dropped.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert!(
+            timeout(Duration::from_millis(50), &mut shutdown)
+                .await
+                .is_err()
+        );
+        assert!(!node.is_shutting_down());
+        assert!(!service.coordinator.stats().await.closed);
+        assert_eq!(manager.staging_budget.available(), (31, 63));
+        assert!(
+            crate::server::workspace::Workspace::open(&files.path().join("node"))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        drop(release);
+        timeout(Duration::from_secs(10), shutdown).await???;
+        assert_eq!(manager.staging_budget.available(), (32, 64));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_push_driver_close_preserves_exact_uncertain_begin_and_panic_returns_credit()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [1, 2, 3] {
+            let (server, _files) = server().await?;
+            let manager = server.repositories.clone();
+            let entry = create(&manager, "driver-exact", format).await?;
+            let (repository, _, service) = loaded(&manager, entry.repository_id).await?;
+            let coordinator = repository.staging_coordinator()?;
+            let ready = coordinator
+                .ready_request(driver_request(&repository, 182), mutation_identity()?)
+                .await?;
+            coordinator.fault_for_test(fault);
+            let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+            let (entered, running) = oneshot::channel();
+            let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let owned = DriverDropped(dropped.clone());
+            ticket.drive(move |_, _| async move {
+                let _owned = owned;
+                let _ = entered.send(());
+                std::future::pending::<std::result::Result<(), StagingError>>().await
+            })?;
+            timeout(Duration::from_secs(5), running).await??;
+            assert!(matches!(
+                timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+                StagingState::Uncertain(_)
+            ));
+            let original = ticket
+                .custody_evidence_for_test()
+                .ok_or("original missing")?;
+            // Both drains await the same workflow join, without taking its
+            // handle away from another observer or returning its quota early.
+            let (first, second) = timeout(Duration::from_secs(5), async {
+                tokio::join!(coordinator.close_and_drain(), coordinator.close_and_drain())
+            })
+            .await?;
+            assert_eq!((first.len(), second.len()), (1, 1));
+            assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+            assert_eq!(ticket.custody_evidence_for_test(), Some(original));
+            assert_eq!(manager.staging_budget.available(), (31, 64));
+            assert!(!service.coordinator.stats().await.closed);
+            timeout(Duration::from_secs(10), server.shutdown()).await??;
+            assert_eq!(manager.staging_budget.available(), (32, 64));
+        }
+        let (server, _files) = server().await?;
+        let manager = server.repositories.clone();
+        let entry = create(&manager, "driver-panic", format).await?;
+        let (repository, _, _) = loaded(&manager, entry.repository_id).await?;
+        let coordinator = repository.staging_coordinator()?;
+        let ready = coordinator
+            .ready_request(driver_request(&repository, 183), mutation_identity()?)
+            .await?;
+        let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+        active(&ticket).await?;
+        ticket.drive(|_, _| async { panic!("owned workflow panic") })?;
+        timeout(Duration::from_secs(5), async {
+            while coordinator.stats().admitted != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert!(matches!(ticket.state(), StagingState::Stopped));
+        assert_eq!(manager.staging_budget.available(), (32, 64));
+        timeout(Duration::from_secs(10), server.shutdown()).await??;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn production_staging_blocks_eviction_and_shutdown_until_detached_physical_worker_drains()
 -> Result {

@@ -208,13 +208,7 @@ pub(super) async fn qualify(context: Context<'_>, refusal_case: bool, late_write
     assert!(staging.close_and_drain().await.is_empty());
     let (runtime, handle, client) = super::durable_recovery::restore_owner(f, &check).await?;
     // Wall-clock expiry is real SDK behavior, not a synthetic transport result.
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= first_identity.expires_at_ms {
-        tokio::time::sleep(std::time::Duration::from_millis(u64::try_from(
-            first_identity.expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
+    wait_for_sdk_expiry(first_identity.expires_at_ms).await?;
     assert!(matches!(
         client.resolve(&first_evidence).await?,
         Resolution::Expired

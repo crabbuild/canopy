@@ -5,15 +5,106 @@ Updated during implementation on 2026-10-04. **The full implementation and capac
 Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged into
 `main` at `d559e5635e002ee3f885c780a418cf861a5197fc` while its checks still failed.
 The native metadata follow-up is based on that main revision. The original SQL
-hydration failures have been resolved by converting real read/cache callers;
-full CI remains open because a directory integration caller and live writers
-still invoke retired ingestion. The ownership and metadata changes below are
+hydration failures have been resolved by converting real read/cache callers.
+The directory recovery fixture now uses repository-local permission metadata
+to verify separate Cells and replay after restoration. Full CI remains open
+because live writers and other integration callers still invoke retired ingestion.
+The ownership and metadata changes below are
 prerequisites for the write replacement. This cutover is not release qualified.
 Older checkpoint notes describe historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Whole-workflow ownership and CI repair
+
+The production resident supplies its actual Cell client and publication
+dispatcher to staging. A resident can prepare a request through the existing
+registered custody factory and join an admitted request only when repository,
+actor, operation and request digest match, including before Begin yields a token.
+Closed or paused admission refuses new request preparation.
+
+Each existing staging job can own one workflow controller. Its callback orders
+the staged/bound worker slots, retrieves their private outputs, and then orders
+checkpoint registration, Bind, policy pages and final publication. The controller
+does not consume a physical-worker slot, so its own existence cannot block Bind
+or held publication. Actual physical work must use the existing worker APIs.
+No additional durable queue, schema or operation inventory is introduced.
+
+Dropping a request observer leaves that controller owned by the existing job.
+Stop and shutdown cancel and join its actual callback. Concurrent drains clone
+one shared join rather than taking a handle away from another drain. Final
+publication and fencing join the controller before removing operation credit.
+Native/SQL/provider work detached from a worker retains its existing physical
+activity and still blocks lower serving/publication, Cell, heartbeat and workspace
+release. A callback error or panic stops the workflow without replacing any
+uncertain exact command with a native refusal.
+
+Regression families exercise actual production residents in both object formats:
+observer loss through Bind, duplicate controllers and mismatched join contexts,
+busy eviction, callback cleanup before shutdown, detached physical work through
+shutdown, concurrent drains of uncertain Begin after absent/lost/panicked replies,
+the original command identities and admission credits, and controller panic.
+These qualify controller ownership, not completed HTTP/SSH/generated writer wiring.
+
+The directory recovery test previously entered a removed object-ingestion command.
+It now grants Write in one repository and leaves the other ungranted, restores
+both from durable Cell storage, replays the original grant receipt, and uses the
+same request ID to grant Read in the other Cell without changing the first grant.
+This preserves the directory test's distinct-Cell, permissions and recovery
+contract. Packed object publication and cold object restoration remain covered
+by the native publication qualification; their failures are not skipped.
+
+SDK-expiry fixtures share one helper that rechecks wall-clock milliseconds after
+every Tokio timer wake. The SDK uses wall time for expiry, so a single monotonic
+sleep does not establish that boundary. Prepared identities, deadlines and receipt
+assertions remain unchanged. Accepted-denial fixtures give initial execution ten
+seconds, matching the existing cold acceptance fixtures, and still require real
+SDK expiry before historical recovery. Intentionally unexecuted fixtures retain
+their short window. The full run exposed a Begin denial whose one-second SDK
+identity expired before initial acceptance; its Pending evidence is retained.
+The cold expiry assertion reports the actual resolution, object format, custody
+kind and original deadline. Earlier failed source fingerprints and terminal logs
+remain attributed separately from repaired runs.
+
+Preceding library runs exposed unlabelled timeouts in two serving renewal tests
+using one-second leases. They now use a shared five-second test lease and hold
+actual borrowers for 7.5 seconds, still crossing the original expiry and requiring
+multiple renewals, unchanged pin identity and release after the last borrower.
+Production profiles and expiration-only cases remain unchanged. The waits report
+object format, phase and owner state. Earlier timed-out runs remain failed evidence;
+any recurrent failure must be investigated rather than counted as successful.
+
+The broader pre-controller diagnostic inventory reached previously unrun tests:
+Git backend 2 passed; multi-server 46 passed, 60 failed and 9 ignored; owner restart,
+repository Cell and smart HTTP each failed their one aggregate case. This is not
+final-source qualification. Actual HTTP pushes still call `persist_objects` and
+legacy push completion, encountering removed `objects`/`git_packs` tables or
+unregistered ingestion descriptors. Some standalone fixtures also lack a registered
+resident serving capability. The full workflow remains a release gate.
+
+Final qualification of the repaired source passes 745 unique Rust cases: 728
+library cases (6 Git-format, 15 object-storage and 707 server), 13 directory cases,
+2 Git backend cases and 2 binary cases. All 31 focused ownership, custody, cursor,
+reachability and renewal regressions pass. Clippy with warnings denied, build,
+formatting/diff checks and 96 Python harness cases pass. These results exclude
+focused/binary reruns and nested child summaries from unique counts.
+
+The preceding frozen full workspace run executed 854 unique Rust cases: 790
+passed, 64 failed and 9 were ignored. Its 63 integration failures still require
+production writer/fixture conversion; its additional serving-renewal timeout is
+retained as failed evidence preceding the revised test profile. Final library/read
+qualification is separate from that earlier complete inventory. Linux/RustFS and
+full production integrations are still required before release.
+
+Current qualification and exact source/log fingerprints are recorded in
+[workflow/CI evidence](evidence/push-workflow-ci-20261004.json). The immediately
+required next step is to connect the actual native HTTP/SSH writer to this owned
+controller and mandatory registered root policy/completion, then convert remaining
+integration fixtures and run the complete Linux/RustFS workflow. Request/policy
+physical ownership, adopted old-owner inputs and the remaining large-team design
+requirements are still mandatory; this increment does not establish capacity.
 
 ## Resident staging ownership
 
@@ -53,7 +144,8 @@ Unexecuted expiry fixtures retain their one-second window.
 
 This increment supplies the resident write lifecycle; live HTTP/SSH/generated
 writers and their integration fixtures still require conversion to it. The full
-CI and release/capacity gates remain open. Final frozen-source qualification passes 725 library cases, including 704
+CI and release/capacity gates remain open. The preceding resident-only increment's
+frozen-source qualification passes 725 library cases, including 704
 server cases and 403 publication cases. All eight focused regressions, Clippy
 with warnings denied, build, formatting/diff checks and 96 Python harness cases
 pass. The workspace command executes 740 unique Rust cases: 739 pass and the

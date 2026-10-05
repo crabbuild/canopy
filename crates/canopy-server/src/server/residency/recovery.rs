@@ -42,11 +42,13 @@ impl RecoveryServices {
         )
         .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?;
         let staging = Arc::new(
-            StagingCoordinator::new_with_budget(
+            StagingCoordinator::new_resident(
+                client.clone(),
                 target.clone(),
                 StagingLimits::default(),
                 authority.clone(),
                 manager.staging_budget.clone(),
+                coordinator.clone(),
             )
             .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
         );

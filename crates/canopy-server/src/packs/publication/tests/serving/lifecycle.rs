@@ -48,7 +48,8 @@ async fn ready(owner: &ServingOwner) -> Result<ServingOwnerStats> {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await?)
+    .await
+    .map_err(|error| format!("serving owner readiness: {error}; {:?}", owner.stats()))?)
 }
 async fn zero_pins(f: &Fixture) -> Result {
     timeout(Duration::from_secs(8), async {
@@ -336,7 +337,7 @@ async fn closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clo
         let owner = ServingOwner::start(
             context(&f, store, &root, tasks.clone())?,
             q.clone(),
-            input(&f, 218, "owner", 1_000),
+            input(&f, 218, "owner", RENEWAL_LEASE_MS),
             identity()?,
         )
         .await?;
@@ -349,7 +350,7 @@ async fn closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clo
             owner.snapshot(Some("owner".into())).await,
             Err(ServingReadError::Inactive)
         ));
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        tokio::time::sleep(Duration::from_millis(RENEWAL_LEASE_MS * 3 / 2)).await;
         timeout(Duration::from_secs(8), async {
             while owner.stats().renewals < 2 {
                 assert_eq!(
@@ -361,7 +362,13 @@ async fn closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clo
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|error| {
+            format!(
+                "{format:?}: borrowed-snapshot renewals: {error}; {:?}",
+                owner.stats()
+            )
+        })?;
         assert!(owner.stats().renewals >= 2, "{:?}", owner.stats());
         assert_eq!(owner.stats().token, Some(token));
         assert_eq!(snapshot.fact(), fact);
@@ -371,7 +378,11 @@ async fn closed_owner_keeps_borrowed_generation_renewing_until_last_snapshot_clo
         drop(clone);
         assert_eq!(
             timeout(Duration::from_secs(8), owner.close_and_drain())
-                .await?
+                .await
+                .map_err(|error| format!(
+                    "{format:?}: last snapshot drain: {error}; {:?}",
+                    owner.stats()
+                ))?
                 .phase,
             ServingOwnerPhase::Released
         );

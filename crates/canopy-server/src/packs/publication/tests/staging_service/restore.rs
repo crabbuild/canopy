@@ -91,12 +91,7 @@ async fn settle(ticket: &StagingTicket) -> Result<StagingState> {
     Ok(timeout(Duration::from_secs(10), ticket.wait()).await?)
 }
 async fn expired(evidence: &PendingMutation) -> Result {
-    let until = evidence.identity().expires_at_ms;
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= until {
-        tokio::time::sleep(Duration::from_millis((until - now + 1) as u64)).await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(evidence.identity().expires_at_ms).await
 }
 
 #[tokio::test]
@@ -166,10 +161,12 @@ async fn cold_staging_keeps_all_original_receipts_after_sdk_expiry_and_actual_ow
                 super::super::durable_recovery::restore_owner(&f, &check(old)).await?;
             assert_ne!(handle.owner_fence(), old.owner);
             expired(&evidence).await?;
-            assert!(matches!(
-                client.resolve(&evidence).await?,
-                Resolution::Expired
-            ));
+            let resolution = client.resolve(&evidence).await?;
+            assert!(
+                matches!(resolution, Resolution::Expired),
+                "format {format:?}, custody kind {kind}, expiry {}: {resolution:?}",
+                evidence.identity().expires_at_ms
+            );
             let (service, ticket) =
                 restore(&f, client.clone(), kind, StagingLimits::default()).await?;
             assert!(matches!(settle(&ticket).await?, StagingState::Fenced(_)));

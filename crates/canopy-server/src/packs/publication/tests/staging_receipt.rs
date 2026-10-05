@@ -5,14 +5,7 @@ use cellule_runtime::Resolution;
 use tokio::time::{Duration, timeout};
 
 async fn expire(expires_at_ms: i64) -> Result {
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(u64::try_from(
-            expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(expires_at_ms).await
 }
 fn denied_stage(
     result: std::result::Result<

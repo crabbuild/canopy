@@ -337,6 +337,20 @@ fn identity() -> std::io::Result<MutationIdentity> {
         expires_at_ms: now + 60_000,
     })
 }
+// SDK expiry uses wall-clock milliseconds; Tokio timers are monotonic.
+// A wake alone cannot establish that the original identity has expired.
+async fn wait_for_sdk_expiry(expires_at_ms: i64) -> Result {
+    loop {
+        let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        if now > expires_at_ms {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(u64::try_from(
+            expires_at_ms - now + 1,
+        )?))
+        .await;
+    }
+}
 async fn registered_preparation(
     f: &Fixture,
     operation: [u8; 16],

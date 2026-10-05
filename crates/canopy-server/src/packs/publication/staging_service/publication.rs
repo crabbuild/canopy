@@ -166,6 +166,7 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 }
                 drain_work(job).await;
                 job.status.send_replace(StagingState::Published(outcome));
+                driver::drain(job).await;
                 remove(inner, job);
                 return true;
             }
@@ -182,6 +183,8 @@ pub(super) async fn observe(inner: &Inner, job: &Job, ticket: &PublicationTicket
                 drain_work(job).await;
                 job.status
                     .send_replace(StagingState::Fenced(Arc::new(StagingError::Inactive)));
+                job.driver_stop.cancel();
+                driver::drain(job).await;
                 remove(inner, job);
                 return true;
             }

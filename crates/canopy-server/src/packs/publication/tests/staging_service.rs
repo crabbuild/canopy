@@ -247,13 +247,7 @@ async fn staged_service_recovers_original_begin_after_sdk_expiry_before_allowing
             .output
             .ok_or("artifact custody expired with the SDK identity")?;
         assert!(live.expires_at_ms > mutation.expires_at_ms);
-        let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-        if now <= mutation.expires_at_ms {
-            tokio::time::sleep(Duration::from_millis(u64::try_from(
-                mutation.expires_at_ms - now + 1,
-            )?))
-            .await;
-        }
+        wait_for_sdk_expiry(mutation.expires_at_ms).await?;
         assert!(matches!(
             fixture.client().resolve(&evidence).await?,
             cellule_runtime::Resolution::Expired

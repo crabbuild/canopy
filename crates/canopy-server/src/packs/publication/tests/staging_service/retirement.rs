@@ -5,14 +5,7 @@ use cellule_runtime::{PendingMutation, Resolution};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 async fn expired(evidence: &PendingMutation) -> Result {
-    let now = crate::packs::publication::sql::now(0)?;
-    if now <= evidence.identity().expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(
-            (evidence.identity().expires_at_ms - now + 1) as u64,
-        ))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(evidence.identity().expires_at_ms).await
 }
 async fn until(c: &StagingCoordinator, predicate: impl Fn(StagingStats) -> bool) -> Result {
     timeout(Duration::from_secs(10), async {
