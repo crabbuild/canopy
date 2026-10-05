@@ -1,6 +1,6 @@
 # Large-repository implementation status
 
-Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
+Updated during implementation on 2026-10-05. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged into
 `main` at `d559e5635e002ee3f885c780a418cf861a5197fc` while its checks still failed.
@@ -16,6 +16,56 @@ Older checkpoint notes describe historical states.
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Native commit checks conversion (2026-10-05 checkpoint)
+
+Commit-check reads and starts were still querying the removed `objects` table,
+returning HTTP 503 after a native push. They now use authenticated bounded
+catalog headers under the actual resident serving snapshot. A private,
+purpose-specific membership certificate reuses the existing MAC envelope,
+serving token and retained joint fact. The final typed receivers verify actual
+Cell identity, fresh read access, the exact live pin/fact, and the command's
+admitted owner fence. Check policy/version and guarded insertion share one
+transaction. Unrelated current-head advancement preserves a live historical pin;
+actor, OID or repository substitution, tampering, revocation and real producer
+drain invalidate its authority. Existing check metadata and ordering are reused.
+No native pack-body hydration is needed for membership issuance.
+
+Production command 49 and query 50 have 4 KiB input bounds, a 16-byte command
+outcome bound and a 256 KiB / 32-context query bound. Recorded policy rejections
+retain their original receipts and produce the existing HTTP domain statuses;
+pending/transport failures remain errors. The stock-Git HTTP checks family and
+branch-protection family pass. Two new actual-resident receiver families cover
+both object formats, forged/substituted proofs, noncommit targets, another Cell,
+retained generations, current policy, revocation, visibility and physical drain.
+
+Frozen-source full-workspace validation still fails: server libraries finish
+715 passed / 2 failed; multi-server finishes 77 passed / 29 failed / 9 existing
+ignores; the three standalone integration aggregates each fail. The two library
+failures are sequential serving rollover capacity and bound-expiry terminal-state
+classification. Both pass isolated from the same compiled source, which does not
+establish their cause or supersede the full-workload failure. The unique workspace
+inventory is 830 passed / 34 failed / 9 unexecuted ignores; child summaries and
+focused reruns are excluded. All-target Clippy with warnings denied, server build,
+formatting, diff checks and all 96 Python harness cases pass.
+The complete validation and build/format/harness results are recorded in
+[evidence/native-checks-ci-20261005.json](evidence/native-checks-ci-20261005.json).
+
+The parent `3e40f19` Linux push Verify run
+[37272804247](https://github.com/crabbuild/canopy/actions/runs/37272804247)
+fails multi-server at 75/35/9; its PR run
+[37272808437](https://github.com/crabbuild/canopy/actions/runs/37272808437)
+fails at 76/34/9. Both pass all 715 server library cases. Reported tools are
+Rust/Cargo 1.98.1 and Git 2.55.0. Those results belong to that parent, not this
+increment. New-head Linux qualification is required.
+
+Highest priorities are the two workload-dependent library failures, Linux native
+bulk/rejected-push custody and pre-Bind terminal refusal, then native pull/ref
+creation/list/detail/reviews and default-branch mutation. Generated writers, peer
+residency, source-independent backup, reachable-only cold/filtered fetch,
+standalone resident fixtures, physical custody completion, final DDL and full
+large-history/team capacity gates remain open. The full goal is active and this
+cutover remains unqualified for release.
 
 ## Native HTTP/SSH writer cutover (in progress)
 

@@ -33,6 +33,8 @@ pub use session::PreparationSession;
 mod base;
 pub use base::{PreparationBaseError, PreparationBaseResolver};
 mod certificate;
+mod commit_membership;
+pub(crate) use commit_membership::{CommitMembership, MembershipRequest};
 pub(in crate::packs) mod codec;
 pub use certificate::{
     AttestationOutcome, CERTIFICATE_BYTES, CatalogCertificate, RegisteredCatalog,
@@ -248,6 +250,8 @@ pub struct MaintenanceRequest {
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
+    registry.bind_command::<crate::checks::native::StartCommitCheck>()?;
+    registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
     registry.bind_query::<SelectServingGeneration>()?;

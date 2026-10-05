@@ -3,6 +3,8 @@
 use crate::ReadIdentity;
 
 mod mutations;
+pub(crate) mod native;
+pub use native::NativeCheckError;
 
 use crate::{RepositoryCell, directory::validate_component, validate_repository_id};
 use cellule_runtime::{
@@ -179,20 +181,33 @@ impl RepositoryCell {
         actor: impl Into<ReadIdentity<'a>>,
         oid: crate::ObjectId,
         after: Option<&str>,
-    ) -> Result<Observed<Option<Vec<CommitCheck>>>, Invocation> {
+    ) -> Result<Observed<Option<Vec<CommitCheck>>>, NativeCheckError> {
         let actor = actor.into();
-        let mut parameters = cursor_parameters(actor, after)?;
-        parameters.push(SqlValue::Blob(oid.to_vec()));
-        let result = self.check_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM objects WHERE oid = ?2 AND kind = 'commit')"), parameters: vec![parameters[0].clone(), parameters[2].clone()] },
-            SqlStatement {
-                sql: format!("SELECT c.name, c.reporter, c.enabled, c.version, {RUN_COLUMNS} FROM check_contexts c LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = c.name AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE c.enabled = 1 AND c.name > ?2 AND ({ACCESS}) ORDER BY c.name LIMIT {CHECK_PAGE_SIZE}"), parameters,
-            },
-        ).await?;
+        if let Some(cursor) = after {
+            validate_component(cursor)?;
+        }
+        // Keep the actual borrow until the receiver verifies the retained pin.
+        let (_snapshot, selection) = self.check_selection(actor, oid).await?;
+        let result = self
+            .application
+            .query::<native::ReadCommitChecks>(
+                &self.target,
+                None,
+                native::CommitPage {
+                    selection,
+                    after: after.map(str::to_owned),
+                },
+            )
+            .await
+            .map_err(|e| NativeCheckError::Read(Box::new(e)))?;
         let output = result
             .output
-            .map(|rows| {
-                rows.iter()
+            .map(|sets| {
+                let rows = sets
+                    .first()
+                    .ok_or(Error::Command("missing native checks page"))?;
+                rows.rows
+                    .iter()
                     .map(|row| {
                         if row.len() != 14 {
                             return Err(Error::Command("invalid commit checks row"));
@@ -209,7 +224,7 @@ impl RepositoryCell {
                     .collect()
             })
             .transpose()
-            .map_err(Invocation::NotStarted)?;
+            .map_err(NativeCheckError::Invalid)?;
         Ok(Observed {
             output,
             receipt: result.receipt,

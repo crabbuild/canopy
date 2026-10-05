@@ -116,6 +116,13 @@ pub struct ServingSnapshot {
     _borrow: Arc<Borrow>,
 }
 impl ServingSnapshot {
+    pub(crate) async fn commit_membership(
+        &self,
+        oid: crate::ObjectId,
+    ) -> Result<Option<super::super::CommitMembership>, ServingReadError> {
+        self.pin.commit_membership(self.actor.clone(), oid).await
+    }
+
     pub(crate) async fn resolve_refs(
         &self,
         names: &[String],

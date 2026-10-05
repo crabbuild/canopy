@@ -2,6 +2,7 @@
 //! catalog fact and editorial pull records are installed by trusted test SQL;
 //! this does not qualify the still-unconverted live pull/ref producers.
 use super::*;
+mod checks;
 use crate::packs::{
     catalog::{
         CatalogSnapshot, StoredCatalog,

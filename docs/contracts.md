@@ -1618,6 +1618,26 @@ increasing creation number. The OID must identify a stored Git commit; absent
 objects, trees, tags and blobs are not check targets. A context does not imply
 branch protection; an enabled branch rule must explicitly require it.
 
+Native commit reads and starts use the resident serving snapshot's authenticated
+catalog headers to prove kind and existence. The private `CommitMembership`
+factory issues a bounded purpose-specific MAC binding tenant, application,
+repository, actor, commit OID, serving token and exact retained catalog/ref fact.
+Header lookup runs under the existing tracked physical read owner and admission;
+it reads bounded metadata and does not hydrate native pack bodies. The caller
+keeps its serving snapshot through the final receiver.
+
+Repository command 49 starts a check; query 50 reads the bounded latest-check
+page. Both verify the MAC, actual Cell identity, current read access, exact live
+pin and retained fact. Command 49 also checks the actual admitted owner fence.
+Pin expiry uses a refreshed wall clock clamped to runtime logical time. An
+unrelated publication may advance current head while the original retained pin
+remains authoritative. Producer release, expiry, access loss, or a substituted
+actor/OID/repository invalidates that authority. Command policy decisions and
+conditional insertion occur in the same transaction. Recorded rejections retain
+their receipts and map to domain HTTP outcomes; pending invocation errors remain
+ambiguous. Inputs are bounded at 4 KiB and commit pages at 256 KiB / 32 contexts.
+The existing check metadata tables, creation order and policy triggers are reused.
+
 Only the configured reporter can start runs. The owner has no implicit reporting
 bypass and must explicitly configure itself as reporter if desired. Starting
 requires the enabled context's current version and current repository read access.
@@ -1666,7 +1686,8 @@ HTTP routes:
 Each context contains name, reporter, enabled and version. Each run contains id,
 OID, context, context_version, reporter, state, version, summary, created_at_ms
 and updated_at_ms. Mutation UUIDs are canonical lowercase with the supported
-RFC variant/version; OIDs use 40 lowercase hexadecimal characters. All writes
+RFC variant/version; OIDs use 40 or 64 lowercase hexadecimal characters for
+the repository's SHA-1 or SHA-256 format. All writes
 carry the repository UUID to prevent stale names from targeting another Cell.
 Missing membership/resources/non-commit targets return 404, authority or scope
 failure returns 403, identity/version/terminal-state conflicts return 409, and
