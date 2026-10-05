@@ -1,8 +1,10 @@
 //! Actual HTTP reads against native, physically verified packs. Only the joint
 //! catalog fact and editorial pull records are installed by trusted test SQL;
-//! this does not qualify the still-unconverted live pull/ref producers.
+//! this isolates native reader semantics from generated Git producers. Pull
+//! receiver tests use the registered native commands against these real roots.
 use super::*;
 mod checks;
+mod pulls;
 use crate::packs::{
     catalog::{
         CatalogSnapshot, StoredCatalog,
@@ -305,17 +307,63 @@ async fn production_native_browser_refuses_absent_generations_wrong_formats_and_
 }
 
 async fn editorial_pull(
+    server: &crate::server::RunningServer,
     repository: &RepositoryCell,
     number: i64,
     source: ObjectId,
     base: ObjectId,
 ) -> Result<Value> {
-    // Only editorial metadata remains on legacy refs. The compared bodies and
-    // ancestry must come from the certified catalog, never objects/parents SQL.
+    // Trusted joint-root installation isolates native read semantics. Both refs
+    // and compared bodies come from immutable roots; only editorial rows use SQL.
     let source_ref = format!("refs/heads/source-{number}");
     let base_ref = format!("refs/heads/base-{number}");
+    let store = Arc::new(ArtifactStore::new(
+        server.repositories.external_store.clone(),
+        repository.repository_id(),
+    ));
+    let snapshot = repository
+        .serving_snapshot(ReadIdentity::Account("canopy"))
+        .await?;
+    let fact = snapshot.fact();
+    let mut refs = fact.refs.ok_or("joint refs absent")?.read(&store).await?;
+    let index =
+        crate::packs::ref_state::RefStateIndex::new(store.clone(), repository.object_format());
+    let mut cursor = index.cursor(refs.root.clone(), None, false)?;
+    let mut records = Vec::new();
+    while let Some(record) = cursor.next().await? {
+        records.push(record);
+    }
+    for (name, oid) in [(&source_ref, source), (&base_ref, base)] {
+        records.push(crate::packs::ref_state::RefStateRecord::new(
+            name,
+            crate::refs::RefExpectation {
+                oid: Some(oid),
+                version: 1,
+            },
+            repository.object_format(),
+        )?);
+    }
+    records.sort_by(|a, b| a.name().cmp(b.name()));
+    refs.root =
+        crate::packs::ref_state::RefStateTree::new(store.clone(), repository.object_format())
+            .build_sorted(
+                operation(300 + 2 * number as u64),
+                records.into_iter().map(Ok),
+            )
+            .await?;
+    refs.generation = fact.generation + 1;
+    let root =
+        RefStateSnapshotRoot::upload(&store, operation(301 + 2 * number as u64), refs).await?;
+    drop(snapshot);
+    install(
+        repository,
+        (fact.generation + 1) as i64,
+        fact.catalog.ok_or("joint catalog absent")?,
+        root,
+    )
+    .await?;
+
     repository.sql.batch(crate::server::mutation_identity()?,SqlBatch{statements:vec![
-        SqlStatement{sql:"INSERT INTO refs(name,oid,version) VALUES(?1,?2,1),(?3,?4,1)".into(),parameters:vec![SqlValue::Text(source_ref.clone()),SqlValue::Blob(source.to_vec()),SqlValue::Text(base_ref.clone()),SqlValue::Blob(base.to_vec())]},
         SqlStatement{sql:"INSERT INTO pull_requests(number,id,creation_digest,author,title,body,state,draft,version,source_ref,base_ref,initial_source_oid,initial_base_oid,created_ms,updated_ms) VALUES(?1,?2,?3,'canopy','native comparison','','open',0,1,?4,?5,?6,?7,0,0)".into(),parameters:vec![SqlValue::Integer(number),SqlValue::Blob(uuid::Uuid::new_v4().into_bytes().to_vec()),SqlValue::Blob(vec![42;32]),SqlValue::Text(source_ref),SqlValue::Text(base_ref),SqlValue::Blob(source.to_vec()),SqlValue::Blob(base.to_vec())]},
     ]}).await?;
     Ok(
@@ -332,7 +380,7 @@ async fn production_native_comparisons_read_certified_ancestry_patches_and_previ
             (2, native.main, native.side, native.side),
             (3, native.main, native.main, native.main),
         ] {
-            let target = editorial_pull(&repository, number, source, base).await?;
+            let target = editorial_pull(&server, &repository, number, source, base).await?;
             let response = request(
                 &server,
                 &format!("pulls/{number}/comparison"),
@@ -390,7 +438,7 @@ async fn production_native_comparisons_read_certified_ancestry_patches_and_previ
             .find(|edge| edge.expected_kind == crate::ObjectKind::Blob)
             .ok_or("blob edge")?
             .child;
-        let target = editorial_pull(&repository, 4, blob, blob).await?;
+        let target = editorial_pull(&server, &repository, 4, blob, blob).await?;
         assert_eq!(
             request(
                 &server,
@@ -401,7 +449,8 @@ async fn production_native_comparisons_read_certified_ancestry_patches_and_previ
             .status(),
             reqwest::StatusCode::SERVICE_UNAVAILABLE
         );
-        let target = editorial_pull(&repository, 5, missing(format), missing(format)).await?;
+        let target =
+            editorial_pull(&server, &repository, 5, missing(format), missing(format)).await?;
         assert_eq!(
             request(
                 &server,
@@ -541,7 +590,7 @@ async fn production_certified_edge_pages_cover_wide_trees_and_parent_boundaries(
             })
             .ok_or("last parent")?;
         assert!(ordinal >= 512);
-        let target = editorial_pull(&repository, 1, wide, last.child).await?;
+        let target = editorial_pull(&server, &repository, 1, wide, last.child).await?;
         let response = request(&server,"pulls/1/comparison",json!({"repository_id":uuid::Uuid::from_bytes(entry.repository_id).to_string(),"target":target,"query":{"kind":"files"}})).await?;
         let status = response.status();
         let body = response.text().await?;

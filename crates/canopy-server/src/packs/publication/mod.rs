@@ -34,7 +34,9 @@ mod base;
 pub use base::{PreparationBaseError, PreparationBaseResolver};
 mod certificate;
 mod commit_membership;
+mod ref_observation;
 pub(crate) use commit_membership::{CommitMembership, MembershipRequest};
+pub(crate) use ref_observation::{REF_SELECTION_BYTES, RefSelection};
 pub(in crate::packs) mod codec;
 pub use certificate::{
     AttestationOutcome, CERTIFICATE_BYTES, CatalogCertificate, RegisteredCatalog,
@@ -252,6 +254,9 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
     registry.bind_command::<crate::checks::native::StartCommitCheck>()?;
     registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;
+    registry.bind_command::<crate::pulls::native::CreateNativePull>()?;
+    registry.bind_command::<crate::pulls::native::ReviewNativePull>()?;
+    registry.bind_query::<crate::pulls::native::ReadNativePulls>()?;
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
     registry.bind_query::<SelectServingGeneration>()?;

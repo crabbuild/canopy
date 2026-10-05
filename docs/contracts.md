@@ -1821,8 +1821,9 @@ backfill path for old object certificates lacking parent rows.
 author, editorial content, open/closed state, draft flag, optimistic version,
 fixed source/base branch names, initial commit OIDs and timestamps. Pull and issue
 numbers have separate sequences. A pull does not store a mutable copy of current
-branch state: reads join the two durable `refs` rows in the same Cell observation.
-This avoids fanout writes to every open pull after a push. Retained ref tombstones
+branch state: reads join privately authenticated facts from the current immutable
+ref snapshot with editorial rows in one final Cell observation. This avoids
+fanout writes to every open pull after a push. Retained ref tombstones
 expose deleted tips as null without losing their versions. Original commit OIDs
 remain available in details. Pulls may share the same source/base pair.
 
@@ -1867,15 +1868,47 @@ results continue to use their configured context versions, as documented above.
 A fresh development prefix is required; old memberships have no generation
 backfill. A future migration must initialize those before enabling these APIs.
 
-All three mutations are bounded guarded SQL batches through the registered Cell
-SQL command. Their recorded pre-mutation domain decision, conditional write and
-result number share the same transaction. Runtime receipt replay preserves the
+Creation and review use typed commands 51 and 53; editorial edits use the existing
+registered Cell SQL command. Their recorded pre-mutation domain decision,
+conditional write and result number share the same transaction. Runtime receipt replay preserves the
 original outcome. Application UUID bindings provide HTTP retry semantics across
 fresh command identities. Failed domain decisions leave pull/review content
 unchanged. The SDK accepts an authenticated actor assertion; HTTP authenticates
 before reading the body and the Cell rechecks membership/authority at mutation.
 As with issues, already admitted token revocation follows the existing admission
 boundary; repository revocation is checked again in the write.
+
+Native ref observations reuse the MAC envelope, serving token and joint catalog/ref
+fact. Issuance derives exact OIDs, versions, tombstones and never-present names
+from the immutable ref tree inside the tracked physical read owner. Its
+constant-sized certificate binds repository, actor, actual Cell, request purpose
+and payload digest, and the complete sorted fact vector digest. Receivers verify
+the repository seed/MAC, fresh access, exact unexpired serving pin, admitted command
+owner fence and equality with the **current** joint generation before using facts.
+A retained historical generation alone cannot authorize current ref policy.
+Altered payloads or facts, another Cell, later joint publication and physical pin
+release invalidate the observation. Ref lookup requires no native pack bodies.
+
+Facts shadow `refs` only in a parameterized statement-local CTE. No SQL ref mirror
+is populated; the fresh production schema removes the obsolete source/base foreign
+keys into that table. Existing editorial rows, UUID digests, member versions and
+review-head ordering remain authoritative for collaboration. Inputs admit at most
+128 unique sorted refs, 512 KiB of total name bytes and 65,535 bytes per name, within
+an 816 KiB operation input bound. Mutation results admit 16 bytes. Unknown names
+and deleted tombstones remain distinct authenticated facts; neither supplies a
+live tip for a new pull or review.
+
+Query 52 reads lists, details and review applicability with a 1 MiB output bound.
+The initial bounded selection binds pull numbers, editorial versions and ref names.
+The final query repeats that selection and rejects a mismatch before joining the
+certified refs. The adapter makes at most three attempts with fresh selections;
+continued movement returns an explicit error, never a partial or skewed page.
+Each final transaction rechecks current access, including anonymous public access
+and public-to-private changes after preparation. Known denied mutations still
+reach the final command without a proof; its fresh access decision records
+NotFound while access remains denied, or Conflict if it has changed. Pending or
+transport failures remain errors. Merge-policy and generated Git producers still
+need their native ref conversion and are not qualified by these pull operations.
 
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation

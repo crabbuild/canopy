@@ -23,7 +23,7 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 19] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 21] = [
     crate::operation(1),
     command::<crate::branch_rules::command::SetBranchRule>(64 << 10, 64),
     command::<AbortPreparation>(4096, 4096),
@@ -43,8 +43,10 @@ pub(crate) const COMMANDS: [OperationDescriptor; 19] = [
     command::<StopCustodyIntent>(1024, 128),
     command::<ReleaseServingPin>(1024, 128),
     command::<crate::checks::native::StartCommitCheck>(4096, 16),
+    command::<crate::pulls::native::CreateNativePull>(crate::pulls::native::INPUT_BYTES, 16),
+    command::<crate::pulls::native::ReviewNativePull>(crate::pulls::native::INPUT_BYTES, 16),
 ];
-pub(crate) const QUERIES: [OperationDescriptor; 12] = [
+pub(crate) const QUERIES: [OperationDescriptor; 13] = [
     crate::operation(2),
     query::<CheckPreparation>(4096, 4096),
     query::<CheckPreparationFrontier>(4096, 4096),
@@ -57,6 +59,10 @@ pub(crate) const QUERIES: [OperationDescriptor; 12] = [
     query::<CheckServingPin>(1024, 1024),
     query::<SelectServingGeneration>(1024, 512),
     query::<crate::checks::native::ReadCommitChecks>(4096, 256 << 10),
+    query::<crate::pulls::native::ReadNativePulls>(
+        crate::pulls::native::INPUT_BYTES,
+        crate::pulls::native::OUTPUT_BYTES,
+    ),
 ];
 
 #[cfg(test)]
@@ -87,7 +93,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                1, 8, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46, 49
+                1, 8, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46, 49, 51, 53
             ]
         );
         assert_eq!(
@@ -96,7 +102,7 @@ mod tests {
                 .iter()
                 .map(|operation| operation.id)
                 .collect::<Vec<_>>(),
-            vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47, 48, 50]
+            vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47, 48, 50, 52]
         );
         for (id, codec, input, output) in [
             (
@@ -127,6 +133,18 @@ mod tests {
                 49,
                 crate::checks::native::StartCommitCheck::CODEC_VERSION,
                 4096,
+                16,
+            ),
+            (
+                51,
+                crate::pulls::native::CreateNativePull::CODEC_VERSION,
+                crate::pulls::native::INPUT_BYTES,
+                16,
+            ),
+            (
+                53,
+                crate::pulls::native::ReviewNativePull::CODEC_VERSION,
+                crate::pulls::native::INPUT_BYTES,
                 16,
             ),
         ] {

@@ -45,12 +45,19 @@ pub(crate) enum ReadError {
     Malformed,
     #[error("Git Cell read failed")]
     Cell(#[from] InvocationError<Vec<SqlResultSet>>),
+    #[error("native pull metadata read failed")]
+    Pull(#[source] Box<crate::pulls::NativePullError>),
     #[error("Git read worker failed")]
     Task(#[from] tokio::task::JoinError),
     #[error("certified Git snapshot is unavailable")]
     Serving(#[from] crate::packs::publication::ServingReadError),
     #[error("certified Git snapshot owner is unavailable")]
     ServingOwner(#[from] crate::packs::publication::ServingOwnerError),
+}
+impl From<crate::pulls::NativePullError> for ReadError {
+    fn from(error: crate::pulls::NativePullError) -> Self {
+        Self::Pull(Box::new(error))
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {

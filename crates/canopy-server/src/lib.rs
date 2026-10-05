@@ -346,6 +346,17 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/serving/ownership.rs"));
                 source.update(include_bytes!("packs/publication/serving/schema.sql"));
+                source.update(include_bytes!("packs/publication/ref_observation.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/ref_observation/selection.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/ref_observation.rs"
+                ));
+                source.update(include_bytes!("pulls/native/mod.rs"));
+                source.update(include_bytes!("pulls/native/codec.rs"));
+                source.update(include_bytes!("pulls/native/client.rs"));
+                source.update(include_bytes!("pulls/native/reads.rs"));
                 source.update(include_bytes!("packs/publication/registry.rs"));
                 source.update(include_bytes!("server/catalog_initialization.rs"));
                 source.update(include_bytes!("server/residency/mod.rs"));
@@ -372,6 +383,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("push/report.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("visibility.rs"));
+                source.update(include_bytes!("checks/native.rs"));
+                source.update(include_bytes!("checks/native/codec.rs"));
+                source.update(include_bytes!("packs/publication/commit_membership.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/membership.rs"
+                ));
                 source.update(include_bytes!("checks/mod.rs"));
                 source.update(include_bytes!("checks/mutations.rs"));
                 source.update(include_bytes!("pulls/mod.rs"));

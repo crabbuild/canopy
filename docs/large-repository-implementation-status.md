@@ -17,6 +17,60 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native pull/ref metadata conversion (2026-10-05 checkpoint)
+
+Pull creation still selected the retired SQL `refs` table after native push,
+reproducibly returning HTTP 409. Pull list/detail/review applicability joined the
+same retired authority, and the fresh schema required obsolete foreign keys into
+it. Core pull operations now derive bounded exact facts from the immutable native
+ref tree under the actual resident serving snapshot. Typed commands 51/53 and
+query 52 consume a purpose-specific private certificate that reuses the MAC
+envelope, serving token and joint fact. The final transaction independently checks
+actual Cell/command owner, current access, the exact unexpired pin, payload/fact
+digests and equality with the current joint generation. Historical retained
+generations alone cannot authorize moving ref policy.
+
+Editorial rows, UUID bindings, membership versions and review-head ordering are
+reused. Authenticated facts form a parameterized statement-local CTE; no SQL ref
+mirror is written. The fresh schema removes only the obsolete pull source/base
+ref foreign keys. Lists/details/reviews bind and recheck the initial bounded
+editorial row selection before joining refs, with at most three fresh attempts.
+Inputs admit 128 sorted facts and 512 KiB total ref-name bytes within an 816 KiB
+wire limit; query output is capped at 1 MiB and mutation output at 16 bytes. The
+certificate remains constant-sized even with long names. Ref issuance reads
+metadata without hydrating native pack bodies.
+
+The stock-Git HTTP pull/review/recovery family passes, including UUID retries,
+ref/editorial ABA, membership changes and delayed repository revocation. Four new
+actual-resident receiver families exercise both object formats: proof/payload,
+actor/Cell/ref substitution; pin drain and current-generation advance; late
+revocation; prepared editorial-version/review conflicts; and anonymous
+public-to-private visibility. A broader fixture run caught invalid UUID artifact
+operation IDs in the trusted native ref fixture; it now uses validated CANOPY01
+operations without relaxing production validation. Clippy also caught the larger
+Git read error variant; its native-pull error source is now boxed.
+
+Final frozen-source validation passes all 722 server library cases, all-target
+Clippy with warnings denied, server build, formatting/diff checks and all 96
+Python harness cases. The five repaired HTTP pull/comparison/patch integrations
+pass in the full workload. Multi-server finishes at 81 passed / 25 failed /
+9 ignored; the three standalone aggregates also fail. Unique workspace totals
+are 841 passed / 28 failed / 9 unexecuted ignores. One additional startup test
+returns `AddrInUse`; port ownership/rebind causality remains unresolved. The
+pre-box run had 842/27/9 but failed Clippy and does not supersede final-source
+results. Fingerprints, both full runs and intermediate failures are recorded in
+[native pull evidence](evidence/native-pulls-ci-20261005.json). New-head Linux
+qualification remains required; this is not a green-CI or release claim.
+
+Parent `4eb4fd0` Linux PR Verify passes all 718 server library cases and fails
+multi-server at 78 passed / 32 failed / 9 ignored. Its push run passes the same
+libraries and fails at 77/33/9, with an additional bulk mirror failure. These
+parent results do not qualify this new source. Merge-policy readers, line-thread
+current-revision checks, generated merge/rebase/candidate writers, default-branch
+mutation, peer residency, source-independent backup and reachable-only filtered
+fetch remain open. Complete physical custody/recovery/final DDL and full
+large-history/team capacity gates are still required. The full goal remains active.
+
 ## Serving rollover and expiry observation (2026-10-05 checkpoint)
 
 Initial authenticated Cell selection used to consume the pool's two-second idle

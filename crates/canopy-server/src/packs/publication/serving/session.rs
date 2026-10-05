@@ -15,6 +15,7 @@ mod body;
 mod edges;
 mod membership;
 mod native_base;
+mod ref_observation;
 mod workspace;
 pub use edges::{MAX_EDGE_PARENTS, ServingEdgePage};
 pub use workspace::{NativeWorkspace, WorkspaceLimits, WorkspaceStats};
