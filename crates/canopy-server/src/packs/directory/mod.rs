@@ -251,11 +251,28 @@ impl DirectoryRun {
         self: Arc<Self>,
         store: &ArtifactStore,
     ) -> Result<StoredRun, MetadataError> {
+        self.upload_owned(store, Arc::new(())).await
+    }
+    pub(in crate::packs) async fn upload_owned(
+        self: Arc<Self>,
+        store: &ArtifactStore,
+        activity: crate::git_objects::ReadOwner,
+    ) -> Result<StoredRun, MetadataError> {
         let run = self.descriptor;
         if run.repository != store.repository() {
             return Err(MetadataError::Integrity);
         }
-        let artifact = upload_file(self, store, run.key(), run.size, run.digest).await?;
+        let artifact = upload_file(
+            Arc::new(metadata::transport::OwnedFile {
+                file: self,
+                activity,
+            }),
+            store,
+            run.key(),
+            run.size,
+            run.digest,
+        )
+        .await?;
         Ok(StoredRun {
             run,
             artifact,

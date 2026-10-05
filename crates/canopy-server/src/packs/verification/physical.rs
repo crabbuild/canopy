@@ -17,6 +17,8 @@ use canopy_object_storage::{artifact::ArtifactStore, external::MAX_ARTIFACT_BYTE
 use cellule_ltx::DiskBudget;
 use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
+mod staged;
+pub use staged::{NativeMetadataLimits, StagedNativeMetadata};
 mod partition;
 pub use partition::PhysicalPartition;
 

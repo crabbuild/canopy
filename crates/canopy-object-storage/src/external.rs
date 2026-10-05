@@ -69,16 +69,25 @@ pub struct Upload {
     stage: Path,
     parts: u64,
     active: Option<Box<dyn MultipartUpload>>,
+    owner: Arc<dyn Send + Sync>,
 }
 
 impl Upload {
     pub async fn new(store: Arc<dyn ObjectStore>, stage: Path) -> object_store::Result<Self> {
+        Self::new_owned(store, stage, Arc::new(())).await
+    }
+    pub async fn new_owned(
+        store: Arc<dyn ObjectStore>,
+        stage: Path,
+        owner: Arc<dyn Send + Sync>,
+    ) -> object_store::Result<Self> {
         let active = timed(store.put_multipart(&part(&stage, 0))).await?;
         Ok(Self {
             store,
             stage,
             parts: 0,
             active: Some(active),
+            owner,
         })
     }
 
@@ -137,9 +146,13 @@ impl Upload {
                 length,
             )
             .await?;
-            let digest = tokio::task::spawn_blocking(move || blake3::hash(&bytes))
-                .await
-                .map_err(|_| invalid())?;
+            let activity = self.owner.clone();
+            let digest = tokio::task::spawn_blocking(move || {
+                let _activity = activity;
+                blake3::hash(&bytes)
+            })
+            .await
+            .map_err(|_| invalid())?;
             if digest.as_bytes() != expected {
                 return Err(invalid());
             }

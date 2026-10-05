@@ -13,7 +13,7 @@ use crate::{
         catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes, CatalogReader},
         metadata::tests::{fixture as input_fixture, limits},
         verification::{
-            PhysicalVerifier,
+            NativeMetadataLimits, PhysicalVerifier,
             physical::tests::{independence::git_input, physical_limits},
         },
     },
@@ -437,7 +437,50 @@ async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
     }
     Ok(())
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetadataFault {
+    DescriptorLimit,
+    TruncatedReplay,
+    MissingArtifact,
+}
+
+#[tokio::test]
+async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_shards_without_publication()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [
+            MetadataFault::DescriptorLimit,
+            MetadataFault::TruncatedReplay,
+            MetadataFault::MissingArtifact,
+        ] {
+            Box::pin(native_receive_metadata_case(
+                format,
+                true,
+                CompletionMode::Success,
+                Some(fault),
+            ))
+            .await?;
+        }
+    }
+    Ok(())
+}
+async fn publication_state(fixture: &Fixture) -> Result<Vec<u8>> {
+    Ok(fixture.handle.query(0, 24, |db| {
+        let state = db.query_row("SELECT (SELECT generation FROM catalog_state WHERE singleton=1),(SELECT generation FROM ref_generation WHERE singleton=1),(SELECT count(*) FROM pushes WHERE response_id IS NOT NULL)", [], |row| {
+            Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?))
+        })?;
+        Ok([state.0.to_be_bytes(), state.1.to_be_bytes(), state.2.to_be_bytes()].concat())
+    }).await?)
+}
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
+    Box::pin(native_receive_metadata_case(format, rooted, mode, None)).await
+}
+async fn native_receive_metadata_case(
+    format: ObjectFormat,
+    rooted: bool,
+    mode: CompletionMode,
+    metadata_fault: Option<MetadataFault>,
+) -> Result {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
         CompletionMode::Durable { .. }
@@ -835,32 +878,70 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         fixture.runtime.shutdown().await?;
         return Ok(());
     }
+    let before_publication = publication_state(&fixture).await?;
     let physical_root = Arc::new(tempfile::TempDir::new()?);
     let physical_disk = DiskBudget::new(256 << 20);
     let verify_root = physical_root.clone();
     let verify_disk = physical_disk.clone();
     let verify_store = store.clone();
     let verify_native = native.clone();
+    let input = inputs[0];
     let work = ticket.spawn(move |context| async move {
         let result = async {
-            let mut verifier = PhysicalVerifier::download_staged(
+            let verifier = PhysicalVerifier::download_staged(
                 &context,
                 verify_root.path(),
                 verify_disk,
                 &verify_store,
-                inputs[0],
+                input,
                 physical_limits(),
                 verify_native.scope(NativeClass::Foreground),
             )
             .await?;
-            let segment = verifier.inspect_next_shard(inputs[0].object_count).await?;
-            let witness = verifier.finish().await?;
-            Ok::<_, crate::packs::verification::PhysicalError>((witness, segment))
+            verifier
+                .stage_metadata(NativeMetadataLimits {
+                    max_shard_objects: 1,
+                    max_descriptor_bytes: if metadata_fault == Some(MetadataFault::DescriptorLimit)
+                    {
+                        1
+                    } else {
+                        NativeMetadataLimits::default().max_descriptor_bytes
+                    },
+                })
+                .await
         }
         .await;
         result.map_err(|error| StagingError::Input(Box::new(error)))
     })?;
-    let (witness, segment) = work.wait().await.map_err(|error| error.to_string())?;
+    let staged = work.wait().await;
+    if metadata_fault == Some(MetadataFault::DescriptorLimit) {
+        let error = match staged {
+            Err(error) => error,
+            Ok(_) => return Err("descriptor admission unexpectedly succeeded".into()),
+        };
+        let StagingError::Input(source) = &*error else {
+            return Err("wrong descriptor refusal".into());
+        };
+        assert!(matches!(
+            source.downcast_ref::<crate::packs::verification::PhysicalError>(),
+            Some(crate::packs::verification::PhysicalError::Limit)
+        ));
+        assert!(coordinator.close_and_drain().await.is_empty());
+        assert_eq!(coordinator.stats().workers, 0);
+        assert_eq!(publication_state(&fixture).await?, before_publication);
+        cleaned(physical_root.path(), &physical_disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
+    let staged = staged.map_err(|error| error.to_string())?;
+    assert_eq!(staged.shard_count(), input.object_count);
+    assert!(staged.descriptor_bytes() <= u64::from(staged.shard_count()) * 516);
+    timeout(Duration::from_secs(10), async {
+        while physical_disk.used() != staged.descriptor_bytes() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     ticket.seal()?;
     assert!(matches!(
         timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
@@ -875,14 +956,64 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
         CatalogFileLimits::default(),
     )?);
     let base = Arc::new(ticket.open_base(indexes, files).await?);
-    if rooted {
-        let mut builder =
-            CatalogPreparation::new(physical_root.path(), physical_disk.clone(), base, limits())
+    match metadata_fault {
+        Some(MetadataFault::TruncatedReplay) => staged.truncate_replay_for_test()?,
+        Some(MetadataFault::MissingArtifact) => {
+            use object_store::ObjectStoreExt;
+            let stored = staged.first_metadata_for_test()?;
+            let path = store.path(
+                canopy_object_storage::artifact::ArtifactKey {
+                    operation: input.operation,
+                    binding_digest: input.pack.digest,
+                    kind: canopy_object_storage::artifact::ArtifactKind::Metadata,
+                },
+                stored.artifact.digest,
+            )?;
+            provider
+                .delete(&canopy_object_storage::external::part(&path, 0))
                 .await?;
-        builder.begin_retained_pack(witness).await?;
-        builder.add_segment(segment).await?;
-        builder.finish_pack().await?;
-        let prepared = builder.finish().await?;
+        }
+        _ => {}
+    }
+    let producer_root = Arc::clone(&physical_root);
+    let producer_disk = physical_disk.clone();
+    let work = ticket.spawn_bound(move |_, context| async move {
+        let result = async {
+            let mut builder = CatalogPreparation::new_staged(
+                &context,
+                producer_root.path(),
+                producer_disk,
+                base,
+                limits(),
+            )
+            .await?;
+            let added = builder.add_staged_pack(staged).await;
+            if metadata_fault.is_some() {
+                let error = added.expect_err("invalid staged metadata accepted");
+                assert!(
+                    builder.finish().await.is_err(),
+                    "failed builder escaped poison"
+                );
+                return Err(error);
+            }
+            added?;
+            builder.finish().await
+        }
+        .await;
+        result.map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let prepared = work.wait().await;
+    if metadata_fault.is_some() {
+        assert!(prepared.is_err());
+        assert!(coordinator.close_and_drain().await.is_empty());
+        assert_eq!(coordinator.stats().workers, 0);
+        assert_eq!(publication_state(&fixture).await?, before_publication);
+        cleaned(physical_root.path(), &physical_disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
+    let prepared = prepared.map_err(|error| error.to_string())?;
+    if rooted {
         if matches!(
             mode,
             CompletionMode::MandatoryRegistration
@@ -950,17 +1081,7 @@ async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: Completio
     let publication_identity = identity()?;
     let work = ticket.spawn_bound(move |_, _context| async move {
         let result = async {
-            let mut builder = CatalogPreparation::new(
-                producer_root.path(),
-                producer_disk.clone(),
-                base,
-                limits(),
-            )
-            .await?;
-            builder.begin_pack(witness)?;
-            builder.add_segment(segment).await?;
-            builder.finish_pack().await?;
-            let prepared = Arc::new(builder.finish().await?);
+            let prepared = Arc::new(prepared);
             let ready = Box::pin(prepared.ready_push(
                 publication_identity,
                 recovered,

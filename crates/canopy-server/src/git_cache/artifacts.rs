@@ -67,9 +67,10 @@ impl GitCache {
             })
             .await??;
             let mut input = store
-                .read(
+                .read_owned(
                     descriptor.key(kind).map_err(|_| MetadataError::Integrity)?,
                     artifact,
+                    owner.clone(),
                 )
                 .await?;
             while let Some(bytes) = input.next().await? {

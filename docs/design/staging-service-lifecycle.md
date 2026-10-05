@@ -99,3 +99,24 @@ StagingStats exposes completed probe queries, failed observations/fingerprint co
 
 
 Seven additional regression families exercise all seven original custody actions in SHA-1/SHA-256, closed coordinators and dropped observers, stopped staging/bound renewals with live callbacks and retained completed resources, unavailable private queries without absent-command execution or known-phase retries, an old ordinal after an explicit successor, malformed stop rejection, a corrupt head followed by a valid head and later repair, exclusion of input checkpoints despite an older stop, and 130 admitted operations spanning multiple probe pages plus restart at an earlier key after idle. The native/domain codecs reject the all-zero operation ID; the multi-page fixture uses valid nonzero IDs rather than weakening that invariant. The initial warm fixture observed the preceding binding before the renewal; it now waits for the actual uncertain renewal. The checkpoint fixture now registers an explicit successor instead of using the fresh-operation factory against an existing journal. Final frozen-source evidence is recorded in the implementation status.
+
+## Bounded physical metadata handoff
+
+The admitted native verifier now uploads/releases one metadata shard per step
+and retains ordered `SourceRecord` descriptors on admitted disk. The creating
+result contains a complete witness and descriptor replay; it contains no worker
+context or open metadata database, so transferring it cannot block Bind.
+The source tree's digest order is distinct from physical ordinal order.
+
+A bound catalog builder checks its staging context, selects the exact retained
+native input checkpoint, and authenticates/copies one stored shard at a time.
+It reuses the stored metadata artifact instead of uploading it again. Blocking
+closure/directory jobs, file reads/writes and artifact hash jobs retain the same
+activity pin. A failure or cancellation cannot yield a private prepared catalog.
+Completed private proofs do not retain worker activity across final publication.
+
+This API composition is a prerequisite, not live transport conversion or a
+full-history deadline/throughput result. Resident service drain, adopted older
+input verification, remaining request/policy work and actual producer wiring
+remain release work. Current qualification and limits are tracked in the
+[implementation status](../large-repository-implementation-status.md).

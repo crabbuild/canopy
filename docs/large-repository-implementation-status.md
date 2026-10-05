@@ -2,18 +2,73 @@
 
 Updated during implementation on 2026-10-04. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
-Current cutover review: [PR #34](https://github.com/crabbuild/canopy/pull/34),
-directly against `main`. The original SQL hydration failures have been resolved by
-converting their real read/cache callers. Full CI remains open: the directory
-integration fixture still invokes the retired loose-object ingestion command.
-The physical worker ownership change below supplies a prerequisite for the native
-write replacement; it does not complete that replacement. The PR remains for
-review and is not ready to merge or deploy. Older checkpoint notes describe
-historical states.
+Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged into
+`main` at `d559e5635e002ee3f885c780a418cf861a5197fc` while its checks still failed.
+The native metadata follow-up is based on that main revision. The original SQL
+hydration failures have been resolved by converting real read/cache callers;
+full CI remains open because a directory integration caller and live writers
+still invoke retired ingestion. The ownership and metadata changes below are
+prerequisites for the write replacement. This cutover is not release qualified.
+Older checkpoint notes describe historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Bounded native metadata preparation
+
+`PhysicalVerifier::stage_metadata` now consumes a live admitted verifier and
+uploads/releases one metadata shard at a time. Defaults admit at most 8,192
+objects per shard and 64 MiB of descriptor replay; the existing physical metadata
+file and edge ceilings still apply. Native inspection uses pages of at most 512
+objects. A large structural object or exhausted file/disk limit fails preparation
+rather than escaping admission. These limits are configurable runtime inputs,
+not measured large-history throughput or fleet configuration.
+
+The private replay uses the existing `SourceRecord` codec, with a maximum 512-byte
+record and four-byte framing, inside one `AdmittedFile`. Append reserves bytes
+before writes; reading retains one record. Ordinal order is preserved explicitly:
+the source index sorts by incarnation/digest and cannot serve as ordinal replay.
+The result owns admitted descriptor storage and a complete physical witness;
+it retains neither SQLite metadata connections nor creating worker activity.
+Creating can therefore drain before Bind without collecting every shard in a Vec.
+
+`CatalogPreparation::new_staged` checks the bound context and carries worker
+admission through queued closure/directory operations and immutable output
+uploads. `add_staged_pack` authenticates retained native checkpoint membership,
+reopens/hash-checks one uploaded shard at a time and reuses its stored descriptor
+without uploading it twice. Exact witness partition, native artifact bindings,
+typed closure and the final fenced publication gates remain mandatory. A failed
+or canceled replay poisons the builder. The finished private catalog does not
+retain the worker activity that publication must drain.
+
+Artifact uploads/downloads now offer owned entry points. Source hashing,
+download hashing and destination-part validation retain the physical owner in
+each blocking job. Metadata transfers pass their existing pinned file/spool;
+native downloads pass their existing read owner. This closes the lower hash-job
+cancellation gap as well as owning the SQL/file work. Other unconverted request
+and policy paths still need their caller ownership integration.
+
+Final frozen-source qualification passes all 719 unique library cases (6
+Git-format, 15 object-storage, 698 server), including all 401 publication cases.
+All six focused server cases and the artifact hash ownership case pass. The full
+workspace command passes the two binary cases and 12 directory cases, then fails
+the retired-ingestion directory case: 734 unique Rust cases executed, 733 pass,
+one fails. Focused/binary reruns and nested subprocess summaries are excluded.
+All-target workspace Clippy with warnings denied, build, formatting/diff checks
+and 96 Python harness cases pass. Source remains unchanged across the main merge,
+which adds only documentation/gallery files. Exact commands, source/log
+fingerprints, preceding CI results, draft diagnostics, scope and remaining gates
+are recorded in [metadata replay evidence](evidence/native-metadata-replay-20261004.json).
+Both preceding `d86f315` Linux CI runs pass 695 server library cases and then fail
+at the same directory integration case. Live HTTP/SSH/generated
+write wiring, resident staging service ownership, authenticated adopted-input
+physical verification and mandatory joint-root completion remain open. Bound
+assembly still reopens incoming metadata and runs incoming closure checks; no
+claim is made that cold full-history work fits the current bound deadline or that
+this establishes 10,000-engineer capacity. Final Linux/provider qualification,
+cache sharing/hot-root progress and the rest of the hard-cutover goal remain
+required.
 
 ## Staging physical worker ownership
 

@@ -12,6 +12,9 @@ pub struct DirectoryBuilder {
     failed: bool,
 }
 impl DirectoryBuilder {
+    pub(in crate::packs) fn workspace(&self) -> Option<Arc<tempfile::TempDir>> {
+        self.admitted.workspace()
+    }
     pub(in crate::packs) fn retain_workspace(&mut self, workspace: Arc<tempfile::TempDir>) {
         self.admitted.retain_workspace(workspace);
     }

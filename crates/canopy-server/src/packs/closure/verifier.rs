@@ -8,6 +8,7 @@ struct ActivePack {
 }
 pub struct ClosureVerifier {
     spool: Arc<Mutex<Spool>>,
+    activity: crate::git_objects::ReadOwner,
     context: ClosureContext,
     canceled: Arc<AtomicBool>,
     active: Option<ActivePack>,
@@ -25,16 +26,17 @@ impl ClosureVerifier {
         context: ClosureContext,
         limits: MetadataLimits,
     ) -> Result<Self, ClosureError> {
-        Self::new_inner(root, budget, context, limits, None).await
+        Self::new_inner(root, budget, context, limits, None, Arc::new(())).await
     }
-    pub(in crate::packs) async fn new_in_workspace(
+    pub(in crate::packs) async fn new_in_workspace_owned(
         workspace: Arc<tempfile::TempDir>,
         budget: DiskBudget,
         context: ClosureContext,
         limits: MetadataLimits,
+        activity: crate::git_objects::ReadOwner,
     ) -> Result<Self, ClosureError> {
         let root = workspace.path().to_owned();
-        Self::new_inner(&root, budget, context, limits, Some(workspace)).await
+        Self::new_inner(&root, budget, context, limits, Some(workspace), activity).await
     }
     async fn new_inner(
         root: &Path,
@@ -42,12 +44,15 @@ impl ClosureVerifier {
         context: ClosureContext,
         limits: MetadataLimits,
         workspace: Option<Arc<tempfile::TempDir>>,
+        activity: crate::git_objects::ReadOwner,
     ) -> Result<Self, ClosureError> {
         let canceled = Arc::new(AtomicBool::new(false));
         let mut guard = CancelGuard::new(canceled.clone());
         let root = root.to_owned();
         let token = canceled.clone();
+        let worker_activity = activity.clone();
         let spool = tokio::task::spawn_blocking(move || {
+            let _activity = worker_activity;
             let mut spool = Spool::new(&root, budget, context, limits, token)?;
             if let Some(workspace) = workspace {
                 spool._admitted.retain_workspace(workspace);
@@ -58,6 +63,7 @@ impl ClosureVerifier {
         guard.complete();
         Ok(Self {
             spool: Arc::new(Mutex::new(spool)),
+            activity,
             context,
             canceled,
             active: None,
@@ -124,7 +130,9 @@ impl ClosureVerifier {
         active.partition.add(segment.descriptor())?;
         let operation = active.native.operation;
         let spool = self.spool.clone();
+        let activity = self.activity.clone();
         tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             spool
                 .lock()
                 .map_err(|_| ClosureError::Integrity)?
@@ -145,7 +153,9 @@ impl ClosureVerifier {
         }
         active.partition.finish()?;
         let spool = self.spool.clone();
+        let activity = self.activity.clone();
         tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             spool
                 .lock()
                 .map_err(|_| ClosureError::Integrity)?
@@ -176,7 +186,9 @@ impl ClosureVerifier {
         }
         let mut guard = CancelGuard::new(self.canceled.clone());
         let spool = self.spool.clone();
+        let activity = self.activity.clone();
         tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             spool
                 .lock()
                 .map_err(|_| ClosureError::Integrity)?
@@ -186,7 +198,9 @@ impl ClosureVerifier {
         if let (Some(base), Some(resolver)) = (self.context.base, resolver) {
             loop {
                 let spool = self.spool.clone();
+                let activity = self.activity.clone();
                 let ids = tokio::task::spawn_blocking(move || {
+                    let _activity = activity;
                     spool
                         .lock()
                         .map_err(|_| ClosureError::Integrity)?
@@ -198,7 +212,9 @@ impl ClosureVerifier {
                 }
                 let batch = resolver.resolve(base, &ids).await?;
                 let spool = self.spool.clone();
+                let activity = self.activity.clone();
                 tokio::task::spawn_blocking(move || {
+                    let _activity = activity;
                     spool
                         .lock()
                         .map_err(|_| ClosureError::Integrity)?
@@ -208,7 +224,9 @@ impl ClosureVerifier {
             }
         }
         let spool = self.spool.clone();
+        let activity = self.activity.clone();
         let witness = tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             let mut spool = spool.lock().map_err(|_| ClosureError::Integrity)?;
             spool.certify_graph()?;
             spool.witness()

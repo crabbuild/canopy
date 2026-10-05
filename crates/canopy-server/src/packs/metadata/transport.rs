@@ -50,12 +50,23 @@ impl MetadataSegment {
         self: Arc<Self>,
         store: &ArtifactStore,
     ) -> Result<StoredSegment, MetadataError> {
+        self.upload_owned(store, Arc::new(())).await
+    }
+
+    pub(crate) async fn upload_owned(
+        self: Arc<Self>,
+        store: &ArtifactStore,
+        activity: crate::git_objects::ReadOwner,
+    ) -> Result<StoredSegment, MetadataError> {
         let segment = self.descriptor();
         if segment.identity.repository != store.repository() {
             return Err(MetadataError::Integrity);
         }
         let artifact = upload_file(
-            self,
+            Arc::new(OwnedFile {
+                file: self,
+                activity,
+            }),
             store,
             key(segment.identity),
             segment.size,
@@ -86,18 +97,31 @@ impl MetadataSegment {
         limits: MetadataLimits,
         reader: Option<ReaderAdmission>,
     ) -> Result<Arc<Self>, MetadataError> {
+        Self::download_owned(root, budget, store, stored, limits, reader, Arc::new(())).await
+    }
+
+    pub(in crate::packs) async fn download_owned(
+        root: &Path,
+        budget: DiskBudget,
+        store: &ArtifactStore,
+        stored: StoredSegment,
+        limits: MetadataLimits,
+        reader: Option<ReaderAdmission>,
+        activity: crate::git_objects::ReadOwner,
+    ) -> Result<Arc<Self>, MetadataError> {
         stored.validate(store)?;
-        let admitted = download_file_for_reader(
+        let admitted = download_file_owned(
             root,
             budget,
             store,
             stored.key(),
             stored.artifact,
             limits,
-            reader,
+            (reader, activity.clone()),
         )
         .await?;
         tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             Ok(Arc::new(Self::open_admitted(
                 admitted,
                 stored.segment,
@@ -114,6 +138,19 @@ pub(crate) trait PinnedFile: Send + Sync + 'static {
 impl PinnedFile for MetadataSegment {
     fn open(&self) -> io::Result<File> {
         File::open(MetadataSegment::path(self))
+    }
+}
+
+// Hold worker admission only during physical work. Idle metadata files must
+// not keep a creating worker alive across Bind or a bound worker across publish.
+pub(crate) struct OwnedFile<T: PinnedFile> {
+    pub(crate) file: Arc<T>,
+    pub(crate) activity: crate::git_objects::ReadOwner,
+}
+impl<T: PinnedFile> PinnedFile for OwnedFile<T> {
+    fn open(&self) -> io::Result<File> {
+        let _activity = &self.activity;
+        self.file.open()
     }
 }
 
@@ -136,13 +173,16 @@ pub(crate) async fn upload_file<T: PinnedFile>(
         }))
     })
     .await??;
+    let physical = source.clone();
     let mut input = StreamReader::new(SegmentStream {
         source,
         offset: 0,
         job: None,
         failed: false,
     });
-    Ok(store.put(key, size, digest, &mut input).await?)
+    Ok(store
+        .put_owned(key, size, digest, &mut input, physical)
+        .await?)
 }
 
 pub(in crate::packs) async fn download_file_for_reader(
@@ -154,6 +194,28 @@ pub(in crate::packs) async fn download_file_for_reader(
     limits: MetadataLimits,
     reader: Option<ReaderAdmission>,
 ) -> Result<AdmittedFile, MetadataError> {
+    download_file_owned(
+        root,
+        budget,
+        store,
+        key,
+        artifact,
+        limits,
+        (reader, Arc::new(())),
+    )
+    .await
+}
+
+pub(in crate::packs) async fn download_file_owned(
+    root: &Path,
+    budget: DiskBudget,
+    store: &ArtifactStore,
+    key: ArtifactKey,
+    artifact: ArtifactDescriptor,
+    limits: MetadataLimits,
+    admission: (Option<ReaderAdmission>, crate::git_objects::ReadOwner),
+) -> Result<AdmittedFile, MetadataError> {
+    let (reader, activity) = admission;
     if limits.cache_kib == 0
         || limits.cache_kib > i32::MAX as u32
         || artifact.size > limits.max_file_bytes
@@ -174,10 +236,11 @@ pub(in crate::packs) async fn download_file_for_reader(
                 )
                 .with_reader(reader),
             ),
+            _activity: activity,
         }))
     })
     .await??;
-    let mut reader = store.read(key, artifact).await?;
+    let mut reader = store.read_owned(key, artifact, spool.clone()).await?;
     while let Some(bytes) = reader.next().await? {
         let spool = Arc::clone(&spool);
         tokio::task::spawn_blocking(move || {
@@ -190,6 +253,9 @@ pub(in crate::packs) async fn download_file_for_reader(
         })
         .await??;
     }
+    // The completed reader also owns the spool through its hash jobs. Release
+    // it before transferring the unique file to the final sync/open stage.
+    drop(reader);
     tokio::task::spawn_blocking(move || {
         let spool = Arc::try_unwrap(spool).map_err(|_| MetadataError::Integrity)?;
         let admitted = spool
@@ -205,6 +271,7 @@ pub(in crate::packs) async fn download_file_for_reader(
 // Field order closes/unlinks the private file before releasing admission.
 struct DownloadSpool {
     admitted: Mutex<AdmittedFile>,
+    _activity: crate::git_objects::ReadOwner,
 }
 
 // Unlike a bare tokio::fs::File, each pending blocking task owns its admission
@@ -283,11 +350,16 @@ mod tests {
             release_rx.recv().unwrap();
         });
         ready_rx.recv_timeout(std::time::Duration::from_secs(5))?;
+        let activity: crate::git_objects::ReadOwner = Arc::new(());
+        let weak_activity = Arc::downgrade(&activity);
         let mut stream = SegmentStream {
             source: Arc::new(ReadPin {
                 file: Mutex::new(File::open(&path)?),
                 size: segment.descriptor().size,
-                _owner: segment,
+                _owner: Arc::new(OwnedFile {
+                    file: segment,
+                    activity,
+                }),
             }),
             offset: 0,
             job: None,
@@ -302,6 +374,7 @@ mod tests {
         drop(stream);
         assert_eq!(budget.used(), charged);
         assert!(weak.upgrade().is_some());
+        assert!(weak_activity.upgrade().is_some());
         assert!(path.exists());
         // Always release before assertions that could unwind: a stopped
         // blocking worker must not hang runtime shutdown if this test fails.
@@ -317,6 +390,7 @@ mod tests {
             Ok::<_, Box<dyn std::error::Error>>(())
         })?;
         assert!(weak.upgrade().is_none());
+        assert!(weak_activity.upgrade().is_none());
         assert!(!path.exists());
         Ok(())
     }

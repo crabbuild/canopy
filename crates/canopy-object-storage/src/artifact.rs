@@ -143,6 +143,18 @@ impl ArtifactStore {
         digest: [u8; 32],
         input: &mut (impl AsyncRead + Unpin),
     ) -> Result<ArtifactDescriptor, ArtifactError> {
+        self.put_owned(key, size, digest, input, Arc::new(())).await
+    }
+    /// Queued hashing retains the caller's physical admission after cancellation.
+    /// The pin grants no artifact namespace or publication authority.
+    pub async fn put_owned(
+        &self,
+        key: ArtifactKey,
+        size: u64,
+        digest: [u8; 32],
+        input: &mut (impl AsyncRead + Unpin),
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<ArtifactDescriptor, ArtifactError> {
         if size > MAX_ARTIFACT_BYTES {
             return Err(ArtifactError::TooLarge);
         }
@@ -158,7 +170,8 @@ impl ArtifactStore {
             uuid::Uuid::from_bytes(key.operation),
             uuid::Uuid::new_v4()
         ));
-        let mut upload = external::Upload::new(Arc::clone(&self.store), stage).await?;
+        let mut upload =
+            external::Upload::new_owned(Arc::clone(&self.store), stage, owner.clone()).await?;
         let result = async {
             let mut hash = blake3::Hasher::new();
             let mut remaining = size;
@@ -169,7 +182,9 @@ impl ArtifactStore {
                 tokio::time::timeout(Duration::from_secs(120), input.read_exact(&mut bytes))
                     .await
                     .map_err(|_| ArtifactError::Timeout)??;
+                let activity = owner.clone();
                 let (next, part, bytes) = tokio::task::spawn_blocking(move || {
+                    let _activity = activity;
                     hash.update(&bytes);
                     let part = *blake3::hash(&bytes).as_bytes();
                     (hash, part, Bytes::from(bytes))
@@ -214,6 +229,14 @@ impl ArtifactStore {
         key: ArtifactKey,
         descriptor: ArtifactDescriptor,
     ) -> Result<ArtifactRead, ArtifactError> {
+        self.read_owned(key, descriptor, Arc::new(())).await
+    }
+    pub async fn read_owned(
+        &self,
+        key: ArtifactKey,
+        descriptor: ArtifactDescriptor,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<ArtifactRead, ArtifactError> {
         if descriptor.size > MAX_ARTIFACT_BYTES {
             return Err(ArtifactError::TooLarge);
         }
@@ -238,6 +261,7 @@ impl ArtifactStore {
             descriptor,
             offset: 0,
             hash: Some(blake3::Hasher::new()),
+            owner,
         })
     }
 }
@@ -251,6 +275,7 @@ pub struct ArtifactRead {
     descriptor: ArtifactDescriptor,
     offset: u64,
     hash: Option<blake3::Hasher>,
+    owner: Arc<dyn Send + Sync>,
 }
 impl ArtifactRead {
     pub fn descriptor(&self) -> ArtifactDescriptor {
@@ -273,7 +298,9 @@ impl ArtifactRead {
             .manifest
             .part_digest(self.offset / PART_BYTES as u64)
             .ok_or(ArtifactError::Corrupt)?;
+        let activity = self.owner.clone();
         let (next, valid, bytes) = tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             let valid = blake3::hash(&bytes).as_bytes() == &expected;
             hash.update(&bytes);
             (hash, valid, bytes)

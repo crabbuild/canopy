@@ -221,6 +221,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("git_http/mod.rs"));
                 source.update(include_bytes!("packs/verification/mod.rs"));
                 source.update(include_bytes!("packs/verification/physical.rs"));
+                source.update(include_bytes!("packs/verification/physical/staged.rs"));
+                source.update(include_bytes!("packs/closure/verifier.rs"));
+                source.update(include_bytes!("packs/directory/mod.rs"));
+                source.update(include_bytes!("packs/directory/writer.rs"));
+                source.update(include_bytes!("packs/publication/prepare.rs"));
                 source.update(include_bytes!("packs/verification/spool.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
                 source.update(include_bytes!("packs/input_artifact.rs"));
