@@ -23,7 +23,7 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 23] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 24] = [
     crate::operation(1),
     command::<crate::branch_rules::command::SetBranchRule>(64 << 10, 64),
     command::<PublishReviewedMerge>(NATIVE_MERGE_BYTES, 512),
@@ -50,6 +50,7 @@ pub(crate) const COMMANDS: [OperationDescriptor; 23] = [
     command::<crate::checks::native::StartCommitCheck>(4096, 16),
     command::<crate::pulls::native::CreateNativePull>(crate::pulls::native::INPUT_BYTES, 16),
     command::<crate::pulls::native::ReviewNativePull>(crate::pulls::native::INPUT_BYTES, 16),
+    command::<PublishNativeHead>(NATIVE_HEAD_BYTES, 512),
 ];
 pub(crate) const QUERIES: [OperationDescriptor; 13] = [
     crate::operation(2),
@@ -99,7 +100,7 @@ mod tests {
             ids,
             vec![
                 1, 8, 9, 10, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46, 49,
-                51, 53
+                51, 53, 54
             ]
         );
         assert_eq!(
@@ -111,6 +112,7 @@ mod tests {
             vec![2, 15, 21, 23, 27, 30, 32, 34, 37, 47, 48, 50, 52]
         );
         for (id, codec, input, output) in [
+            (54, PublishNativeHead::CODEC_VERSION, NATIVE_HEAD_BYTES, 512),
             (
                 10,
                 crate::pulls::candidates::command::PrepareCandidate::CODEC_VERSION,

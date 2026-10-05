@@ -16,6 +16,7 @@ mod mandatory_registration;
 mod namespaces;
 mod native_candidate;
 mod native_capture;
+mod native_head;
 mod native_merge;
 mod policy_dispatch;
 mod policy_refusal;

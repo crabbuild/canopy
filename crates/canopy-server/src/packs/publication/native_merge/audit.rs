@@ -102,7 +102,7 @@ pub(super) async fn prepare(
     input: &MergeInput,
     base_ref: &str,
     refs: RefStateSnapshotRoot,
-) -> Result<StoredInputRoot, NativeMergePreparationError> {
+) -> Result<(StoredInputRoot, u64), NativeMergePreparationError> {
     let store = prepared.base.indexes().store();
     let record = Audit {
         input: input.clone(),
@@ -111,13 +111,17 @@ pub(super) async fn prepare(
         refs,
         ref_generation: refs.read(&store).await?.generation,
     };
-    Ok(StoredInputRoot::upload(
-        &store,
-        prepared.token().artifact_operation,
-        &record,
-        INPUT_ROOT_BYTES,
-    )
-    .await?)
+    let generation = record.ref_generation;
+    Ok((
+        StoredInputRoot::upload(
+            &store,
+            prepared.token().artifact_operation,
+            &record,
+            INPUT_ROOT_BYTES,
+        )
+        .await?,
+        generation,
+    ))
 }
 
 pub(in crate::packs::publication) fn statement(outcome: &MergeOutcome) -> SqlStatement {

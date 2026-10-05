@@ -55,6 +55,10 @@ pub use initialization::{
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
+mod native_head;
+pub use native_head::{
+    HeadRequest, NATIVE_HEAD_BYTES, NativeHeadPreparationError, NativeHeadProof, PublishNativeHead,
+};
 mod native_candidate;
 pub use native_candidate::NativeCandidateVerificationError;
 mod native_merge;
@@ -88,9 +92,10 @@ pub use coordinator::{
     PublicationClass, PublicationCoordinator, PublicationError, PublicationLimits,
     PublicationOutcome, PublicationScheduleError, PublicationState, PublicationStats,
     PublicationTicket, ReadyBoundRecovery, ReadyCatalogCompaction, ReadyCatalogPush,
-    ReadyInitialization, ReadyNativeInputs, ReadyNativeMerge, ReadyPreparation, ReadyPublication,
-    ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError,
-    RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError, ServingDrainAdmission,
+    ReadyInitialization, ReadyNativeHead, ReadyNativeInputs, ReadyNativeMerge, ReadyPreparation,
+    ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
+    RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
+    ServingDrainAdmission,
 };
 pub use scan::{RecoveryScanBudget, RecoveryScanSettings};
 mod commands;
@@ -259,6 +264,7 @@ pub struct MaintenanceRequest {
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<PublishReviewedMerge>()?;
+    registry.bind_command::<PublishNativeHead>()?;
     registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
     registry.bind_command::<crate::checks::native::StartCommitCheck>()?;
     registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;

@@ -18,21 +18,22 @@ pub(super) async fn read(
         Ok(authorized) => authorized,
         Err(response) => return response,
     };
-    let head = async {
-        let snapshot = route.repository.serving_snapshot(actor.identity()).await?;
-        snapshot
-            .resolve_ref(None)
-            .await
-            .map_err(crate::packs::publication::ServingOwnerError::from)
-    }
-    .await;
+    let head = route
+        .repository
+        .default_branch_for(actor.identity(), None)
+        .await;
     match head {
-        Ok(head) if (state.manager.ready)() => response(
-            route.repository.repository_id(),
-            &head.reference,
-            head.generation,
-        ),
-        Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
+        Ok(_) if !(state.manager.ready)() => {
+            plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready")
+        }
+        Ok(head) => match head.output {
+            Some(head) => response(
+                route.repository.repository_id(),
+                &head.reference,
+                head.generation,
+            ),
+            None => plain(StatusCode::NOT_FOUND, "Repository not found"),
+        },
         Err(error) => {
             tracing::error!(error = %error, "default branch read failed");
             plain(
@@ -90,21 +91,27 @@ pub(super) async fn update(
         }
     };
     match route
-        .repository
+        .gateway
         .set_default_branch(
             identity,
             &principal.account,
-            input.expected_generation,
-            &input.reference,
+            crate::packs::publication::HeadRequest {
+                expected_generation: input.expected_generation,
+                reference: input.reference.clone(),
+            },
         )
         .await
     {
-        Ok(result) if result.output && (state.manager.ready)() => response(
-            route.repository.repository_id(),
-            &input.reference,
-            input.expected_generation + 1,
-        ),
-        Ok(result) if !result.output => plain(
+        Ok(crate::packs::publication::PublicationReply::Published(_))
+            if (state.manager.ready)() =>
+        {
+            response(
+                route.repository.repository_id(),
+                &input.reference,
+                input.expected_generation + 1,
+            )
+        }
+        Ok(crate::packs::publication::PublicationReply::Denied(_)) => plain(
             StatusCode::CONFLICT,
             "Ref generation changed or target branch does not exist",
         ),

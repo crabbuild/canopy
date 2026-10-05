@@ -595,3 +595,19 @@ BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;
 CREATE TRIGGER catalog_custody_stop_immutable BEFORE UPDATE OF stopped ON catalog_custody_commands
 WHEN OLD.stopped IS NOT NULL AND NEW.stopped IS NOT OLD.stopped
 BEGIN SELECT RAISE(ABORT, 'custody retirement is immutable'); END;
+
+-- Symbolic HEAD outcomes retain the original joint roots for exact retirement.
+CREATE TABLE catalog_head_updates (
+    id BLOB PRIMARY KEY CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    request BLOB NOT NULL CHECK(length(request)<=131072),
+    result BLOB NOT NULL CHECK(length(result)<=512),
+    fact BLOB NOT NULL CHECK(length(fact)<=512)
+) STRICT;
+CREATE TRIGGER catalog_head_updates_immutable BEFORE UPDATE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is immutable');
+END;
+CREATE TRIGGER catalog_head_updates_retained BEFORE DELETE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is retained');
+END;

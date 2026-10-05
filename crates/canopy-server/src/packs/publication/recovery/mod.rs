@@ -39,6 +39,10 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("symbolic HEAD retirement metadata failed")]
+    HeadMetadata(#[from] crate::packs::directory::index::IndexError),
+    #[error("symbolic HEAD retirement snapshot failed")]
+    HeadSnapshot(#[from] RefSnapshotPreparationError),
     #[error("selected native merge audit failed")]
     MergeAudit(#[source] Box<NativeMergeAuditError>),
     #[error("closed initialization graph failed")]
@@ -87,10 +91,13 @@ pub(super) enum Kind {
     Policy,
     Initialization,
     Merge,
+    Head,
 }
 impl Kind {
     fn body_limit(self) -> u32 {
-        if self == Self::Merge {
+        if self == Self::Head {
+            NATIVE_HEAD_BYTES
+        } else if self == Self::Merge {
             NATIVE_MERGE_BYTES
         } else if self == Self::Initialization {
             INITIALIZATION_BYTES
@@ -344,7 +351,7 @@ impl RegisteredRootRecovery {
                 )
                 .await
             }
-            Kind::Policy | Kind::Initialization | Kind::Merge => {
+            Kind::Policy | Kind::Initialization | Kind::Merge | Kind::Head => {
                 Err(AttemptError::Invocation(InvocationError::NotStarted(
                     Error::Command("recovery kind requires typed phase dispatch"),
                 )))
@@ -387,6 +394,19 @@ impl RegisteredRootRecovery {
                 .dispatch_initialization(client, store, authority, original)
                 .await
                 .map(PublicationOutcome::Initialization);
+        }
+        if self.record.kind == Kind::Head {
+            let result = self
+                .dispatch_command::<PublishNativeHead>(client, store, authority, false, original)
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Head))?;
+            return if matches!(result.output, PublicationReply::Published(_)) {
+                Ok(PublicationOutcome::Head(result))
+            } else {
+                Err(PublicationError::Head(InvocationError::Rejected(Box::new(
+                    result,
+                ))))
+            };
         }
         if self.record.kind == Kind::Merge {
             let result = self
@@ -575,33 +595,38 @@ impl RegisteredRootRecovery {
         // Write query here would hide an expired/revoked attempt before that
         // original command could record its definitive denial. Bound live
         // initialization still retains and checks its original local guard.
-        let session =
-            if refusal_only || self.record.kind == Kind::Initialization || original.is_some() {
-                None
-            } else {
-                match PreparationSession::open(
-                    client.clone(),
-                    self.evidence().target().clone(),
-                    self.record.check.clone(),
-                    None,
-                    authority.clone(),
-                )
-                .await
-                {
-                    Ok(session) => Some(session),
-                    Err(error) => {
-                        if let Some(known) = self.known::<C>(client, store, refusal).await? {
-                            return Ok(known);
-                        }
-                        return Err(AttemptError::Invocation(InvocationError::NotStarted(
-                            Error::Facility {
-                                name: "publication recovery custody",
-                                source: Box::new(error),
-                            },
-                        )));
+        // Frozen HEAD metadata also needs no native work or new preparation.
+        // Its original final receiver must record expired/revoked denials,
+        // while checking actual owner, original pin and current joint roots.
+        let session = if refusal_only
+            || matches!(self.record.kind, Kind::Initialization | Kind::Head)
+            || original.is_some()
+        {
+            None
+        } else {
+            match PreparationSession::open(
+                client.clone(),
+                self.evidence().target().clone(),
+                self.record.check.clone(),
+                None,
+                authority.clone(),
+            )
+            .await
+            {
+                Ok(session) => Some(session),
+                Err(error) => {
+                    if let Some(known) = self.known::<C>(client, store, refusal).await? {
+                        return Ok(known);
                     }
+                    return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                        Error::Facility {
+                            name: "publication recovery custody",
+                            source: Box::new(error),
+                        },
+                    )));
                 }
-            };
+            }
+        };
         // A command can settle while body I/O or custody acquisition is in flight.
         if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);

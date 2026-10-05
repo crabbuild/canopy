@@ -209,6 +209,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
                 source.update(include_bytes!("git_gateway/merge.rs"));
+                source.update(include_bytes!("git_gateway/head.rs"));
                 source.update(include_bytes!("git_gateway/candidates/mod.rs"));
                 source.update(include_bytes!("git_gateway/fetch.rs"));
                 source.update(include_bytes!("git_gateway/discovery.rs"));
@@ -273,6 +274,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/ref_snapshot.rs"));
                 source.update(include_bytes!("packs/publication/native_candidate.rs"));
                 source.update(include_bytes!("packs/publication/native_merge.rs"));
+                source.update(include_bytes!("packs/publication/native_head.rs"));
+                source.update(include_bytes!("packs/publication/native_head/publish.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/native_head.rs"
+                ));
                 source.update(include_bytes!("packs/publication/native_merge/audit.rs"));
                 source.update(include_bytes!(
                     "packs/publication/coordinator/native_merge.rs"

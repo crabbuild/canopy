@@ -124,6 +124,7 @@ pub(super) enum Terminal {
     Push(Box<CompletedRootPush>),
     Initialization(InitializationReply),
     Merge(crate::pulls::merge::MergeOutcome),
+    Head(PublicationReply),
 }
 impl Terminal {
     fn selected_statement(&self, operation: [u8; 16]) -> SqlStatement {
@@ -131,6 +132,7 @@ impl Terminal {
             sql: match self {
                 Self::Push(_) => super::super::root_completion::read::SAVED,
                 Self::Initialization(_) => super::super::initialization::publish::SAVED,
+                Self::Head(_) => super::super::native_head::publish::SAVED,
                 Self::Merge(outcome) => {
                     return super::super::native_merge::audit::statement(outcome);
                 }
@@ -154,6 +156,11 @@ impl Terminal {
             // A known negative is the original phase knowledge. A later attempt
             // may initialize this logical operation, without rewriting that denial.
             Self::Initialization(InitializationReply::Denied(_)) => true,
+            Self::Head(reply) => {
+                matches!(reply, PublicationReply::Denied(_))
+                    || super::super::native_head::publish::selected(result, check, *reply)?
+                        .is_some()
+            }
             Self::Merge(outcome) => {
                 !matches!(outcome, crate::pulls::merge::MergeOutcome::Applied { .. })
                     || super::super::native_merge::audit::selected(result, outcome, &check.actor)?
@@ -169,6 +176,52 @@ impl Terminal {
         hash: &mut blake3::Hasher,
     ) -> Result<(), RootRecoveryError> {
         match self {
+            Self::Head(reply) => {
+                hash.update(&encoded(reply, 512)?);
+                if let PublicationReply::Published(published) = reply {
+                    let (request, fact) =
+                        super::super::native_head::publish::selected(selected, check, *reply)?
+                            .ok_or(RootRecoveryError::Context)?;
+                    let catalog = fact.catalog.ok_or(RootRecoveryError::Context)?;
+                    let snapshot =
+                        crate::packs::catalog::CatalogSnapshot::download(store, catalog).await?;
+                    crate::packs::directory::snapshot::DirectorySnapshot::download(
+                        store,
+                        snapshot.directory,
+                    )
+                    .await?;
+                    let refs = fact.refs.ok_or(RootRecoveryError::Context)?;
+                    let state = refs
+                        .read(store)
+                        .await
+                        .map_err(super::super::RefSnapshotPreparationError::from)?;
+                    if state.repository != check.token.repository
+                        || state.format != catalog.format
+                        || state.generation != published.ref_generation
+                        || state.default_branch != request.reference
+                    {
+                        return Err(RootRecoveryError::Context);
+                    }
+                    descriptor(
+                        hash,
+                        catalog.operation,
+                        ArtifactKind::CatalogNode,
+                        catalog.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        snapshot.directory.operation,
+                        ArtifactKind::CatalogNode,
+                        snapshot.directory.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        refs.operation(),
+                        ArtifactKind::InputRoot,
+                        refs.artifact(),
+                    )?;
+                }
+            }
             Self::Merge(outcome) => {
                 hash.update(&encoded(outcome, 512)?);
                 if let Some(root) =
@@ -221,6 +274,13 @@ impl phase::Journal {
         self.may_advance(record)?;
         // A merge has its own typed permanent audit selection. Known denials
         // retain their original phase even if a later UUID attempt succeeds.
+        if record.kind == Kind::Head {
+            return self
+                .primary
+                .as_ref()
+                .map(|v| v.decode_reply::<PublicationReply>().map(Terminal::Head))
+                .transpose();
+        }
         if record.kind == Kind::Merge {
             return self
                 .primary

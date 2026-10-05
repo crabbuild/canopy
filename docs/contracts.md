@@ -103,7 +103,7 @@ These limits bound individual requests and publication work. They do not cap tot
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout with no whole-transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | No receive-pack byte quota; 64 MiB for other requests; 120-second input idle deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
-| Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
+| Symbolic HEAD | Accepted immutable `RefStateSnapshot.default_branch`, initially `refs/heads/main`; owner-authorized joint-root compare-and-set | `PublishNativeHead`, operation 54, codec 1 |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer, rejection decision and ordered push notes atomically with accepted refs | `CompletePush`, codec 5 |
 | Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
@@ -155,26 +155,50 @@ implemented yet.
 
 ### Ref snapshots and default branch
 
-The `ref_generation` singleton advances once in the same transaction as each
-accepted ref plan or default-branch update, including selecting the same branch.
-Typed finalization and HTTP completion share the ref-plan update; rejected plans,
-failed HEAD preconditions, completed-request replay and object/ACL writes do not
-advance it. Ref queries return at most 256 rows with HEAD and generation in one SQLite
-statement, including an empty terminal page. A continuation must supply the
-first page's generation. Changes invalidate the scan even when tips return to
-their previous OIDs or names are deleted and recreated. The gateway discards
-partial scans and tries at most three scans, then returns HTTP 503.
-Successful scans therefore describe one coherent ref state. That state can
-become older while its disposable cache is hydrated; admitted readers retain
-the selected generation, and immutable objects remain readable without GC.
+The accepted immutable ref snapshot's generation advances once for every
+accepted ref plan or HEAD update, including selecting the same branch. Ref
+records retain independent monotonic versions and deletion history. HEAD-only
+changes reuse the existing ref tree without changing those records. Ref pages
+select the same certified joint catalog/ref generation; continuations must use
+the unchanged ref generation. A push or HEAD ABA invalidates that precondition.
 
-HEAD must name a valid `refs/heads/` reference under Canopy's UTF-8,
-255-byte ref policy. Changing it requires the owner, an expected ref generation,
-and either a live target branch or no live branches. Owner authorization, target
-existence and generation comparison occur in one Cell SQL update. Concurrent
-ref changes and HEAD ABA invalidate the precondition. The SDK's mutation identity
-replays its recorded result; the HTTP API uses an explicit generation and requires
-a fresh GET after an ambiguous reply. It does not silently retry updates.
+HEAD must name a valid UTF-8 `refs/heads/` reference within the ref metadata's
+65,535-byte name limit. The HTTP body has a separate 8 KiB limit. Changing HEAD
+requires the current repository owner, an admin-scoped token, the expected ref
+generation, and either a live target branch or no live branches. The private
+preparation reads the held immutable tree. Checking for any live branch uses a
+seek and one live cursor result, skipping whole tombstoned subtrees.
+
+Operation 54 carries a purpose-bound catalog certificate, original request and
+conditional new snapshot. The final Cell transaction rechecks current owner,
+ACL, actual fence, exact original pin, expiry, retention floor and current joint
+roots, then publishes roots, immutable `catalog_head_updates` outcome, checkpoint,
+attempt closure and the original recovery phase together. No network observer
+owns the command. The resident staging/publication lifecycle retains its original
+prepared command and owner through cancellation and uncertain acknowledgements.
+Results fit the existing 512-byte recovery phase limit. A known SDK receipt or
+journal is resolved before body downloads or new custody. A cold absent HEAD
+command performs no new native work; its final receiver can record the original
+expiry or revocation denial without first requiring fresh Write authorization.
+
+Typed retirement checks the immutable selected outcome and bounded catalog,
+directory and ref snapshot headers before transferring the original journal to
+shared recovery receipts and releasing the transient pin. A missing selected
+snapshot retains the pin. The permanent original outcome cannot be updated or
+deleted. This authorizes no provider deletion; physical collection and quota
+qualification remain separate work.
+
+The HTTP API uses an explicit generation and requires a fresh GET after an
+ambiguous reply. It does not silently retry an update. Repository discovery,
+and default-branch GET read the existing constant-size `ref_generation` summary
+with current read access in the same query. Every successful native push,
+reviewed merge and HEAD publication updates its generation atomically with the
+accepted immutable ref snapshot. Push and merge preserve HEAD; operation 54
+changes both fields. The private merge proof binds the generation read from its
+prepared immutable snapshot (operation 9 codec 7). Ref-free completions and
+refusals leave the summary unchanged. Stock Git reads the accepted immutable
+snapshot. Metadata reads perform no artifact I/O, acquire no serving pin and
+publish no Cell root. The detached SQL HEAD setter fails closed.
 
 `GET /api/repositories/<name>/default-branch` requires repository read access,
 including anonymous public access. It returns `repository_id`, `reference` and `generation`.
@@ -1732,7 +1756,7 @@ with a 30-second receive deadline. The Cell command rechecks owner authority.
 The historical SQL publisher used `refs::apply_refs` for typed
 `FinalizePush`, HTTP `CompletePush`, and `MergePull`. Native publication instead
 uses privately certified immutable ref roots and reuses current branch/check
-predicates; native reviewed merge operation 9, codec 6 is described below. Before any ref writes, each enabled rule
+predicates; native reviewed merge operation 9, codec 7 is described below. Before any ref writes, each enabled rule
 checks deletion policy, ancestry and every required check. For a non-deletion,
 the selected attempt is the greatest creation number matching the proposed
 commit, context and current context version. It must have state `success` and
@@ -1945,7 +1969,7 @@ recovery journal. The native receiver and resident fast-forward adapter describe
 Typed terminal release is described below. The historical SQL merge description
 below is not qualification of generated native merge strategies.
 
-`PublishReviewedMerge` reuses operation 9 with codec 6 and a 256 KiB input / 512
+`PublishReviewedMerge` reuses operation 9 with codec 7 and a 256 KiB input / 512
 byte output contract. It replaces the registered contract rather than decoding
 legacy codec 4. Its private factory requires a ref-only `PreparedCatalog`: no
 incoming pack or native push-result checkpoint is accepted. It reads at most two
@@ -2323,7 +2347,7 @@ conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
 Historical SQL merge contract (operation 9, codec 4; no longer registered in
 the native production registry): the old command performed the following
-transaction. The native operation 9, codec 6 contract above replaces its storage
+transaction. The native operation 9, codec 7 contract above replaces its storage
 authority. Public/resident adapter conversion remains open; this historical
 section is not evidence that the current merge endpoint works.
 
@@ -2507,7 +2531,7 @@ historic candidates need quota/retention policy before persistent public use.
 Schema 1 remains unreleased and requires a fresh development prefix. The native
 editorial increment reuses the existing candidate request/result/table and
 ref-observation structures, with operation 10 codec 3; reviewed native merge is
-operation 9 codec 6. No dependency or lockfile changes are needed for this step.
+operation 9 codec 7. No dependency or lockfile changes are needed for this step.
 
 
 ## Repository browser
@@ -2526,7 +2550,7 @@ A different UUID returns 409; malformed input returns 422. The response is
 | `{"kind":"history","commit":"<OID>"}` | `history` | Up to 32 commits following only the first parent |
 
 `resolved` contains `reference`, nullable `oid`/`version`, and `generation`.
-Default HEAD and its ref tip come from one SQL observation. A missing/deleted
+Default HEAD and its ref tip come from the same accepted immutable ref snapshot. A missing/deleted
 reference returns null OID. Subsequent tree/file/history queries use the returned
 lowercase SHA-1 object ID, preserving that snapshot through ref changes.
 Annotated tags are peeled to commits, with at most 16 object visits. Tags to

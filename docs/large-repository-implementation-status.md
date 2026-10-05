@@ -17,6 +17,56 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native symbolic HEAD publication (2026-10-05 checkpoint)
+
+The stock-Git default-branch regression failed before this change: the API
+reported success but an unborn Unicode clone still selected `refs/heads/main`.
+The public writer had changed legacy SQL HEAD while native Git read the accepted
+immutable snapshot. The HTTP writer now uses resident staging and operation 54
+codec 1. Discovery and HEAD GET read the existing constant-size summary with
+current ACL in the same observation. Native pushes, reviewed merges and HEAD
+updates maintain that summary atomically with their immutable ref snapshots;
+the merge proof binds the prepared snapshot generation in operation 9 codec 7.
+Metadata reads acquire no pin and publish no root. The detached SQL setter fails
+closed.
+
+The private factory retains the existing ref tree and creates a new snapshot
+header. It checks the target through an exact tree lookup; one live cursor seek
+checks whether any branch exists, skipping deleted subtrees. The final owner
+transaction checks current ACL, actual fence, original pin, expiry, retention
+and joint-root CAS, then commits roots, immutable original outcome, checkpoint,
+attempt closure and its compact recovery journal atomically. The new permanent
+outcome selector reuses `GenerationFact` and the existing 512-byte phase limit.
+Typed retirement verifies selected snapshot headers and preserves the original
+SDK receipt before releasing the transient pin; it grants no provider deletion.
+
+Three actual Cell regression families pass in both Git formats. They cover
+unchanged tree/ref versions, request-purpose binding, absent registration, late
+SQL rollback with absent SDK acceptance, current owner/expiry/generation/target
+denials, cold absent recovery after revocation or expiry, missing metadata
+retaining a pin, immutable outcome rows, and receipt recovery on a fresh owner
+after deleting command bodies. The original public stock-Git case, repository
+metadata/ACL/restore case, branch-deletion case, registry and all-target Clippy
+also pass. The complete current-source validation results are recorded in
+[evidence](evidence/native-head-ci-20261005.json).
+
+The corrected source's full workspace diagnostic passes all 750 server library
+cases. Multi-server finishes with 88 passed, 19 failed and nine ignored; the
+three detached owner-restart, repository-cell and smart-HTTP targets each fail.
+Clippy, production build, formatting and all 96 Python harness cases pass.
+Both cold-gateway root-equality cases, pristine-bootstrap custody-count case and
+oversized-comparison case now pass in the full run with unchanged assertions.
+The intermediate serving-pin reader failed those cases and was corrected before
+commit. This is a completed diagnostic inventory, not a green CI result.
+
+Both Linux Verify runs on parent `7c232ea` completed with 747 passing library
+cases and the branch-deletion regression passing; their multi-server inventories
+were 88 passed, 23 failed and nine ignored. They confirm the previous recovery
+race fix but are not qualification of this HEAD source. Full CI and the capacity
+goal remain open. Generated candidates/merges, line threads, detached legacy
+Cell fixtures/writers, selective fetch, peer/backup restore, retention/collection,
+final DDL, acceleration and workload qualification remain required.
+
 ## Resident recovery discovery race (2026-10-05 checkpoint)
 
 The two Linux Verify jobs on `8230922` add a branch-deletion failure with HTTP
@@ -108,7 +158,7 @@ and production-build phases were skipped, and exact new-head Linux validation
 remains required.
 
 Next: complete resident generated candidate production and atomic Ready/catalog/
-fetch-ref publication, then native merge/squash/rebase, default-branch and thread
+fetch-ref publication, then native merge/squash/rebase and thread
 writers. Qualify cancellation, lost acknowledgements, startup adoption and
 retention, resolve remaining full CI failures, and complete peer/backup recovery,
 selective fetch, physical collection/final DDL, acceleration/fair maintenance,

@@ -17,7 +17,10 @@ use crate::{
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{PreparedCommand, Resolution};
 
-async fn initial(format: ObjectFormat, unrelated: bool) -> Result<(Fixture, Graph, MergeRequest)> {
+pub(super) async fn initial(
+    format: ObjectFormat,
+    unrelated: bool,
+) -> Result<(Fixture, Graph, MergeRequest)> {
     let f = Fixture::new(format).await?;
     let graph = assembled(&f, [245; 16], 16).await?;
     let source = if unrelated { graph.other } else { graph.tip };
@@ -74,7 +77,7 @@ async fn initial(format: ObjectFormat, unrelated: bool) -> Result<(Fixture, Grap
     };
     Ok((f, graph, request))
 }
-async fn preparation(
+pub(super) async fn preparation(
     f: &Fixture,
     graph: &Graph,
 ) -> Result<(Arc<PreparedCatalog>, tempfile::TempDir, DiskBudget)> {
@@ -161,7 +164,7 @@ async fn merged_roots(f: &Fixture, graph: &Graph) -> Result {
         let result=db.query_row("SELECT s.generation,g.refs,(SELECT count(*) FROM refs),(SELECT generation FROM ref_generation),(SELECT state FROM pull_requests WHERE number=1),(SELECT count(*) FROM pull_merges) FROM catalog_state s JOIN catalog_generations g ON g.generation=s.generation",[],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,r.get::<_,String>(4)?,r.get::<_,u64>(5)?)))?;
         serde_json::to_vec(&result).map_err(|_|Error::Command("merge fixture roots"))
     }).await?;
-    let (generation, refs, legacy, legacy_generation, pull, merges): (
+    let (generation, refs, legacy, summary_generation, pull, merges): (
         u64,
         Vec<u8>,
         u64,
@@ -170,8 +173,14 @@ async fn merged_roots(f: &Fixture, graph: &Graph) -> Result {
         u64,
     ) = serde_json::from_slice(&bytes)?;
     assert_eq!(
-        (generation, legacy, legacy_generation, pull.as_str(), merges),
-        (2, 0, 0, "merged", 1)
+        (
+            generation,
+            legacy,
+            summary_generation,
+            pull.as_str(),
+            merges
+        ),
+        (2, 0, 2, "merged", 1)
     );
     let mut d = BoundedDecoder::new(&refs, 128)?;
     let root = RefStateSnapshotRoot::decode(&mut d)?;

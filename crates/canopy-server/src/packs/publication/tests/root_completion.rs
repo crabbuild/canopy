@@ -317,6 +317,22 @@ pub(super) async fn qualify(
             edit(fixture, "INSERT INTO pushes(id,actor,request_digest) VALUES(zeroblob(16),'original',zeroblob(32)); INSERT INTO push_certificates VALUES(X'1111111111111111111111111111111111111111111111111111111111111111',zeroblob(16),'original','original','original key',1234,0)").await?;
         }
     }
+    let prior_summary = fixture
+        .handle
+        .query(0, 1024, |db| {
+            let value: u64 = db.query_row(
+                "SELECT generation FROM ref_generation WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(value.to_le_bytes().to_vec())
+        })
+        .await?;
+    let prior_summary = u64::from_le_bytes(
+        prior_summary
+            .try_into()
+            .map_err(|_| "invalid prior summary")?,
+    );
     let mutation = identity()?;
     let command = fixture
         .client()
@@ -394,6 +410,24 @@ pub(super) async fn qualify(
         assert_eq!(value.generation, 3);
         assert_eq!(value.ref_generation, 1);
     }
+    let summary = fixture
+        .handle
+        .query(0, 1024, |db| {
+            let value: u64 = db.query_row(
+                "SELECT generation FROM ref_generation WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(value.to_le_bytes().to_vec())
+        })
+        .await?;
+    assert_eq!(
+        u64::from_le_bytes(summary.try_into().map_err(|_| "invalid summary")?),
+        output
+            .completion
+            .publication
+            .map_or(prior_summary, |value| value.ref_generation)
+    );
     let roots = fixture.handle.query(0, 1024, |db| {
         let value: (u64, Vec<u8>, Vec<u8>) = db.query_row("SELECT generation,catalog,refs FROM catalog_generations WHERE generation=(SELECT generation FROM catalog_state)", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
         Ok(serde_json::to_vec(&value).unwrap())

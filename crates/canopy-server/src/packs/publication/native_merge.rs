@@ -33,6 +33,7 @@ struct Transition {
     plan: PushPlan,
     ancestry: Vec<u8>,
     refs: Option<RefStateSnapshotRoot>,
+    ref_generation: Option<u64>,
     audit: Option<crate::packs::input_artifact::StoredInputRoot>,
 }
 
@@ -121,6 +122,9 @@ impl NativeMergeProof {
                     .is_some_and(|r| r.operation() != data.token.artifact_operation)
                 || t.audit
                     .is_some_and(|r| r.operation != data.token.artifact_operation)
+                || t.ref_generation.is_some() != t.refs.is_some()
+                || t.ref_generation
+                    .is_some_and(|g| g == 0 || g > i64::MAX as u64)
                 || t.audit.is_some() != t.refs.is_some()
                 || t.refs.is_some() != super::ref_proof::proven(&t.ancestry, 0)
             {
@@ -148,6 +152,7 @@ impl NativeMergeProof {
             h.update(&super::ref_proof::binding(&t.plan, &t.ancestry)?);
             let mut e = BoundedEncoder::new(256)?;
             t.refs.encode(&mut e)?;
+            t.ref_generation.encode(&mut e)?;
             t.audit.encode(&mut e)?;
             h.update(&e.finish());
         }
@@ -165,6 +170,7 @@ impl WireValue for NativeMergeProof {
             t.plan.encode(e)?;
             e.write_bytes(&t.ancestry)?;
             t.refs.encode(e)?;
+            t.ref_generation.encode(e)?;
             t.audit.encode(e)?;
         }
         Ok(())
@@ -179,6 +185,7 @@ impl WireValue for NativeMergeProof {
                     plan: PushPlan::decode(d)?,
                     ancestry: d.read_bytes()?.to_vec(),
                     refs: Option::<RefStateSnapshotRoot>::decode(d)?,
+                    ref_generation: Option::<u64>::decode(d)?,
                     audit: Option::<crate::packs::input_artifact::StoredInputRoot>::decode(d)?,
                 })
             } else {
@@ -283,16 +290,20 @@ impl PreparedCatalog {
                         } else {
                             None
                         };
-                        let audit = match proposed {
-                            Some(refs) => Some(
-                                audit::prepare(self, &input, &plan.updates[0].name, refs).await?,
-                            ),
-                            None => None,
+                        let (audit, ref_generation) = match proposed {
+                            Some(refs) => {
+                                let (audit, generation) =
+                                    audit::prepare(self, &input, &plan.updates[0].name, refs)
+                                        .await?;
+                                (Some(audit), Some(generation))
+                            }
+                            None => (None, None),
                         };
                         transition = Some(Transition {
                             plan,
                             ancestry,
                             refs: proposed,
+                            ref_generation,
                             audit,
                         });
                     }
@@ -318,7 +329,7 @@ pub struct PublishReviewedMerge;
 impl Command for PublishReviewedMerge {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 6;
+    const CODEC_VERSION: u32 = 7;
     type Input = NativeMergeProof;
     type Output = MergeOutcome;
     fn execute(
@@ -444,6 +455,9 @@ fn publish_authenticated(
     let Some(refs) = transition.refs else {
         return Ok(denied(MergeOutcome::Conflict));
     };
+    let Some(ref_generation) = transition.ref_generation else {
+        return Ok(denied(MergeOutcome::Conflict));
+    };
     let Some(audit) = transition.audit else {
         return Ok(denied(MergeOutcome::Conflict));
     };
@@ -524,6 +538,10 @@ fn publish_authenticated(
     changed(context.sql(&statement(
         "UPDATE catalog_state SET generation=?1 WHERE singleton=1 AND generation=?2",
         vec![number(generation)?, number(data.base.generation)?],
+    ))?)?;
+    changed(context.sql(&statement(
+        "UPDATE ref_generation SET generation=?1 WHERE singleton=1",
+        vec![number(ref_generation)?],
     ))?)?;
     changed(context.sql(&statement("UPDATE pull_requests SET state='merged',version=version+1,updated_ms=max(updated_ms,?2) WHERE number=?1 AND state='open' AND version=?3 AND version<9223372036854775807", vec![SqlValue::Integer(input.number),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version)]))?)?;
     changed(context.sql(&statement("INSERT INTO pull_merges(id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", vec![blob(id.as_bytes()),blob(binding),SqlValue::Integer(input.number),blob(source),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),blob(crate::pulls::merge::oid(&input.request.revision.source_oid)?),SqlValue::Integer(input.request.revision.source_version),blob(base),SqlValue::Integer(input.request.revision.base_version),blob(encoded_audit)]))?)?;

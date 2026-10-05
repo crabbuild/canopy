@@ -187,6 +187,10 @@ impl CompleteRootPush {
                 "UPDATE catalog_state SET generation=?1 WHERE singleton=1 AND generation=?2",
                 vec![number(value.generation)?, number(data.base.generation)?],
             ))?)?;
+            changed(context.sql(&statement(
+                "UPDATE ref_generation SET generation=?1 WHERE singleton=1",
+                vec![number(value.ref_generation)?],
+            ))?)?;
         }
         Ok(CommandResult::Success(terminal.save(context)?))
     }
