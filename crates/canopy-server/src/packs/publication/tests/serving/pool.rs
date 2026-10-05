@@ -456,3 +456,74 @@ async fn blocked_old_generation_does_not_block_other_release_or_allow_early_evic
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn slow_cell_selection_preserves_the_idle_rollover_observation_budget() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let store = Arc::new(ArtifactStore::new(Arc::new(InMemory::new()), f.repository));
+        initialize(&f, store.clone()).await?;
+        let q = queue(&f)?;
+        let root = tempfile::TempDir::new()?;
+        let tasks = TaskTracker::new();
+        let pool = pooled(&f, store, &root, tasks.clone(), q.clone())?;
+        for generation in 1..=4 {
+            if generation > 1 {
+                advance(&f, generation).await?;
+            }
+            drop(pool.snapshot(Some("owner".into())).await?);
+        }
+        advance(&f, 5).await?;
+        assert_eq!(pool.owners_for_test().await.len(), 4);
+        // Stall the actual Cell worker, not the pool's timers or a mock reader.
+        // Selection queues behind this callback; exact release queues afterward.
+        let handle = f.handle.clone();
+        let mutation = identity()?;
+        let now = sql::now(0)?;
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, waiting) = std::sync::mpsc::channel();
+        let blocked = tokio::spawn(async move {
+            handle
+                .execute(
+                    mutation,
+                    Digest::from_bytes(*blake3::hash(b"selection-gate").as_bytes()),
+                    now,
+                    b"selection-gate".len(),
+                    0,
+                    move |_| {
+                        let _ = entered.send(());
+                        waiting
+                            .recv()
+                            .map_err(|_| Error::Command("selection gate lost"))?;
+                        Ok(cellule_runtime::cell::executor::HandlerOutcome::Success(
+                            Vec::new(),
+                        ))
+                    },
+                )
+                .await
+        });
+        timeout(Duration::from_secs(8), started).await??;
+        let selected = pool.observe_selection_for_test();
+        let work = pool.clone();
+        let viewer = tokio::spawn(async move { work.snapshot(Some("owner".into())).await });
+        timeout(Duration::from_secs(8), selected).await??;
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+        assert!(
+            !viewer.is_finished(),
+            "Cell selection did not wait for the real worker"
+        );
+        release
+            .send(())
+            .map_err(|_| "Cell selection gate disappeared")?;
+        timeout(Duration::from_secs(8), blocked).await???;
+        let result = timeout(Duration::from_secs(8), viewer).await??;
+        // Always join cleanup before asserting, even for the failing baseline.
+        let fact = result.as_ref().ok().map(|s| s.fact().generation);
+        let error = result.as_ref().err().map(|e| format!("{e:?}"));
+        drop(result);
+        finish(&f, &pool, &q, tasks).await?;
+        f.runtime.shutdown().await?;
+        assert_eq!(fact, Some(5), "{error:?}");
+    }
+    Ok(())
+}

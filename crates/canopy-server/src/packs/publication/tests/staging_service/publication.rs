@@ -617,7 +617,10 @@ async fn bound_publication_wait_ceiling_never_admits_or_executes_the_retained_co
             0
         );
         drop(failure);
-        assert!(matches!(terminal(&ticket).await?, StagingState::Fenced(_)));
+        // Bound is terminal for the staging phase, but expiry completes later.
+        // Wait for the lifecycle outcome rather than racing its status update.
+        let state = timeout(Duration::from_secs(10), ticket.wait_completion()).await?;
+        assert!(matches!(state, StagingState::Fenced(_)), "{state:?}");
         assert!(c.close_and_drain().await.is_empty());
         assert!(p.close_and_drain().await.is_empty());
         f.runtime.shutdown().await?;

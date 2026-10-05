@@ -17,6 +17,42 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Serving rollover and expiry observation (2026-10-05 checkpoint)
+
+Initial authenticated Cell selection used to consume the pool's two-second idle
+release observation budget. A regression fills all four slots, queues the actual
+Cell selection behind an admitted worker for 2.1 seconds, and then requests the
+next generation. Before the fix it fails with repository serving-generation
+capacity; after the fix it succeeds in both object formats and drains all pins.
+The budget now begins at the first retirement observation and stays shared across
+later retries. Its duration, generation cap and physical-drain requirements are
+unchanged. This reproduces one cause of the earlier workload-dependent capacity
+failure; it does not prove that every historical capacity failure had that cause.
+
+The bound-expiry test was calling `wait_terminal()`, which accepts intermediate
+Bound as staging handoff. It now calls `wait_completion()` to observe the expiry
+outcome and retains the Fenced, zero-admission and no-execution assertions. No
+production expiry classification or authorization semantics were relaxed.
+All 376 publication cases pass on the new frozen source. Full workspace tests
+pass all 718 server library cases, including both previously failing cases and
+the new Cell-contention regression. Multi-server remains at 77 passed / 29
+failed / 9 ignored; the three standalone aggregate fixtures also fail. The unique
+workspace inventory is 833 passed / 32 failed / 9 unexecuted ignores. All-target
+Clippy with warnings denied, server build, formatting, diff checks and all 96
+Python harness cases pass. Source fingerprints and complete results are in
+[evidence/serving-selection-budget-ci-20261005.json](evidence/serving-selection-budget-ci-20261005.json).
+Current-head Linux qualification remains required.
+
+Both `c86057c` Linux Verify runs pass all 717 server library tests and fail
+multi-server at 78 passed / 32 failed / 9 ignored: the
+[push run](https://github.com/crabbuild/canopy/actions/runs/37277708867) and
+[PR run](https://github.com/crabbuild/canopy/actions/runs/37277713775).
+Native commit checks, branch protection and bulk mirror cases pass there.
+Three rejected-push option cases still fail in the full Linux workload despite
+isolated local and earlier isolated Linux passes. Pull/ref product callers,
+default-branch mutation, generated writers, recovery/backup and filtered/cache
+expectations remain open. This follow-up is not a green-CI or release claim.
+
 ## Native commit checks conversion (2026-10-05 checkpoint)
 
 Commit-check reads and starts were still querying the removed `objects` table,

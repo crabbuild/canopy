@@ -48,6 +48,8 @@ struct Inner {
     stop: CancellationToken,
     requests: TaskTracker,
     drain: TaskTracker,
+    #[cfg(test)]
+    selection_started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 struct Lifetime(Weak<Inner>);
 impl Drop for Lifetime {
@@ -101,6 +103,8 @@ impl ServingPool {
             stop: CancellationToken::new(),
             requests: TaskTracker::new(),
             drain: TaskTracker::new(),
+            #[cfg(test)]
+            selection_started: std::sync::Mutex::new(None),
         });
         let work = inner.clone();
         inner.drain.spawn(async move {
@@ -165,6 +169,18 @@ impl ServingPool {
             .map_err(ServingReadError::Task)?
     }
     #[cfg(test)]
+    pub(in crate::packs::publication) fn observe_selection_for_test(
+        &self,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self
+            .inner
+            .selection_started
+            .lock()
+            .expect("selection observer") = Some(sender);
+        receiver
+    }
+    #[cfg(test)]
     pub(in crate::packs::publication) async fn owners_for_test(&self) -> Vec<ServingOwner> {
         self.inner
             .state
@@ -185,11 +201,20 @@ impl Inner {
         if self.stop.is_cancelled() || self.paused.load(Ordering::Acquire) {
             return Err(ServingReadError::Inactive.into());
         }
-        let deadline = Instant::now() + ROLLOVER_WAIT;
+        let mut rollover_deadline = None;
         // Concurrent viewers may consume a released slot first. Bound retries
         // even under continuous publication; admission already bounds waiters.
         for _ in 0..=self.limits.generations {
             // Permission and current generation can change while release waits.
+            #[cfg(test)]
+            if let Some(observer) = self
+                .selection_started
+                .lock()
+                .expect("selection observer")
+                .take()
+            {
+                let _ = observer.send(());
+            }
             let selected = self.context.select(actor.clone()).await?;
             enum Selection {
                 Borrow(ServingOwner),
@@ -282,6 +307,11 @@ impl Inner {
                     // Never wait for provider I/O or exact release under the
                     // pool lock. Shutdown can cancel this bounded observation
                     // without canceling the independently owned producer.
+                    // Initial Cell selection may queue behind unrelated work.
+                    // Charge the observation budget only once retirement starts;
+                    // subsequent retries share it rather than extending it.
+                    let deadline =
+                        *rollover_deadline.get_or_insert_with(|| Instant::now() + ROLLOVER_WAIT);
                     let drain = owner.drain_observer();
                     tokio::select! {
                         _ = self.stop.cancelled() => return Err(ServingReadError::Inactive.into()),

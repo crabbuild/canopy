@@ -219,8 +219,10 @@ covers selection, acquisition waiting and the returned snapshot borrow. Observer
 cancellation detaches accepted work, and the owner's original stays retained.
 At capacity, the pool initiates closure of a least-recently-used unborrowed
 owner and observes its independently owned release outside the pool lock. A
-request shares a two-second rollover budget and performs at most one retry per
-configured generation slot. Concurrent waiters can join an already closing
+request starts its two-second rollover observation budget when it first needs
+to retire an owner; initial authenticated Cell selection does not consume this
+budget. Later release observations and selection retries share that deadline.
+The request performs at most one retry per configured generation slot. Concurrent waiters can join an already closing
 owner. Each retry selects the current generation under current viewer access;
 closing owners cannot accept new borrows. Sequential readers can therefore move
 through more than four publications without retrying at the client.

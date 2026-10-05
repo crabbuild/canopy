@@ -50,6 +50,11 @@ A known registration stores its original receipt before a fresh CheckStaging que
 
 Call seal when the input phase should finish. It prevents new producer admission and enters Draining. Existing producers and retained completed results continue under renewed staging custody. Bind does not begin until all input slots have drained through handoff or failure. This prevents a canceled observer from silently losing a physical witness while the service advances to catalog preparation.
 
+`wait_terminal()` observes staging handoff, including the intermediate Bound
+state. Callers waiting for expiry or final publication must use
+`wait_completion()`, which waits for Published, Uncertain, Fenced or Stopped.
+Observing Bound does not establish an expiry result or completed publication.
+
 Bind uses a newly prepared original command 42 and registrar 41 under the shared registered custody protocol. Known binding preserves the token, creating namespace and artifact expiry, and adds only the current catalog floor. Bound records that durable result and its original receipt; its recorded timestamps are not a fresh live-lease observation. Stage contexts become inactive after handoff. The operation remains admitted through bound preparation. `ticket.open_base` refreshes at the binding receipt and uses the existing PreparationBaseResolver with the supervisor's shared session, validating current access and expiry while inheriting automatic renewal, shutdown fencing and the bound residence ceiling.
 
 A producer can physically verify a native pack and return its private PhysicalPackWitness and sealed metadata segments. Take that result, seal, observe Bound, open the base, and feed the witness/segments to CatalogPreparation. The existing assembler rechecks store, namespace, partition completeness, canonical overlap and closure. Its private factories issue the publication proof. Bind and a generic producer result do not grant canonical or publication authority.
