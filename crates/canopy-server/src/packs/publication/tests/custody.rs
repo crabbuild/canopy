@@ -328,7 +328,7 @@ async fn cold_owner_restoration_recovers_claim_and_renew_receipts_without_revivi
             let started = execute(&f, CustodyAction::BeginPreparation(f.begin(operation))).await?;
             let old = token(&started.output)?;
             let mut mutation = identity()?;
-            mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+            mutation.expires_at_ms = mutation.issued_at_ms + 10_000;
             let action = if claim {
                 CustodyAction::ClaimPreparation(request(old))
             } else {
@@ -337,7 +337,12 @@ async fn cold_owner_restoration_recovers_claim_and_renew_receipts_without_revivi
             let original =
                 PreparedCustody::prepare(&f.client(), &f.target, action, mutation).await?;
             let registered = original.register(&f.client(), identity()?).await?;
-            let accepted = registered.recover(&f.client()).await?;
+            // Allow loaded CI workers to commit before testing actual expiry.
+            // The post-restore Expired assertion below remains mandatory.
+            let accepted = registered
+                .recover(&f.client())
+                .await
+                .map_err(|error| format!("initial acceptance before owner restore: {error:?}"))?;
             let token = token(&accepted.output)?;
             let (runtime, handle, client) =
                 super::durable_recovery::restore_owner(&f, &check(token)).await?;

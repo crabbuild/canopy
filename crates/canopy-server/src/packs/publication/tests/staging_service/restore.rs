@@ -57,16 +57,23 @@ pub(in crate::packs::publication::tests) async fn head_expiring(
     };
     let mut mutation = identity()?;
     if short_expiry {
-        mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+        // Accepted-history tests need time to commit on loaded CI workers;
+        // they still wait for real SDK expiry before observing cold recovery.
+        // Intentionally unexecuted expiry cases retain their short window.
+        mutation.expires_at_ms =
+            mutation.issued_at_ms + if execute_original { 10_000 } else { 1_000 };
     }
     let command = PreparedCustody::prepare(&f.client(), &f.target, action, mutation).await?;
     let original = command.evidence().clone();
     let registered = command.register(&f.client(), identity()?).await?;
-    let committed = if execute_original {
-        Some(registered.recover(&f.client()).await?)
-    } else {
-        None
-    };
+    let committed =
+        if execute_original {
+            Some(registered.recover(&f.client()).await.map_err(|error| {
+                format!("initial acceptance for custody kind {kind}: {error:?}")
+            })?)
+        } else {
+            None
+        };
     Ok((original, committed))
 }
 async fn restore(

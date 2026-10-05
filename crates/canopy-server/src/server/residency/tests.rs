@@ -3,6 +3,7 @@ use std::{collections::VecDeque, convert::Infallible, future::poll_fn};
 use super::*;
 mod recovery;
 mod serving;
+mod staging;
 
 struct Frames(VecDeque<Frame<Bytes>>);
 

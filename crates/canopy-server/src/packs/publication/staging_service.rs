@@ -324,6 +324,7 @@ struct ActorAdmission {
 #[derive(Default)]
 struct Admission {
     closed: bool,
+    paused: bool,
     retirement_probe: bool,
     retirement_probes: u64,
     retirement_failures: u64,
@@ -336,6 +337,7 @@ struct Inner {
     authority: PreparationAuthority,
     target: CellTarget,
     limits: StagingLimits,
+    budget: StagingBudget,
     admission: Mutex<Admission>,
     workers: Arc<Semaphore>,
     drained: Notify,
@@ -378,6 +380,7 @@ struct Job {
     operation: [u8; 16],
     restored_evidence: Option<cellule_runtime::PendingMutation>,
     actor_workers: Arc<Semaphore>,
+    operation_permit: Mutex<Option<crate::admission::AdmissionPermit>>,
     local: Mutex<Local>,
     work: Mutex<WorkSlots>,
     exact: Mutex<Option<Exact>>,
@@ -591,11 +594,76 @@ pub struct StagingStats {
     pub retirement_restarts: u64,
     pub retirement_running: bool,
 }
+/// Node-wide capacity shared by every resident repository. Physical worker
+/// claims are retained by the existing activity owner, including detached work.
+#[derive(Clone)]
+pub(crate) struct StagingBudget {
+    operations: Arc<crate::admission::AccountAdmission>,
+    workers: Arc<crate::admission::AccountAdmission>,
+}
+impl StagingBudget {
+    pub(crate) fn new(operations: usize, workers: usize) -> Result<Self, StagingError> {
+        if operations < 2 || workers < 2 {
+            return Err(StagingError::InvalidLimits);
+        }
+        Ok(Self {
+            operations: Arc::new(crate::admission::AccountAdmission::new(
+                operations,
+                "node staging operations",
+                "account staging operations",
+            )),
+            workers: Arc::new(crate::admission::AccountAdmission::new(
+                workers,
+                "node staging workers",
+                "account staging workers",
+            )),
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn available(&self) -> (usize, usize) {
+        (self.operations.available(), self.workers.available())
+    }
+}
+/// Pauses an idle resident while its other services attempt eviction. A busy
+/// serving pool or a canceled eviction restores admission through this guard.
+pub(crate) struct StagingQuiescence {
+    inner: Arc<Inner>,
+}
+impl StagingQuiescence {
+    pub(crate) fn commit(self) {
+        self.inner
+            .admission
+            .lock()
+            .expect("staging admission")
+            .closed = true;
+    }
+}
+impl Drop for StagingQuiescence {
+    fn drop(&mut self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.paused = false;
+    }
+}
 impl StagingCoordinator {
     pub fn new(
         target: CellTarget,
         limits: StagingLimits,
         authority: PreparationAuthority,
+    ) -> Result<Self, StagingError> {
+        limits.validate()?;
+        // Standalone coordinators keep their original per-repository limits.
+        // Production residents share a node budget through new_with_budget.
+        let budget = StagingBudget::new(
+            limits.operations.max(limits.per_actor * 2),
+            limits.workers.max(limits.workers_per_actor * 2),
+        )?;
+        Self::new_with_budget(target, limits, authority, budget)
+    }
+    pub(crate) fn new_with_budget(
+        target: CellTarget,
+        limits: StagingLimits,
+        authority: PreparationAuthority,
+        budget: StagingBudget,
     ) -> Result<Self, StagingError> {
         limits.validate()?;
         if !authority.matches(&target) {
@@ -606,6 +674,7 @@ impl StagingCoordinator {
                 authority,
                 target,
                 limits,
+                budget,
                 admission: Mutex::new(Admission::default()),
                 workers: Arc::new(Semaphore::new(limits.workers)),
                 drained: Notify::new(),
@@ -622,7 +691,7 @@ impl StagingCoordinator {
         let mut admission = self.inner.admission.lock().expect("staging admission");
         let error = if ready.inner.target != self.inner.target {
             Some(StagingError::Foreign)
-        } else if admission.closed {
+        } else if admission.closed || admission.paused {
             Some(StagingError::Closed)
         } else if !matches!(ready.inner.command, Exact::Restored(_))
             && ready.inner.request.lease_ms != self.inner.limits.lease_ms
@@ -645,6 +714,15 @@ impl StagingCoordinator {
         if let Some(error) = error {
             return Err((error, ready));
         }
+        let operation_permit = match self
+            .inner
+            .budget
+            .operations
+            .try_acquire(crate::ReadIdentity::Account(&ready.inner.request.actor))
+        {
+            Ok(permit) => permit,
+            Err(_) => return Err((StagingError::Capacity, ready)),
+        };
         let actor = admission
             .actors
             .entry(ready.inner.request.actor.clone())
@@ -667,6 +745,7 @@ impl StagingCoordinator {
             operation: ready.inner.request.operation,
             restored_evidence,
             actor_workers,
+            operation_permit: Mutex::new(Some(operation_permit)),
             local: Mutex::new(Local {
                 lease: None,
                 bound: None,
@@ -754,6 +833,25 @@ impl StagingCoordinator {
             retirement_running: a.retirement_probe,
         }
     }
+    pub(crate) fn try_quiesce(&self) -> Option<StagingQuiescence> {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        if admission.paused || !admission.jobs.is_empty() || admission.retirement_probe {
+            return None;
+        }
+        admission.paused = true;
+        Some(StagingQuiescence {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+    pub(crate) fn close(&self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.closed = true;
+        for job in admission.jobs.values() {
+            job.local.lock().expect("staging local").stop = true;
+            job.changed.notify_one();
+        }
+        self.inner.drained.notify_waiters();
+    }
     /// Stop admission and renew while accepted workers drain. Uncertain exact
     /// commands remain charged and returned; explicit recovery remains possible.
     pub async fn close_and_drain(&self) -> Vec<StagingTicket> {
@@ -786,7 +884,7 @@ impl StagingCoordinator {
         }
     }
     #[cfg(test)]
-    pub(super) fn fault_for_test(&self, fault: u8) {
+    pub(crate) fn fault_for_test(&self, fault: u8) {
         self.inner
             .fault
             .store(fault, std::sync::atomic::Ordering::Release);
@@ -1097,6 +1195,12 @@ impl StagingTicket {
         let actor_permit = Arc::clone(&self.job.actor_workers)
             .try_acquire_owned()
             .map_err(|_| StagingError::Capacity)?;
+        let node_permit = self
+            .inner
+            .budget
+            .workers
+            .try_acquire(crate::ReadIdentity::Account(&self.job.actor))
+            .map_err(|_| StagingError::Capacity)?;
         let (token, format) = {
             let mut l = self.job.local.lock().expect("staging local");
             if (l.seal && !bound)
@@ -1131,6 +1235,7 @@ impl StagingTicket {
             job: Arc::clone(&self.job),
             permit: Some(permit),
             actor_permit: Some(actor_permit),
+            node_permit: Some(node_permit),
         });
         let context = StagingContext {
             job: Arc::clone(&self.job),
@@ -1291,11 +1396,13 @@ struct Activity {
     job: Arc<Job>,
     permit: Option<OwnedSemaphorePermit>,
     actor_permit: Option<OwnedSemaphorePermit>,
+    node_permit: Option<crate::admission::AdmissionPermit>,
 }
 impl Drop for Activity {
     fn drop(&mut self) {
         drop(self.actor_permit.take());
         drop(self.permit.take());
+        drop(self.node_permit.take());
         self.job.local.lock().expect("staging local").workers -= 1;
         self.job.changed.notify_one();
         self.inner.drained.notify_waiters();
@@ -2116,6 +2223,12 @@ fn bound_state(local: &Local) -> StagingState {
 fn remove(inner: &Inner, job: &Job) {
     let mut a = inner.admission.lock().expect("staging admission");
     a.jobs.remove(&job.operation);
+    drop(
+        job.operation_permit
+            .lock()
+            .expect("staging operation permit")
+            .take(),
+    );
     let count = a.actors.get_mut(&job.actor).expect("staging actor");
     count.operations -= 1;
     if count.operations == 0 {

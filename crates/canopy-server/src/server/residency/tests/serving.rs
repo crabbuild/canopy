@@ -149,6 +149,7 @@ async fn shutdown_refuses_unpublished_serving_constructor_and_joins_it_before_wo
             .serving_snapshot(ReadIdentity::Account("canopy"))
             .await;
         let unavailable = premature.is_err();
+        assert!(repository.staging_coordinator().is_err());
         drop(premature);
         let mut shutdown = tokio::spawn(server.shutdown());
         timeout(Duration::from_secs(8), manager.serving_stop.cancelled()).await?;
@@ -169,6 +170,7 @@ async fn shutdown_refuses_unpublished_serving_constructor_and_joins_it_before_wo
             unavailable,
             "unpublished constructor exposed serving before registered ownership"
         );
+        assert!(repository.staging_coordinator().is_err());
         assert!(matches!(
             result,
             Err(crate::server::ServerError::Runtime(

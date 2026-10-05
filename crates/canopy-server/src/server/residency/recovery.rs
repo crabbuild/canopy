@@ -4,13 +4,14 @@ use crate::packs::catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes};
 use crate::packs::publication::{
     CustodySupervisor, MaintenanceRequest, PreparationAuthority, PublicationCoordinator,
     PublicationLimits, PublicationState, RecoveryScanLimits, RecoverySupervisor, ServingContext,
-    ServingPool, ServingPoolLimits,
+    ServingPool, ServingPoolLimits, StagingCoordinator, StagingLimits, StagingState,
 };
 use canopy_object_storage::artifact::ArtifactStore;
 
 pub(super) struct RecoveryServices {
     pub(super) coordinator: PublicationCoordinator,
     pub(super) serving: Arc<ServingPool>,
+    pub(super) staging: Arc<StagingCoordinator>,
     workers: Mutex<Option<Workers>>,
 }
 struct Workers {
@@ -40,6 +41,15 @@ impl RecoveryServices {
             manager.publication_budget.clone(),
         )
         .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?;
+        let staging = Arc::new(
+            StagingCoordinator::new_with_budget(
+                target.clone(),
+                StagingLimits::default(),
+                authority.clone(),
+                manager.staging_budget.clone(),
+            )
+            .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
+        );
         let settings = manager
             .recovery_scans
             .settings(RecoveryScanLimits::default(), &entry.owner);
@@ -112,11 +122,15 @@ impl RecoveryServices {
         Ok(Self {
             coordinator,
             serving,
+            staging,
             workers: Mutex::new(Some(Workers { roots, custody })),
         })
     }
 
     pub(super) async fn quiesce(&self) -> bool {
+        let Some(staging) = self.staging.try_quiesce() else {
+            return false;
+        };
         let mut workers = self.workers.lock().await;
         if let Some(active) = workers.as_ref() {
             tokio::join!(active.roots.pause(), active.custody.pause());
@@ -135,12 +149,33 @@ impl RecoveryServices {
             }
             return false;
         }
+        staging.commit();
         self.serving.close_and_drain().await;
         join(workers.take()).await;
         true
     }
 
+    async fn drain_staging(&self) {
+        loop {
+            let pending = self.staging.close_and_drain().await;
+            if pending.is_empty() && !self.staging.stats().retirement_running {
+                return;
+            }
+            // Exact settlement can remove the last job while its read-only
+            // retirement owner is finishing a round. Keep the Cell and node
+            // workspace until that independently owned scanner exits too.
+            for ticket in pending {
+                if matches!(ticket.state(), StagingState::Uncertain(_))
+                    && let Err(error) = self.staging.recover(&ticket)
+                {
+                    tracing::warn!(?error, "exact staging recovery deferred during drain");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }
     pub(super) async fn drain(&self) {
+        self.drain_staging().await;
         self.serving.close_and_drain().await;
         join(self.workers.lock().await.take()).await;
         loop {
@@ -187,6 +222,13 @@ impl RepositoryManager {
                 .filter_map(|repository| repository.recovery.as_ref().map(Arc::clone))
                 .collect()
         };
+        for service in &services {
+            service.staging.close();
+        }
+        // Producer capabilities may retain serving generations and exact held
+        // publication work. Drain them before closing either lower service.
+        futures_util::future::join_all(services.iter().map(|service| service.drain_staging()))
+            .await;
         for service in &services {
             service.serving.close();
         }

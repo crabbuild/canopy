@@ -455,6 +455,7 @@ pub struct RepositoryCell {
     // reference must not retain its original disk budget after gateway eviction.
     pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
     serving: std::sync::Mutex<Option<std::sync::Weak<packs::publication::ServingPool>>>,
+    staging: std::sync::Mutex<Option<std::sync::Weak<packs::publication::StagingCoordinator>>>,
 }
 
 impl RepositoryCell {
@@ -483,12 +484,40 @@ impl RepositoryCell {
             target,
             pack_readers: std::sync::Mutex::new(Vec::new()),
             serving: std::sync::Mutex::new(None),
+            staging: std::sync::Mutex::new(None),
         })
     }
 
     pub(crate) fn attach_serving(&self, pool: &std::sync::Arc<packs::publication::ServingPool>) {
         *self.serving.lock().expect("repository serving pool") =
             Some(std::sync::Arc::downgrade(pool));
+    }
+    pub(crate) fn attach_staging(
+        &self,
+        staging: &std::sync::Arc<packs::publication::StagingCoordinator>,
+    ) {
+        *self.staging.lock().expect("repository staging coordinator") =
+            Some(std::sync::Arc::downgrade(staging));
+    }
+    /// Obtain the resident's owned write lifecycle. Admission still checks live
+    /// custody and actor limits; retaining this handle cannot keep a Cell resident.
+    pub fn staging_coordinator(
+        &self,
+    ) -> Result<
+        std::sync::Arc<packs::publication::StagingCoordinator>,
+        packs::publication::StagingError,
+    > {
+        let staging = self
+            .staging
+            .lock()
+            .expect("repository staging coordinator")
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(packs::publication::StagingError::Inactive)?;
+        if staging.stats().closed {
+            return Err(packs::publication::StagingError::Closed);
+        }
+        Ok(staging)
     }
     /// Borrow the resident's certified joint generation; a detached caller
     /// cannot abandon its acquisition or extend a released residency.

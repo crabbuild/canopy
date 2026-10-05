@@ -98,6 +98,7 @@ pub use recovery::{
     TerminalReleaseInput, TerminalReleaseReply,
 };
 mod staging_service;
+pub(crate) use staging_service::StagingBudget;
 pub use staging_service::{
     ReadyStaging, StagedInputsTicket, StagedPublicationFailure, StagedPublicationTicket,
     StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits, StagingState,

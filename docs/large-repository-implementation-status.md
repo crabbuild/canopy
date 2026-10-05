@@ -15,6 +15,52 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Resident staging ownership
+
+The production resident now constructs one `StagingCoordinator` alongside its
+serving pool and publication coordinator. Both capabilities are attached under
+the existing constructor/shutdown barrier; `RepositoryCell` holds weak references.
+A retained or detached caller cannot invent an unregistered resident service.
+Remote repository routes still require owner-aware write forwarding.
+
+All resident coordinators share node admission for 32 operations and 64 physical
+workers, with half-node account shares and the existing repository/account caps.
+These are admission defaults, not measured capacity. The implementation reuses
+`AccountAdmission`, its bounded weak account map, semaphore permits and the
+existing staging activity owner. Operation credit survives exact uncertainty
+and is returned on terminal removal even if a caller retains its old observer.
+Worker credit stays with the last physical activity, including queued jobs after
+an async result is transferred. Rejected admission returns the original prepared
+request. No additional durable queue, SQL schema or operation inventory is added.
+
+Idle eviction pauses staging admission through a reversible guard before
+quiescing serving. Busy staging prevents eviction. A serving refusal or canceled
+pause releases the guard; a committed eviction closes admission. Shutdown closes
+all inventoried staging services first and drains them concurrently while their
+serving/publication resources remain available. Each service resolves its exact
+uncertain originals and waits for the read-only retirement owner to exit before
+releasing the lower services, Cell ownership, heartbeat or node workspace.
+Late constructors are refused by the same registration barrier and drained.
+
+Regression coverage exercises both object formats: production eviction and
+shutdown with detached physical work, shared cross-repository account capacity,
+retry of the same refused request, busy-serving admission restoration, idempotent
+closed eviction, exact staging recovery while another repository remains busy,
+and physical/operation credits after observer cancellation or retained terminal
+observers. Accepted-history expiry fixtures give initial command execution ten
+seconds under loaded CI and still wait for actual SDK expiry before recovery.
+Unexecuted expiry fixtures retain their one-second window.
+
+This increment supplies the resident write lifecycle; live HTTP/SSH/generated
+writers and their integration fixtures still require conversion to it. The full
+CI and release/capacity gates remain open. Final frozen-source qualification passes 725 library cases, including 704
+server cases and 403 publication cases. All eight focused regressions, Clippy
+with warnings denied, build, formatting/diff checks and 96 Python harness cases
+pass. The workspace command executes 740 unique Rust cases: 739 pass and the
+retired-ingestion directory case fails; later integrations/doctests are unrun.
+See [resident staging evidence](evidence/resident-staging-20261004.json) for exact
+commands, source/log fingerprints, preserved earlier failures and remaining gates.
+
 ## Bounded native metadata preparation
 
 `PhysicalVerifier::stage_metadata` now consumes a live admitted verifier and

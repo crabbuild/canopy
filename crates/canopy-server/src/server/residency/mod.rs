@@ -382,6 +382,7 @@ impl RepositoryManager {
                 } else if let Some(resident) = loaded.get_mut(&entry.repository_id) {
                     resident.recovery = Some(recovery.clone());
                     repository.attach_serving(&recovery.serving);
+                    repository.attach_staging(&recovery.staging);
                     None
                 } else {
                     Some(ServerError::Repository("loaded repository is absent"))
