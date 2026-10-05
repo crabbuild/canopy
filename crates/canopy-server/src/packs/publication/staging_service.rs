@@ -339,7 +339,11 @@ struct Inner {
     target: CellTarget,
     limits: StagingLimits,
     budget: StagingBudget,
-    resident: Option<(CellClient, PublicationCoordinator)>,
+    resident: Option<(
+        CellClient,
+        PublicationCoordinator,
+        Arc<canopy_object_storage::artifact::ArtifactStore>,
+    )>,
     admission: Mutex<Admission>,
     workers: Arc<Semaphore>,
     drained: Notify,
@@ -365,6 +369,7 @@ struct Local {
     recovery: bool,
     renew: bool,
     driver_started: bool,
+    driver_graceful: bool,
 }
 trait RetainedWork: Any + Send + Sync {
     fn fence_completed(&self);
@@ -777,6 +782,7 @@ impl StagingCoordinator {
                 recovery: false,
                 renew: false,
                 driver_started: false,
+                driver_graceful: false,
             }),
             work: Mutex::new(WorkSlots::default()),
             exact: Mutex::new(Some(ready.inner.command)),
@@ -854,6 +860,40 @@ impl StagingCoordinator {
             inner: Arc::clone(&self.inner),
         })
     }
+    /// Seal node admission while already-owned receive workflows finish. Other
+    /// callback producers retain their existing cancel-and-physical-drain contract.
+    pub(crate) fn close_admission(&self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.closed = true;
+        for job in admission.jobs.values() {
+            let mut local = job.local.lock().expect("staging local");
+            if !local.driver_graceful {
+                local.stop = true;
+                job.driver_stop.cancel();
+                job.changed.notify_one();
+            }
+        }
+    }
+
+    pub(crate) async fn finish_receive_workflows(&self) {
+        let jobs: Vec<_> = self
+            .inner
+            .admission
+            .lock()
+            .expect("staging admission")
+            .jobs
+            .values()
+            .cloned()
+            .collect();
+        // Timeout abandons only this join observer. Forced close below retains
+        // and joins every actual controller, worker and uncertain command.
+        let _ = tokio::time::timeout(
+            Duration::from_secs(30),
+            futures_util::future::join_all(jobs.iter().map(|job| driver::drain(job))),
+        )
+        .await;
+    }
+
     pub(crate) fn close(&self) {
         let mut admission = self.inner.admission.lock().expect("staging admission");
         admission.closed = true;
@@ -867,18 +907,13 @@ impl StagingCoordinator {
     /// Stop admission and renew while accepted workers drain. Uncertain exact
     /// commands remain charged and returned; explicit recovery remains possible.
     pub async fn close_and_drain(&self) -> Vec<StagingTicket> {
+        self.close();
         loop {
             let wake = self.inner.drained.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
             let pending = {
-                let mut a = self.inner.admission.lock().expect("staging admission");
-                a.closed = true;
-                for job in a.jobs.values() {
-                    job.local.lock().expect("staging local").stop = true;
-                    job.driver_stop.cancel();
-                    job.changed.notify_one();
-                }
+                let a = self.inner.admission.lock().expect("staging admission");
                 if a.jobs.values().all(|j| {
                     matches!(*j.status.borrow(), StagingState::Uncertain(_))
                         && j.local.lock().expect("staging local").workers == 0
@@ -1081,6 +1116,26 @@ impl StagingTicket {
                     | StagingState::Draining(_)
                     | StagingState::Finishing
                     | StagingState::Publishing
+            ) {
+                return state;
+            }
+            if status.changed().await.is_err() {
+                return status.borrow().clone();
+            }
+        }
+    }
+    /// Observe final publication without treating the intermediate Bound phase
+    /// as completion. Cancellation only drops this watch receiver.
+    pub async fn wait_completion(&self) -> StagingState {
+        let mut status = self.job.status.subscribe();
+        loop {
+            let state = status.borrow_and_update().clone();
+            if matches!(
+                state,
+                StagingState::Published(_)
+                    | StagingState::Uncertain(_)
+                    | StagingState::Fenced(_)
+                    | StagingState::Stopped
             ) {
                 return state;
             }

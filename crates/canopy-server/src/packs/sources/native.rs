@@ -80,6 +80,25 @@ impl NativePackDescriptor {
     }
     /// Local precursor only: manifest digests are filled by authenticated
     /// upload before this descriptor escapes the capture service.
+    /// A native receive of refs pointing to existing objects can produce an
+    /// empty pack. Verify its index/header/trailer before excluding it from the
+    /// incoming object inventory; zero-object sources remain forbidden.
+    pub(crate) fn is_empty_pair(
+        format: ObjectFormat,
+        pack: &Path,
+        index: &Path,
+    ) -> Result<bool, IndexError> {
+        let index = PackIndex::open(index, format).map_err(MetadataError::from)?;
+        if !index.is_empty() {
+            return Ok(false);
+        }
+        let size = std::fs::metadata(pack).map_err(MetadataError::from)?.len();
+        if size != 12 + format.bytes() as u64 {
+            return Err(IndexError::Integrity);
+        }
+        pack_digest(pack, size, index.pack_checksum(), 0)?;
+        Ok(true)
+    }
     pub(crate) fn inspect_files(
         repository: [u8; 16],
         operation: [u8; 16],

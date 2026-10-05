@@ -7,15 +7,68 @@ Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged 
 The native metadata follow-up is based on that main revision. The original SQL
 hydration failures have been resolved by converting real read/cache callers.
 The directory recovery fixture now uses repository-local permission metadata
-to verify separate Cells and replay after restoration. Full CI remains open
-because live writers and other integration callers still invoke retired ingestion.
-The ownership and metadata changes below are
-prerequisites for the write replacement. This cutover is not release qualified.
+to verify separate Cells and replay after restoration. Full CI remains open because generated writers and other product callers still
+invoke retired ingestion/ref metadata. The production HTTP/SSH native writer is
+now wired through the resident lifecycle, with the remaining correctness and
+qualification gates described below. This cutover is not release qualified.
 Older checkpoint notes describe historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
-All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH/generated producers and authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Native HTTP/SSH writer cutover (in progress)
+
+The actual receive-pack path now transfers its authenticated encoded request to
+its resident staging controller before waiting. It registers original request
+custody, runs native Git in a disposable cache, registers the exact native result
+and creating pack descriptors, verifies native metadata, binds a publication
+floor, and constructs the certified catalog/ref replacement. Byte-bounded policy
+pages advance by their exact minted offsets. Every page and final outcome uses
+registered exact recovery; ambiguous dispatch never becomes a new success or
+refusal. Success responses stream only after authorized completed-root selection.
+The legacy whole-push mutex and SQL object/push-response writer are removed from
+this path. Generated candidate writers remain outstanding.
+
+Signed certificate bytes remain in immutable audit artifacts; the verified
+request-private loose certificate blob is removed under the native worker fence
+before capturing incoming packs. Authenticated empty native pack/index pairs are
+excluded from the nonempty catalog source inventory. Ref-only/delete-only pushes
+still carry their registered request/result checkpoint through final publication.
+Audit option reads follow the authorized completed outcome root instead of the
+retired SQL payload. The default-branch GET uses the certified ref snapshot;
+its mutation still requires conversion to joint publication.
+
+Node shutdown seals staging admission and gives already-owned receive workflows
+30 seconds to finish while their Cell, serving generations and native admission
+remain available. Forced close after that grace cancels the controller and joins
+its physical work and exact recovery before releasing the lower services. Generic
+callback producers preserve their cancel-and-drain contract. The provider-fault
+fixtures now pause native staging uploads; cold preparation failure is armed only
+after SSH discovery, so the test reaches an actual admitted push.
+
+Current diagnostic qualification confirms signed pushes/audit restore, SHA-1 and
+SHA-256 history/push/clone/fetch/restore, the 4,096-ref mirror and oversized exact
+rejection replay, cold SSH preparation refusal, and disconnected SSH publication
+through shutdown. A late Write-to-Read revocation still fences staging before a
+completed per-ref refusal exists. Refs remain unchanged, but the transport closes.
+This remains a failing correctness/UX gate; authorization is not weakened to hide
+it. Full-workspace, Linux/RustFS and final-source evidence remain release gates.
+Request/result/policy detached physical pins, authenticated older-owner adoption,
+remaining product metadata writers/readers, backup and capacity qualification are
+still required. No large-team throughput or release claim follows from this slice.
+
+Final frozen-source validation passes all 729 library cases (6 Git-format,
+15 object-storage and 708 server), 13 directory cases, two Git backend cases and
+two binary cases. Multi-server completes with 74 passes, 32 failures and nine
+existing ignores. The three standalone aggregate integrations each fail. Isolated
+RustFS passes SHA-256 push/clone/restore and then fails its merge-candidate gate;
+remaining provider cases are unexecuted. Combined unique inventory is 821 passes,
+36 failures and seven unexecuted ignores, including the two provider executions
+without double-counting their ordinary ignored listings. All-target Clippy,
+server build, formatting/diff checks and 96 Python harness cases pass.
+These results do not qualify the full workflow or Linux. Exact fingerprints and
+remaining priorities are in [native writer evidence](evidence/native-writer-ci-20261005.json).
 
 ## Whole-workflow ownership and CI repair
 

@@ -1,0 +1,172 @@
+{
+  "recorded_at_utc": "2026-10-05T04:13:28.009295+00:00",
+  "base_head": "1ab3853d7411876c9f2c8fcc410e3bf409be35a1",
+  "source_files": 493,
+  "rust_files": 479,
+  "source_hash_digest": "3fde41e1f521f09f087f24a212fb9741ce095089e681c8b742ee7b08fc9db439",
+  "source_digest_algorithm": "SHA256 of sorted path + NUL + file SHA256 + newline for tracked/nonignored Rust, SQL, Cargo manifests/lock/toolchain files",
+  "manifest_log": "/tmp/canopy-native-writer-final-source.json",
+  "toolchain": "Rust 1.98.0",
+  "host": "macOS; isolated RustFS in Docker; Linux PR CI remains required",
+  "unique_cases": {
+    "passed": 821,
+    "failed": 36,
+    "ignored": 7,
+    "total": 864
+  },
+  "runs": {
+    "workspace": {
+      "log": "/tmp/canopy-native-writer-workspace2.log",
+      "sha256": "3791d77e95dc911a5b335519508fe6b1487fe14da9c2ed3c4fdb58f2468abf24",
+      "exit_code": 101,
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.53s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 707 filtered out; finished in 0.02s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 707 filtered out; finished in 0.09s",
+        "test result: ok. 708 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 319.23s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.02s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: FAILED. 74 passed; 32 failed; 9 ignored; 0 measured; 0 filtered out; finished in 345.37s"
+      ],
+      "failed_cases": [
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "checks::commit_checks_bind_reporters_versions_and_reruns_across_recovery",
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "branch_rules::protected_pushes_preserve_native_reports_and_policy_across_recovery",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+        "ssh::stock_ssh_clone_push_fetch_filters_and_revocation_survive_disk_loss"
+      ]
+    },
+    "owner_restart": {
+      "log": "/tmp/canopy-native-writer-owner_restart1.log",
+      "sha256": "34742c00418a92c8b521a56932dfcf50feef59d0db00cc29009db672470fa5ac",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s"
+      ],
+      "failed_cases": [
+        "a_second_node_clones_from_the_published_root_after_local_disk_loss"
+      ]
+    },
+    "repository_cell": {
+      "log": "/tmp/canopy-native-writer-repository_cell1.log",
+      "sha256": "a924a8381e434434a3b3b2dc581c9b17fea832df06e3969b43c35738c3467a70",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      ],
+      "failed_cases": [
+        "repository_cell_publishes_objects_and_refs_atomically"
+      ]
+    },
+    "smart_http": {
+      "log": "/tmp/canopy-native-writer-smart_http1.log",
+      "sha256": "1df241873fd064a2951293eb61e424524772c3ba2738bb8ff65757bd7edcadf3",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s"
+      ],
+      "failed_cases": [
+        "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+      ]
+    },
+    "rustfs": {
+      "log": "/tmp/canopy-native-writer-rustfs1.log",
+      "sha256": "45be385b5c2f1118d440e508a075bca9d0dbed79a785759647fada3640a7d6dc",
+      "exit_code": 1,
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 114 filtered out; finished in 14.79s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 4.99s"
+      ],
+      "failed_cases": [
+        "sha256::sha256_real_provider_native_merge_candidates"
+      ]
+    },
+    "clippy": {
+      "log": "/tmp/canopy-native-writer-clippy3.log",
+      "sha256": "3cf4d8ef44cab40cbf914c13c0fcf671f0df1f6c19dc109981f21c6ad55bf69e",
+      "exit_code": 0,
+      "summaries": [],
+      "failed_cases": []
+    },
+    "build": {
+      "log": "/tmp/canopy-native-writer-build1.log",
+      "sha256": "148bd156b917f79c7a616eae627abb60604dee7f29ff18db30c1abfd6bf6f5c8",
+      "exit_code": 0,
+      "summaries": [],
+      "failed_cases": []
+    },
+    "harness": {
+      "log": "/tmp/canopy-native-writer-harness1.log",
+      "sha256": "3463cc7ddce2f982e04d14f65a1ed36b99232ed29bb398de8f1df8eda44a0e4b",
+      "exit_code": 0,
+      "summaries": [],
+      "failed_cases": []
+    }
+  },
+  "source_changed_during_final_validation": false,
+  "release_qualified": false,
+  "remaining_high_priorities": [
+    "Authenticated durable per-ref refusal when Write is revoked during native pack capture, before Bind; refs currently remain unchanged but transport closes.",
+    "Convert generated candidate/merge/rebase writers and authoritative pull/check/default-branch metadata to certified catalog/ref facts.",
+    "Owner-aware routing to actual resident serving/staging capabilities; complete standalone integration fixture conversion.",
+    "Native-aware backup/restore root enumeration, generation retirement, filtered serving and read-only restore boundaries.",
+    "Complete request/result/policy detached physical pins, older-owner input adoption, full Linux/RustFS workflow and large-team/full-history capacity gates."
+  ],
+  "previous_evidence": "push-workflow-ci-20261004.json",
+  "retained_diagnostic_runs": [
+    {
+      "log": "/tmp/canopy-native-writer-matrix1.log",
+      "source_hash_digest": "e8ceddc67dfdd3b852c3d1c96aff0edc2e3165ed926ec0293255908e4840081b",
+      "result": "68 passed, 38 failed, 9 ignored; preceding source"
+    },
+    {
+      "log": "/tmp/canopy-native-writer-workspace1.log",
+      "source_hash_digest": "5348ba16c16f89086b2458f8da3659e95ea01092bdb75622110f79c5694de9af",
+      "result": "349 server library passes, 359 registry-binding failures; fixed on final source"
+    },
+    {
+      "log": "/tmp/canopy-native-writer-focused4.log",
+      "source_hash_digest": "5348ba16c16f89086b2458f8da3659e95ea01092bdb75622110f79c5694de9af",
+      "result": "3 passes, 1 late-revocation failure; preceding source"
+    }
+  ],
+  "unique_case_identity": "Test binary plus case name, checked against terminal per-binary summaries; nested child repetitions/provider reruns are not additional cases.",
+  "interleaved_output": {
+    "binary": "canopy_server",
+    "cases": [
+      "git_http::stream_tests::failed_spawn_releases_parent_fence_before_cache_cleanup",
+      "git_http::stream_tests::disconnect_kills_the_process_group_and_releases_cache"
+    ],
+    "detail": "Parent and subprocess test announcements interleave on one line. Both actual cases are counted once using the terminal 708-pass server summary and the matching 708-case --list inventory; the combined pseudo-name is excluded.",
+    "inventory_log": "/tmp/canopy-native-writer-lib-list.log"
+  }
+}

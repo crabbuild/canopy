@@ -41,6 +41,10 @@ impl RecoveryServices {
             manager.publication_budget.clone(),
         )
         .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?;
+        let store = Arc::new(ArtifactStore::new(
+            Arc::clone(&manager.external_store),
+            entry.repository_id,
+        ));
         let staging = Arc::new(
             StagingCoordinator::new_resident(
                 client.clone(),
@@ -49,16 +53,13 @@ impl RecoveryServices {
                 authority.clone(),
                 manager.staging_budget.clone(),
                 coordinator.clone(),
+                store.clone(),
             )
             .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
         );
         let settings = manager
             .recovery_scans
             .settings(RecoveryScanLimits::default(), &entry.owner);
-        let store = Arc::new(ArtifactStore::new(
-            Arc::clone(&manager.external_store),
-            entry.repository_id,
-        ));
         let serving = Arc::new(
             ServingPool::new(
                 ServingContext::new(
@@ -225,8 +226,14 @@ impl RepositoryManager {
                 .collect()
         };
         for service in &services {
-            service.staging.close();
+            service.staging.close_admission();
         }
+        futures_util::future::join_all(
+            services
+                .iter()
+                .map(|service| service.staging.finish_receive_workflows()),
+        )
+        .await;
         // Producer capabilities may retain serving generations and exact held
         // publication work. Drain them before closing either lower service.
         futures_util::future::join_all(services.iter().map(|service| service.drain_staging()))

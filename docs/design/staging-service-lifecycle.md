@@ -1,6 +1,6 @@
 # Service owned staging lifecycle
 
-`StagingCoordinator` now owns admitted Begin/Claim/Renew/RegisterStagedInputs/Bind commands, input and bound tasks and completed results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
+`StagingCoordinator` now owns admitted Begin/Claim/Renew/RegisterStagedInputs/Bind commands, input and bound tasks and completed results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH receive-pack now selects this lifecycle. Generated producers, durable takeover reconstruction, complete physical admission and large-team qualification remain required.
 
 ## Admission and ownership
 
@@ -120,3 +120,30 @@ full-history deadline/throughput result. Resident service drain, adopted older
 input verification, remaining request/policy work and actual producer wiring
 remain release work. Current qualification and limits are tracked in the
 [implementation status](../large-repository-implementation-status.md).
+
+
+## Production receive workflow and shutdown grace
+
+HTTP and SSH transfer one authenticated encoded receive request to `drive_receive`
+before awaiting status. Its controller registers wire custody, retrieves staged
+native/result/descriptor outputs, registers checkpoints, drains physical workers,
+binds once, and orders the existing policy/ref/completed-root protocol. Each
+byte-bounded page advances by its actual minted end offset. Returned success is
+selected from the durable completed root under current read authorization.
+
+Node shutdown first closes ingress and staging admission. Already-owned receive
+controllers get a shared 30-second grace while serving, native admission, Cell
+heartbeat and workspace ownership remain available. The grace is a controller
+finish window, not a deadline for draining physical jobs or uncertain mutations.
+After it expires, ordinary forced close cancels/joins controllers and drains the
+existing worker/exact recovery owners before the lower services can close.
+Generic `drive` callback producers continue to cancel immediately. Public stop,
+lease/authority fencing and forced close retain their previous semantics.
+
+Stock SSH qualification disconnects the request after real native pack upload is
+paused, starts shutdown, proves release remains blocked, resumes upload, and
+checks the new commit and blob through cold clone and strict fsck. Late Write-to-Read
+revocation before Bind still requires a separately authorized durable refusal
+path. No current lease, completed receipt or generic callback may bypass that
+missing authority transition. Request/result/policy physical pins and authenticated
+older-owner adoption remain unfinished release gates.

@@ -23,8 +23,9 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     }
 }
 
-pub(crate) const COMMANDS: [OperationDescriptor; 17] = [
+pub(crate) const COMMANDS: [OperationDescriptor; 18] = [
     crate::operation(1),
+    command::<crate::branch_rules::command::SetBranchRule>(64 << 10, 64),
     command::<AbortPreparation>(4096, 4096),
     command::<ReapPreparation>(4096, 4096),
     command::<RegisterCatalogAttestation>(4096, 4096),
@@ -64,7 +65,7 @@ mod tests {
     use cellule_runtime::CellModule;
 
     #[test]
-    fn production_registers_only_the_packed_command_contract() -> cellule_runtime::Result<()> {
+    fn production_registers_packed_and_policy_metadata_contracts() -> cellule_runtime::Result<()> {
         let application = CanopyApplication::compile(build_descriptor(
             include_bytes!("../../../../../Cargo.lock"),
             env!("CARGO_PKG_VERSION"),
@@ -84,7 +85,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                1, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46
+                1, 8, 14, 16, 17, 22, 29, 31, 33, 35, 36, 38, 39, 40, 41, 42, 43, 46
             ]
         );
         assert_eq!(

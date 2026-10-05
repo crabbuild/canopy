@@ -168,3 +168,14 @@ pub async fn replay_root_push_response(
         body,
     }))
 }
+
+/// Read the retained native annotation selected by an already-authorized
+/// repository audit row. Keep the bounded completion command independent of
+/// the potentially large options field; the outcome roots retain it for GC.
+pub(in crate::packs::publication) async fn selected_options(
+    root: NativeOutcomeRoot,
+    store: &ArtifactStore,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let record: OutcomeRecord = root.0.read(store, INPUT_ROOT_BYTES).await?;
+    Ok(record.native.read(store).await?.options)
+}

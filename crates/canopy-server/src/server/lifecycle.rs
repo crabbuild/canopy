@@ -112,7 +112,6 @@ impl CanopyServer {
 
 impl RunningServer {
     pub(super) async fn shutdown(mut self) -> Result<(), ServerError> {
-        self.native.close();
         self.maintenance_stop.cancel();
         self.repositories.recovery_scans.close();
         self.ingress_stop.cancel();
@@ -124,6 +123,7 @@ impl RunningServer {
         };
         self.listeners.stop_ingress();
         self.repositories.drain_serving().await;
+        self.native.close();
         self.tasks.close();
         self.tasks.wait().await;
         self.repositories.drain_recovery().await;

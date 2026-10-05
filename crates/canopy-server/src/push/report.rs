@@ -1,4 +1,5 @@
 use super::*;
+use crate::{PushPlan, git_http::GitHttpResponse};
 
 pub(crate) const REJECTED: &str =
     "Canopy publication rejected: refs, permissions or policy changed; fetch and retry";
@@ -82,8 +83,10 @@ pub(crate) fn publication_matches(
         };
         let name = std::str::from_utf8(name).map_err(|_| PushError::InvalidResponse)?;
         if !crate::refs::valid_ref_name(name)
-            || !seen.insert(name)
-            || seen.len() > crate::refs::MAX_UPDATES
+            // A limit hook can reject more commands than we admit for a
+            // publication. All-refusal reports need no per-name inventory:
+            // every successful name still fails against the empty plan below.
+            || (plan.is_some() && (!seen.insert(name) || seen.len() > crate::refs::MAX_UPDATES))
             || (success && (unpack != b"unpack ok\n" || !expected.remove(name)))
             || (!success && expected.contains(name))
         {
@@ -305,6 +308,26 @@ mod tests {
         let text = String::from_utf8(plain.body).unwrap();
         assert_eq!(text.matches(REJECTED).count(), 4096);
         assert!(text.contains("ng refs/heads/protected hook declined\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_all_refusal_report_is_valid_but_cannot_acknowledge_one_ref()
+    -> Result<(), PushError> {
+        let mut report = Vec::new();
+        write_packet(&mut report, b"unpack ok\n")?;
+        for n in 0..=crate::refs::MAX_UPDATES {
+            write_packet(
+                &mut report,
+                format!("ng refs/tags/{n} pre-receive hook declined\n").as_bytes(),
+            )?;
+        }
+        report.extend_from_slice(b"0000");
+        assert!(publication_matches(&response(report.clone()), None).is_ok());
+        report.truncate(report.len() - 4);
+        write_packet(&mut report, b"ok refs/heads/unvalidated\n")?;
+        report.extend_from_slice(b"0000");
+        assert!(publication_matches(&response(report), None).is_err());
         Ok(())
     }
 

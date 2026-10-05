@@ -247,6 +247,7 @@ pub struct MaintenanceRequest {
 /// Bind the packed production contract. Inline publication/completion adapters
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
     registry.bind_query::<SelectServingGeneration>()?;

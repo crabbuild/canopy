@@ -6,6 +6,43 @@ pub(super) type DriverJoin =
     futures_util::future::Shared<futures_util::future::BoxFuture<'static, ()>>;
 
 impl StagingCoordinator {
+    /// Called only after RepositoryCell selected this root from the completed
+    /// row under current audit authorization. No client-provided root enters.
+    pub(crate) async fn completed_options(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Vec<String>, StagingError> {
+        let (_, _, store) = self.inner.resident.as_ref().ok_or(StagingError::Inactive)?;
+        let mut decoder =
+            BoundedDecoder::new(bytes, 128).map_err(|e| StagingError::Input(Box::new(e)))?;
+        let root = NativeOutcomeRoot::decode(&mut decoder)
+            .map_err(|e| StagingError::Input(Box::new(e)))?;
+        decoder
+            .finish()
+            .map_err(|e| StagingError::Input(Box::new(e)))?;
+        root_completion::read::selected_options(root, store)
+            .await
+            .map_err(StagingError::Input)
+    }
+
+    /// Select a completed response with current authorization before decoding or
+    /// admitting another attempt. The resident holds the actual Cell capability.
+    pub async fn replay_request(
+        &self,
+        request: BeginRequest,
+        store: &canopy_object_storage::artifact::ArtifactStore,
+    ) -> Result<
+        Option<crate::git_http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>>,
+        RootPushReplayError,
+    > {
+        let (client, _, _) = self
+            .inner
+            .resident
+            .as_ref()
+            .ok_or(RootPushReplayError::Context)?;
+        replay_root_push_response(client, &self.inner.target, request, None, store).await
+    }
+
     pub(crate) fn new_resident(
         client: CellClient,
         target: CellTarget,
@@ -13,14 +50,19 @@ impl StagingCoordinator {
         authority: PreparationAuthority,
         budget: StagingBudget,
         publication: PublicationCoordinator,
+        store: Arc<canopy_object_storage::artifact::ArtifactStore>,
     ) -> Result<Self, StagingError> {
-        if !publication.matches_target(&target) {
+        if !publication.matches_target(&target)
+            || crate::repository_target(target.tenant(), target.application(), store.repository())
+                .map_err(|_| StagingError::Foreign)?
+                != target
+        {
             return Err(StagingError::Foreign);
         }
         let mut coordinator = Self::new_with_budget(target, limits, authority, budget)?;
         Arc::get_mut(&mut coordinator.inner)
             .expect("new staging owner")
-            .resident = Some((client, publication));
+            .resident = Some((client, publication, store));
         Ok(coordinator)
     }
 
@@ -37,7 +79,7 @@ impl StagingCoordinator {
                 return Err(StagingError::Closed);
             }
         }
-        let (client, _) = self.inner.resident.as_ref().ok_or(StagingError::Inactive)?;
+        let (client, _, _) = self.inner.resident.as_ref().ok_or(StagingError::Inactive)?;
         ReadyStaging::new(client.clone(), self.inner.target.clone(), request, identity).await
     }
 
@@ -79,6 +121,25 @@ impl StagingTicket {
         F: FnOnce(StagingTicket, PublicationCoordinator) -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), StagingError>> + Send + 'static,
     {
+        self.drive_with_drain(producer, false)
+    }
+
+    /// An authenticated receive-pack keeps its controller during the bounded
+    /// node shutdown grace. Forced close still cancels it and joins physical
+    /// workers and exact recovery before releasing the repository.
+    pub(crate) fn drive_receive<F, Fut>(&self, producer: F) -> Result<(), StagingError>
+    where
+        F: FnOnce(StagingTicket, PublicationCoordinator) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), StagingError>> + Send + 'static,
+    {
+        self.drive_with_drain(producer, true)
+    }
+
+    fn drive_with_drain<F, Fut>(&self, producer: F, graceful: bool) -> Result<(), StagingError>
+    where
+        F: FnOnce(StagingTicket, PublicationCoordinator) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), StagingError>> + Send + 'static,
+    {
         let publication = self
             .inner
             .resident
@@ -103,6 +164,7 @@ impl StagingTicket {
             return Err(StagingError::Duplicate);
         }
         local.driver_started = true;
+        local.driver_graceful = graceful;
         let ticket = self.clone();
         let owner = self.job.clone();
         let inner = self.inner.clone();

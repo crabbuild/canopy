@@ -91,7 +91,7 @@ pub(super) struct ResultRecord {
     request: WireRequestRoot,
     pub(super) response: GitHttpResponse<ArtifactDescriptor>,
     plan: Option<ArtifactDescriptor>,
-    options: Vec<String>,
+    pub(super) options: Vec<String>,
     signed: Option<SignedPushAnnotation<ArtifactDescriptor>>,
 }
 impl ResultRecord {

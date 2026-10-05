@@ -179,7 +179,14 @@ impl RepositoryCell {
             .query(
                 None,
                 SqlBatch {
-                    statements: updates.iter().map(policy_statement).collect(),
+                    // Native preparation establishes ancestry in its private
+                    // workspace; final publication supplies catalog-certified
+                    // evidence. Metadata reads must not consult the retired
+                    // mutable commit_ancestry cache.
+                    statements: updates
+                        .iter()
+                        .map(|update| policy_statement_with_ancestry(update, false))
+                        .collect(),
                 },
             )
             .await?;

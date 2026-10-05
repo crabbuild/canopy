@@ -179,7 +179,7 @@ async fn late_ssh_push_refusals_report_both_refs_and_survive_restore() -> Result
         let error = String::from_utf8(output.stderr)?;
         assert!(!output.status.success(), "{change}: {error}");
         let reason = if change == "storage" {
-            "Canopy object ingestion failed"
+            "Canopy push failed before publication"
         } else {
             "Canopy publication rejected"
         };
@@ -344,10 +344,10 @@ async fn cold_ssh_push_preparation_failure_reports_rejection_before_any_refs_cha
         store,
         server,
         host,
+        key,
         source,
         ssh,
         url,
-        ..
     } = fixture().await?;
     git(Some(&source), &ssh, &["push", &url, "main"]).await?;
     server.shutdown().await?;
@@ -365,35 +365,84 @@ async fn cold_ssh_push_preparation_failure_reports_rejection_before_any_refs_cha
     let client = reqwest::Client::new();
     let before = generation(&client, address).await?;
     let original = git(None, &ssh, &["ls-remote", "--refs", &url]).await?;
+    // Finish discovery before arming the provider fault. It must reject the
+    // owned push preparation, rather than fail before any command was sent.
+    let session = connect(ssh_address, &host, &key, "git", true).await?;
+    let mut channel = session.channel_open_session().await?;
+    channel
+        .exec(true, "git-receive-pack 'canopy/publication.git'")
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut advertised = Vec::new();
+        loop {
+            match channel.wait().await.ok_or("SSH advertisement missing")? {
+                russh::ChannelMsg::Data { data } => {
+                    advertised.extend_from_slice(&data);
+                    if advertised.ends_with(b"0000") {
+                        return Ok::<_, Box<dyn std::error::Error>>(());
+                    }
+                }
+                russh::ChannelMsg::Close | russh::ChannelMsg::Failure => {
+                    return Err("SSH discovery rejected".into());
+                }
+                _ => {}
+            }
+        }
+    })
+    .await??;
+    let tip = String::from_utf8(git(Some(&source), &ssh, &["rev-parse", "HEAD"]).await?)?;
+    let mut body = Vec::new();
+    for (n, name) in ["preparation", "準備"].iter().enumerate() {
+        let capabilities = if n == 0 { "\0report-status atomic" } else { "" };
+        let command = format!(
+            "{} {} refs/heads/{name}{capabilities}\n",
+            "0".repeat(40),
+            tip.trim()
+        );
+        body.extend_from_slice(format!("{:04x}{command}", command.len() + 4).as_bytes());
+    }
+    body.extend_from_slice(b"0000");
+    body.extend(git(Some(&source), &ssh, &["pack-objects", "--all", "--stdout"]).await?);
     store.read_armed.store(true, Ordering::SeqCst);
-    let child = git_command(
-        Some(&source),
-        &ssh,
-        &[
-            "push",
-            "--atomic",
-            &url,
-            "HEAD:refs/heads/preparation",
-            "HEAD:refs/heads/準備",
-        ],
-    )
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()?;
+    channel.data(body.as_slice()).await?;
+    channel.eof().await?;
     tokio::time::timeout(Duration::from_secs(15), store.entered.notified()).await?;
     store.fail.store(true, Ordering::SeqCst);
     store.proceed.notify_one();
-    let output = child.wait_with_output().await?;
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{error}");
+    let report = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut report = Vec::new();
+        loop {
+            match channel.wait().await {
+                Some(russh::ChannelMsg::Data { data }) => report.extend_from_slice(&data),
+                Some(russh::ChannelMsg::Close) | None => break,
+                Some(russh::ChannelMsg::Failure) => return Err("SSH report unavailable".into()),
+                _ => {}
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error>>(report)
+    })
+    .await??;
+    let report = String::from_utf8(report)?;
+    assert!(
+        report.contains("unpack Canopy push failed before publication"),
+        "{report}"
+    );
     for name in ["preparation", "準備"] {
         assert!(
-            error.lines().any(|line| line.contains("[remote rejected]")
-                && line.contains(&format!(" -> {name} "))
-                && line.contains("Canopy push failed before publication")),
-            "{error}"
+            report.contains(&format!(
+                "ng refs/heads/{name} Canopy push failed before publication"
+            )),
+            "{report}"
+        );
+        assert!(
+            !report.contains(&format!("ok refs/heads/{name}\n")),
+            "{report}"
         );
     }
+    drop(channel);
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "test finished", "")
+        .await;
     assert_eq!(
         git(None, &ssh, &["ls-remote", "--refs", &url]).await?,
         original

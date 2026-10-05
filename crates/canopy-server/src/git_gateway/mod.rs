@@ -27,7 +27,7 @@ use crate::{
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES},
     git_objects::GitObjects,
     lfs::LfsService,
-    push::{PushCompletion, PushError},
+    push::PushError,
 };
 
 mod branch_policy;
@@ -82,17 +82,19 @@ struct CachedRepository {
 }
 
 /// Serves Git requests from a warm, disposable cache of durable Cell state.
+#[derive(Clone)]
 pub struct GitGateway {
     repository: Arc<RepositoryCell>,
     signer_directory: Option<Arc<crate::directory::DirectoryCell>>,
-    certificate_seed: OnceCell<[u8; 32]>,
-    large_blobs: LargeBlobStore,
+    certificate_seed: Arc<OnceCell<[u8; 32]>>,
+    large_blobs: Arc<LargeBlobStore>,
     pack_reader: Arc<crate::pack_store::PackReader>,
-    lfs: LfsService,
+    lfs: Arc<LfsService>,
+    artifacts: Arc<canopy_object_storage::artifact::ArtifactStore>,
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
     native: crate::native_resources::NativeScope,
-    push: Mutex<()>,
+    push: Arc<Mutex<()>>,
 }
 
 impl GitGateway {
@@ -104,7 +106,14 @@ impl GitGateway {
         native: crate::native_resources::NativeResources,
     ) -> Self {
         let native = native.scope(crate::native_resources::NativeClass::Foreground);
-        let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
+        let large_blobs = Arc::new(LargeBlobStore::new(
+            Arc::clone(&blob_store),
+            repository.repository_id(),
+        ));
+        let artifacts = Arc::new(canopy_object_storage::artifact::ArtifactStore::new(
+            Arc::clone(&blob_store),
+            repository.repository_id(),
+        ));
         // A reader belongs to this gateway's workspace and disk admission.
         // Another gateway may use a different root/budget for the same Cell.
         let pack_reader = Arc::new(crate::pack_store::PackReader::new(
@@ -123,18 +132,19 @@ impl GitGateway {
             readers.retain(|reader| reader.strong_count() > 0);
             readers.push(Arc::downgrade(&pack_reader));
         }
-        let lfs = LfsService::new(Arc::clone(&repository), blob_store);
+        let lfs = Arc::new(LfsService::new(Arc::clone(&repository), blob_store));
         Self {
             repository,
             signer_directory: None,
-            certificate_seed: OnceCell::new(),
+            certificate_seed: Arc::new(OnceCell::new()),
             large_blobs,
             pack_reader,
             lfs,
+            artifacts,
             scratch_root,
             disk_budget,
             native,
-            push: Mutex::new(()),
+            push: Arc::new(Mutex::new(())),
         }
     }
 
@@ -205,24 +215,7 @@ impl GitGateway {
                 id,
             )
             .await?;
-            // Upload spooling uses a private, budgeted scratch file. Serialize
-            // the push-ID check, decode, native Git work and publication, but
-            // do not let one slow client block another client's upload.
-            let _push = self.push.lock().await;
-            if self
-                .repository
-                .begin_push(id, actor, encoded.identity().request_digest)
-                .await?
-            {
-                return Ok(http_body(with_push_id(
-                    self.repository.completed_response(id).await?,
-                    id,
-                )));
-            }
-            let preflight = encoded
-                .decode(&self.scratch_root, &self.disk_budget, None)
-                .await?;
-            return self.handle_push(preflight).await.map(http_body);
+            return self.handle_native_push(encoded).await;
         }
         let request = self
             .receive(request, Some(MAX_FETCH_REQUEST_BYTES), admission)
@@ -536,15 +529,7 @@ impl GitGateway {
     }
 }
 
-fn http_body(response: GitHttpResponse) -> GitHttpResponse<Body> {
-    GitHttpResponse {
-        status: response.status,
-        headers: response.headers,
-        body: Body::from(response.body),
-    }
-}
-
-fn with_push_id(mut response: GitHttpResponse, id: [u8; 16]) -> GitHttpResponse {
+fn with_push_id<B>(mut response: GitHttpResponse<B>, id: [u8; 16]) -> GitHttpResponse<B> {
     response.headers.push((
         "X-Canopy-Push-Id".into(),
         uuid::Uuid::from_bytes(id).to_string(),

@@ -72,6 +72,51 @@ struct Pair {
     index: Arc<InputFile>,
 }
 impl GitHttpBackend {
+    /// Git writes its verified push certificate as a request-private loose
+    /// blob. The immutable native result retains these exact audit bytes; this
+    /// disposable blob is not an incoming pack or a reachable Git object.
+    pub(crate) async fn remove_disposable_certificate(
+        &self,
+        context: &StagingContext,
+        oid: crate::ObjectId,
+    ) -> Result<(), NativeCaptureError> {
+        context.ensure_live()?;
+        if oid.format() != context.format() {
+            return Err(NativeCaptureError::Context);
+        }
+        let cache = self.cache.clone();
+        let activity = context.physical_owner();
+        tokio::task::spawn_blocking(move || {
+            let _activity = activity;
+            let fence = crate::native_git::lock_file(
+                &cache.git_dir().join(crate::native_git::WORKER_LOCK),
+            )?;
+            fence.try_lock().map_err(std::io::Error::from)?;
+            let hex = hex::encode(oid);
+            let directory = cache.git_dir().join("objects").join(&hex[..2]);
+            match std::fs::remove_file(directory.join(&hex[2..])) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            match std::fs::remove_dir(directory) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+            fence.unlock()?;
+            Ok::<_, NativeCaptureError>(())
+        })
+        .await??;
+        self.cache.reconcile_owned(context.physical_owner()).await?;
+        context.ensure_live()?;
+        Ok(())
+    }
+
     /// Run inside a StagingTicket producer after native receive completes. The
     /// returned inputs establish authenticated bytes, not physical decoding,
     /// closure, ref authorization or a durable completed network response.
@@ -142,6 +187,9 @@ impl GitHttpBackend {
                     || std::fs::metadata(&index_path)?.len() > limits.max_index_bytes
                 {
                     return Err(NativeCaptureError::Limit);
+                }
+                if NativePackDescriptor::is_empty_pair(format, &path, &index_path)? {
+                    continue;
                 }
                 let native = NativePackDescriptor::inspect_files(
                     token.repository,

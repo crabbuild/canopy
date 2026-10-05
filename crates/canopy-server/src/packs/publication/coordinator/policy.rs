@@ -20,6 +20,7 @@ pub struct ReadyRefPolicyPage {
     pub(super) prepared: Arc<PreparedCatalog>,
     intent: Arc<RefPolicyPreparation>,
     command: PreparedCommand<RegisterRefPolicyPage>,
+    end_offset: usize,
     refusal: Option<Arc<ReadyRootPush>>,
     #[cfg(test)]
     refusal_fault: u8,
@@ -35,6 +36,7 @@ impl RefPolicyPreparation {
             .page(prepared, start)
             .await
             .map_err(|error| RefPolicyReadyError::Preparation(Box::new(error)))?;
+        let end_offset = input.offset as usize + input.proof.plan.updates.len();
         input.encode(&mut BoundedEncoder::new(REF_POLICY_PAGE_BYTES)?)?;
         prepared.ensure_live()?;
         let (client, target, _) = prepared.base.capability();
@@ -47,6 +49,7 @@ impl RefPolicyPreparation {
             prepared: prepared.clone(),
             intent: self.clone(),
             command,
+            end_offset,
             refusal: None,
             #[cfg(test)]
             refusal_fault: 0,
@@ -71,6 +74,12 @@ impl std::fmt::Display for RefPolicyRefusalFailure {
 }
 impl std::error::Error for RefPolicyRefusalFailure {}
 impl ReadyRefPolicyPage {
+    /// Next offset from this exact byte-bounded page, which may contain fewer
+    /// than the maximum number of updates.
+    pub fn end_offset(&self) -> usize {
+        self.end_offset
+    }
+
     /// Convert only after this exact original page/refusal bundle is registered.
     /// The shared session and intent survive admission failure and uncertainty.
     pub fn bind_recovery(

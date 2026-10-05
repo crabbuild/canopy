@@ -216,6 +216,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("git_gateway/preflight/retention.rs"));
                 source.update(include_bytes!("git_gateway/branch_policy.rs"));
                 source.update(include_bytes!("git_gateway/push.rs"));
+                source.update(include_bytes!("git_gateway/push/native.rs"));
                 source.update(include_bytes!("git_input/mod.rs"));
                 source.update(include_bytes!("git_http/capture.rs"));
                 source.update(include_bytes!("git_http/mod.rs"));
@@ -368,7 +369,6 @@ impl CellModule for RepositoryModule {
                     "../../canopy-object-storage/src/external.rs"
                 ));
                 source.update(include_bytes!("push/mod.rs"));
-                source.update(include_bytes!("push/plan.rs"));
                 source.update(include_bytes!("push/report.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("visibility.rs"));

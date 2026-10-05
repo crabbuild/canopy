@@ -14,15 +14,23 @@ pub(super) async fn read(
     Path(name): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
-    let (route, _) = match readable_route(&state, &name, &headers).await {
+    let (route, actor) = match readable_route(&state, &name, &headers).await {
         Ok(authorized) => authorized,
         Err(response) => return response,
     };
-    match route.repository.default_branch(None).await {
+    let head = async {
+        let snapshot = route.repository.serving_snapshot(actor.identity()).await?;
+        snapshot
+            .resolve_ref(None)
+            .await
+            .map_err(crate::packs::publication::ServingOwnerError::from)
+    }
+    .await;
+    match head {
         Ok(head) if (state.manager.ready)() => response(
             route.repository.repository_id(),
-            &head.output.reference,
-            head.output.generation,
+            &head.reference,
+            head.generation,
         ),
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
         Err(error) => {
