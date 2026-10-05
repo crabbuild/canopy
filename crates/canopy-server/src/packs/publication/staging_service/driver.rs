@@ -2,8 +2,43 @@
 //! the existing staged/bound worker slots; controllers must not block Bind.
 use super::*;
 use futures_util::FutureExt;
+use std::fmt::Write;
 pub(super) type DriverJoin =
     futures_util::future::Shared<futures_util::future::BoxFuture<'static, ()>>;
+
+/// Retain diagnostics without retaining rejected preparation values or their
+/// physical credits. Both message bytes and source traversal are bounded.
+fn failure(error: &StagingError) -> StagingError {
+    struct Message(String);
+    impl Write for Message {
+        fn write_str(&mut self, value: &str) -> std::fmt::Result {
+            let remaining = 4096 - self.0.len();
+            if value.len() <= remaining {
+                self.0.push_str(value);
+                return Ok(());
+            }
+            let mut end = remaining;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.0.push_str(&value[..end]);
+            Err(std::fmt::Error)
+        }
+    }
+    let mut message = Message(String::new());
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    for _ in 0..8 {
+        let Some(error) = source else { break };
+        if !message.0.is_empty() && message.write_str(": ").is_err() {
+            break;
+        }
+        if write!(&mut message, "{error}").is_err() {
+            break;
+        }
+        source = error.source();
+    }
+    StagingError::DriverFailure(message.0.into_boxed_str())
+}
 
 impl StagingCoordinator {
     /// Called only after RepositoryCell selected this root from the completed
@@ -182,7 +217,15 @@ impl StagingTicket {
                 tracing::warn!(operation = %hex::encode(owner.operation), ?error, "owned push workflow stopped");
                 // The lifecycle still owns every admitted exact command and
                 // physical worker. Never replace an uncertain result with ng.
-                owner.local.lock().expect("staging local").stop = true;
+                let diagnostic = Arc::new(failure(&error));
+                {
+                    let mut local = owner.local.lock().expect("staging local");
+                    local.driver_failure = Some(diagnostic);
+                    local.stop = true;
+                }
+                // Stop is visible before returning any physical credit. Drop
+                // outside the lock: an Activity destructor acquires it too.
+                drop(error);
                 owner.changed.notify_one();
             } else {
                 let mut local = owner.local.lock().expect("staging local");

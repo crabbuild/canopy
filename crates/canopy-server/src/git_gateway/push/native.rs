@@ -70,18 +70,22 @@ impl GitGateway {
         drop(admission);
         match ticket.wait_completion().await {
             StagingState::Published(Ok(PublicationOutcome::RootPush(_))) => {
-                let response = staging
-                    .replay_request(identity, &self.artifacts)
+                // Use the known completion's original read capability and
+                // receipt. Recheck current authorization before streaming.
+                let publication = ticket
+                    .pending_publication()
+                    .ok_or_else(|| GatewayError::Cell(Box::new(StagingError::Context)))?;
+                let response = publication
+                    .root_response(&self.artifacts)
                     .await
-                    .map_err(|e| GatewayError::Cell(Box::new(e)))?
-                    .ok_or(GatewayError::MalformedCache)?;
+                    .map_err(|e| GatewayError::Cell(Box::new(e)))?;
                 Ok(with_push_id(artifact_body(response), id))
             }
             StagingState::Published(Err(error)) => Err(GatewayError::Cell(Box::new(error))),
             StagingState::Uncertain(error) | StagingState::Fenced(error) => {
                 Err(GatewayError::Cell(Box::new(error)))
             }
-            _ => Err(GatewayError::MalformedCache),
+            _ => Err(GatewayError::Cell(Box::new(StagingError::NotReady))),
         }
     }
 
@@ -201,7 +205,10 @@ impl GitGateway {
             let ready = ready
                 .bind_recovery(registered, &self.artifacts)
                 .map_err(input)?;
-            let observer = ticket.publish(&publication, ready).map_err(input)?;
+            let observer = ticket
+                .publish_wait(&publication, ready)
+                .await
+                .map_err(input)?;
             final_publication(&staging, &ticket, &observer).await?;
             return Ok(());
         };
@@ -303,7 +310,8 @@ impl GitGateway {
                 .await
                 .map_err(observed)?;
             let observer = ticket
-                .register_policy_page(&publication, ready)
+                .register_policy_page_wait(&publication, ready)
+                .await
                 .map_err(input)?;
             match final_publication(&staging, &ticket, &observer).await? {
                 PublicationOutcome::PolicyPage(_) => bound(&staging, &ticket).await?,
@@ -343,7 +351,10 @@ impl GitGateway {
         let ready = ready
             .bind_recovery(registered, &self.artifacts)
             .map_err(input)?;
-        let observer = ticket.publish(&publication, ready).map_err(input)?;
+        let observer = ticket
+            .publish_wait(&publication, ready)
+            .await
+            .map_err(input)?;
         final_publication(&staging, &ticket, &observer).await?;
         Ok(())
     }

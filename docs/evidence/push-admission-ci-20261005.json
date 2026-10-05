@@ -1,0 +1,632 @@
+{
+  "recorded_at_utc": "2026-10-05T06:29:55.815708+00:00",
+  "base_head": "79e2a3c7c8f6f094d4056ba1a106511619b2a351",
+  "source_files": 493,
+  "rust_files": 479,
+  "source_hash_digest": "e27224d4325fe884709cddc6d45a2809de1914a9b4c0a5b79f88520cc4e6d024",
+  "source_digest_algorithm": "SHA256 of sorted path + NUL + file SHA256 + newline for Rust, SQL, Cargo manifests/lock/toolchain files",
+  "source_manifest": "/tmp/canopy-admission-final-source.json",
+  "workflow_sha256": "8a891045792649c21d7728bc29341fcf7827050510a898b4d4365df48a1a8649",
+  "toolchain": "Rust 1.98.0, macOS ARM64, isolated Cargo target, RUSTC_WRAPPER empty",
+  "release_qualified": false,
+  "ci_pass_claim": false,
+  "regressions": {
+    "controller_failure_before_bind": {
+      "log": "/tmp/canopy-driver-failure-repro1.log",
+      "sha256": "15a48e82470800f891722fb16a7fe2d71fe1bc5df3b64afaa87de84208470b50",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 711 filtered out; finished in 0.26s"
+      ],
+      "failed_cases": [
+        "server::residency::tests::staging::production_push_driver_failure_remains_observable_before_and_after_bind"
+      ],
+      "source_manifest": "/tmp/canopy-driver-failure-repro1-source.json",
+      "source_digest": "414e41ed3e799c15a8bc31b187864e68b12f8aab20f35b270ecbc1a77d26e7f9"
+    },
+    "retaining_error_that_owns_physical_worker": {
+      "log": "/tmp/canopy-driver-failure-owner-repro1.log",
+      "sha256": "f91918b056057df5e0bb737a58834ad70b78e17d834004b275b55cd64b9e887a",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 711 filtered out; finished in 5.47s"
+      ],
+      "failed_cases": [
+        "server::residency::tests::staging::production_push_driver_failure_remains_observable_before_and_after_bind"
+      ],
+      "source_manifest": "/tmp/canopy-driver-failure-owner-repro1-source.json",
+      "source_digest": "b43ba82a2a059fbf34a1ad521b5e1d1369f801962ec3030b7edc73cb53bc40a7"
+    },
+    "bounded_driver_diagnostic": {
+      "log": "/tmp/canopy-driver-failure-focused-final.log",
+      "sha256": "f8269d4034cf7e2d8910f411983afad846de35b575b16156915bf7d77709d43d",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 708 filtered out; finished in 14.24s"
+      ],
+      "failed_cases": [],
+      "source_manifest": "/tmp/canopy-driver-failure-final-source.json",
+      "source_digest": "f02f74b4665dbc6629b881235ed56395a7ecfa49135bbf54e33ea612582aca51"
+    },
+    "contended_real_bound_handoff_before_fix": {
+      "log": "/tmp/canopy-admission-contention-repro.log",
+      "sha256": "f282d674392acbbc2de1d755d6c8251d47958c826805d73812aad26554419e63",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 712 filtered out; finished in 0.16s"
+      ],
+      "failed_cases": [
+        "packs::publication::tests::staging_service::publication::bound_publication_waits_for_contended_admission_without_losing_original_command"
+      ]
+    },
+    "contention_quota_and_deadline_after_fix": {
+      "log": "/tmp/canopy-admission-contention-focused-final.log",
+      "sha256": "bce62f49db9f49e11fa12d1feb398b3a2842d1fe894fb309a49200c635b0c0de",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 712 filtered out; finished in 0.55s"
+      ],
+      "failed_cases": [],
+      "source_manifest": "/tmp/canopy-admission-final-source.json",
+      "source_digest": "e27224d4325fe884709cddc6d45a2809de1914a9b4c0a5b79f88520cc4e6d024"
+    }
+  },
+  "intermediate_driver_source": {
+    "validation": {
+      "source_digest": "f02f74b4665dbc6629b881235ed56395a7ecfa49135bbf54e33ea612582aca51",
+      "phases": [
+        {
+          "name": "focused",
+          "exit_code": 0,
+          "seconds": 134.01,
+          "log": "/tmp/canopy-driver-failure-focused-final.log",
+          "log_sha256": "f8269d4034cf7e2d8910f411983afad846de35b575b16156915bf7d77709d43d",
+          "summaries": [
+            "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 708 filtered out; finished in 14.24s"
+          ],
+          "failed_cases": []
+        },
+        {
+          "name": "workspace",
+          "exit_code": 101,
+          "seconds": 43.46,
+          "log": "/tmp/canopy-driver-failure-workspace-final.log",
+          "log_sha256": "eaf4c8970d796a1072e7fd5a62811b0a7de63baead83f02081a0ab1db7cd2d42",
+          "summaries": [],
+          "failed_cases": []
+        },
+        {
+          "name": "clippy",
+          "exit_code": 0,
+          "seconds": 64.98,
+          "log": "/tmp/canopy-driver-failure-clippy-final.log",
+          "log_sha256": "ac704f42b4ed890ab4654f0415890ca3debf5498f7d6d129539c127d029edd61",
+          "summaries": [],
+          "failed_cases": []
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "seconds": 68.41,
+          "log": "/tmp/canopy-driver-failure-build-final.log",
+          "log_sha256": "edd67e4a5978392bcd3db1f83b7eb6420506ed92b103d1692c312e247cc098f1",
+          "summaries": [],
+          "failed_cases": []
+        },
+        {
+          "name": "fmt",
+          "exit_code": 0,
+          "seconds": 1.33,
+          "log": "/tmp/canopy-driver-failure-fmt-final.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "summaries": [],
+          "failed_cases": []
+        },
+        {
+          "name": "diff",
+          "exit_code": 0,
+          "seconds": 0.03,
+          "log": "/tmp/canopy-driver-failure-diff-final.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "summaries": [],
+          "failed_cases": []
+        }
+      ],
+      "complete": true,
+      "release_qualified": false,
+      "source_unchanged": true
+    },
+    "workspace_retry": {
+      "log": "/tmp/canopy-driver-failure-workspace-retry1.log",
+      "sha256": "0981246f9b74acd389d7db58fc9dbcb760f72cc04895d145ccd933d518e51280",
+      "exit_code": 101,
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.31s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 711 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 711 filtered out; finished in 0.09s",
+        "test result: FAILED. 708 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 353.45s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.77s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: FAILED. 73 passed; 33 failed; 9 ignored; 0 measured; 0 filtered out; finished in 370.55s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "failed_cases": [
+        "packs::publication::tests::serving::lifecycle::restarts::producer_restarts_preserve_factory_identity_held_ticket_capture_renewal_and_release",
+        "server::residency::tests::serving::production_shutdown_keeps_publication_cell_heartbeat_and_workspace_until_last_borrow",
+        "server::residency::tests::serving::production_resident_shares_generation_and_busy_eviction_resumes_before_exact_drain",
+        "server::residency::tests::recovery::production_shutdown_recovers_other_repositories_while_one_producer_holds_its_command",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "checks::commit_checks_bind_reporters_versions_and_reruns_across_recovery",
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "branch_rules::protected_pushes_preserve_native_reports_and_policy_across_recovery",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+        "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "ssh::ssh_push_options_cover_pack_and_delete_only_requests",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+        "bulk_refs::bulk_mirror_publication_is_atomic_and_survives_restart",
+        "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+        "repository_cell_publishes_objects_and_refs_atomically",
+        "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+      ],
+      "source_manifest": "/tmp/canopy-driver-failure-final-source.json",
+      "source_digest": "f02f74b4665dbc6629b881235ed56395a7ecfa49135bbf54e33ea612582aca51"
+    },
+    "workspace_retry_note": "Isolated target and disabled sccache compiled after a missing rcgu.o failure in the previous shared target. Full run still failed: 708/4 server libraries, 73/33/9 multi-server, three standalone failures. Four timeouts passed focused only after concurrent build jobs drained; final full-suite results supersede neither historical failure nor its source fingerprint."
+  },
+  "final_validation": {
+    "source_digest": "e27224d4325fe884709cddc6d45a2809de1914a9b4c0a5b79f88520cc4e6d024",
+    "phases": [
+      {
+        "name": "restart",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "producer_restarts_preserve_factory_identity_held_ticket_capture_renewal_and_release",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 6.78,
+        "log": "/tmp/canopy-admission-restart-final.log",
+        "log_sha256": "2dde1a4c3b94532c7925333bd55c23860d3784a63ca865ee119c9edca4777bdc",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 5.54s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "shutdown",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "production_shutdown_keeps_publication_cell_heartbeat_and_workspace_until_last_borrow",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 1.64,
+        "log": "/tmp/canopy-admission-shutdown-final.log",
+        "log_sha256": "0fad96827df24c581ad5df0781d355379b554b3a39174735ed3c2d2ae090bfa3",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 1.00s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "eviction",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "production_resident_shares_generation_and_busy_eviction_resumes_before_exact_drain",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 1.23,
+        "log": "/tmp/canopy-admission-eviction-final.log",
+        "log_sha256": "27392eb0b377815b6b8b8ac32e139dfd1bdd3cf6c943ca9e98697f41c66c7a1a",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.82s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "recovery",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "production_shutdown_recovers_other_repositories_while_one_producer_holds_its_command",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 8.65,
+        "log": "/tmp/canopy-admission-recovery-final.log",
+        "log_sha256": "eb25bf09a8cd57f248f6da9e92c1ea4de65c92587437eca20c6cd1ae1a966480",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 8.30s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "bulk",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--test",
+          "multi_server",
+          "bulk_mirror_publication_is_atomic_and_survives_restart",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 146.72,
+        "log": "/tmp/canopy-admission-bulk-final.log",
+        "log_sha256": "3a77ea2bfd517cfd5a2c05b0a1f6db6665a6724b2b36af16ec385764007f1ece",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 114 filtered out; finished in 74.99s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "options",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--test",
+          "multi_server",
+          "push_options::",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 7.73,
+        "log": "/tmp/canopy-admission-options-final.log",
+        "log_sha256": "0b811e31fc9c583a89703f4cbabbac9b42363c3decc1411065d4f032ab3febec",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 111 filtered out; finished in 5.22s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 722.6,
+        "log": "/tmp/canopy-admission-workspace-final.log",
+        "log_sha256": "e3e6fa071cf518d66b65144702a7399a04f37ebc74d59b5e2b674aa5e0a599dc",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.70s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.20s",
+          "test result: ok. 715 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 327.22s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.94s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+          "test result: FAILED. 75 passed; 31 failed; 9 ignored; 0 measured; 0 filtered out; finished in 358.04s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+          "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+          "checks::commit_checks_bind_reporters_versions_and_reruns_across_recovery",
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "branch_rules::protected_pushes_preserve_native_reports_and_policy_across_recovery",
+          "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+          "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+          "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+          "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+          "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+          "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+          "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+          "leased_server_recovers_two_repositories_with_git_and_lfs",
+          "merge::merge_rechecks_revisions_authority_and_competing_publications",
+          "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+          "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+          "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+          "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+          "sha256::sha256_checks_reviews_and_merge_survive_restore",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 46.74,
+        "log": "/tmp/canopy-admission-clippy-final.log",
+        "log_sha256": "b33de76a1243507d0a4378b4ba042da68b08296e5f56d7585f4f4417fac77c70",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 59.76,
+        "log": "/tmp/canopy-admission-build-final.log",
+        "log_sha256": "9aeec9c34c760a400ef390e410cc12ab6c4eb1d3de6b883e47e3e28190508573",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.29,
+        "log": "/tmp/canopy-admission-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 42.59,
+        "log": "/tmp/canopy-admission-harness-final.log",
+        "log_sha256": "46d58ee2d7dc831ae0e69d4cd0d8a1d424173487af3937adf80887a5215b74ed",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.04,
+        "log": "/tmp/canopy-admission-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "complete": true,
+    "release_qualified": false,
+    "source_unchanged": true
+  },
+  "parent_linux_ci": {
+    "head": "79e2a3c7c8f6f094d4056ba1a106511619b2a351",
+    "pr_run": 37264946662,
+    "rust_job": 111619651832,
+    "conclusion": "FAILURE",
+    "server_library": {
+      "passed": 711,
+      "failed": 0
+    },
+    "multi_server": {
+      "passed": 75,
+      "failed": 35,
+      "ignored": 9
+    },
+    "log": {
+      "log": "/tmp/canopy-remote-79e2a3c-pr-full.log",
+      "sha256": "c4544a19463e7dd4ecd2e1c495b957254c3599df345dff90c97502bccae00b4c",
+      "exit_code": 101,
+      "summaries": [],
+      "failed_cases": []
+    },
+    "toolchain_note": "Git 2.55.0 is printed; exact Rust version was not printed. Workflow now reports rustc/cargo/active-toolchain/Git versions without changing toolchain selection."
+  },
+  "prior_linux_arm_probes": {
+    "pre_admission_source_note": "These are diagnostic probes, not final-source Linux qualification.",
+    "rust197_options": {
+      "log": "/tmp/canopy-options-linux-group1.log",
+      "sha256": "e168702f061766ac4ee50d7acd21364c7719072cda5c850f8fd9270172932852",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 114 filtered out; finished in 5.96s"
+      ],
+      "failed_cases": []
+    },
+    "rust197_matrix": {
+      "log": "/tmp/canopy-options-linux-matrix1.log",
+      "sha256": "7d83f869d1db6d82b312cb1421b275892dbf1adae0a9846a3df523e3e4e1cc75",
+      "exit_code": 101,
+      "summaries": [
+        "test result: FAILED. 77 passed; 33 failed; 9 ignored; 0 measured; 0 filtered out; finished in 504.00s"
+      ],
+      "failed_cases": [
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "branch_rules::protected_pushes_preserve_native_reports_and_policy_across_recovery",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "checks::commit_checks_bind_reporters_versions_and_reruns_across_recovery",
+        "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+        "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+        "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "lfs_locks::stock_lfs_locks_block_conflicting_pushes_and_unlock_allows_retry",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::failed_local_cleanup_retries_before_restoring_the_released_repository",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery"
+      ]
+    },
+    "rust198_options": {
+      "log": "/tmp/canopy-options-linux-rust198-group1.log",
+      "sha256": "2f61d9ee6386d15739908a6474f9c6b716980772f65625403d8f4d5539d4785d",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 114 filtered out; finished in 14.93s"
+      ],
+      "failed_cases": []
+    },
+    "bounded_driver_source_options": {
+      "log": "/tmp/canopy-driver-failure-linux-options-final.log",
+      "sha256": "ee7b1b8d95110bd4a48a025ab4727ecb0e5a32029510321b228667106a6dbc79",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 114 filtered out; finished in 3.92s"
+      ],
+      "failed_cases": [],
+      "source_manifest": "/tmp/canopy-driver-failure-final-source.json",
+      "source_digest": "f02f74b4665dbc6629b881235ed56395a7ecfa49135bbf54e33ea612582aca51"
+    },
+    "bounded_driver_source_controllers": {
+      "log": "/tmp/canopy-driver-failure-linux-controllers-final.log",
+      "sha256": "eecbf2792285151aad36fd76847465d1cf5bfb89a32a8c723f90b081567841ab",
+      "exit_code": 0,
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 708 filtered out; finished in 14.30s"
+      ],
+      "failed_cases": [],
+      "source_manifest": "/tmp/canopy-driver-failure-final-source.json",
+      "source_digest": "f02f74b4665dbc6629b881235ed56395a7ecfa49135bbf54e33ea612582aca51"
+    }
+  },
+  "scope_and_limits": [
+    "A contended mutex now has a distinct Busy classification. Native push waits fairly for the mutex under the existing custody deadline and keeps the original prepared command. Actual operation/account/byte quota refusal remains Capacity and is never retried.",
+    "Held reservation, custody recheck and lifecycle ticket capture are synchronous under the same admission guard. No admitted command exists while awaiting that guard. Timeout returns the original ready value; requester cancellation does not own the resident controller.",
+    "Controller diagnostics retain at most 4096 valid UTF-8 bytes and eight error sources. Rejected prepared values are dropped outside the local lock after stop is recorded, before physical credits can be reused. Historical Bind evidence remains separate.",
+    "Known completion responses use the existing publication ticket read capability, completion receipt watermark and fresh authorization. Missing request replay alone was not proven causal.",
+    "Local bulk failure exposed PublicationAdmission(Capacity); deterministic contention repro proves the busy-mutex defect. Final-head GitHub option failures require actual CI observation, not extrapolation from ARM64/local passes.",
+    "No tests disabled, no quotas raised, no authorization weakened, no retired object/ref SQL tables restored.",
+    "Remaining native metadata/writer conversion, refusal-only pre-Bind terminal semantics, peer routing, backup/filtered reads, standalone resident fixtures, physical custody completion and large-history/team capacity gates remain open."
+  ],
+  "sdk": {
+    "path": "/Users/haipingfu/.codex/worktrees/durable-command-recovery/cellule",
+    "head": "161067f5a21703b3e257024bcb64e565fd9657b4",
+    "clean_when_checked": true
+  },
+  "unique_workspace_inventory": {
+    "passed": 828,
+    "failed": 34,
+    "ignored_unexecuted": 9,
+    "total": 871
+  }
+}

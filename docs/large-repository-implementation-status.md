@@ -106,6 +106,73 @@ defines the pending refusal-only authority boundary without weakening Write for
 admission or publication. Full CI, generated metadata/writers, backup/routing,
 physical ownership/recovery and large-team capacity remain open.
 
+## Push failure observation and admission contention (2026-10-05)
+
+A controller failure before Bind previously became `Stopped`, so receive-pack
+reported `MalformedCache` instead of the actual failure. After Bind, the same
+path reported the historical `Bound` state and could strand a completion
+observer. Failed controllers now finish as `Fenced` with a diagnostic bounded to
+4,096 UTF-8 bytes and eight error sources. The original Bind receipt remains
+available as historical evidence. Clean stop behavior is unchanged.
+
+Errors can contain rejected preparation values that retain physical worker
+credits. The controller records stop before dropping those values outside its
+local lock; only the bounded diagnostic survives. Regression coverage uses a
+real resident, observer loss/rejoin, both object formats, both Bind phases,
+ordinary failures and an error carrying an actual worker pin. Retaining the
+whole error reproduced a drain timeout; the bounded representation removes that
+ownership cycle. Existing cancellation, panic and exact uncertain-Begin recovery
+families remain required checks.
+
+Known completed HTTP/SSH responses now use the retained publication ticket's
+existing response API, including its completion receipt as the query watermark
+and a fresh read-authorization check. Initial request replay remains a separate
+authorized lookup. Neither diagnostics nor receipts grant artifact authority.
+
+The diagnostic exposed a bulk-mirror failure during final publication admission.
+Synchronous admission classified a busy mutex as `Capacity`; receive-pack treated
+that refusal as terminal. This can happen when a completed page wakes its
+observer before the coordinator releases its mutex. Contention now has a
+separate `Busy` classification. Native final commands and policy pages wait for
+the fair mutex under their existing custody ceiling, retaining the original
+prepared command and registered recovery. After the wait, the lifecycle checks
+current custody and captures the held ticket synchronously under the admission
+guard. Waiting reserves no quota and dispatches no command. Operation, account
+and byte quota refusals remain immediate; no limit is increased or retried.
+
+A deterministic regression polls a real bound publication while the mutex is
+held, then verifies the original command completes after release. Separate cases
+verify that quota exhaustion refuses without execution and that a custody
+ceiling ends the wait without admission. All three families pass for SHA-1 and
+SHA-256. The stock Git bulk mirror and HTTP push-option group also pass locally.
+
+Linux Verify at head `79e2a3c7c8f6f094d4056ba1a106511619b2a351` passes all 711
+server library cases and the stock SSH workflow, but multi-server still fails
+with 75 passes, 35 failures and nine ignores. Three rejected-option families
+continue to fail on GitHub; a bulk-mirror failure also appeared under load.
+Isolated Linux ARM64 option groups pass with Rust 1.97 and 1.98, with and without
+warning-level logging. These observations do not establish the cause of those
+GitHub option failures or qualify the complete CI workflow. Verify now prints
+Rust, Cargo, active-toolchain and Git versions without changing toolchain choice.
+
+The final frozen-source macOS run passes all 736 library cases (715 server),
+13 directory cases, two Git backend cases and two binary cases. Multi-server
+finishes with 75 passes, 31 failures and nine existing ignores; bulk mirror,
+HTTP/SSH options and stock SSH pass under concurrent load. The three standalone
+integration aggregates still fail. All-target Clippy with warnings denied,
+formatting and the server build pass. The unique workspace inventory is 828
+passes, 34 failures and nine unexecuted ignores; focused reruns and nested child
+summaries are not counted again. No final-source RustFS claim is made.
+
+Exact source/log fingerprints, both controller-failure reproductions, the
+contended-admission reproduction, intermediate failed validation and final
+validation are retained in
+[`push-admission-ci-20261005.json`](evidence/push-admission-ci-20261005.json).
+Current-head Linux CI remains required. Native collaboration metadata and
+candidate writers, pre-Bind refusal semantics, peer routing, backup/filtered
+reads and actual standalone resident fixtures remain the highest release gates.
+The complete storage/team-capacity goal remains open.
+
 ## Whole-workflow ownership and CI repair
 
 The production resident supplies its actual Cell client and publication

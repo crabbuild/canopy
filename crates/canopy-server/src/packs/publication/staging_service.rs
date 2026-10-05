@@ -98,6 +98,8 @@ pub enum StagingError {
     Clock,
     #[error("staging worker panicked")]
     Worker,
+    #[error("owned push workflow failed: {0}")]
+    DriverFailure(Box<str>),
     #[error("input preparation failed")]
     Input(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("staging begin failed")]
@@ -370,6 +372,8 @@ struct Local {
     renew: bool,
     driver_started: bool,
     driver_graceful: bool,
+    // Diagnostic only: rejected producer values can own physical worker pins.
+    driver_failure: Option<Arc<StagingError>>,
 }
 trait RetainedWork: Any + Send + Sync {
     fn fence_completed(&self);
@@ -783,6 +787,7 @@ impl StagingCoordinator {
                 renew: false,
                 driver_started: false,
                 driver_graceful: false,
+                driver_failure: None,
             }),
             work: Mutex::new(WorkSlots::default()),
             exact: Mutex::new(Some(ready.inner.command)),
@@ -2095,14 +2100,18 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                     if let Some(session) = &local.bound {
                         session.fence();
                     }
-                    // Keep the original binding receipt observable after graceful stop.
-                    job.status.send_replace(
-                        local
+                    // A failed controller must remain a failure before or after
+                    // Bind. Preserve the original receipt as historical evidence;
+                    // reporting Bound here would strand completion observers.
+                    let state = match &local.driver_failure {
+                        Some(error) => StagingState::Fenced(error.clone()),
+                        None => local
                             .bound_result
                             .clone()
                             .map(StagingState::Bound)
                             .unwrap_or(StagingState::Stopped),
-                    );
+                    };
+                    job.status.send_replace(state);
                 }
                 driver::drain(&job).await;
                 remove(&inner, &job);

@@ -59,7 +59,7 @@ impl StagingTicket {
         coordinator: &PublicationCoordinator,
         ready: impl Into<ReadyPublication>,
     ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
-        self.handoff(coordinator, ready.into(), false)
+        self.handoff(ready.into(), false, |ready| coordinator.try_reserve(ready))
     }
     /// Order one intermediate policy page through the same held slot. A known
     /// successful page resumes Bound; it never terminates or acknowledges a
@@ -69,13 +69,55 @@ impl StagingTicket {
         coordinator: &PublicationCoordinator,
         ready: impl Into<ReadyPublication>,
     ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
-        self.handoff(coordinator, ready.into(), true)
+        self.handoff(ready.into(), true, |ready| coordinator.try_reserve(ready))
     }
-    fn handoff(
+    /// Wait only for mutex contention, bounded by the existing custody ceiling.
+    /// Quota refusal is immediate. Admission and lifecycle capture still happen
+    /// synchronously; cancellation before this point cannot dispatch a command.
+    pub async fn publish_wait(
+        &self,
+        coordinator: &PublicationCoordinator,
+        ready: impl Into<ReadyPublication>,
+    ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
+        self.handoff_wait(coordinator, ready.into(), false).await
+    }
+    /// Intermediate pages use the same bounded handoff as final publication.
+    pub async fn register_policy_page_wait(
+        &self,
+        coordinator: &PublicationCoordinator,
+        ready: impl Into<ReadyPublication>,
+    ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
+        self.handoff_wait(coordinator, ready.into(), true).await
+    }
+    async fn handoff_wait(
         &self,
         coordinator: &PublicationCoordinator,
         ready: ReadyPublication,
         policy_page: bool,
+    ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
+        let deadline = {
+            let local = self.job.local.lock().expect("staging local");
+            local.deadline.min(local.lifetime)
+        };
+        let Ok(mut admission) =
+            tokio::time::timeout_at(deadline, coordinator.held_admission()).await
+        else {
+            return Err(Box::new(StagedPublicationFailure {
+                reason: StagingError::Inactive,
+                ready,
+            }));
+        };
+        // Recheck live custody after waiting, then retain the exact held ticket
+        // under the lifecycle lock before either lock is released or we yield.
+        self.handoff(ready, policy_page, |ready| admission.reserve(ready))
+    }
+    fn handoff(
+        &self,
+        ready: ReadyPublication,
+        policy_page: bool,
+        reserve: impl FnOnce(
+            ReadyPublication,
+        ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>>,
     ) -> Result<StagedPublicationTicket, Box<StagedPublicationFailure>> {
         let mut local = self.job.local.lock().expect("staging local");
         let reason = if ready.is_policy_page() != policy_page {
@@ -100,7 +142,7 @@ impl StagingTicket {
         if let Some(reason) = reason {
             return Err(Box::new(StagedPublicationFailure { reason, ready }));
         }
-        let ticket = coordinator.try_reserve(ready).map_err(|failure| {
+        let ticket = reserve(ready).map_err(|failure| {
             Box::new(StagedPublicationFailure {
                 reason: StagingError::PublicationAdmission(failure.reason),
                 ready: failure.ready,

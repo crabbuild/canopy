@@ -62,6 +62,22 @@ fn driver_request(repository: &RepositoryCell, operation: u8) -> BeginRequest {
     }
 }
 
+struct DriverOwnedFailure {
+    _pin: crate::git_objects::ReadOwner,
+    message: String,
+}
+impl std::fmt::Debug for DriverOwnedFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriverOwnedFailure").finish_non_exhaustive()
+    }
+}
+impl std::fmt::Display for DriverOwnedFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for DriverOwnedFailure {}
+
 #[tokio::test]
 async fn production_push_driver_survives_observer_loss_binds_and_joins_before_resident_release()
 -> Result {
@@ -276,9 +292,110 @@ async fn production_push_driver_close_preserves_exact_uncertain_begin_and_panic_
             }
         })
         .await?;
-        assert!(matches!(ticket.state(), StagingState::Stopped));
+        assert!(
+            matches!(ticket.state(), StagingState::Fenced(error) if matches!(&*error, StagingError::DriverFailure(message) if message.contains("staging worker panicked")))
+        );
         assert_eq!(manager.staging_budget.available(), (32, 64));
         timeout(Duration::from_secs(10), server.shutdown()).await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_push_driver_failure_remains_observable_before_and_after_bind() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for bind in [false, true] {
+            for owned in [false, true] {
+                let (server, _files) = server().await?;
+                let manager = server.repositories.clone();
+                let entry = create(&manager, "driver-failure", format).await?;
+                let (repository, _, service) = loaded(&manager, entry.repository_id).await?;
+                let coordinator = repository.staging_coordinator()?;
+                let request = driver_request(&repository, 184);
+                let ready = coordinator
+                    .ready_request(request.clone(), mutation_identity()?)
+                    .await?;
+                let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+                let (entered, running) = oneshot::channel();
+                let (release, proceed) = oneshot::channel();
+                ticket.drive(move |ticket, _| async move {
+                    if !matches!(ticket.wait().await, StagingState::Active(_)) {
+                        return Err(StagingError::Context);
+                    }
+                    if bind {
+                        ticket.seal()?;
+                        if !matches!(ticket.wait_terminal().await, StagingState::Bound(_)) {
+                            return Err(StagingError::Context);
+                        }
+                    }
+                    let pin = if owned {
+                        let task = if bind {
+                            ticket.spawn_bound(|_, context| async move {
+                                Ok(context.physical_owner())
+                            })?
+                        } else {
+                            ticket.spawn(|context| async move { Ok(context.physical_owner()) })?
+                        };
+                        Some(
+                            task.wait()
+                                .await
+                                .map_err(|error| StagingError::Input(Box::new(error)))?,
+                        )
+                    } else {
+                        None
+                    };
+                    let _ = entered.send(());
+                    let _ = proceed.await;
+                    Err(match pin {
+                        Some(pin) => StagingError::Input(Box::new(DriverOwnedFailure {
+                            _pin: pin,
+                            message: format!("worker-owned failure {}", "λ".repeat(4096)),
+                        })),
+                        None => StagingError::Clock,
+                    })
+                })?;
+                timeout(Duration::from_secs(5), running).await??;
+                let original_bound = ticket.bound_result();
+                assert_eq!(original_bound.is_some(), bind);
+                assert_eq!(
+                    manager.staging_budget.available(),
+                    (31, if owned { 63 } else { 64 })
+                );
+                drop(ticket);
+                let observer = coordinator.join_request(&request)?.expect("owned driver");
+                let _ = release.send(());
+                let outcome = timeout(Duration::from_secs(5), observer.wait_completion()).await?;
+                let StagingState::Fenced(error) = outcome else {
+                    return Err(format!("controller failure was lost: {outcome:?}").into());
+                };
+                let StagingError::DriverFailure(message) = &*error else {
+                    return Err(format!("unexpected controller failure: {error:?}").into());
+                };
+                assert!(message.len() <= 4096);
+                assert!(message.contains(if owned {
+                    "worker-owned failure"
+                } else {
+                    "staging clock failed"
+                }));
+                assert_eq!(observer.bound_result().is_some(), bind);
+                if let Some(original) = original_bound {
+                    assert!(Arc::ptr_eq(
+                        &original,
+                        &observer.bound_result().expect("historical Bind")
+                    ));
+                }
+                assert!(observer.pending_publication().is_none());
+                timeout(Duration::from_secs(5), async {
+                    while coordinator.stats().admitted != 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await?;
+                assert_eq!(manager.staging_budget.available(), (32, 64));
+                assert!(!service.coordinator.stats().await.closed);
+                timeout(Duration::from_secs(10), server.shutdown()).await??;
+            }
+        }
     }
     Ok(())
 }
