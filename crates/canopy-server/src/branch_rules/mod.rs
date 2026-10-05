@@ -253,6 +253,13 @@ pub(crate) struct Policy {
     require_pull_request: bool,
 }
 impl Policy {
+    pub(crate) fn allows_reviewed(
+        &self,
+        update: &RefUpdate,
+        reviewed: &crate::pulls::merge::ReviewedMerge,
+    ) -> bool {
+        self.allows_ref(update, true) && (!self.require_pull_request || reviewed.authorizes(update))
+    }
     pub(crate) fn allows(&self, update: &RefUpdate, require_ancestry: bool) -> bool {
         !self.require_pull_request && self.allows_ref(update, require_ancestry)
     }

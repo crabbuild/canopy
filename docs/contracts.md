@@ -1729,8 +1729,10 @@ admin-scoped owner token and `{repository_id, rule}`. `rule` contains `reference
 are 422. Repository identity is a UUID precondition. The body limit is 16 KiB
 with a 30-second receive deadline. The Cell command rechecks owner authority.
 
-The one authoritative `refs::apply_refs` function applies to typed
-`FinalizePush`, HTTP `CompletePush`, and `MergePull`. Before any ref writes, each enabled rule
+The historical SQL publisher used `refs::apply_refs` for typed
+`FinalizePush`, HTTP `CompletePush`, and `MergePull`. Native publication instead
+uses privately certified immutable ref roots and reuses current branch/check
+predicates; native reviewed merge operation 9, codec 5 is described below. Before any ref writes, each enabled rule
 checks deletion policy, ancestry and every required check. For a non-deletion,
 the selected attempt is the greatest creation number matching the proposed
 commit, context and current context version. It must have state `success` and
@@ -1742,8 +1744,11 @@ ref mutation, including deletion and recreation. Otherwise deletion depends on
 `deny_deletions`; checks and fast-forward policy govern non-deletions. Branch
 creation needs checks but has no old ancestry to prove.
 
-Verified commit objects provide `commit_parents(child, parent)` when graph
-closure is certified. Only commit-parent edges enter that table. Immutable
+In the retired SQL graph contract, verified commit objects provided
+`commit_parents(child, parent)` when graph closure was certified. Native
+preparation reads verified catalog commit headers and uses MAC-bound ancestry
+evidence; it does not populate these retired tables. The historical contract
+below does not describe native production authority. Only commit-parent edges enter that table. Immutable
 `commit_ancestry(ancestor, descendant)` certificates avoid graph traversal in the
 ref transaction. Operation 7, codec 1 accepts at most 128 child/parent steps.
 Every step must exist in verified parent links and lead either to the claimed
@@ -1917,8 +1922,8 @@ query. Changes to rules or decisions after preparation are reflected immediately
 ref/editorial changes invalidate the prepared observation. Tombstones remove the
 reviewed revision; recreating the same OID with a later ref version cannot restore
 old approvals. Merge ancestry preparation uses this same native policy reader.
-The final merge command and generated Git producers still need native atomic
-publication and are not qualified by these read operations. Codec 2 is a hard
+The public merge adapter and generated Git producers still need native
+publication integration and are not qualified by these read operations. Codec 2 is a hard
 cutover of this unreleased query; no old input decoder is retained.
 
 Native merge preparation has a separate
@@ -1936,8 +1941,46 @@ scratch budget. Neither publishes roots or populates SQL refs/ancestry. A final
 native merge receiver must authenticate the exact proof and conditional ref
 snapshot, check current access/reviews/checks and ref versions, and commit joint
 roots, pull state and UUID result under the actual owner fence and durable
-recovery journal. That receiver and its resident adapter remain unfinished; the
-legacy operation 9 description below is not qualification of the native writer.
+recovery journal. The native receiver described below exists; its resident
+adapter and terminal pin release remain unfinished. The historical SQL merge
+description below is not qualification of the native product workflow.
+
+`PublishReviewedMerge` reuses operation 9 with codec 5 and a 256 KiB input / 512
+byte output contract. It replaces the registered contract rather than decoding
+legacy codec 4. Its private factory requires a ref-only `PreparedCatalog`: no
+incoming pack or native push-result checkpoint is accepted. It reads at most two
+source/base facts from that preparation's immutable ref root, verifies native
+ancestry, and prepares the conditional ref snapshot while preserving HEAD.
+The existing catalog MAC binds actor, exact request including preparation time,
+fact vector, plan/evidence and proposed ref root under a distinct merge purpose.
+No serving-only proof, arbitrary root or transport bit grants write authority.
+
+The final command requires its exact registered SDK command and body before
+evaluating the domain transition. It authenticates the catalog certificate,
+checks current write authority, then replays an exactly bound application UUID
+before testing new policy. A new merge requires the actual owner fence, live
+matching operation and pin, retained base and equality with the current joint
+generation. Authenticated facts join current editorial, review-head and member
+metadata in the same statement-local CTE as native pull reads. The exact reviewed
+update privately satisfies only its require-PR gate; ancestry and current check
+context/reporter results remain mandatory even on unprotected branches.
+
+Joint catalog/ref roots, pull state/version, immutable UUID result, preparation
+checkpoint and operation consumption share the final Cell transaction and its
+durable recovery journal. Errors after the first write roll back all of them.
+Rejected requests do not insert `pull_merges`, so a fresh owned attempt may retry
+the same application UUID after policy changes. The older attempt still recovers
+its original refusal and receipt. `ReadyNativeMerge` binds its exact original
+command and private owner into the existing fair `ReadyBoundRecovery` dispatcher;
+Kind `Merge` cannot be restored or decoded as a push outcome.
+
+The current SHA-256 maximum result encodes to 493 bytes, within the unchanged
+512-byte journal cap. Known results survive original factory loss, SQLite loss
+and actual owner restoration. Merge pins deliberately remain retained: terminal
+release has not yet certified their selected catalog/ref graph and UUID outcome.
+The public adapter still invokes retired preparation/codec 4, so network merge
+remains unqualified. Generated merge/squash/rebase strategies are not accepted by
+this factory; their producers and integration remain required work.
 
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation
@@ -2237,7 +2280,11 @@ moves refs. Source must descend from base for this strategy even when the branch
 rule does not require fast-forward pushes. Non-ancestor or unrelated histories
 conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
-Operation 9, codec 4 publishes the merge in one Repository Cell command:
+Historical SQL merge contract (operation 9, codec 4; no longer registered in
+the native production registry): the old command performed the following
+transaction. The native operation 9, codec 5 contract above replaces its storage
+authority. Public/resident adapter conversion remains open; this historical
+section is not evidence that the current merge endpoint works.
 
 1. Check current write authority. For an existing application UUID, compare its
    binding to actor, pull number, full requested revision and strategy; an exact

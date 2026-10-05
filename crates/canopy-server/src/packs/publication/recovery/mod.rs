@@ -78,10 +78,13 @@ pub(super) enum Kind {
     Outcome,
     Policy,
     Initialization,
+    Merge,
 }
 impl Kind {
     fn body_limit(self) -> u32 {
-        if self == Self::Initialization {
+        if self == Self::Merge {
+            NATIVE_MERGE_BYTES
+        } else if self == Self::Initialization {
             INITIALIZATION_BYTES
         } else if self == Self::Policy {
             REF_POLICY_PAGE_BYTES
@@ -333,7 +336,7 @@ impl RegisteredRootRecovery {
                 )
                 .await
             }
-            Kind::Policy | Kind::Initialization => {
+            Kind::Policy | Kind::Initialization | Kind::Merge => {
                 Err(AttemptError::Invocation(InvocationError::NotStarted(
                     Error::Command("recovery kind requires typed phase dispatch"),
                 )))
@@ -376,6 +379,22 @@ impl RegisteredRootRecovery {
                 .dispatch_initialization(client, store, authority, original)
                 .await
                 .map(PublicationOutcome::Initialization);
+        }
+        if self.record.kind == Kind::Merge {
+            let result = self
+                .dispatch_command::<PublishReviewedMerge>(client, store, authority, false, original)
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Merge))?;
+            return if matches!(
+                result.output,
+                crate::pulls::merge::MergeOutcome::Applied { .. }
+            ) {
+                Ok(PublicationOutcome::Merge(result))
+            } else {
+                Err(PublicationError::Merge(InvocationError::Rejected(
+                    Box::new(result),
+                )))
+            };
         }
         if self.record.kind != Kind::Policy {
             let result = match original {

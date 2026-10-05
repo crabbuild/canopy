@@ -195,6 +195,12 @@ impl phase::Journal {
     pub(super) fn terminal(&self, record: &Record) -> Result<Option<Terminal>, CodecError> {
         // Validation is required even when only a primary result is selected.
         self.may_advance(record)?;
+        // Merge recovery retains its physical pin until its selected catalog/ref
+        // graph and UUID outcome can be certified for terminal release. It must
+        // not be misdecoded or released as a push/empty initialization graph.
+        if record.kind == Kind::Merge {
+            return Ok(None);
+        }
         if record.kind == Kind::Initialization {
             return self
                 .primary

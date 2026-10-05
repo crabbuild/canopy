@@ -91,7 +91,7 @@ pub(crate) struct ReviewRequest {
 
 /// Shadow the retired table only within this statement with authenticated facts.
 /// Names/OIDs/versions are bound parameters, never interpolated client SQL.
-fn with_refs(mut statement: SqlStatement, selection: &RefSelection) -> SqlStatement {
+pub(crate) fn with_refs(mut statement: SqlStatement, selection: &RefSelection) -> SqlStatement {
     if !statement.sql.contains("FROM refs ") && !statement.sql.contains("JOIN refs ") {
         return statement;
     }

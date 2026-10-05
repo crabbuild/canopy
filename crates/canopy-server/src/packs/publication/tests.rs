@@ -15,6 +15,7 @@ mod inputs;
 mod mandatory_registration;
 mod namespaces;
 mod native_capture;
+mod native_merge;
 mod policy_dispatch;
 mod policy_refusal;
 mod preparation_receipt;

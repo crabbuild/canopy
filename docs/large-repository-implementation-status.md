@@ -17,6 +17,55 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Atomic native reviewed-merge transaction (2026-10-05 checkpoint)
+
+The private factory now binds the exact merge request, actor, source/base ref
+versions, mandatory ancestry evidence and conditional immutable ref snapshot to
+the existing catalog certificate. It reads verified native metadata, without a
+SQL ref or ancestry mirror. This increment supports fast-forward intent;
+generated merge, squash and rebase producers remain open.
+
+Operation 9, codec 5 replaces the production registration of the retired SQL
+merge command. Its final owner-fenced transaction checks current access, pull
+revision, applicable reviews, branch rules and required checks, then atomically
+commits the joint catalog/ref generation, pull state, application UUID result,
+checkpoint, operation consumption and original-command recovery journal. Errors
+after the first domain write roll back the whole transaction. An applied UUID
+replays its original record; a rejected review request can be retried under a
+fresh admitted command after policy changes.
+
+The ready capability retains the actual preparation owner and reuses typed
+`ReadyBoundRecovery` dispatch. Eight focused regressions pass for SHA-1 and
+SHA-256, including native roots without SQL ref authority, unrelated history,
+late review changes, payload substitution, generation conflict, mandatory
+original-command registration, late SQL rollback, UUID replay and original
+receipt recovery after SQLite loss and actual owner restoration. The maximum
+SHA-256 response is 493 wire bytes within the unchanged 512-byte recovery cap.
+Both new implementation files are included in the Repository Cell source
+fingerprint, so future implementation changes alter the runtime contract.
+The fixtures install a trusted initial native root with a synthetic certificate;
+they qualify the private factory/receiver/recovery, not the initial-root producer
+or public endpoint. Frozen-source validation passes all 733 server library tests, all-target
+Clippy with warnings denied, server build, formatting/diff checks and all 96
+Python harness cases. Multi-server remains at 82 passed /24 failed /9 ignored;
+three standalone aggregates also fail. Unique totals are 853 passed /27 failed
+/9 unexecuted ignores, excluding nested child summaries and focused reruns.
+The exact 513-file corrected source digest is
+`214b64e819382822ffa9bac28434d2ea2bd42a4247421e69025569188b9cf198`.
+The complete run, separately attributed pre-fingerprint run, intermediate
+compile/fixture failures and source-fingerprint correction are preserved in
+[atomic merge evidence](evidence/native-merge-atomic-ci-20261005.json).
+Parent `0b8d3b5` Linux PR/push runs each pass 725 server library cases and fail
+the matrix at 83 passed /27 failed /9 ignored. Exact new-head Linux and RustFS
+qualification remain required; this PR is not green or release qualified.
+
+The public merge adapter still calls the retired command and fails. Merge
+terminal release deliberately retains its preparation pin until the selected
+native graph and exact UUID outcome can be certified. These are explicit
+integration and retention gaps, not completed endpoint or capacity work. The
+next priority is safe terminal graph certification and actual resident/public
+merge dispatch, followed by generated writers and full CI.
+
 ## Mandatory native merge ancestry (2026-10-05 checkpoint)
 
 The ordinary ref-proof factory computes ancestry only for enabled fast-forward

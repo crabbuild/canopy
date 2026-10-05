@@ -89,6 +89,11 @@ impl Journal {
                     primary.decode_reply::<InitializationReply>()?,
                     InitializationReply::Denied(_)
                 )
+            } else if record.kind == Kind::Merge {
+                !matches!(
+                    primary.decode_reply::<crate::pulls::merge::MergeOutcome>()?,
+                    crate::pulls::merge::MergeOutcome::Applied { .. }
+                )
             } else if record.kind == Kind::Policy {
                 matches!(
                     primary.decode_reply::<RefPolicyReply>()?,
@@ -150,6 +155,8 @@ impl Journal {
                 primary.decode_reply::<InitializationReply>()?,
                 InitializationReply::Denied(_)
             )
+        } else if record.kind == Kind::Merge {
+            false
         } else if record.kind == Kind::Policy {
             matches!(primary.decode_reply::<RefPolicyReply>()?, RefPolicyReply::Registered(value) if value.valid)
         } else {

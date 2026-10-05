@@ -32,7 +32,7 @@ pub struct MergeRecord {
     pub merged_at_ms: i64,
     pub revision: PullRevision,
 }
-pub(super) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
+pub(crate) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
     let [
         SqlValue::Blob(id),
         SqlValue::Integer(number),
@@ -67,7 +67,7 @@ pub struct ReviewPolicy {
     pub reviews_satisfied: bool,
 }
 /// The final transaction's domain outcome; only Applied moves refs.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum MergeOutcome {
     Applied { merge: MergeRecord },
@@ -85,9 +85,45 @@ pub(crate) struct ReviewedMerge {
     update: RefUpdate,
 }
 impl ReviewedMerge {
+    pub(crate) fn update(&self) -> &RefUpdate {
+        &self.update
+    }
     pub(crate) fn authorizes(&self, update: &RefUpdate) -> bool {
         self.update == *update
     }
+}
+/// Called only inside the native publisher's authenticated final transaction.
+/// This constructs the same exact-update capability as the original merge
+/// command; client facts alone cannot satisfy the current review predicate.
+pub(crate) fn reviewed_native_update(
+    context: &cellule_runtime::registry::CommandContext<'_, '_>,
+    input: &command::MergeInput,
+    selection: &crate::packs::publication::RefSelection,
+) -> cellule_runtime::Result<Result<ReviewedMerge, MergeOutcome>> {
+    let statement =
+        super::native::with_refs(policy_statement(&input.actor, input.number), selection);
+    let Some(state) = policy_state(&context.sql(&SqlBatch {
+        statements: vec![statement],
+    })?)?
+    else {
+        return Ok(Err(MergeOutcome::NotFound));
+    };
+    if !state.policy.ready || state.policy.revision.as_ref() != Some(&input.request.revision) {
+        return Ok(Err(MergeOutcome::Conflict));
+    }
+    if !state.policy.reviews_satisfied {
+        return Ok(Err(MergeOutcome::ReviewsRequired));
+    }
+    Ok(Ok(ReviewedMerge {
+        update: RefUpdate {
+            name: state.base,
+            expected: Some(RefExpectation {
+                oid: Some(oid(&input.request.revision.base_oid)?),
+                version: input.request.revision.base_version,
+            }),
+            new_oid: Some(oid(&input.request.revision.source_oid)?),
+        },
+    }))
 }
 pub(super) struct ReviewState {
     pub(super) policy: ReviewPolicy,
@@ -226,7 +262,7 @@ fn preparation(
         source: Box::new(error),
     })
 }
-pub(super) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
+pub(crate) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
     parse_oid(text)
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))

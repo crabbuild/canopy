@@ -262,6 +262,16 @@ impl PreparedCatalog {
         self.ref_evidence_with_ancestry(plan, root, budget, limits, AncestryRequirement::Policy)
             .await
     }
+    pub(super) async fn required_ref_evidence(
+        &self,
+        plan: PushPlan,
+        root: &Path,
+        budget: DiskBudget,
+        limits: MetadataLimits,
+    ) -> Result<(PushPlan, Vec<u8>), RefProofError> {
+        self.ref_evidence_with_ancestry(plan, root, budget, limits, AncestryRequirement::Required)
+            .await
+    }
     async fn ref_evidence_with_ancestry(
         &self,
         plan: PushPlan,

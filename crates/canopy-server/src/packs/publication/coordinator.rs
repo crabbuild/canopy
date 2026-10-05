@@ -23,6 +23,8 @@ use tokio::{
 const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
 mod initialization;
+mod native_merge;
+pub use native_merge::ReadyNativeMerge;
 mod inputs;
 pub use initialization::ReadyInitialization;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
