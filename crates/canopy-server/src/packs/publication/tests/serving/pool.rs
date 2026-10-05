@@ -133,6 +133,152 @@ async fn canceled_cold_observer_and_lost_ack_keep_one_owned_acquisition() -> Res
 }
 
 #[tokio::test]
+async fn sequential_generations_roll_over_idle_slots_without_client_retries() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let store = Arc::new(ArtifactStore::new(Arc::new(InMemory::new()), f.repository));
+        initialize(&f, store.clone()).await?;
+        let q = queue(&f)?;
+        let root = tempfile::TempDir::new()?;
+        let tasks = TaskTracker::new();
+        let pool = pooled(&f, store, &root, tasks.clone(), q.clone())?;
+        for generation in 1..=12 {
+            if generation > 1 {
+                advance(&f, generation).await?;
+            }
+            let snapshot =
+                timeout(Duration::from_secs(8), pool.snapshot(Some("owner".into()))).await??;
+            assert_eq!(snapshot.fact().generation, generation);
+            assert_eq!(snapshot.headers(&[missing(&f)?]).await?, vec![None]);
+            assert!(pool.owners_for_test().await.len() <= 4);
+            assert!(pin_count(&f).await? <= 4);
+            drop(snapshot);
+        }
+        finish(&f, &pool, &q, tasks).await?;
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollover_waiters_share_release_after_observer_cancellation_and_lost_ack() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let store = Arc::new(ArtifactStore::new(Arc::new(InMemory::new()), f.repository));
+        initialize(&f, store.clone()).await?;
+        let q = queue(&f)?;
+        let root = tempfile::TempDir::new()?;
+        let tasks = TaskTracker::new();
+        let pool = pooled(&f, store, &root, tasks.clone(), q.clone())?;
+        let mut old_views = Vec::new();
+        for generation in 1..=4 {
+            if generation > 1 {
+                advance(&f, generation).await?;
+            }
+            old_views.push(pool.snapshot(Some("owner".into())).await?);
+        }
+        let old = pool.owners_for_test().await.remove(0);
+        drop(old_views.remove(0));
+        advance(&f, 5).await?;
+        let (dispatch, entered) = q.pause_for_test().await;
+        q.fault_for_test(2);
+        let work = pool.clone();
+        let observer = tokio::spawn(async move { work.snapshot(Some("owner".into())).await });
+        timeout(Duration::from_secs(8), entered).await??;
+        observer.abort();
+        assert!(
+            observer
+                .await
+                .err()
+                .ok_or("rollover finished early")?
+                .is_cancelled()
+        );
+        assert!(
+            timeout(Duration::from_millis(20), old.drain_observer().wait())
+                .await
+                .is_err()
+        );
+        assert_eq!(pool.owners_for_test().await.len(), 4);
+        assert_eq!(pin_count(&f).await?, 4);
+        let work = pool.clone();
+        let viewers = tokio::spawn(async move {
+            futures_util::future::join_all((0..12).map(|_| work.snapshot(Some("owner".into()))))
+                .await
+                .into_iter()
+                .collect::<std::result::Result<Vec<_>, _>>()
+        });
+        dispatch.send(()).map_err(|_| "release dispatch gone")?;
+        let snapshots = timeout(Duration::from_secs(8), viewers).await???;
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.fact().generation == 5)
+        );
+        assert_eq!(old.stats().phase, ServingOwnerPhase::Released);
+        assert_eq!(pool.owners_for_test().await.len(), 4);
+        assert_eq!(pin_count(&f).await?, 4);
+        for view in &old_views {
+            assert_eq!(view.headers(&[missing(&f)?]).await?, vec![None]);
+        }
+        drop((old_views, snapshots));
+        finish(&f, &pool, &q, tasks).await?;
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollover_timeout_retains_the_slot_and_exact_release_for_retry() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let store = Arc::new(ArtifactStore::new(Arc::new(InMemory::new()), f.repository));
+        initialize(&f, store.clone()).await?;
+        let q = queue(&f)?;
+        let root = tempfile::TempDir::new()?;
+        let tasks = TaskTracker::new();
+        let pool = pooled(&f, store, &root, tasks.clone(), q.clone())?;
+        let mut old_views = Vec::new();
+        for generation in 1..=4 {
+            if generation > 1 {
+                advance(&f, generation).await?;
+            }
+            old_views.push(pool.snapshot(Some("owner".into())).await?);
+        }
+        let old = pool.owners_for_test().await.remove(0);
+        drop(old_views.remove(0));
+        advance(&f, 5).await?;
+        let (dispatch, entered) = q.pause_for_test().await;
+        let work = pool.clone();
+        let observer = tokio::spawn(async move { work.snapshot(Some("owner".into())).await });
+        timeout(Duration::from_secs(8), entered).await??;
+        assert!(matches!(
+            timeout(Duration::from_secs(8), observer).await??,
+            Err(ServingOwnerError::Read(ServingReadError::Capability(
+                Error::Capacity("repository serving generations")
+            )))
+        ));
+        assert!(
+            timeout(Duration::from_millis(20), old.drain_observer().wait())
+                .await
+                .is_err()
+        );
+        assert_eq!(pool.owners_for_test().await.len(), 4);
+        assert_eq!(pin_count(&f).await?, 4);
+        dispatch.send(()).map_err(|_| "release dispatch gone")?;
+        let fifth = timeout(Duration::from_secs(8), pool.snapshot(Some("owner".into()))).await??;
+        assert_eq!(fifth.fact().generation, 5);
+        assert_eq!(pin_count(&f).await?, 4);
+        for view in &old_views {
+            assert_eq!(view.headers(&[missing(&f)?]).await?, vec![None]);
+        }
+        drop((old_views, fifth));
+        finish(&f, &pool, &q, tasks).await?;
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn four_generation_bound_retains_borrows_and_reuses_only_actually_drained_slots() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
@@ -161,14 +307,13 @@ async fn four_generation_bound_retains_borrows_and_reuses_only_actually_drained_
         assert_eq!(pin_count(&f).await?, 4);
         let old = pool.owners_for_test().await.remove(0);
         drop(snapshots.remove(0));
-        assert!(pool.snapshot(Some("owner".into())).await.is_err());
+        let fifth = timeout(Duration::from_secs(8), pool.snapshot(Some("owner".into()))).await??;
         assert_eq!(
             timeout(Duration::from_secs(8), old.drain_observer().wait())
                 .await?
                 .phase,
             ServingOwnerPhase::Released
         );
-        let fifth = pool.snapshot(Some("owner".into())).await?;
         assert_eq!(fifth.fact().generation, 5);
         assert_eq!(pin_count(&f).await?, 4);
         for snapshot in &snapshots {

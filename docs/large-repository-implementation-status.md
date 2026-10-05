@@ -70,6 +70,42 @@ server build, formatting/diff checks and 96 Python harness cases pass.
 These results do not qualify the full workflow or Linux. Exact fingerprints and
 remaining priorities are in [native writer evidence](evidence/native-writer-ci-20261005.json).
 
+## Serving generation rollover and CI repair (2026-10-05)
+
+A sequential reader could exhaust the four-generation serving pool even after
+all old snapshots were dropped. The pool started one idle owner's release and
+immediately returned capacity. It now observes independently owned retirement
+outside the pool lock and retries current authorized selection within a shared
+two-second rollover budget and a slot-count retry limit. Closing owners remain
+charged and cannot accept new borrows. Four borrowed generations still refuse
+capacity immediately; timeout, observer cancellation and lost acknowledgement
+preserve the exact release and its retained slot/pin. Limits are unchanged.
+
+Three new pool families cover twelve sequential generations, concurrent waiters
+with cancellation/lost acknowledgement, and timed-out release followed by retry,
+in both object formats. All nine pool families pass. The complete frozen-source
+workspace passes 732 library cases (6 Git-format, 15 object-storage and 711 server),
+13 directory cases, two Git backend cases and two binary cases. Multi-server
+finishes with 75 passes, 31 failures and nine existing ignores. The stock SSH
+clone/push/fetch/revocation family now passes; its previous serving-generation
+capacity failure is resolved. The three standalone aggregates still fail.
+Isolated RustFS passes SHA-256 push/clone/restore and fails native merge candidates;
+its later six cases remain unexecuted. Combined unique inventory is 825 passes,
+35 failures and seven unexecuted ignores. Clippy with warnings denied, server
+build, formatting/diff checks and 96 harness cases pass.
+
+Both Linux Verify runs at previous head `64481d15b6d1f210006d137ca481b8b95abcb721`
+pass 708 server library cases but fail multi-server with 75 passes, 35 failures
+and nine ignores. In addition to the macOS failures, three push-option rejection
+families fail with a transport error or missing exact reason. Those logs are
+captured; they are not current-source Linux qualification. New PR/push CI must
+run after this increment. The [rollover evidence](evidence/serving-rollover-ci-20261005.json)
+separates source digests, preserved reproduction, local results and previous-head
+Linux failures. The [final publication contract](design/final-publication-lifecycle.md#open-gate-refusal-after-pre-bind-write-revocation)
+defines the pending refusal-only authority boundary without weakening Write for
+admission or publication. Full CI, generated metadata/writers, backup/routing,
+physical ownership/recovery and large-team capacity remain open.
+
 ## Whole-workflow ownership and CI repair
 
 The production resident supplies its actual Cell client and publication
