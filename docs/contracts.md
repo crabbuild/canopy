@@ -1732,7 +1732,7 @@ with a 30-second receive deadline. The Cell command rechecks owner authority.
 The historical SQL publisher used `refs::apply_refs` for typed
 `FinalizePush`, HTTP `CompletePush`, and `MergePull`. Native publication instead
 uses privately certified immutable ref roots and reuses current branch/check
-predicates; native reviewed merge operation 9, codec 5 is described below. Before any ref writes, each enabled rule
+predicates; native reviewed merge operation 9, codec 6 is described below. Before any ref writes, each enabled rule
 checks deletion policy, ancestry and every required check. For a non-deletion,
 the selected attempt is the greatest creation number matching the proposed
 commit, context and current context version. It must have state `success` and
@@ -1942,17 +1942,18 @@ native merge receiver must authenticate the exact proof and conditional ref
 snapshot, check current access/reviews/checks and ref versions, and commit joint
 roots, pull state and UUID result under the actual owner fence and durable
 recovery journal. The native receiver described below exists; its resident
-adapter and terminal pin release remain unfinished. The historical SQL merge
+adapter remains unfinished; typed terminal release is described below. The historical SQL merge
 description below is not qualification of the native product workflow.
 
-`PublishReviewedMerge` reuses operation 9 with codec 5 and a 256 KiB input / 512
+`PublishReviewedMerge` reuses operation 9 with codec 6 and a 256 KiB input / 512
 byte output contract. It replaces the registered contract rather than decoding
 legacy codec 4. Its private factory requires a ref-only `PreparedCatalog`: no
 incoming pack or native push-result checkpoint is accepted. It reads at most two
 source/base facts from that preparation's immutable ref root, verifies native
 ancestry, and prepares the conditional ref snapshot while preserving HEAD.
 The existing catalog MAC binds actor, exact request including preparation time,
-fact vector, plan/evidence and proposed ref root under a distinct merge purpose.
+fact vector, plan/evidence, proposed ref root and permanent audit root under a
+distinct merge purpose.
 No serving-only proof, arbitrary root or transport bit grants write authority.
 
 The final command requires its exact registered SDK command and body before
@@ -1976,8 +1977,18 @@ Kind `Merge` cannot be restored or decoded as a push outcome.
 
 The current SHA-256 maximum result encodes to 493 bytes, within the unchanged
 512-byte journal cap. Known results survive original factory loss, SQLite loss
-and actual owner restoration. Merge pins deliberately remain retained: terminal
-release has not yet certified their selected catalog/ref graph and UUID outcome.
+and actual owner restoration. An applied UUID row also retains a bounded
+`StoredInputRoot` descriptor containing its typed request, catalog and ref
+snapshot. The final merge transaction saves that descriptor atomically with the
+result; SQL guards prohibit replacing, updating or deleting the row. Terminal
+release selects the original UUID audit, authenticates its typed catalog roots
+and exact published base-ref path, and transfers the original recovery phase
+into the existing immutable receipt archive before deleting the pin. A fresh
+UUID replay must close its own operation first and selects the original audit,
+not its new proposal. Known denials retain their original phase after later
+success and require authoritative operation closure. This authorizes no provider
+deletion; complete retained-root inventory and descendant reclamation remain
+required. See [terminal retention](design/terminal-publication-retention.md).
 The public adapter still invokes retired preparation/codec 4, so network merge
 remains unqualified. Generated merge/squash/rebase strategies are not accepted by
 this factory; their producers and integration remain required work.
@@ -2282,7 +2293,7 @@ conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
 Historical SQL merge contract (operation 9, codec 4; no longer registered in
 the native production registry): the old command performed the following
-transaction. The native operation 9, codec 5 contract above replaces its storage
+transaction. The native operation 9, codec 6 contract above replaces its storage
 authority. Public/resident adapter conversion remains open; this historical
 section is not evidence that the current merge endpoint works.
 

@@ -123,6 +123,7 @@ impl WireValue for TerminalReleaseReply {
 pub(super) enum Terminal {
     Push(Box<CompletedRootPush>),
     Initialization(InitializationReply),
+    Merge(crate::pulls::merge::MergeOutcome),
 }
 impl Terminal {
     fn selected_statement(&self, operation: [u8; 16]) -> SqlStatement {
@@ -130,6 +131,9 @@ impl Terminal {
             sql: match self {
                 Self::Push(_) => super::super::root_completion::read::SAVED,
                 Self::Initialization(_) => super::super::initialization::publish::SAVED,
+                Self::Merge(outcome) => {
+                    return super::super::native_merge::audit::statement(outcome);
+                }
             }
             .into(),
             parameters: vec![blob(operation)],
@@ -150,14 +154,34 @@ impl Terminal {
             // A known negative is the original phase knowledge. A later attempt
             // may initialize this logical operation, without rewriting that denial.
             Self::Initialization(InitializationReply::Denied(_)) => true,
+            Self::Merge(outcome) => {
+                !matches!(outcome, crate::pulls::merge::MergeOutcome::Applied { .. })
+                    || super::super::native_merge::audit::selected(result, outcome, &check.actor)?
+                        .is_some()
+            }
         })
     }
     async fn closed_graph(
         &self,
         store: &ArtifactStore,
+        selected: &[SqlResultSet],
+        check: &LeaseCheck,
         hash: &mut blake3::Hasher,
     ) -> Result<(), RootRecoveryError> {
         match self {
+            Self::Merge(outcome) => {
+                hash.update(&encoded(outcome, 512)?);
+                if let Some(root) =
+                    super::super::native_merge::audit::selected(selected, outcome, &check.actor)?
+                {
+                    super::super::native_merge::audit::closed_graph(
+                        store, root, outcome, check, hash,
+                    )
+                    .await?;
+                } else if matches!(outcome, crate::pulls::merge::MergeOutcome::Applied { .. }) {
+                    return Err(RootRecoveryError::Context);
+                }
+            }
             Self::Push(terminal) => {
                 super::super::root_completion::closed_graph(store, terminal.root, hash).await?
             }
@@ -195,11 +219,18 @@ impl phase::Journal {
     pub(super) fn terminal(&self, record: &Record) -> Result<Option<Terminal>, CodecError> {
         // Validation is required even when only a primary result is selected.
         self.may_advance(record)?;
-        // Merge recovery retains its physical pin until its selected catalog/ref
-        // graph and UUID outcome can be certified for terminal release. It must
-        // not be misdecoded or released as a push/empty initialization graph.
+        // A merge has its own typed permanent audit selection. Known denials
+        // retain their original phase even if a later UUID attempt succeeds.
         if record.kind == Kind::Merge {
-            return Ok(None);
+            return self
+                .primary
+                .as_ref()
+                .map(|value| {
+                    value
+                        .decode_reply::<crate::pulls::merge::MergeOutcome>()
+                        .map(Terminal::Merge)
+                })
+                .transpose();
         }
         if record.kind == Kind::Initialization {
             return self
@@ -338,7 +369,9 @@ impl RegisteredRootRecovery {
             )?;
             record = next;
         }
-        terminal.closed_graph(store, &mut hash).await?;
+        terminal
+            .closed_graph(store, &row.output, &self.record.check, &mut hash)
+            .await?;
         let proof = Proof {
             recovery: self.certificate.clone(),
             phase: *blake3::hash(&encoded(&journal, 2048)?).as_bytes(),

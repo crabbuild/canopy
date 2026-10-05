@@ -17,6 +17,55 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native merge audit and terminal retirement (2026-10-05 checkpoint)
+
+Operation 9 codec 6 now binds a permanent merge audit in the existing catalog
+certificate. The fresh `pull_merges` schema stores a bounded `StoredInputRoot`
+descriptor beside the immutable UUID result; SQL guards reject result/audit
+updates, deletion and replacement. It reuses existing request, catalog, ref
+snapshot and recovery structures, without a SQL ref mirror or backward decoder.
+The final transaction saves the audit descriptor with joint roots and result.
+
+Typed terminal retirement selects the first applied UUID's permanent audit,
+checks its exact actor/request/result and native catalog top roots plus published
+base-ref path, and atomically archives original recovery and release receipts
+before deleting the closed preparation pin. A fresh replay must close its own
+operation and selects the old audit rather than its new proposal. Known denials
+remain their original phase after a later fresh attempt succeeds. Missing or
+corrupt selected metadata prevents release. This grants no provider deletion;
+the complete retained-root collector must include the audit's typed descendants.
+
+The failing-first applied-retirement regression compiled and returned
+`Error::Context` on the parent implementation. Thirteen focused merge tests now
+pass, including five new retirement families for applied/replayed release,
+denied-then-successful receipt separation, missing/corrupt metadata, actual
+Admin/owner checks, last-write rollback, immutable result rows, original body
+removal and SQLite-loss/owner restoration of both merge and release receipts.
+Both formats are exercised where applicable. Fixtures use verified stock-Git
+bytes with a trusted synthetic initial certificate; they do not qualify the
+public merge adapter or initial-root production path.
+
+Frozen validation passes all 738 server library tests, all-target Clippy with
+warnings denied, the production server build, formatting/diff checks and all
+96 Python harness tests. Full Rust results are 858 passed /27 failed /9 ignored;
+the exact failed-case set is unchanged from the prior atomic-merge run.
+Exact source digest across
+515 files (497 Rust) is
+`ec37049731e41eb420dac90a67c20fa49c2efc603a6ff206c38da674ce9fa2eb`.
+The final results and preserved baseline/intermediate failures are recorded
+in [merge retirement evidence](evidence/native-merge-retirement-ci-20261005.json).
+Parent `2ed3d58` Rust checks were cancelled, not passed; one PR harness completed
+successfully. Exact new-head Linux qualification remains required.
+
+Next: qualify actual automatic merge retirement and selected audits after SQL
+generation reaping; connect the public/resident fast-forward endpoint through
+owned staging and exact registered dispatch; then generated merge/squash/rebase,
+thread/default-branch writers and the remaining full CI failures. Physical
+collection/backup/restore, peer recovery, selective fetch, fair maintenance and
+accelerators, asynchronous file attribution and full-history/10,000-engineer
+capacity gates remain open. The historical checkpoints below describe earlier
+revisions; the current full goal is not achieved or release qualified.
+
 ## Atomic native reviewed-merge transaction (2026-10-05 checkpoint)
 
 The private factory now binds the exact merge request, actor, source/base ref

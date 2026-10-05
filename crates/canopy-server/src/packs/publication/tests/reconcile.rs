@@ -88,6 +88,7 @@ pub(super) async fn graph_with_run_limits(
         other: initial,
         blob,
         store,
+        provider: native.provider,
     })
 }
 async fn publish(

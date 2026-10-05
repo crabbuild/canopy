@@ -282,8 +282,16 @@ CREATE TABLE pull_merges (
     source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
     source_version INTEGER NOT NULL CHECK(source_version > 0),
     base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
-    base_version INTEGER NOT NULL CHECK(base_version > 0)
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    publication BLOB NOT NULL CHECK(length(publication) BETWEEN 1 AND 128)
 ) WITHOUT ROWID;
+CREATE TRIGGER pull_merge_immutable BEFORE UPDATE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_not_replaced BEFORE INSERT ON pull_merges
+WHEN EXISTS(SELECT 1 FROM pull_merges WHERE id=NEW.id OR pull_number=NEW.pull_number)
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_retained BEFORE DELETE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge audit retained'); END;
 
 CREATE TABLE merge_candidates (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),

@@ -214,6 +214,7 @@ pub(super) fn attempt<'a>(
                 other: tip,
                 blob,
                 store,
+                provider: provider.clone(),
             },
             staging,
             ticket,

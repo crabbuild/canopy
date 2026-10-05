@@ -39,6 +39,8 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("selected native merge audit failed")]
+    MergeAudit(#[source] Box<NativeMergeAuditError>),
     #[error("closed initialization graph failed")]
     Initialization(#[from] super::initialization::InitializationVerificationError),
     #[error("closed native audit graph failed")]
@@ -63,6 +65,12 @@ pub enum RootRecoveryError {
     Query(#[source] Box<InvocationError<Vec<SqlResultSet>>>),
     #[error("root command recovery binding differs")]
     Context,
+}
+
+impl From<NativeMergeAuditError> for RootRecoveryError {
+    fn from(error: NativeMergeAuditError) -> Self {
+        Self::MergeAudit(Box::new(error))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -18,6 +18,7 @@ pub(super) struct Graph {
     pub(super) other: ObjectId,
     pub(super) blob: ObjectId,
     pub(super) store: Arc<canopy_object_storage::artifact::ArtifactStore>,
+    pub(super) provider: Arc<dyn object_store::ObjectStore>,
 }
 pub(super) fn update(name: &str, old: Option<(ObjectId, i64)>, new: Option<ObjectId>) -> RefUpdate {
     RefUpdate {
@@ -82,6 +83,7 @@ pub(super) async fn assembled(
             other,
             blob,
             store: native.store,
+            provider: native.provider,
         })
     })
     .await
@@ -300,6 +302,7 @@ pub(super) async fn next_graph(
         other: old.other,
         blob: old.blob,
         store: Arc::clone(&old.store),
+        provider: Arc::clone(&old.provider),
     })
 }
 

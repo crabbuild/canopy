@@ -24,6 +24,8 @@ use cellule_runtime::{InvocationError, primitives::sql::SqlCell};
 use std::path::Path;
 use tokio::time::timeout_at;
 
+pub(super) mod audit;
+
 pub const NATIVE_MERGE_BYTES: u32 = 256 << 10;
 
 #[derive(Clone, Debug)]
@@ -31,6 +33,7 @@ struct Transition {
     plan: PushPlan,
     ancestry: Vec<u8>,
     refs: Option<RefStateSnapshotRoot>,
+    audit: Option<crate::packs::input_artifact::StoredInputRoot>,
 }
 
 /// Exact request, native ref facts and conditional snapshot. Only a privately
@@ -46,6 +49,8 @@ pub struct NativeMergeProof {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NativeMergePreparationError {
+    #[error("native merge audit root failed")]
+    Root(#[from] crate::packs::InputRootError),
     #[error("native merge preparation is inactive")]
     Base(#[from] PreparationBaseError),
     #[error("native merge encoding failed")]
@@ -98,6 +103,9 @@ impl NativeMergeProof {
             return Err(CodecError::Invalid("native merge ref format"));
         }
         if let Some(t) = &self.transition {
+            if let Some(audit) = t.audit {
+                audit.validate(crate::packs::input_artifact::INPUT_ROOT_BYTES)?;
+            }
             super::ref_proof::shape(&t.plan, data.catalog.format)
                 .map_err(|_| CodecError::Invalid("native merge plan"))?;
             super::ref_proof::binding(&t.plan, &t.ancestry)?;
@@ -111,6 +119,9 @@ impl NativeMergeProof {
                     .is_none()
                 || t.refs
                     .is_some_and(|r| r.operation() != data.token.artifact_operation)
+                || t.audit
+                    .is_some_and(|r| r.operation != data.token.artifact_operation)
+                || t.audit.is_some() != t.refs.is_some()
                 || t.refs.is_some() != super::ref_proof::proven(&t.ancestry, 0)
             {
                 return Err(CodecError::Invalid("invalid native merge transition"));
@@ -135,8 +146,9 @@ impl NativeMergeProof {
         h.update(&[u8::from(transition.is_some())]);
         if let Some(t) = transition {
             h.update(&super::ref_proof::binding(&t.plan, &t.ancestry)?);
-            let mut e = BoundedEncoder::new(128)?;
+            let mut e = BoundedEncoder::new(256)?;
             t.refs.encode(&mut e)?;
+            t.audit.encode(&mut e)?;
             h.update(&e.finish());
         }
         Ok(*h.finalize().as_bytes())
@@ -153,6 +165,7 @@ impl WireValue for NativeMergeProof {
             t.plan.encode(e)?;
             e.write_bytes(&t.ancestry)?;
             t.refs.encode(e)?;
+            t.audit.encode(e)?;
         }
         Ok(())
     }
@@ -166,6 +179,7 @@ impl WireValue for NativeMergeProof {
                     plan: PushPlan::decode(d)?,
                     ancestry: d.read_bytes()?.to_vec(),
                     refs: Option::<RefStateSnapshotRoot>::decode(d)?,
+                    audit: Option::<crate::packs::input_artifact::StoredInputRoot>::decode(d)?,
                 })
             } else {
                 None
@@ -269,10 +283,17 @@ impl PreparedCatalog {
                         } else {
                             None
                         };
+                        let audit = match proposed {
+                            Some(refs) => Some(
+                                audit::prepare(self, &input, &plan.updates[0].name, refs).await?,
+                            ),
+                            None => None,
+                        };
                         transition = Some(Transition {
                             plan,
                             ancestry,
                             refs: proposed,
+                            audit,
                         });
                     }
                 }
@@ -297,7 +318,7 @@ pub struct PublishReviewedMerge;
 impl Command for PublishReviewedMerge {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 5;
+    const CODEC_VERSION: u32 = 6;
     type Input = NativeMergeProof;
     type Output = MergeOutcome;
     fn execute(
@@ -396,6 +417,12 @@ fn publish(
     let Some(refs) = transition.refs else {
         return Ok(denied(MergeOutcome::Conflict));
     };
+    let Some(audit) = transition.audit else {
+        return Ok(denied(MergeOutcome::Conflict));
+    };
+    let mut encoded_audit = BoundedEncoder::new(128)?;
+    audit.encode(&mut encoded_audit)?;
+    let encoded_audit = encoded_audit.finish();
     let policy = context.sql(&SqlBatch {
         statements: vec![crate::branch_rules::policy_statement_with_ancestry(
             update, true,
@@ -472,7 +499,7 @@ fn publish(
         vec![number(generation)?, number(data.base.generation)?],
     ))?)?;
     changed(context.sql(&statement("UPDATE pull_requests SET state='merged',version=version+1,updated_ms=max(updated_ms,?2) WHERE number=?1 AND state='open' AND version=?3 AND version<9223372036854775807", vec![SqlValue::Integer(input.number),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version)]))?)?;
-    changed(context.sql(&statement("INSERT INTO pull_merges(id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", vec![blob(id.as_bytes()),blob(binding),SqlValue::Integer(input.number),blob(source),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),blob(crate::pulls::merge::oid(&input.request.revision.source_oid)?),SqlValue::Integer(input.request.revision.source_version),blob(base),SqlValue::Integer(input.request.revision.base_version)]))?)?;
+    changed(context.sql(&statement("INSERT INTO pull_merges(id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", vec![blob(id.as_bytes()),blob(binding),SqlValue::Integer(input.number),blob(source),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),blob(crate::pulls::merge::oid(&input.request.revision.source_oid)?),SqlValue::Integer(input.request.revision.source_version),blob(base),SqlValue::Integer(input.request.revision.base_version),blob(encoded_audit)]))?)?;
     changed(context.sql(&statement(
         "DELETE FROM catalog_operations WHERE id=?1",
         vec![blob(data.token.operation)],

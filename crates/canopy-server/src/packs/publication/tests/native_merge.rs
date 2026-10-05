@@ -544,3 +544,5 @@ async fn native_merge_original_result_survives_sqlite_loss_and_actual_owner_rest
     }
     Ok(())
 }
+
+mod retirement;
