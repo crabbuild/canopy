@@ -10,6 +10,8 @@ use crate::pulls::{
 use cellule_runtime::codec::BoundedDecoder;
 use cellule_runtime::{Committed, InvocationError};
 
+mod candidates;
+
 fn data(native: &BrowseFixture) -> CreateData {
     CreateData {
         id: uuid::Uuid::new_v4().into_bytes(),

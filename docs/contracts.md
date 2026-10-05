@@ -2365,6 +2365,13 @@ remain open. No dependency or lockfile changed.
 
 ### Native merge, squash and rebase candidates
 
+In the current packed cutover, operation 10 codec 3 supports native editorial
+reservation and negative preparation completion. Generated `ready` publication
+and the resident generated producer remain incomplete. The generated-object
+workflow below is required delivery scope; retired SQLite object/ref ingestion
+does not implement it. This distinction applies even when a pending intent or
+negative result is already durable.
+
 Preparation and branch publication are separate actions. A writer POSTs
 `/api/repositories/<name>/pulls/<number>/merge-candidates` with `repository_id`,
 canonical UUID `id`, exact pull `revision`, and `strategy`. `merge_commit` and
@@ -2382,7 +2389,23 @@ its original request fields, pull `number`, `actor`, `created_at_ms`, and `resul
 | `unrelated` | none | Native Git found no common ancestor; cannot publish |
 | `rebase_unavailable` | `reason` | `merge_history`, `no_commits`, `limit` or `commit_format`; cannot publish |
 
-Operation 10, codec 2 reserves the UUID against actor, pull and complete intent.
+Operation 10, codec 3 reserves the UUID against actor, pull and complete intent.
+Its input reuses `CandidateAction` and `RefSelection`. A serving observation
+authenticates the exact action purpose, actor, selected native OIDs/versions,
+actual owner, live pin and current joint generation. The final transaction
+checks fresh write access and projects those facts into the existing pull-policy
+statement instead of reading the retired SQL ref table. The client keeps its
+serving snapshot through dispatch. Known access denials reach the typed command
+without a proof, preserving their original durable refusal.
+
+Reservation and negative completion change only existing candidate editorial
+rows. They do not move roots, create fetch refs or authorize physical deletion.
+Even an authentic serving observation bound to a `Ready` payload cannot grant
+generated write authority: this command's codec rejects that scope, and the
+client requires the forthcoming joint generated publisher. There is no codec 2
+compatibility decoder. A SQL failure rolls back both the editorial write and
+SDK acceptance, allowing the original prepared command to retry unchanged.
+
 It retains the first timestamp. Retrying completed preparation returns the
 original result, even if the pull later changes or merges; current write access
 is still required for POST. GET requires current read access. For pending
@@ -2414,10 +2437,12 @@ native worker is trusted to compute the merge tree; the Cell validates exact
 canonical commit bytes and certified graph closure before recording readiness.
 It does not independently recompute the merge algorithm.
 
-Generated objects use the same verified SQLite/chunk/external-blob ingestion as
-pushes. A ready result and `refs/canopy/merge-candidates/<UUID>` commit in one
-transaction, advancing the ref generation for cache invalidation and coherent
-pagination. The entire `refs/canopy` namespace, including its root, is reserved.
+The cutover's generated publisher must use the same physically verified native
+pack/catalog lifecycle as pushes. Its ready result, certified joint roots and
+`refs/canopy/merge-candidates/<UUID>` must commit in one transaction, advancing
+the ref generation for cache invalidation and coherent pagination. The retired
+SQLite/chunk/external object ingestion and SQL ref insertion are not a fallback.
+The entire `refs/canopy` namespace, including its root, is reserved.
 The authoritative publisher rejects direct creation, replacement and deletion
 there; native receive hooks give per-ref rejection reports. Mixed pushes may
 still publish permitted siblings, while atomic pushes reject the group. Ready
@@ -2448,8 +2473,10 @@ native peak disk/memory/CPU bounds and crash-left cleanup remain release gates.
 Candidate input/result objects and their ancestor closure are retention roots.
 No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
 historic candidates need quota/retention policy before persistent public use.
-Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
-codec 4 require a fresh development prefix. No dependency or lockfile changes.
+Schema 1 remains unreleased and requires a fresh development prefix. The native
+editorial increment reuses the existing candidate request/result/table and
+ref-observation structures, with operation 10 codec 3; reviewed native merge is
+operation 9 codec 6. No dependency or lockfile changes are needed for this step.
 
 
 ## Repository browser

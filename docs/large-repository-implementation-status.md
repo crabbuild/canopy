@@ -17,6 +17,50 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native candidate reservation and negative completion (2026-10-05 checkpoint)
+
+Operation 10 codec 3 is now registered for native editorial candidate intent.
+It reuses the existing request/action/result, candidate rows and certified ref
+selection. The client retains its serving snapshot through dispatch. The final
+receiver checks fresh write access, actual Cell/owner, exact action purpose and
+facts, live pin and current joint generation, then evaluates pull policy against
+native refs. UUID replay preserves the first request, timestamp and negative
+result; changed intent is a collision. Pending reservation and first negative
+completion modify only editorial metadata. Generated Ready results require a
+separate joint publication and are refused even with authentic read evidence;
+the old SQL object certification/ref insertion path is removed from this command.
+
+The failing-first actual resident reservation compiled and failed because the
+operation was absent from the production registry. Four regression families now
+pass in both Git formats: reservation/negative completion/replay and unchanged
+roots; purpose/payload/fact/actor/Cell/current-generation binding; late access and
+editorial revision changes; and SQL rollback with absent SDK acceptance followed
+by exact-command retry and receipt replay. Two intermediate rollback-fixture
+attempts hit the public SQL separator guard and read-only query guard. The fault
+now uses a trusted test-only Cell mutation; neither production guard was weakened.
+Fixtures use verified stock-Git metadata but synthetic initial certificate SQL.
+They do not qualify the public generated producer or initial-root creation.
+
+Frozen validation passes all 743 server library cases, the registry contract,
+all-target Clippy with warnings denied, production build, formatting/diff checks
+and all 96 Python harness cases. Full Rust results are 868 passed /23 failed /9
+ignored, with the exact failed-case set unchanged from the preceding checkpoint.
+The unchanged digest across 517 source files (499 Rust) is
+`67608ddeea86178381fdc9cc3521f6c4362cd9648c0734fc8453c079a28c4926`.
+[Candidate evidence](evidence/native-candidate-intent-ci-20261005.json) records
+complete results, failing-first/intermediate runs and parent Linux CI. Both
+parent c8c49e8 Linux Rust jobs failed; Python harness jobs passed. Their RustFS
+and production-build phases were skipped, and exact new-head Linux validation
+remains required.
+
+Next: complete resident generated candidate production and atomic Ready/catalog/
+fetch-ref publication, then native merge/squash/rebase, default-branch and thread
+writers. Qualify cancellation, lost acknowledgements, startup adoption and
+retention, resolve remaining full CI failures, and complete peer/backup recovery,
+selective fetch, physical collection/final DDL, acceleration/fair maintenance,
+asynchronous attribution and full-history/10,000-engineer capacity gates. The
+full goal remains active and this increment is not release qualified.
+
 ## Public native fast-forward merge endpoint (2026-10-05 checkpoint)
 
 Production HTTP merge now calls the resident `GitGateway` native driver. The

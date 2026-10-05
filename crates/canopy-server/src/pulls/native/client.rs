@@ -1,6 +1,6 @@
 use super::*;
 impl RepositoryCell {
-    async fn pull_ref_selection(
+    pub(crate) async fn pull_ref_selection(
         &self,
         actor: &str,
         request: [u8; 32],
