@@ -6,6 +6,7 @@ pub(crate) enum ReadKind {
         state: Option<PullState>,
     },
     Detail(i64),
+    ReviewPolicy(i64),
     Reviews {
         number: i64,
         after: i64,
@@ -54,7 +55,9 @@ pub(super) fn selector(actor: ReadIdentity<'_>, kind: &ReadKind) -> SqlStatement
             };
             (format!("p.number>?2{extra}"), p)
         }
-        ReadKind::Detail(number) | ReadKind::Reviews { number, .. } => (
+        ReadKind::Detail(number)
+        | ReadKind::ReviewPolicy(number)
+        | ReadKind::Reviews { number, .. } => (
             "p.number=?2".into(),
             vec![actor.parameter(), SqlValue::Integer(*number)],
         ),
@@ -135,7 +138,7 @@ pub(crate) struct ReadNativePulls;
 impl Query for ReadNativePulls {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 52;
-    const CODEC_VERSION: u32 = 1;
+    const CODEC_VERSION: u32 = 2;
     type Input = ReadRequest;
     type Output = ReadReply;
     fn execute(
@@ -202,6 +205,7 @@ impl Query for ReadNativePulls {
                 ),
                 parameters: vec![actor.parameter(), SqlValue::Integer(number)],
             },
+            ReadKind::ReviewPolicy(number) => super::super::merge::policy_statement(actor, number),
             ReadKind::Reviews { number, after } => {
                 if rows.is_empty() {
                     return Ok(ReadReply::Rows(None));

@@ -1142,8 +1142,10 @@ acknowledged state is recovered from object storage. Normal shutdown may leave
 local files for the next startup to reclaim.
 
 One supervisor owns node startup, the listener, Cell drain and the workspace.
-`CanopyServer::start` waits for its readiness result; cancelling that wait closes
-the control channel and requests drain after admitted initialization settles.
+`CanopyServer::start` waits for its readiness result. A reported startup error
+also joins the supervisor before returning, so completion includes release of
+its task-owned startup resources. Successful readiness retains the running
+supervisor in the handle. Cancelling either wait closes the control channel and requests drain after admitted initialization settles.
 Dropping a returned handle also requests drain. `shutdown()` waits for completion,
 but cancelling the wait leaves that same supervisor running. The Tokio runtime
 must stay alive for cleanup to finish. This does not make runtime destruction,
@@ -1898,7 +1900,9 @@ an 816 KiB operation input bound. Mutation results admit 16 bytes. Unknown names
 and deleted tombstones remain distinct authenticated facts; neither supplies a
 live tip for a new pull or review.
 
-Query 52 reads lists, details and review applicability with a 1 MiB output bound.
+Query 52, codec 2, reads lists, details, review applicability and review policy
+with a 1 MiB output bound. Policy is a distinct request purpose: a prepared policy
+observation cannot authorize a detail query or another pull number.
 The initial bounded selection binds pull numbers, editorial versions and ref names.
 The final query repeats that selection and rejects a mismatch before joining the
 certified refs. The adapter makes at most three attempts with fresh selections;
@@ -1907,8 +1911,15 @@ Each final transaction rechecks current access, including anonymous public acces
 and public-to-private changes after preparation. Known denied mutations still
 reach the final command without a proof; its fresh access decision records
 NotFound while access remains denied, or Conflict if it has changed. Pending or
-transport failures remain errors. Merge-policy and generated Git producers still
-need their native ref conversion and are not qualified by these pull operations.
+transport failures remain errors. Review-policy reads join the authenticated
+native tips with current rules, review heads and member generations in the final
+query. Changes to rules or decisions after preparation are reflected immediately;
+ref/editorial changes invalidate the prepared observation. Tombstones remove the
+reviewed revision; recreating the same OID with a later ref version cannot restore
+old approvals. Merge ancestry preparation uses this same native policy reader.
+The final merge command and generated Git producers still need native atomic
+publication and are not qualified by these read operations. Codec 2 is a hard
+cutover of this unreleased query; no old input decoder is retained.
 
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation

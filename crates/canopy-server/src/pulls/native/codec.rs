@@ -160,6 +160,13 @@ impl WireValue for ReadData {
                 e.write_u8(1)?;
                 e.write_i64(*number)?;
             }
+            ReadKind::ReviewPolicy(number) => {
+                if *number < 1 {
+                    return Err(invalid());
+                }
+                e.write_u8(3)?;
+                e.write_i64(*number)?;
+            }
             ReadKind::Reviews { number, after } => {
                 if *number < 1 || *after < 0 {
                     return Err(invalid());
@@ -181,6 +188,7 @@ impl WireValue for ReadData {
                 state: Option::<PullState>::decode(d)?,
             },
             1 => ReadKind::Detail(d.read_i64()?),
+            3 => ReadKind::ReviewPolicy(d.read_i64()?),
             2 => ReadKind::Reviews {
                 number: d.read_i64()?,
                 after: d.read_i64()?,

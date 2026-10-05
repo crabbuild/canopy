@@ -3,6 +3,55 @@ use crate::native_resources::{NativeClass, NativeLimits, NativeWork};
 use object_store::memory::InMemory;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_startup_waits_for_supervisor_completion_and_owned_listener_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let listener = listeners::ReservedListener::new(TcpListener::bind("127.0.0.1:0").await?)?;
+    let address = listener.local_addr()?;
+    let (ready, receive_ready) = oneshot::channel();
+    let (entered, receive_entered) = oneshot::channel();
+    let (release, receive_release) = oneshot::channel();
+    let (drained, receive_drained) = oneshot::channel();
+    let finished = tokio::spawn(async move {
+        // The actual supervisor can publish its error before its task-owned
+        // resources finish dropping. Hold a real reserved listener here.
+        let _ = ready.send(Err(ServerError::Repository("injected startup failure")));
+        let _ = entered.send(());
+        let _ = receive_release.await;
+        drop(listener);
+        let _ = drained.send(());
+        Ok(())
+    });
+    let mut startup = tokio::spawn(receive_startup(receive_ready, finished));
+    tokio::time::timeout(Duration::from_secs(5), receive_entered).await??;
+    let early = tokio::time::timeout(Duration::from_millis(50), &mut startup)
+        .await
+        .ok();
+    let returned_before_drain = early.is_some();
+    assert!(
+        TcpListener::bind(address)
+            .await
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::AddrInUse)
+    );
+    let _ = release.send(());
+    tokio::time::timeout(Duration::from_secs(5), receive_drained).await??;
+    let result = match early {
+        Some(result) => result?,
+        None => tokio::time::timeout(Duration::from_secs(5), startup).await??,
+    };
+    assert!(matches!(
+        result,
+        Err(ServerError::Repository("injected startup failure"))
+    ));
+    assert!(
+        !returned_before_drain,
+        "startup error returned while supervisor still owned the listener"
+    );
+    let rebound = TcpListener::bind(address).await?;
+    assert_eq!(rebound.local_addr()?, address);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_drain_retains_cell_workspace_and_lease_past_one_lease()
 -> Result<(), Box<dyn std::error::Error>> {
     let files = tempfile::TempDir::new()?;

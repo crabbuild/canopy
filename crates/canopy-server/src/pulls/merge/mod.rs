@@ -117,27 +117,36 @@ pub(crate) fn valid_request(request: &MergeRequest) -> bool {
 }
 
 impl RepositoryCell {
-    /// Reads current review requirements and eligible decisions in one Cell observation.
+    /// Reads current review requirements against authenticated native ref facts.
     pub async fn pull_review_policy<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
         number: i64,
-    ) -> Result<Observed<Option<ReviewPolicy>>, Invocation> {
-        let actor = actor.into();
-        actor.validate().map_err(Invocation::NotStarted)?;
+    ) -> Result<Observed<Option<ReviewPolicy>>, super::native::NativePullError> {
+        let result = self.pull_review_state(actor.into(), number).await?;
+        Ok(Observed {
+            output: result.output.map(|state| state.policy),
+            receipt: result.receipt,
+        })
+    }
+    async fn pull_review_state(
+        &self,
+        actor: ReadIdentity<'_>,
+        number: i64,
+    ) -> Result<Observed<Option<ReviewState>>, super::native::NativePullError> {
+        if number < 1 {
+            return Err(Error::Command("invalid pull number").into());
+        }
         let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![policy_statement(actor, number)],
-                },
-            )
+            .native_pull_rows(actor, super::native::ReadKind::ReviewPolicy(number))
             .await?;
         Ok(Observed {
-            output: policy_state(&result.output)
-                .map_err(Invocation::NotStarted)?
-                .map(|state| state.policy),
+            output: result
+                .output
+                .as_deref()
+                .map(policy_state)
+                .transpose()?
+                .flatten(),
             receipt: result.receipt,
         })
     }
@@ -157,17 +166,11 @@ impl RepositoryCell {
                 "invalid merge request",
             )));
         }
-        let observed = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![policy_statement(actor, number)],
-                },
-            )
+        let state = self
+            .pull_review_state(ReadIdentity::Account(actor), number)
             .await
-            .map_err(preparation)?;
-        let state = policy_state(&observed.output).map_err(InvocationError::NotStarted)?;
+            .map_err(preparation)?
+            .output;
         if state.is_some_and(|state| {
             state.writable
                 && state.policy.ready

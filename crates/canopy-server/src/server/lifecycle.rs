@@ -1,5 +1,30 @@
 use super::*;
 
+type ReadyAddresses = (std::net::SocketAddr, Option<std::net::SocketAddr>);
+type StartupSupervisor = JoinHandle<Result<(), ServerError>>;
+
+async fn receive_startup(
+    receive_ready: oneshot::Receiver<Result<ReadyAddresses, ServerError>>,
+    finished: StartupSupervisor,
+) -> Result<(ReadyAddresses, StartupSupervisor), ServerError> {
+    let addresses = match receive_ready.await {
+        Ok(Ok(addresses)) => addresses,
+        Ok(Err(error)) => {
+            // The readiness channel may wake its caller before the supervisor
+            // drops task-owned startup resources. An error is a cleanup barrier.
+            finished.await??;
+            return Err(error);
+        }
+        Err(_) => {
+            finished.await??;
+            return Err(ServerError::Repository(
+                "node supervisor ended before readiness",
+            ));
+        }
+    };
+    Ok((addresses, finished))
+}
+
 impl CanopyServer {
     /// Starts a node only after storage fencing, authority and Git ingress are ready.
     /// Cancelling startup requests cleanup after admitted initialization settles.
@@ -54,15 +79,7 @@ impl CanopyServer {
             }
             result
         });
-        let (address, ssh_address) = match receive_ready.await {
-            Ok(address) => address?,
-            Err(_) => {
-                finished.await??;
-                return Err(ServerError::Repository(
-                    "node supervisor ended before readiness",
-                ));
-            }
-        };
+        let ((address, ssh_address), finished) = receive_startup(receive_ready, finished).await?;
         Ok(Self {
             address,
             ssh_address,

@@ -17,6 +17,56 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native review-policy and failed-startup supervision (2026-10-05 checkpoint)
+
+Review-policy still joined retired SQL refs after core pulls were converted. An
+existing stock-Git HTTP merge family reproducibly returned 404 at its first
+policy read. A new actual-resident regression also returned no policy for both
+native refs. Query 52, codec 2, now adds a distinct policy purpose and reuses the
+same authenticated ref observation and bounded editorial selection. Current
+branch rules, review heads, account generations and access are read in its final
+Cell transaction. Merge ancestry preparation uses that reader; the final legacy
+merge writer remains unfinished.
+
+The actual-resident regression covers SHA-1 and SHA-256, preparations before
+rule/review changes, substituted purposes and pull numbers, delayed access
+revocation, revoked/regranted reviewer decisions, request-changes decisions and comments
+that preserve the latest decision,
+and ref deletion/recreation with the same OID. It does not populate legacy refs
+or qualify a generated writer.
+
+Public startup formerly returned a reported readiness error before joining its
+supervisor. A regression holds a real reserved listener in the supervisor after
+reporting an error: before the fix startup returns early; afterward it waits for
+release and preserves the original error. The existing conditional-storage
+startup fixture now retains its caller reservation through the storage probe,
+then checks exact rebind after release. Domain rejection and empty-store checks
+remain intact. These prove supervision and remove a fixture's unowned probe
+window; they do not establish the cause of every historical `AddrInUse` failure.
+
+Frozen-source validation passes all 724 server library cases, all-target Clippy
+with warnings denied, server build, formatting/diff checks and all 96 Python
+harness cases. The existing failed-storage startup case passes in the full
+workload. Multi-server finishes at 82 passed / 24 failed / 9 ignored; the three
+standalone aggregates still fail. Unique totals are 844 passed / 27 failed /
+9 unexecuted ignores, excluding nested summaries and focused reruns. The HTTP
+merge reproduction now proceeds past policy reads and fails later at legacy
+merge preparation/publication (503); the merge workflow is not qualified.
+
+The expanded regression initially expected a comment to clear request-changes;
+that contradicted the documented decision-head contract. Its failed run and the
+interrupted partial compiler run are preserved alongside the corrected regression
+and complete final run in [policy/startup evidence](evidence/native-policy-startup-ci-20261005.json).
+The 510-file frozen-source digest is
+`08ef5b30a9be622dc4ebccc592cd66d7cbf20a72e6912aeddb364e2f8ddcbd39`.
+Parent `ef765d4` Linux PR and push Verify pass all 722 server libraries, formatting
+and Clippy but each fail multi-server at 83 passed / 27 failed / 9 ignored. Those
+results remain failures; exact new-head Linux validation is still required.
+
+Native atomic merge/candidate/rebase publication, thread revisions, default-branch
+publication, rejected-push workload failures, peer/backup recovery and selective
+fetch remain priority work. The full implementation/capacity goal stays active.
+
 ## Native pull/ref metadata conversion (2026-10-05 checkpoint)
 
 Pull creation still selected the retired SQL `refs` table after native push,
