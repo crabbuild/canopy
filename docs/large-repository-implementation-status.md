@@ -17,6 +17,60 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Resident recovery discovery race (2026-10-05 checkpoint)
+
+The two Linux Verify jobs on `8230922` add a branch-deletion failure with HTTP
+500 and `logical publication already admitted`. Restart discovery can observe a
+new recovery registration before the live producer reserves final publication.
+It can execute that original command and retire its pin during this gap.
+A deterministic failing-first actual Cell regression reproduces premature
+submission and retirement while the producer is paused after registration.
+
+Production residency now supplies the existing staging coordinator to root
+recovery discovery. After checking already admitted cold work, discovery defers
+only when that coordinator still owns the exact bound `LeaseCheck`: actor,
+request digest, operation, owner incarnation/epoch, admission sequence and artifact
+operation. This leaves the original producer in charge of handoff. The queue's
+original duplicate guard and cold exact-command recovery remain in place.
+Historical pins and reused logical UUIDs cannot satisfy the exact owner test.
+There is no additional command, SQL table or retry identity.
+
+The regression passes in SHA-1 and SHA-256 and verifies absent SDK acceptance,
+zero queue admissions and no scanner submission before producer handoff, then
+successful publication through the same registered command. Frozen current-source
+validation passes all 747 server library cases, the branch-deletion integration
+case, both recovery-discovery tests, all 10 staging-publication cases, registry,
+all-target Clippy, formatting, production build and all 96 Python harness tests.
+[Discovery evidence](evidence/resident-recovery-discovery-ci-20261005.json)
+records actual terminal logs and source digest
+`923f13824b06e38897b342cbd837e716ba5771966efbe56b50b833b927605f45`.
+The previous full diagnostic inventory is historical, not a run of this source.
+Exact new-head Linux qualification remains required. Full CI remains open; generated
+publication, metadata writers, selective-fetch and restoration failures are
+separate required work, not flakes or skipped tests.
+
+## Native generated commit semantic verification (2026-10-05 checkpoint)
+
+A private preparation verifier reuses the candidate model and physically verified
+catalog headers/edges. Merge and squash check the exact canonical Git OID, size
+and BLAKE3 body digest without native body downloads. Rebase checks up to 128
+original commits, exact rewritten parent order and bytes, author/message/encoding
+preservation and removal of stale signatures. One admitted disk ancestry walk
+rejects skipped source commits and replayed base history. The fixture accepts
+128 and refuses 129 commits in both Git formats, with shared pack-cache reuse.
+The verifier does not publish a Ready candidate or authorize a SQL write.
+
+Frozen semantic verification passed three new both-format families, 14 existing
+native merge cases, all 746 library cases, registry, Clippy, formatting, production
+build and all 96 Python harness tests. The full diagnostic inventory was 871
+passed, 23 failed and nine ignored; the failed-case set was unchanged from the
+preceding macOS checkpoint. Its historical source digest is
+`e06fe0f8168246e9e9bf731b16d720bb97ad49c4bebb627db10ffe5a84d1eb7a`.
+[Semantic evidence](evidence/native-candidate-verification-ci-20261005.json)
+retains the public candidate baseline (HTTP 503), intermediate failed runs,
+terminal log hashes and actual Linux failures. Generated joint publication,
+startup adoption, selective workspaces and workload capacity remain required.
+
 ## Native candidate reservation and negative completion (2026-10-05 checkpoint)
 
 Operation 10 codec 3 is now registered for native editorial candidate intent.

@@ -2000,6 +2000,16 @@ the repository, actor, pull and exact request. A fresh SDK identity is never
 substituted for an uncertain original command. Ref-only Bind selects the current
 certified joint generation; an admitted bound worker owns catalog preparation
 and ancestry verification using the gateway's scratch, disk and native resources.
+
+Resident root recovery discovery shares the existing staging coordinator.
+A newly registered recovery head can precede the producer's held publication
+handoff; discovery must not execute or retire it while that exact bound attempt
+is still owned. After looking up already admitted cold work, the scanner checks
+the full bound `LeaseCheck` against the staging owner and defers a match. Logical
+UUID equality alone is insufficient. This creates no additional admission or
+SQL mirror. The original lifecycle retains live command recovery, and abandoned
+heads without a matching bound owner continue through the cold discovery path.
+
 The producer result is retrieved before Finishing, then `ReadyNativeMerge`
 registers and binds its original command into fair publication. HTTP timeout or
 observer cancellation leaves this resident-owned workflow and exact recovery
@@ -2405,6 +2415,27 @@ generated write authority: this command's codec rejects that scope, and the
 client requires the forthcoming joint generated publisher. There is no codec 2
 compatibility decoder. A SQL failure rolls back both the editorial write and
 SDK acceptance, allowing the original prepared command to retry unchanged.
+
+The private prepared native catalog now provides `verify_candidate_commit`.
+It checks the reserved actor, valid intent, repository object format and selected
+commit/tree/source/base membership. Merge and squash commits must match exact
+parent order, author/committer, reserved UTC second and message bytes. Both the
+Git OID and canonical BLAKE3 body digest must match the physically verified
+header; verifying these strategies requires no native body/pack download.
+
+For rebase, at most 128 original commit bodies are read through bounded shared
+native-pack custody. Each rewritten commit is verified by canonical headers and
+exact expected bytes, preserving original author, encoding and message while
+removing stale signatures and replacing tree, parent and committer. The source
+and rewritten chains advance together. One admitted, disk-backed traversal of
+base ancestry checks the bounded original set: only the final remaining source
+anchor may already be reachable from base. Skipping a source commit or replaying
+base history is refused. Original body reads reuse the native pack cache; new
+commit bodies do not require a second download or subprocess. The shared lease
+and timeout cover preparation. This verifier adds no publication authority,
+SDK command, schema or compatibility decoder: the forthcoming resident factory
+and final transaction must bind these facts to exact intent/ref publication and
+recheck fresh policy, access, owner, generation and custody.
 
 It retains the first timestamp. Retrying completed preparation returns the
 original result, even if the pull later changes or merges; current write access

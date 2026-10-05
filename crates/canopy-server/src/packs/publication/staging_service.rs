@@ -660,6 +660,22 @@ impl Drop for StagingQuiescence {
     }
 }
 impl StagingCoordinator {
+    /// Discovery may defer only to this exact bound attempt, including its
+    /// actor, owner epoch, admission sequence and artifact operation. A reused
+    /// logical UUID or an unrelated historical pin is insufficient.
+    pub(in crate::packs::publication) fn owns_bound(&self, check: &LeaseCheck) -> bool {
+        let Some(ticket) = self.pending(check.token.operation) else {
+            return false;
+        };
+        let local = ticket.job.local.lock().expect("staging local");
+        local
+            .bound
+            .as_ref()
+            .is_some_and(|session| session.check == *check)
+    }
+    pub(in crate::packs::publication) fn matches_target(&self, target: &CellTarget) -> bool {
+        self.inner.target == *target
+    }
     pub fn new(
         target: CellTarget,
         limits: StagingLimits,

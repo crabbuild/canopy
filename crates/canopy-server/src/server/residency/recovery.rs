@@ -91,11 +91,11 @@ impl RecoveryServices {
             )
             .map_err(|error| ServerError::CatalogRecovery(Box::new(error)))?,
         );
-        let roots = match RecoverySupervisor::start_retiring(
+        let roots = match RecoverySupervisor::start_resident(
             client.clone(),
             target.clone(),
             ArtifactStore::new(Arc::clone(&manager.external_store), entry.repository_id),
-            coordinator.clone(),
+            (coordinator.clone(), staging.clone()),
             settings.clone(),
             authority.clone(),
             maintenance,

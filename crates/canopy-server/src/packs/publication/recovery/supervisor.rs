@@ -89,7 +89,7 @@ impl RecoverySupervisor {
             coordinator,
             settings,
             authority,
-            None,
+            (None, None),
         )
     }
     /// The service supplies current repository administration and actual owner
@@ -115,7 +115,34 @@ impl RecoverySupervisor {
             coordinator,
             settings,
             authority,
-            Some(maintenance),
+            (Some(maintenance), None),
+        )
+    }
+    /// Resident discovery shares the existing staging owner. A registered
+    /// recovery head can become visible before its live producer hands off the
+    /// final command; discovery must leave that exact workflow with its owner.
+    pub(crate) fn start_resident(
+        client: CellClient,
+        target: CellTarget,
+        store: ArtifactStore,
+        resident: (PublicationCoordinator, Arc<StagingCoordinator>),
+        settings: RecoveryScanSettings,
+        authority: PreparationAuthority,
+        maintenance: MaintenanceRequest,
+    ) -> Result<Self, RootRecoveryError> {
+        let (coordinator, staging) = resident;
+        if maintenance.repository != store.repository() || !staging.matches_target(&target) {
+            return Err(RootRecoveryError::Context);
+        }
+        maintenance.encode(&mut BoundedEncoder::new(4096)?)?;
+        Self::start_inner(
+            client,
+            target,
+            store,
+            coordinator,
+            settings,
+            authority,
+            (Some(maintenance), Some(staging)),
         )
     }
     fn start_inner(
@@ -125,8 +152,9 @@ impl RecoverySupervisor {
         coordinator: PublicationCoordinator,
         settings: RecoveryScanSettings,
         authority: PreparationAuthority,
-        maintenance: Option<MaintenanceRequest>,
+        ownership: (Option<MaintenanceRequest>, Option<Arc<StagingCoordinator>>),
     ) -> Result<Self, RootRecoveryError> {
+        let (maintenance, staging) = ownership;
         settings.validate()?;
         if !authority.matches(&target)
             || !coordinator.matches_target(&target)
@@ -146,6 +174,7 @@ impl RecoverySupervisor {
                 coordinator,
                 authority,
                 maintenance,
+                staging,
             },
             sql,
             settings.clone(),
@@ -234,6 +263,7 @@ struct Scan {
     coordinator: PublicationCoordinator,
     authority: PreparationAuthority,
     maintenance: Option<MaintenanceRequest>,
+    staging: Option<Arc<StagingCoordinator>>,
 }
 impl Scan {
     async fn visit(
@@ -266,6 +296,18 @@ impl Scan {
             } else {
                 stats.deferred = stats.deferred.saturating_add(1);
             }
+            return Ok(());
+        }
+        // Registration precedes the live lifecycle's held handoff. Its exact
+        // bound owner must retain that gap; cold discovery cannot execute the
+        // same command early, steal admission, or retire the producer's pin.
+        // Check the queue first so already admitted cold work still recovers.
+        if self
+            .staging
+            .as_ref()
+            .is_some_and(|staging| staging.owns_bound(&registered.record.check))
+        {
+            stats.deferred = stats.deferred.saturating_add(1);
             return Ok(());
         }
         // Settled heads must not consume new command slots every scan. Known
