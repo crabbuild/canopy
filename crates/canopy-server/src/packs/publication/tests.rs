@@ -14,6 +14,7 @@ mod initialization_retirement;
 mod inputs;
 mod mandatory_registration;
 mod namespaces;
+mod native_candidate;
 mod native_capture;
 mod native_merge;
 mod policy_dispatch;

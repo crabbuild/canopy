@@ -132,6 +132,10 @@ async fn history(
         )
         .await?,
     )?;
+    repack(native).await?;
+    Ok((tip, other))
+}
+pub(super) async fn repack(native: &mut Prepared) -> Result {
     git_input(native.fixture.root.path(), &["repack", "-ad"], b"").await?;
     let path = std::fs::read_dir(native.fixture.root.path().join("objects/pack"))?
         .find_map(|entry| {
@@ -172,7 +176,7 @@ async fn history(
     native.descriptor.index = artifact_index;
     native.descriptor.git_checksum = index.pack_checksum();
     native.descriptor.object_count = index.len();
-    Ok((tip, other))
+    Ok(())
 }
 async fn proof(graph: &Graph, updates: Vec<RefUpdate>) -> Result<RefPublicationProof> {
     Ok(Box::pin(graph.prepared.ref_proof(

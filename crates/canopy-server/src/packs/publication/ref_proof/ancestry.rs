@@ -148,6 +148,131 @@ impl Walker {
         Ok(result)
     }
 
+    /// Test a bounded set against one descendant traversal. This avoids one
+    /// full base-history walk per original commit when verifying a rebase.
+    pub(in crate::packs::publication) async fn ancestors_within(
+        &mut self,
+        reader: &CatalogReader,
+        files: &Arc<CatalogFiles>,
+        targets: &[ObjectId],
+        descendant: ObjectId,
+        base: &PreparationBaseResolver,
+    ) -> Result<Vec<bool>, RefProofError> {
+        if self.failed || self._cancel.0.load(Ordering::Acquire) {
+            return Err(RefProofError::Canceled);
+        }
+        self.failed = true;
+        let mut guard = WalkCancellation::new(Arc::clone(&self._cancel.0));
+        let catalog = reader.stored();
+        if targets.is_empty()
+            || targets.len() > PAGE_OBJECTS
+            || self.catalog.is_some_and(|c| c != catalog)
+            || descendant.format() != catalog.format
+            || targets.iter().any(|o| o.format() != catalog.format)
+        {
+            return Err(RefProofError::Invalid);
+        }
+        self.catalog = Some(catalog);
+        base.live_lease()?;
+        for ids in [targets, std::slice::from_ref(&descendant)] {
+            let headers = reader.headers(ids, &**files, &**files).await?;
+            if headers.len() != ids.len()
+                || headers
+                    .iter()
+                    .any(|h| h.is_none_or(|h| h.object.kind != ObjectKind::Commit))
+            {
+                return Err(RefProofError::Invalid);
+            }
+        }
+        loop {
+            base.live_lease()?;
+            if self.call(Scratch::clear_page).await? == 0 {
+                break;
+            }
+        }
+        self.call(move |scratch| {
+            scratch.write(|tx| {
+                tx.execute("INSERT INTO visits(oid) VALUES(?1)", [descendant.as_ref()])
+                    .map_err(MetadataError::from)?;
+                Ok(())
+            })
+        })
+        .await?;
+        let wanted: BTreeSet<_> = targets.iter().copied().collect();
+        let mut reached = BTreeSet::new();
+        'walk: loop {
+            base.live_lease()?;
+            let page = self
+                .call(|scratch| {
+                    scratch
+                        .connection
+                        .prepare_cached(
+                            "SELECT oid FROM visits WHERE expanded=0 ORDER BY oid LIMIT ?1",
+                        )
+                        .map_err(MetadataError::from)?
+                        .query_map([PAGE_OBJECTS as i64], |r| {
+                            crate::packs::metadata::oid(r.get(0)?)
+                        })
+                        .map_err(MetadataError::from)?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .map_err(MetadataError::from)
+                        .map_err(Into::into)
+                })
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            for oid in page {
+                base.live_lease()?;
+                if wanted.contains(&oid) {
+                    reached.insert(oid);
+                }
+                if reached.len() == wanted.len() {
+                    break 'walk;
+                }
+                let object = reader
+                    .lookup(oid, &**files, &**files)
+                    .await?
+                    .ok_or(RefProofError::Invalid)?;
+                if object.entry.header.object.kind != ObjectKind::Commit {
+                    return Err(RefProofError::Invalid);
+                }
+                let mut after = None;
+                loop {
+                    base.live_lease()?;
+                    let metadata = object.source.metadata.clone();
+                    let edges =
+                        tokio::task::spawn_blocking(move || metadata.edges_after(oid, after))
+                            .await??;
+                    if edges.is_empty() {
+                        break;
+                    }
+                    after = edges.last().map(|e| e.child);
+                    self.parents(edges).await?;
+                }
+                self.call(move |scratch| {
+                    scratch.write(|tx| {
+                        if tx
+                            .execute(
+                                "UPDATE visits SET expanded=1 WHERE oid=?1 AND expanded=0",
+                                [oid.as_ref()],
+                            )
+                            .map_err(MetadataError::from)?
+                            != 1
+                        {
+                            return Err(RefProofError::Invalid);
+                        }
+                        Ok(())
+                    })
+                })
+                .await?;
+            }
+        }
+        base.live_lease()?;
+        guard.complete = true;
+        self.failed = false;
+        Ok(targets.iter().map(|o| reached.contains(o)).collect())
+    }
     async fn walk(
         &self,
         reader: &CatalogReader,

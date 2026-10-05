@@ -55,6 +55,8 @@ pub use initialization::{
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
+mod native_candidate;
+pub use native_candidate::NativeCandidateVerificationError;
 mod native_merge;
 pub use native_merge::audit::NativeMergeAuditError;
 pub use native_merge::{
