@@ -471,7 +471,10 @@ impl GitGateway {
     }
 }
 
-async fn active(staging: &StagingCoordinator, ticket: &StagingTicket) -> Result<(), StagingError> {
+pub(in crate::git_gateway) async fn active(
+    staging: &StagingCoordinator,
+    ticket: &StagingTicket,
+) -> Result<(), StagingError> {
     loop {
         match ticket.wait().await {
             StagingState::Active(_) => return Ok(()),
@@ -484,7 +487,10 @@ async fn active(staging: &StagingCoordinator, ticket: &StagingTicket) -> Result<
         }
     }
 }
-async fn bound(staging: &StagingCoordinator, ticket: &StagingTicket) -> Result<(), StagingError> {
+pub(in crate::git_gateway) async fn bound(
+    staging: &StagingCoordinator,
+    ticket: &StagingTicket,
+) -> Result<(), StagingError> {
     loop {
         match ticket.wait_terminal().await {
             StagingState::Bound(_) => return Ok(()),
@@ -516,7 +522,7 @@ async fn checkpoint(
         }
     }
 }
-async fn final_publication(
+pub(in crate::git_gateway) async fn final_publication(
     staging: &StagingCoordinator,
     ticket: &StagingTicket,
     observer: &StagedPublicationTicket,

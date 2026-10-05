@@ -90,25 +90,9 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         let (retry_command, retry_recovery) =
             prepared_command(&f, &retry, request, retry_root.path(), retry_budget.clone()).await?;
         assert_eq!(retry_command.execute().await?.output, original.output);
-        // An application replay does not consume its fresh preparation. Actual
-        // owner closure is required before its independent pin can be released.
+        // A terminal replay closes only its fresh operation in the same final
+        // transaction. Its independent pin can then select the original audit.
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
-        assert!(
-            retry_recovery
-                .ready_terminal_release(f.client(), &graph.store, admin.clone(), identity()?)
-                .await
-                .is_err()
-        );
-        assert!(
-            f.client()
-                .command::<AbortPreparation>(
-                    &f.target,
-                    identity()?,
-                    retry.base.capability().2.clone()
-                )
-                .await?
-                .output
-        );
         assert_eq!(
             retry_recovery
                 .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
@@ -144,19 +128,7 @@ async fn negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds() -> R
         let original = command.execute().await?;
         assert_eq!(original.output, MergeOutcome::ReviewsRequired);
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
-        assert!(
-            saved
-                .ready_terminal_release(f.client(), &graph.store, admin.clone(), identity()?)
-                .await
-                .is_err()
-        );
         retained_pin(&f, &check, 1).await?;
-        assert!(
-            f.client()
-                .command::<AbortPreparation>(&f.target, identity()?, check.clone())
-                .await?
-                .output
-        );
         let release = saved
             .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
             .await?;
@@ -457,6 +429,67 @@ async fn archived_merge_and_release_receipts_survive_sqlite_loss_and_owner_resto
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
         runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_merge_refusal_closure_rolls_back_with_original_phase_and_sdk_acceptance() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (f, graph, request) = initial(format, false).await?;
+        let (prepared, root, budget) = preparation(&f, &graph).await?;
+        let (command, saved) =
+            prepared_command(&f, &prepared, request, root.path(), budget.clone()).await?;
+        edit(
+            &f,
+            "INSERT INTO branch_rules VALUES('refs/heads/main',1,1,1,1,1,1)",
+        )
+        .await?;
+        edit(&f,"CREATE TRIGGER terminal_merge_close_fault BEFORE DELETE ON catalog_operations BEGIN SELECT RAISE(ABORT,'terminal merge close fault'); END").await?;
+        let before = phase_state(&f).await?;
+        let domain = domain_state(&f).await?;
+        let operation = prepared.token().operation;
+        let remaining = domain_state_except_attempt(&f, Some(operation)).await?;
+        assert!(command.clone().execute().await.is_err());
+        assert_eq!(phase_state(&f).await?, before);
+        assert_eq!(domain_state(&f).await?, domain);
+        assert!(matches!(
+            f.client().resolve(command.evidence()).await?,
+            Resolution::Absent
+        ));
+        edit(&f, "DROP TRIGGER terminal_merge_close_fault").await?;
+        let original = command.execute().await?;
+        assert_eq!(original.output, MergeOutcome::ReviewsRequired);
+        assert_eq!(
+            domain_state_except_attempt(&f, Some(operation)).await?,
+            remaining
+        );
+        assert_operation(&f, operation, 0).await?;
+        assert_eq!(
+            saved
+                .ready_terminal_release(
+                    f.client(),
+                    &graph.store,
+                    terminal_retention::maintenance(&f.handle, f.repository).await?,
+                    identity()?
+                )
+                .await?
+                .complete()
+                .await?
+                .output,
+            TerminalReleaseReply::Released
+        );
+        let recovered = archived_result(&f, &graph, prepared.base.capability().2).await?;
+        assert_eq!(
+            (recovered.output, recovered.receipt),
+            (original.output, original.receipt)
+        );
+        drop(prepared);
+        cleaned(root.path(), &budget).await?;
+        drop(graph.prepared);
+        cleaned(graph.root.path(), &graph.budget).await?;
+        f.runtime.shutdown().await?;
     }
     Ok(())
 }

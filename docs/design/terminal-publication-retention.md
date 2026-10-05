@@ -19,6 +19,11 @@ bounded `StoredInputRoot` representation. The private factory uploads logical
 merge intent, base ref, catalog descriptor, ref snapshot and ref generation;
 the catalog MAC binds this audit descriptor alongside the conditional ref
 proposal. Operation 9 codec 6 saves it atomically with the immutable UUID result.
+The authenticated final merge command closes only its exact matching operation
+when recording any terminal result, including a refusal or application replay.
+This shares the original recovery/SDK transaction and avoids an independent
+abort command. Closure failure rolls back the original phase and acceptance;
+unauthenticated proposals and successor operations stay protected.
 SQL guards reject result mutation, deletion and replacement. Fresh deployments
 use this schema directly; no backward decoder or SQL ref mirror is introduced.
 
@@ -81,7 +86,7 @@ Six typed initialization families additionally qualify both formats, immutable s
 
 Five native merge retirement families qualify both formats where applicable:
 original applied UUID replay selects the first audit after releasing its pin;
-a denied attempt closes and keeps its original refusal after a fresh attempt
+a denied attempt closes atomically and keeps its original refusal after a fresh attempt
 succeeds; missing and corrupt audit, catalog, directory, ref snapshot and ref
 index metadata prevent release without losing the result; current Admin/owner
 checks and a fault at the final delete preserve atomic archive/pin rollback;

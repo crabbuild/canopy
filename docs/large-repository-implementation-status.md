@@ -17,6 +17,64 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Public native fast-forward merge endpoint (2026-10-05 checkpoint)
+
+Production HTTP merge now calls the resident `GitGateway` native driver. The
+adapter checks access again after body ingestion, transfers the request and
+producer to resident ownership before awaiting observation, binds the current
+native catalog/ref base, retrieves admitted preparation before Finishing,
+persists the original command and uses the existing fair publication/recovery
+coordinator. Each observation gets an independent preparation attempt; the
+final transaction selects the original application UUID result or refuses a
+collision. Generated strategies remain unavailable rather than receiving a
+different merge strategy. The historical direct `RepositoryCell::merge_pull`
+API remains a retired-preparation caller outside this product route.
+
+Authenticated terminal denials and UUID replays now close only their matching
+admitted operation atomically with the original recovery phase and SDK
+acceptance. The independent pin remains until typed terminal retirement. A
+late closure SQL fault rolls back complete domain state, phase and acceptance;
+the same exact command can retry and its known denial can retire immediately.
+Unauthenticated proposals and successor operations do not gain closure rights.
+This reuses the existing operation/recovery structures and codec 6 payload.
+
+The original HTTP regression failed at 503 instead of 409. The failing-first
+immediate-denial-retirement regression failed with `Error::Context`. Fourteen
+private merge tests now pass. Real stock-Git endpoint coverage creates genuine
+production roots for SHA-1 and SHA-256, merges and replays an exact UUID,
+refuses changed intent, discovers the joint ref and clones the exact new bytes.
+Existing coverage for unrelated history, stale revisions, body-ingestion access
+revocation and competing publications also passes. A first intermediate run
+had four state-oracle failures after the intentional operation deletion; the
+corrected oracle compares every other operation/domain fact and asserts the
+exact own-operation count, while rollback still compares the full state.
+
+Frozen validation passes all 739 server library cases, all-target Clippy with
+warnings denied, production server build, formatting/diff checks and all 96
+Python harness cases. Full Rust results are 864 passed /23 failed /9 ignored,
+with no added failures and four removed: both reviewed merge families,
+SHA-256 checks/reviews/merge recovery, and historical comparisons after branch
+deletion. Multi-server finishes at 87 passed /20 failed /9 ignored; three
+standalone aggregates still fail. The exact unchanged source digest over
+516 files (498 Rust) is
+`d1aa115a3c9e7ff266c3d71e50fc3d2054648af58e52d70c845ef817e2acd53a`.
+Baselines, the intermediate failures and complete validation are preserved in
+[endpoint evidence](evidence/native-merge-endpoint-ci-20261005.json).
+Parent `75814b4` Linux PR and push Rust jobs both failed: 738 library cases pass,
+then multi-server fails at 83 passed /27 failed /9 ignored. RustFS and server
+build were skipped. Those parent logs do not qualify this increment on Linux.
+
+Next: qualify this producer's observer cancellation, lost acknowledgement,
+restart adoption, queued policy/access changes, pre-Bind intent recovery and
+automatic audit retirement after generation pruning. Generic push lifecycle
+tests are not sufficient merge-specific evidence. Implement native generated
+candidate and merge/squash/rebase publication, thread/default-branch writers
+and remaining full CI failures. Physical retention/collection/final DDL,
+backup/restore, peer recovery, reachable-only cold/filtered fetch,
+accelerators/fair maintenance, asynchronous file attribution and
+full-history/10,000-engineer capacity gates remain required. The full goal is
+active and this cutover remains unqualified for release.
+
 ## Native merge audit and terminal retirement (2026-10-05 checkpoint)
 
 Operation 9 codec 6 now binds a permanent merge audit in the existing catalog

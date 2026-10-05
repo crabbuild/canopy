@@ -34,6 +34,7 @@ mod branch_policy;
 mod candidates;
 mod discovery;
 mod fetch;
+mod merge;
 pub mod preflight;
 mod push;
 mod ssh;

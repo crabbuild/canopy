@@ -557,3 +557,96 @@ async fn merge_rechecks_revisions_authority_and_competing_publications() -> Resu
     server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_fast_forward_endpoint_replays_original_uuid_and_exposes_joint_refs_for_both_formats()
+-> Result {
+    for format in ["sha1", "sha256"] {
+        let workspace = tempfile::TempDir::new()?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = CanopyServer::start_with_listener(
+            config(address, workspace.path().join("node")),
+            Arc::new(InMemory::new()),
+            listener,
+        )
+        .await?;
+        let client = Client::new();
+        let created = value(
+            client
+                .post(format!("http://{address}/api/repositories"))
+                .bearer_auth(OWNER)
+                .json(&json!({"name":"native-merge","object_format":format})),
+        )
+        .await?;
+        let repository = created["repository_id"].clone();
+        let url = created["clone_url"].as_str().ok_or("clone URL absent")?;
+        let repo = format!("http://{address}/api/repositories/native-merge");
+        let local = workspace.path().join("local");
+        run_git(
+            None,
+            &[
+                "init",
+                "-b",
+                "main",
+                &format!("--object-format={format}"),
+                path_str(&local)?,
+            ],
+        )
+        .await?;
+        run_git(Some(&local), &["config", "user.name", "Native Merge"]).await?;
+        run_git(
+            Some(&local),
+            &["config", "user.email", "merge@example.invalid"],
+        )
+        .await?;
+        run_git(Some(&local), &["commit", "--allow-empty", "-m", "Base"]).await?;
+        let base = oid(&local, "HEAD").await?;
+        push(&local, url, &["HEAD:refs/heads/main"], true).await?;
+        tokio::fs::write(local.join("feature.txt"), b"native merge endpoint\n").await?;
+        run_git(Some(&local), &["add", "."]).await?;
+        run_git(Some(&local), &["commit", "-m", "Feature"]).await?;
+        let source = oid(&local, "HEAD").await?;
+        push(&local, url, &["HEAD:refs/heads/feature"], true).await?;
+        let api = new_pull(
+            &client,
+            &repo,
+            &repository,
+            "refs/heads/feature",
+            &source,
+            &base,
+        )
+        .await?;
+        let input = intent(&client, &api, &repository).await?;
+        let merge_api = format!("{api}/merge");
+        let original = value(client.post(&merge_api).bearer_auth(OWNER).json(&input)).await?;
+        assert_eq!(original["merge"]["oid"], source);
+        assert_eq!(
+            value(client.post(&merge_api).bearer_auth(OWNER).json(&input)).await?,
+            original
+        );
+        let mut collision = input.clone();
+        collision["revision"]["source_oid"] = json!(base);
+        status(
+            client.post(&merge_api).bearer_auth(OWNER).json(&collision),
+            StatusCode::CONFLICT,
+        )
+        .await?;
+        let pull = current(&client, &api).await?;
+        assert_eq!(pull["state"], "merged");
+        assert_eq!(pull["base"]["oid"], source);
+        assert_eq!(pull["base"]["version"], 2);
+        let refs = String::from_utf8(
+            run_git(None, &["-c", AUTH, "ls-remote", url, "refs/heads/main"]).await?,
+        )?;
+        assert_eq!(refs.trim(), format!("{source}\trefs/heads/main"));
+        let clone = workspace.path().join("clone");
+        run_git(None, &["-c", AUTH, "clone", url, path_str(&clone)?]).await?;
+        assert_eq!(
+            tokio::fs::read(clone.join("feature.txt")).await?,
+            b"native merge endpoint\n"
+        );
+        server.shutdown().await?;
+    }
+    Ok(())
+}

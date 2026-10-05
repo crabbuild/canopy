@@ -1941,9 +1941,9 @@ scratch budget. Neither publishes roots or populates SQL refs/ancestry. A final
 native merge receiver must authenticate the exact proof and conditional ref
 snapshot, check current access/reviews/checks and ref versions, and commit joint
 roots, pull state and UUID result under the actual owner fence and durable
-recovery journal. The native receiver described below exists; its resident
-adapter remains unfinished; typed terminal release is described below. The historical SQL merge
-description below is not qualification of the native product workflow.
+recovery journal. The native receiver and resident fast-forward adapter described below exist.
+Typed terminal release is described below. The historical SQL merge description
+below is not qualification of generated native merge strategies.
 
 `PublishReviewedMerge` reuses operation 9 with codec 6 and a 256 KiB input / 512
 byte output contract. It replaces the registered contract rather than decoding
@@ -1968,7 +1968,11 @@ context/reporter results remain mandatory even on unprotected branches.
 
 Joint catalog/ref roots, pull state/version, immutable UUID result, preparation
 checkpoint and operation consumption share the final Cell transaction and its
-durable recovery journal. Errors after the first write roll back all of them.
+durable recovery journal. Every authenticated terminal result also closes its
+exact matching operation under the actual owner fence, including domain refusals
+and applied UUID replays. It cannot close a successor or unauthenticated
+proposal; the independent pin remains until typed retirement. Errors after the
+first write roll back operation closure, domain changes, phase and SDK acceptance.
 Rejected requests do not insert `pull_merges`, so a fresh owned attempt may retry
 the same application UUID after policy changes. The older attempt still recovers
 its original refusal and receipt. `ReadyNativeMerge` binds its exact original
@@ -1989,9 +1993,25 @@ not its new proposal. Known denials retain their original phase after later
 success and require authoritative operation closure. This authorizes no provider
 deletion; complete retained-root inventory and descendant reclamation remain
 required. See [terminal retention](design/terminal-publication-retention.md).
-The public adapter still invokes retired preparation/codec 4, so network merge
-remains unqualified. Generated merge/squash/rebase strategies are not accepted by
-this factory; their producers and integration remain required work.
+The HTTP fast-forward adapter now uses `GitGateway::merge_pull`. It checks
+current access after body ingestion, then gives an independent fresh attempt to
+the resident staging controller. A bounded, domain-separated intent digest binds
+the repository, actor, pull and exact request. A fresh SDK identity is never
+substituted for an uncertain original command. Ref-only Bind selects the current
+certified joint generation; an admitted bound worker owns catalog preparation
+and ancestry verification using the gateway's scratch, disk and native resources.
+The producer result is retrieved before Finishing, then `ReadyNativeMerge`
+registers and binds its original command into fair publication. HTTP timeout or
+observer cancellation leaves this resident-owned workflow and exact recovery
+intact. Known refusals use the normal 404/403/409 mappings; unknown acceptance
+remains unavailable and asks for the same application UUID/revision.
+
+The direct historical `RepositoryCell::merge_pull` API still uses retired codec
+4 and is not the product HTTP path. Generated merge/squash/rebase strategies are
+not accepted by this factory; their producers and native publication remain
+required work. Complete merge-specific cancellation/startup reconstruction,
+queued authority/policy races and pre-Bind intent retention qualification remain
+required beyond the generic resident lifecycle tests.
 
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation

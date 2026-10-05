@@ -1,4 +1,4 @@
-mod native;
+pub(super) mod native;
 use super::*;
 
 impl GitGateway {

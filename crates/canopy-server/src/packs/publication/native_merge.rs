@@ -349,6 +349,33 @@ fn publish(
     else {
         return Ok(denied(MergeOutcome::Conflict));
     };
+    let check = LeaseCheck {
+        token: data.token,
+        actor: data.actor.clone(),
+    };
+    let result = publish_authenticated(context, proof, data, key)?;
+    // Every authenticated result is terminal for this exact command. Close its
+    // own binding atomically with the recovery phase, including denials and
+    // application UUID replays. Never close a successor or an unauthenticated
+    // proposal. The independent pin remains until typed terminal retirement.
+    if check.token.owner == context.owner_fence()
+        && let Some(row) = load(context, check.token)?
+        && matched(&row, &check)
+    {
+        check_pin(context, &row)?;
+        changed(context.sql(&statement(
+            "DELETE FROM catalog_operations WHERE id=?1",
+            vec![blob(check.token.operation)],
+        ))?)?;
+    }
+    Ok(result)
+}
+fn publish_authenticated(
+    context: &mut CommandContext<'_, '_>,
+    proof: NativeMergeProof,
+    data: super::certificate::CertificateData,
+    key: [u8; 32],
+) -> cellule_runtime::Result<CommandResult<MergeOutcome>> {
     let input = proof.input;
     let role = crate::access::decode_access(&context.sql(&SqlBatch {
         statements: vec![crate::access::access_statement(&input.actor)],

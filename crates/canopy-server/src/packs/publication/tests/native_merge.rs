@@ -4,7 +4,7 @@
 use super::*;
 use super::{
     prepare::{cleaned, opened},
-    publishing::{Graph, assembled, edit, plan, state, update},
+    publishing::{Graph, assembled, edit, plan, update},
 };
 use crate::{
     packs::{
@@ -130,7 +130,10 @@ async fn prepared_command(
     Ok((command, registered))
 }
 async fn domain_state(f: &Fixture) -> Result<Vec<u8>> {
-    let roots = state(&f.handle).await?;
+    domain_state_except_attempt(f, None).await
+}
+async fn domain_state_except_attempt(f: &Fixture, operation: Option<[u8; 16]>) -> Result<Vec<u8>> {
+    let roots = super::publishing::state_except_operation(&f.handle, operation).await?;
     let editorial = f
         .handle
         .query(0, 4096, |db| {
@@ -244,10 +247,15 @@ async fn native_merge_unprotected_unrelated_history_records_refusal_without_publ
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let (command, registered) =
             prepared_command(&f, &prepared, request, root.path(), budget.clone()).await?;
-        let before = domain_state(&f).await?;
+        let operation = prepared.token().operation;
+        let before = domain_state_except_attempt(&f, Some(operation)).await?;
         let result = command.execute().await?;
         assert_eq!(result.output, MergeOutcome::NotFastForward);
-        assert_eq!(domain_state(&f).await?, before);
+        assert_eq!(
+            domain_state_except_attempt(&f, Some(operation)).await?,
+            before
+        );
+        assert_operation(&f, operation, 0).await?;
         let recovered = registered
             .dispatch_any(
                 &f.client(),
@@ -280,10 +288,15 @@ async fn native_merge_late_review_requirement_is_current_and_does_not_bind_a_rej
             "INSERT INTO branch_rules VALUES('refs/heads/main',1,1,1,1,1,1)",
         )
         .await?;
-        let before = domain_state(&f).await?;
+        let operation = prepared.token().operation;
+        let before = domain_state_except_attempt(&f, Some(operation)).await?;
         let result = first.execute().await?;
         assert_eq!(result.output, MergeOutcome::ReviewsRequired);
-        assert_eq!(domain_state(&f).await?, before);
+        assert_eq!(
+            domain_state_except_attempt(&f, Some(operation)).await?,
+            before
+        );
+        assert_operation(&f, operation, 0).await?;
         // Remove only the review requirement, retain require-PR, ancestry and
         // deletion policy. Only the reviewed command may satisfy this PR gate.
         edit(&f,"UPDATE branch_rules SET required_approvals=0,version=2 WHERE reference='refs/heads/main'").await?;
@@ -432,9 +445,16 @@ async fn native_merge_changed_request_and_later_joint_generation_cannot_publish(
                 // identical ref facts. The joint generation alone must fence it.
                 edit(&f, "INSERT INTO catalog_generations SELECT 2,catalog,certificate,refs FROM catalog_generations WHERE generation=1; UPDATE catalog_state SET generation=2 WHERE singleton=1;").await?;
             }
-            let before = domain_state(&f).await?;
+            let operation = prepared.token().operation;
+            let excluded = if altered_request {
+                None
+            } else {
+                Some(operation)
+            };
+            let before = domain_state_except_attempt(&f, excluded).await?;
             assert_eq!(command.execute().await?.output, MergeOutcome::Conflict);
-            assert_eq!(domain_state(&f).await?, before);
+            assert_eq!(domain_state_except_attempt(&f, excluded).await?, before);
+            assert_operation(&f, operation, u64::from(altered_request)).await?;
             drop(prepared);
             cleaned(root.path(), &budget).await?;
             drop(graph.prepared);
@@ -546,3 +566,20 @@ async fn native_merge_original_result_survives_sqlite_loss_and_actual_owner_rest
 }
 
 mod retirement;
+
+async fn assert_operation(f: &Fixture, operation: [u8; 16], expected: u64) -> Result {
+    f.handle
+        .query(0, 128, move |db| {
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM catalog_operations WHERE id=?1",
+                    [operation.as_slice()],
+                    |r| r.get::<_, u64>(0)
+                )?,
+                expected
+            );
+            Ok(Vec::new())
+        })
+        .await?;
+    Ok(())
+}

@@ -208,6 +208,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("native_git/process.rs"));
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
+                source.update(include_bytes!("git_gateway/merge.rs"));
                 source.update(include_bytes!("git_gateway/candidates/mod.rs"));
                 source.update(include_bytes!("git_gateway/fetch.rs"));
                 source.update(include_bytes!("git_gateway/discovery.rs"));

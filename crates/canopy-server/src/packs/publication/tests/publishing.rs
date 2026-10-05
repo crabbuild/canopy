@@ -184,7 +184,15 @@ async fn proof(graph: &Graph, updates: Vec<RefUpdate>) -> Result<RefPublicationP
     .await?)
 }
 pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
-    Ok(handle.query(0, 64 << 10, |connection| {
+    state_except_operation(handle, None).await
+}
+// Terminal merge semantics intentionally close only one exact operation.
+// All other operation, root, ref, checkpoint and policy facts remain compared.
+pub(super) async fn state_except_operation(
+    handle: &CellHandle,
+    exclude: Option<[u8; 16]>,
+) -> Result<Vec<u8>> {
+    Ok(handle.query(0, 64 << 10, move |connection| {
         let mut refs = connection.prepare("SELECT name,oid,version FROM refs ORDER BY name")?;
         let refs = refs.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut catalog = connection.prepare("SELECT generation,catalog,certificate,refs FROM catalog_generations ORDER BY generation")?;
@@ -218,8 +226,8 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
             let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<i64>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,Option<Vec<u8>>>(7)?,row.get::<_,Option<Vec<u8>>>(8)?,row.get::<_,Option<Vec<u8>>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?);
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root outcome hash"))?);
         }
-        let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations ORDER BY id")?;
-        let mut rows=operations.query([])?;
+        let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations WHERE ?1 IS NULL OR id!=?1 ORDER BY id")?;
+        let mut rows=operations.query([exclude.map(|id|id.to_vec())])?;
         while let Some(row)=rows.next()? {
             let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Option<u64>>(4)?,row.get::<_,Option<Vec<u8>>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?);
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root operation hash"))?);
