@@ -67,14 +67,36 @@ pub(crate) struct RepositoryRoute {
     pub(crate) repository: Arc<RepositoryCell>,
     pub(crate) gateway: Arc<GitGateway>,
     router: Router,
+    remote: Option<super::peer::NodePeer>,
     pin: Arc<()>,
 }
 
 impl RepositoryRoute {
     pub(crate) async fn dispatch(self, request: Request<Body>) -> Response<Body> {
-        let response = match self.router.oneshot(request).await {
-            Ok(response) => response,
-            Err(error) => match error {},
+        let response = if let Some(peer) = &self.remote {
+            match peer
+                .forward_repository(&self.repository.target, request)
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(?error, "repository owner forwarding failed");
+                    let mut response = Response::new(Body::from(
+                        "Repository owner is unavailable; retry the same request",
+                    ));
+                    *response.status_mut() = axum::http::StatusCode::SERVICE_UNAVAILABLE;
+                    response.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+                    );
+                    response
+                }
+            }
+        } else {
+            match self.router.oneshot(request).await {
+                Ok(response) => response,
+                Err(error) => match error {},
+            }
         };
         // A streamed reply outlives the handler. Keep its Cell resident until the
         // body finishes or is dropped; cache generations have their own worker pins.
@@ -417,6 +439,7 @@ impl RepositoryManager {
             repository: Arc::clone(&existing.repository),
             gateway: Arc::clone(&existing.gateway),
             router: existing.router.clone(),
+            remote: (!existing.local).then(|| self.peer.clone()),
             pin: Arc::clone(&existing.pin),
         })
     }

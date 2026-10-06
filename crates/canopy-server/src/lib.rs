@@ -385,6 +385,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("pulls/native/mod.rs"));
                 source.update(include_bytes!("pulls/native/codec.rs"));
                 source.update(include_bytes!("pulls/native/client.rs"));
+                source.update(include_bytes!("pulls/native/threads.rs"));
+                source.update(include_bytes!("pulls/threads.rs"));
                 source.update(include_bytes!("pulls/native/reads.rs"));
                 source.update(include_bytes!("packs/publication/registry.rs"));
                 source.update(include_bytes!("server/catalog_initialization.rs"));

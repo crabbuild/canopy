@@ -341,6 +341,7 @@ async fn response_loss_proxy(
     let lose_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fault = Arc::clone(&lose_reply);
     let client = Client::new();
+    let transport_client = client.clone();
     let route = post(move |request: Request<Body>| {
         let client = client.clone();
         let fault = Arc::clone(&fault);
@@ -374,10 +375,39 @@ async fn response_loss_proxy(
             result
         }
     });
+    // The advertised TLS endpoint also carries owner-routed Git/LFS streams.
+    // Keep the loss injector restricted to the exact Cell RPC above.
+    let transport = move |request: Request<Body>| {
+        let client = transport_client.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let url = format!("http://{upstream}{}", parts.uri);
+            let mut headers = parts.headers;
+            headers.remove(reqwest::header::HOST);
+            let response = client
+                .request(parts.method, url)
+                .headers(headers)
+                .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let headers = response.headers().clone();
+            let mut result = Response::new(Body::from_stream(response.bytes_stream()));
+            *result.status_mut() = status;
+            *result.headers_mut() = headers;
+            result
+        }
+    };
     let task = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/internal/cell", route))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/internal/cell", route)
+                .fallback(transport),
+        )
+        .await
+        .unwrap();
     });
     Ok((address, lose_reply, Proxy(task)))
 }

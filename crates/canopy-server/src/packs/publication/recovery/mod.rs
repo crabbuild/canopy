@@ -345,6 +345,25 @@ impl RegisteredRootRecovery {
         authority: &PreparationAuthority,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
+        if self.record.kind == Kind::Publish && self.record.refusal.is_some() {
+            let refusing = std::sync::atomic::AtomicBool::new(false);
+            let result = Box::pin(self.dispatch_bound(
+                client,
+                store,
+                authority,
+                &refusing,
+                original,
+                #[cfg(test)]
+                None,
+            ))
+            .await?;
+            return match result {
+                PublicationOutcome::RootPush(value) => Ok(value),
+                _ => Err(PublicationError::RootPush(InvocationError::NotStarted(
+                    Error::Command("armed root dispatch outcome differs"),
+                ))),
+            };
+        }
         let result = match self.record.kind {
             Kind::Publish => {
                 self.dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
@@ -444,7 +463,7 @@ impl RegisteredRootRecovery {
                 )))
             };
         }
-        if self.record.kind != Kind::Policy {
+        if self.record.kind != Kind::Policy && self.record.refusal.is_none() {
             let result = match original {
                 Some(original) => {
                     self.dispatch_root(client, store, authority, Some(original))
@@ -454,16 +473,35 @@ impl RegisteredRootRecovery {
             };
             return result.map(PublicationOutcome::RootPush);
         }
-        let result = self
-            .dispatch_command::<RegisterRefPolicyPage>(client, store, authority, false, original)
-            .await;
-        let refused = match &result {
-            Ok(value) => {
-                matches!(value.output, RefPolicyReply::Denied(_))
-                    || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
-            }
-            Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
-            _ => false,
+        let mut page = None;
+        let mut root = None;
+        let refused = if self.record.kind == Kind::Policy {
+            let result = self
+                .dispatch_command::<RegisterRefPolicyPage>(
+                    client, store, authority, false, original,
+                )
+                .await;
+            let refused = match &result {
+                Ok(value) => {
+                    matches!(value.output, RefPolicyReply::Denied(_))
+                        || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
+                }
+                Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
+                _ => false,
+            };
+            page = Some(result);
+            refused
+        } else {
+            let result = self
+                .dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
+                .await;
+            let refused = match &result {
+                Ok(value) => matches!(value.output, RootCompletionReply::Denied(_)),
+                Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
+                _ => false,
+            };
+            root = Some(result);
+            refused
         };
         if refused {
             let journal = self
@@ -480,9 +518,15 @@ impl RegisteredRootRecovery {
                     source: Box::new(RootRecoveryError::Codec(source)),
                 })?
             {
-                return Err(PublicationError::PolicyPage(InvocationError::Pending(
-                    Box::new(self.evidence().clone()),
-                )));
+                return Err(if self.record.kind == Kind::Policy {
+                    PublicationError::PolicyPage(InvocationError::Pending(Box::new(
+                        self.evidence().clone(),
+                    )))
+                } else {
+                    PublicationError::RootPush(InvocationError::Pending(Box::new(
+                        self.evidence().clone(),
+                    )))
+                });
             }
             refusing.store(true, std::sync::atomic::Ordering::Release);
             let evidence = self
@@ -528,9 +572,18 @@ impl RegisteredRootRecovery {
                 Err(error) => Err(error.publication(evidence, PublicationError::RootPush)),
             };
         }
-        result
-            .map(PublicationOutcome::PolicyPage)
-            .map_err(|error| error.publication(self.evidence(), PublicationError::PolicyPage))
+        if let Some(result) = page {
+            result
+                .map(PublicationOutcome::PolicyPage)
+                .map_err(|error| error.publication(self.evidence(), PublicationError::PolicyPage))
+        } else {
+            match root.expect("root or policy dispatch") {
+                Ok(value) => phase::normalize_root(Ok(value))
+                    .map(PublicationOutcome::RootPush)
+                    .map_err(PublicationError::RootPush),
+                Err(error) => Err(error.publication(self.evidence(), PublicationError::RootPush)),
+            }
+        }
     }
     async fn known<C: Command>(
         &self,
@@ -787,7 +840,8 @@ pub(super) async fn persist_full<C: Command>(
         || command.evidence().incarnation() != check.token.owner.incarnation
         || command.input_bytes().is_empty()
         || command.input_bytes().len() > kind.body_limit() as usize
-        || (kind == Kind::Policy) != refusal.is_some()
+        || (kind == Kind::Policy && refusal.is_none())
+        || (refusal.is_some() && !matches!(kind, Kind::Policy | Kind::Publish))
     {
         return Err(RootRecoveryError::Context);
     }

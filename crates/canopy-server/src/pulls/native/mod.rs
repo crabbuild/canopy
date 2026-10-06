@@ -13,6 +13,8 @@ mod codec;
 mod reads;
 pub(crate) use reads::{ReadData, ReadKind, ReadNativePulls, ReadReply, ReadRequest};
 mod client;
+pub(crate) mod threads;
+pub(crate) use threads::CreateNativeThread;
 
 pub(crate) const INPUT_BYTES: u32 = REF_SELECTION_BYTES + (256 << 10);
 pub(crate) const OUTPUT_BYTES: u32 = 1 << 20;

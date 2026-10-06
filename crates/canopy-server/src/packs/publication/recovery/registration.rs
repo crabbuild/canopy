@@ -67,10 +67,10 @@ impl Command for RegisterRootRecovery {
                 if !old.0.authenticated(&seed) || old_record.check != *check {
                     return deny(PreparationDenial::Conflict);
                 }
-                // The original policy bundle already authorized this exact
+                // The original armed bundle already authorized this exact
                 // refusal. Advancing to it cannot publish refs or objects and
                 // must remain possible after current Write access is revoked.
-                let frozen_refusal = old_record.kind == Kind::Policy
+                let frozen_refusal = matches!(old_record.kind, Kind::Policy | Kind::Publish)
                     && record.kind == Kind::Outcome
                     && old_record.refusal == Some(record.primary);
                 if !permitted && !frozen_refusal {

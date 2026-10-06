@@ -826,3 +826,130 @@ async fn native_review_policy_observes_current_rules_reviews_membership_and_ref_
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn native_thread_receiver_binds_verified_anchor_and_rechecks_editorial_revision() -> Result {
+    use crate::git_read::{ComparisonTarget, Side, patch::LineAnchor};
+    use crate::pulls::{
+        native::CreateNativeThread,
+        native::threads::{ThreadData, ThreadRequest},
+        threads::ThreadIntent,
+    };
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let (server, _files) = server().await?;
+        let (repository, native, _) = fixture(&server, format).await?;
+        let (creation, input) = prepare(&repository, "canopy", data(&native)).await?;
+        assert_eq!(
+            execute(&repository, input).await?.output,
+            PullChange::Applied(1)
+        );
+        let revision = PullRevision {
+            pull_version: 1,
+            source_oid: hex::encode(native.main),
+            source_version: 1,
+            base_oid: hex::encode(native.side),
+            base_version: 1,
+        };
+        let data = ThreadData {
+            number: 1,
+            intent: ThreadIntent {
+                id: uuid::Uuid::new_v4().into_bytes(),
+                target: ComparisonTarget::Current {
+                    revision: revision.clone(),
+                },
+                path_base64: "ZmlsZQ".into(),
+                side: Side::After,
+                line: 1,
+                body: "Original discussion".into(),
+            },
+            anchor: LineAnchor {
+                revision,
+                merge_base: hex::encode(native.side),
+                path_base64: "ZmlsZQ".into(),
+                side: Side::After,
+                line: 1,
+                blob_oid: hex::encode(native.main),
+            },
+        };
+        let snapshot = repository
+            .serving_snapshot(ReadIdentity::Account("canopy"))
+            .await?;
+        let selection = snapshot
+            .ref_selection(
+                data.digest()?,
+                &["refs/heads/main".into(), "refs/heads/side".into()],
+            )
+            .await?;
+        // Each substitution keeps valid shape but must invalidate its purpose MAC.
+        let encoded = serde_json::to_vec(&data)?;
+        for change in ["body", "blob", "line"] {
+            let mut substituted: ThreadData = serde_json::from_slice(&encoded)?;
+            match change {
+                "body" => substituted.intent.body.push_str(" substituted"),
+                "blob" => substituted.anchor.blob_oid = hex::encode(native.side),
+                _ => {
+                    substituted.intent.line = 2;
+                    substituted.anchor.line = 2;
+                }
+            }
+            let result = repository
+                .application
+                .command::<CreateNativeThread>(
+                    &repository.target,
+                    crate::server::mutation_identity()?,
+                    ThreadRequest {
+                        selection: selection.clone(),
+                        data: substituted,
+                    },
+                )
+                .await;
+            let Err(InvocationError::Rejected(result)) = result else {
+                return Err("substituted anchor accepted".into());
+            };
+            assert_eq!(result.output, PullChange::Conflict);
+            assert!(
+                repository
+                    .threads("canopy", 1, 0)
+                    .await?
+                    .ok_or("thread page absent")?
+                    .is_empty()
+            );
+        }
+        repository
+            .edit_pull(
+                crate::server::mutation_identity()?,
+                "canopy",
+                1,
+                PullEdit {
+                    expected_version: 1,
+                    title: "Edited while anchor was prepared",
+                    body: "",
+                    state: PullState::Open,
+                    draft: false,
+                },
+            )
+            .await?;
+        let result = repository
+            .application
+            .command::<CreateNativeThread>(
+                &repository.target,
+                crate::server::mutation_identity()?,
+                ThreadRequest { selection, data },
+            )
+            .await;
+        let Err(InvocationError::Rejected(result)) = result else {
+            return Err("stale anchor accepted".into());
+        };
+        assert_eq!(result.output, PullChange::Conflict);
+        assert!(
+            repository
+                .threads("canopy", 1, 0)
+                .await?
+                .ok_or("thread page absent")?
+                .is_empty()
+        );
+        drop((snapshot, creation, repository));
+        timeout(Duration::from_secs(15), server.shutdown()).await??;
+    }
+    Ok(())
+}

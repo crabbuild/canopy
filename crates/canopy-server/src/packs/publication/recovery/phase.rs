@@ -135,6 +135,15 @@ impl Journal {
         Ok(())
     }
     pub(super) fn refused(&self, record: &Record) -> Result<bool, CodecError> {
+        if record.kind == Kind::Publish && record.refusal.is_some() {
+            return Ok(matches!(
+                self.primary
+                    .as_ref()
+                    .map(Recorded::decode_reply::<RootCompletionReply>)
+                    .transpose()?,
+                Some(RootCompletionReply::Denied(_))
+            ));
+        }
         if record.kind != Kind::Policy {
             return Ok(false);
         }
@@ -153,7 +162,7 @@ impl Journal {
     }
     pub(super) fn may_advance(&self, record: &Record) -> Result<bool, CodecError> {
         self.validate(record)?;
-        if self.refusal.is_some() {
+        if self.refusal.is_some() || self.refused(record)? {
             return Ok(false);
         }
         let Some(primary) = &self.primary else {
@@ -298,7 +307,9 @@ pub(in crate::packs::publication) fn execute<T: WireValue>(
     let stamp = Stamp::of(&evidence);
     let refusal = if kind == record.kind && stamp == record.primary {
         false
-    } else if kind == Kind::Outcome && record.kind == Kind::Policy && record.refusal == Some(stamp)
+    } else if kind == Kind::Outcome
+        && matches!(record.kind, Kind::Policy | Kind::Publish)
+        && record.refusal == Some(stamp)
     {
         // Do not consume a pre-frozen refusal identity before a known page
         // refusal. An execution error leaves the SDK ledger absent.
@@ -514,6 +525,37 @@ mod tests {
                 .is_err()
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn denied_publication_keeps_its_frozen_refusal_pinned() -> Result<(), CodecError> {
+        let mut record = policy_record();
+        record.kind = Kind::Publish;
+        let primary = recorded(
+            17,
+            true,
+            RootCompletionReply::Denied(PreparationDenial::Conflict),
+        )?;
+        let mut journal = Journal {
+            primary: Some(primary),
+            refusal: None,
+        };
+        assert!(journal.refused(&record)?);
+        assert!(!journal.may_advance(&record)?);
+        let mut unarmed = record.clone();
+        unarmed.refusal = None;
+        assert!(journal.may_advance(&unarmed)?);
+        journal.refusal = Some(recorded(
+            18,
+            true,
+            RootCompletionReply::Denied(PreparationDenial::Stale),
+        )?);
+        journal.validate(&record)?;
+        assert!(!journal.may_advance(&record)?);
+        journal.refusal.as_mut().unwrap().sequence = 17;
+        assert!(journal.validate(&record).is_err());
+        journal.primary = None;
+        assert!(journal.validate(&record).is_err());
         Ok(())
     }
     #[test]

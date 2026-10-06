@@ -46,7 +46,8 @@ struct Edit {
     index: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LineAnchor {
     pub revision: PullRevision,
     pub merge_base: String,

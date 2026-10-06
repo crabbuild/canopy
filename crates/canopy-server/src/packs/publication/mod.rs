@@ -271,6 +271,7 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;
     registry.bind_command::<crate::pulls::native::CreateNativePull>()?;
     registry.bind_command::<crate::pulls::native::ReviewNativePull>()?;
+    registry.bind_command::<crate::pulls::native::CreateNativeThread>()?;
     registry.bind_command::<crate::pulls::candidates::command::PrepareCandidate>()?;
     registry.bind_query::<crate::pulls::native::ReadNativePulls>()?;
     registry.bind_command::<ReleaseServingPin>()?;

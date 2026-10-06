@@ -333,7 +333,7 @@ impl phase::Journal {
                 })
                 .transpose();
         }
-        let result = if record.kind == Kind::Policy {
+        let result = if record.kind == Kind::Policy || self.refused(record)? {
             if !self.refused(record)? {
                 return Ok(None);
             }

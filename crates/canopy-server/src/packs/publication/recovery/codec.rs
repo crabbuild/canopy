@@ -5,7 +5,9 @@ impl WireValue for Record {
         if self.root.operation != self.check.token.artifact_operation {
             return Err(CodecError::Invalid("root recovery namespace"));
         }
-        if (self.kind == Kind::Policy) != self.refusal.is_some() {
+        if (self.kind == Kind::Policy && self.refusal.is_none())
+            || (self.refusal.is_some() && !matches!(self.kind, Kind::Policy | Kind::Publish))
+        {
             return Err(CodecError::Invalid(
                 "policy recovery requires frozen refusal",
             ));
@@ -83,7 +85,9 @@ impl WireValue for Record {
 impl WireValue for Bundle {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         self.primary.validate(self.kind.body_limit())?;
-        if (self.kind == Kind::Policy) != self.refusal.is_some() {
+        if (self.kind == Kind::Policy && self.refusal.is_none())
+            || (self.refusal.is_some() && !matches!(self.kind, Kind::Policy | Kind::Publish))
+        {
             return Err(CodecError::Invalid("missing frozen refusal"));
         }
         if let Some(refusal) = &self.refusal {

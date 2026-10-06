@@ -59,6 +59,11 @@ pub(super) async fn qualify_publish(
     ))
     .await?;
     let guard = pending.ready(&prepared).await?;
+    let refusal = Arc::new(
+        Arc::new(prepared.base.session.clone())
+            .ready_root_refusal(identity()?, store, root, budget.clone(), None)
+            .await?,
+    );
     let ready = prepared
         .ready_root_push(
             identity()?,
@@ -68,7 +73,8 @@ pub(super) async fn qualify_publish(
             crate::packs::metadata::tests::limits(),
             None,
         )
-        .await?;
+        .await?
+        .with_refusal(refusal.clone())?;
     let loser = prepared
         .ready_root_push(
             identity()?,
@@ -78,7 +84,8 @@ pub(super) async fn qualify_publish(
             crate::packs::metadata::tests::limits(),
             None,
         )
-        .await?;
+        .await?
+        .with_refusal(refusal)?;
     drop(pending);
     drop(guard);
     drop(prepared);
@@ -248,7 +255,12 @@ async fn qualify_ready(
             matches!(tokio::time::timeout(std::time::Duration::from_secs(10), observer.wait()).await?,
             PublicationState::Uncertain(error) if matches!(&*error, PublicationError::RootPush(InvocationError::Pending(evidence)) if **evidence == original))
         );
-        assert_eq!(queue.stats().await.command_bytes, 32 << 10);
+        // Publishing bundles retain both the 32 KiB publication and its
+        // 16 KiB frozen refusal; ref-free outcomes retain one command.
+        assert_eq!(
+            queue.stats().await.command_bytes,
+            if publishing { 48 << 10 } else { 32 << 10 }
+        );
         assert_eq!(queue.close_and_drain().await.len(), 1);
         observer.recover().await?;
         assert!(

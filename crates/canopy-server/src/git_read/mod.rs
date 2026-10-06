@@ -89,7 +89,7 @@ pub(crate) struct FileChange {
     before: Option<Entry>,
     after: Option<Entry>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub(crate) enum ComparisonTarget {
     Current { revision: PullRevision },

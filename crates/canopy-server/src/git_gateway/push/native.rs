@@ -37,7 +37,15 @@ impl GitGateway {
         if let Some(response) = staging
             .replay_request(identity.clone(), &self.artifacts)
             .await
-            .map_err(|e| GatewayError::Cell(Box::new(e)))?
+            .map_err(|error| match error {
+                crate::packs::publication::RootPushReplayError::Denied(
+                    crate::packs::publication::PreparationDenial::Conflict,
+                ) => GatewayError::Push(crate::PushError::Conflict),
+                crate::packs::publication::RootPushReplayError::Denied(
+                    crate::packs::publication::PreparationDenial::Unauthorized,
+                ) => GatewayError::Unauthorized,
+                error => GatewayError::Cell(Box::new(error)),
+            })?
         {
             return Ok(with_push_id(artifact_body(response), id));
         }
@@ -322,6 +330,7 @@ impl GitGateway {
             offset = end;
         }
         let gateway = self.clone();
+        let frozen_refusal = refusal.clone();
         let ready = ticket
             .spawn_bound(move |_, _context| async move {
                 let guard = policy.ready(&prepared).await.map_err(input)?;
@@ -335,6 +344,8 @@ impl GitGateway {
                         gateway.signer_directory.as_deref(),
                     )
                     .await
+                    .map_err(input)?
+                    .with_refusal(frozen_refusal)
                     .map_err(input)
             })?
             .wait()

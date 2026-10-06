@@ -23,12 +23,15 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
     .await?;
     let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
     let advertised = format!("{} refs/heads/main", std::str::from_utf8(&oid)?.trim());
-    let suffix = format!("/git-blobs/{}", hex::encode(Sha256::digest(&body)));
+    // Pause the physical native pack body rather than the retired loose-blob
+    // layout. This fixture's incompressible history occupies the unique large
+    // pack part; manifests and structural metadata remain available.
+    let suffix = "/pack.parts/0000000000000000";
     let mut stored = fixture.store.inner.list(None);
     let mut blob = None;
     while let Some(meta) = std::future::poll_fn(|cx| stored.as_mut().poll_next(cx)).await {
         let meta = meta?;
-        if meta.location.as_ref().ends_with(&suffix) {
+        if meta.location.as_ref().ends_with(suffix) && meta.size >= body.len() as u64 {
             assert!(blob.replace(meta.location).is_none());
         }
     }
@@ -37,7 +40,8 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
     // helper as the other cold-restore tests before starting discovery.
     fixture.make_original_cold().await?;
     assert!(!fixture.repository_dir.exists());
-    *fixture.store.paused_read.lock().unwrap() = Some(blob.ok_or("external Git body missing")?);
+    *fixture.store.paused_read.lock().unwrap() =
+        Some(blob.ok_or("external native pack body missing")?);
     let destination = fixture.workspace.path().join("cold-clone");
     let clone = async {
         run_git(

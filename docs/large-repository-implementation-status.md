@@ -18,6 +18,25 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers and reviewed merges now use native publication. Remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native line threads and owner routing (2026-10-05 checkpoint)
+
+The [native thread and owner routing contract](design/native-thread-and-owner-routing.md)
+repairs purpose-bound line-thread publication, HTTP Git/LFS forwarding to the
+live resident owner, push UUID conflict classification, and durable frozen
+refusal after a known final catalog CAS denial. Both peer tests, line-thread and
+visibility integrations, and the leased push UUID test now pass. The final
+cold-owner fixture includes the publication and refusal command reservations.
+
+[The evidence](evidence/native-ci-routing-20261005.json) distinguishes the full
+workspace source from its one assertion-only test correction and final focused
+checks. The full diagnostic had 754 passing library cases and the corrected
+admission assertion; multi-server had 97 passed / 10 failed / 9 ignored. All
+three detached standalone fixtures still fail. Native discovery and listener
+rebinding pass alone but fail under full local contention. Clippy, build,
+formatting and 96 harness tests pass. Full CI, native backup/selective fetch,
+late pre-bind SSH refusal, read-only residency restoration, and new-head Linux
+qualification remain open. The capacity goal remains paused and incomplete.
+
 ## Native generated candidates and reviewed merges (2026-10-05 checkpoint)
 
 The public candidate, rebase and SHA-256 integration failures were caused by

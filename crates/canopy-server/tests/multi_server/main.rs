@@ -576,6 +576,9 @@ async fn create_repository(
 }
 
 fn config(address: std::net::SocketAddr, data_dir: std::path::PathBuf) -> ServerConfig {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     ServerConfig {
         tenant: TenantId::from_bytes([51; 16]),
         application: ApplicationId::from_bytes([52; 16]),
