@@ -37,6 +37,7 @@ pub mod issues;
 pub mod blob {
     //! Verified, immutable Git blob bodies stored outside the Repository Cell.
 
+    #[cfg(test)]
     pub(crate) use canopy_object_storage::blob::blob_path;
     pub use canopy_object_storage::blob::{
         LargeBlobError, LargeBlobRead, LargeBlobReference, LargeBlobStore,
@@ -174,6 +175,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("deployment/mod.rs"));
                 source.update(include_bytes!("deployment/root.rs"));
+                source.update(include_bytes!("deployment/backup/bodies.rs"));
+                source.update(include_bytes!("deployment/backup/native.rs"));
+                source.update(include_bytes!("packs/backup.rs"));
+                source.update(include_bytes!("packs/directory/index/visit.rs"));
+                source.update(include_bytes!("packs/publication/backup.rs"));
+                source.update(include_bytes!("packs/publication/recovery/backup.rs"));
                 source.update(include_bytes!("server/mod.rs"));
                 source.update(include_bytes!("server/lifecycle.rs"));
                 source.update(include_bytes!("admission.rs"));

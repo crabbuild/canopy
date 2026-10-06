@@ -97,14 +97,103 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
             .await
             .is_err()
     );
+    // Simulate an uploaded creating body whose attempt never registered a
+    // root. Provider listings must not turn this orphan into a backup root.
+    use canopy_object_storage::artifact::{ArtifactKey, ArtifactKind, ArtifactStore};
+    let orphan_store = ArtifactStore::new(
+        Arc::new(object_store::prefix::PrefixStore::new(
+            store.clone(),
+            source_prefix.clone(),
+        )),
+        *uuid::Uuid::parse_str(
+            repository["repository_id"]
+                .as_str()
+                .ok_or("repository UUID missing")?,
+        )?
+        .as_bytes(),
+    );
+    let mut orphan = b"unregistered creating input".as_slice();
+    let digest = *blake3::hash(orphan).as_bytes();
+    orphan_store
+        .put(
+            ArtifactKey {
+                operation: [99; 16],
+                binding_digest: digest,
+                kind: ArtifactKind::InputBody,
+            },
+            orphan.len() as u64,
+            digest,
+            &mut orphan,
+        )
+        .await?;
     let report = deployment
         .create_backup(id, backup.clone(), worker())
         .await?;
-    assert_eq!(report.external_objects, 3);
+    // Native backup counts all retained physical artifacts, including typed
+    // catalog/ref roots and closed command/audit headers, plus the LFS body.
+    assert_eq!(report.external_objects, 25);
     assert_eq!(report.cells, 2);
     deployment
         .create_backup(id, backup.clone(), worker())
         .await?;
+    // Retired input/command bodies and unselected native responses are not
+    // permanent audit edges. Remove all this fixture's unretained native bytes
+    // and prove the same pinned backup remains independently reproducible.
+    use futures_util::TryStreamExt;
+    let native_repository = format!(
+        "repos/{}",
+        hex::encode(
+            uuid::Uuid::parse_str(
+                repository["repository_id"]
+                    .as_str()
+                    .ok_or("missing repository id")?
+            )?
+            .as_bytes()
+        )
+    );
+    let retained_prefix = StorePath::from(format!("{backup}/{native_repository}"));
+    let retained = store
+        .list(Some(&retained_prefix))
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .map(|entry| {
+            entry
+                .location
+                .as_ref()
+                .strip_prefix(backup.as_ref())
+                .map(str::to_owned)
+                .ok_or("backup namespace differs")
+        })
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    let creating_prefix = StorePath::from(format!("{source_prefix}/{native_repository}"));
+    let creating = store
+        .list(Some(&creating_prefix))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let mut retired = 0;
+    for entry in creating {
+        let relative = entry
+            .location
+            .as_ref()
+            .strip_prefix(source_prefix.as_ref())
+            .ok_or("source namespace differs")?;
+        if !retained.contains(relative) {
+            store.delete(&entry.location).await?;
+            retired += 1;
+        }
+    }
+    assert!(
+        retired > 0,
+        "fixture must contain unretained native input artifacts"
+    );
+    assert_eq!(
+        deployment
+            .create_backup(id, backup.clone(), worker())
+            .await?
+            .external_objects,
+        report.external_objects
+    );
     let mut forbidden = config(
         available_address().await?,
         files.path().join("backup-server"),
@@ -130,9 +219,10 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     }
     let emptied = store.list_with_delimiter(Some(&source_prefix)).await?;
     assert!(emptied.objects.is_empty() && emptied.common_prefixes.is_empty());
-    deployment
+    let verified = deployment
         .verify_backup(id, backup.clone(), worker())
         .await?;
+    assert_eq!(verified.external_objects, report.external_objects);
     let mut constrained = worker();
     constrained.local_disk_limit_bytes = 1;
     assert!(
@@ -235,6 +325,46 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
             .as_str()
             .ok_or("missing repository id")?,
     )?;
+    // A complete backup must verify the native parts as well as LFS. Locate
+    // this fixture's one pack solely to inject provider corruption; production
+    // traversal derives its authority from the pinned typed graph.
+    let native_prefix = StorePath::from(format!(
+        "{backup}/repos/{}/git-packs",
+        hex::encode(repository_id.as_bytes())
+    ));
+    let parts = store
+        .list(Some(&native_prefix))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let native_part = parts
+        .iter()
+        .find(|entry| {
+            entry
+                .location
+                .as_ref()
+                .ends_with("/pack.parts/0000000000000000")
+        })
+        .ok_or("backup native pack part absent")?
+        .location
+        .clone();
+    let original = store.get(&native_part).await?.bytes().await?;
+    store
+        .put(&native_part, vec![0; original.len()].into())
+        .await?;
+    assert!(
+        deployment
+            .verify_backup(id, backup.clone(), worker())
+            .await
+            .is_err()
+    );
+    store.put(&native_part, original.into()).await?;
+    assert_eq!(
+        deployment
+            .verify_backup(id, backup.clone(), worker())
+            .await?
+            .external_objects,
+        report.external_objects
+    );
     let lfs_path = StorePath::from(format!(
         "{backup}/repos/{}/lfs/{}.parts/0000000000000000",
         hex::encode(repository_id.as_bytes()),

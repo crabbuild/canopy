@@ -3,6 +3,7 @@
 //! These structures are inputs to trusted catalog verification. Native pack
 //! membership alone does not certify graph closure or authorize object reads.
 
+pub(crate) mod backup;
 pub mod catalog;
 pub mod closure;
 pub mod directory;

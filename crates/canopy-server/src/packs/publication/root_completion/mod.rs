@@ -150,3 +150,5 @@ impl RootPushCompletion {
         Ok(())
     }
 }
+
+pub(in crate::packs::publication) use retention::backup_graph;

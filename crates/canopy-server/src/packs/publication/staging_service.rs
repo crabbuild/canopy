@@ -336,6 +336,11 @@ struct Admission {
     jobs: HashMap<[u8; 16], Arc<Job>>,
     actors: HashMap<String, ActorAdmission>,
 }
+#[cfg(test)]
+type CheckpointProbeGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 struct Inner {
     authority: PreparationAuthority,
     target: CellTarget,
@@ -351,6 +356,8 @@ struct Inner {
     drained: Notify,
     #[cfg(test)]
     fault: std::sync::atomic::AtomicU8,
+    #[cfg(test)]
+    checkpoint_probe_gate: Mutex<Option<CheckpointProbeGate>>,
 }
 struct Local {
     lease: Option<StagingLease>,
@@ -712,6 +719,8 @@ impl StagingCoordinator {
                 drained: Notify::new(),
                 #[cfg(test)]
                 fault: std::sync::atomic::AtomicU8::new(0),
+                #[cfg(test)]
+                checkpoint_probe_gate: Mutex::new(None),
             }),
         })
     }
@@ -962,6 +971,22 @@ impl StagingCoordinator {
         }
     }
     #[cfg(test)]
+    pub(crate) fn pause_checkpoint_probe_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, receive) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        *self
+            .inner
+            .checkpoint_probe_gate
+            .lock()
+            .expect("checkpoint gate") = Some((entered, wait));
+        (receive, release)
+    }
+    #[cfg(test)]
     pub(crate) fn fault_for_test(&self, fault: u8) {
         self.inner
             .fault
@@ -997,6 +1022,25 @@ pub struct StagedInputsTicket {
     registration: Arc<InputRegistration>,
 }
 impl StagedInputsTicket {
+    /// Order the next producer after the controller has installed its fresh
+    /// phase. `wait` independently retains the original committed receipt.
+    pub(crate) async fn wait_ready(&self) -> Result<Receipt, Arc<StagingError>> {
+        let receipt = self.wait().await?;
+        let mut state = self.job.status.subscribe();
+        loop {
+            match state.borrow_and_update().clone() {
+                StagingState::Active(_) | StagingState::Bound(_) => return Ok(receipt),
+                StagingState::Uncertain(error) | StagingState::Fenced(error) => return Err(error),
+                StagingState::Stopped | StagingState::Published(_) => {
+                    return Err(Arc::new(StagingError::Inactive));
+                }
+                _ => {}
+            }
+            if state.changed().await.is_err() {
+                return Err(Arc::new(StagingError::Worker));
+            }
+        }
+    }
     /// Observe the original durable registration receipt. An uncertain error
     /// retains the exact command in the coordinator; recover and wait again.
     /// A receipt is not a fresh authority or lease observation.
@@ -1833,6 +1877,8 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         .clone()
                         .expect("bound checkpoint slot");
                     registration.finish(Ok(value.receipt));
+                    #[cfg(test)]
+                    checkpoint_probe_for_test(&inner).await;
                     let matched = matches!(&value.output, StagingReply::Granted(lease)
                         if lease.token == session.lease.token && lease.format == session.lease.format);
                     let result = if matched {
@@ -1922,6 +1968,10 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         if l.lease.is_none() {
                             l.lease = Some(*lease);
                         }
+                    }
+                    #[cfg(test)]
+                    if checkpoint {
+                        checkpoint_probe_for_test(&inner).await;
                     }
                     match probe(&job, value.receipt).await {
                         Ok((lease, deadline)) => {
@@ -2342,4 +2392,17 @@ fn remove(inner: &Inner, job: &Job) {
         a.actors.remove(&job.actor);
     }
     inner.drained.notify_waiters();
+}
+
+#[cfg(test)]
+async fn checkpoint_probe_for_test(inner: &Inner) {
+    let gate = inner
+        .checkpoint_probe_gate
+        .lock()
+        .expect("checkpoint gate")
+        .take();
+    if let Some((entered, wait)) = gate {
+        let _ = entered.send(());
+        let _ = wait.await;
+    }
 }

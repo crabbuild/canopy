@@ -523,7 +523,7 @@ pub(in crate::git_gateway) async fn checkpoint(
         .register_inputs(proof, mutation()?)
         .map_err(|(error, _)| error)?;
     loop {
-        match registration.wait().await {
+        match registration.wait_ready().await {
             Ok(_) => return Ok(()),
             Err(_) if matches!(ticket.state(), StagingState::Uncertain(_)) => {
                 staging.recover(ticket)?;

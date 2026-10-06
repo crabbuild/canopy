@@ -923,3 +923,46 @@ async fn generated_candidate_intent_joins_uncertain_original_and_retries_only_af
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn checkpoint_receipt_precedes_custody_probe_but_next_work_waits_for_active_phase() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+        let ticket = submit(&f, &c, [236; 16], "owner").await?;
+        active(&ticket).await?;
+        let store = Arc::new(canopy_object_storage::artifact::ArtifactStore::new(
+            Arc::new(InMemory::new()),
+            f.repository,
+        ));
+        let proof = super::inputs::seal(&f, &ticket, store, 0).await?;
+        let (entered, release) = c.pause_checkpoint_probe_for_test();
+        let registration = ticket
+            .register_inputs(proof, identity()?)
+            .map_err(|(e, _)| e)?;
+        timeout(Duration::from_secs(10), entered).await??;
+        assert!(matches!(ticket.state(), StagingState::RegisteringInputs));
+        let original = timeout(Duration::from_secs(10), registration.wait())
+            .await?
+            .map_err(|e| e.to_string())?;
+        // Dropping the release sender resumes a failed test's held controller.
+        assert!(
+            timeout(Duration::from_millis(20), registration.wait_ready())
+                .await
+                .is_err(),
+            "known checkpoint receipt leaked into the still-registering phase"
+        );
+        let _ = release.send(());
+        assert_eq!(
+            timeout(Duration::from_secs(10), registration.wait_ready())
+                .await?
+                .map_err(|e| e.to_string())?,
+            original
+        );
+        assert!(matches!(ticket.state(), StagingState::Active(_)));
+        assert!(c.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}

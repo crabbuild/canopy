@@ -490,7 +490,7 @@ impl RegisteredRootRecovery {
         })
     }
 }
-fn validate_bundle(
+pub(super) fn validate_bundle(
     bundle: &Bundle,
     record: &Record,
     target: &CellTarget,
@@ -788,6 +788,12 @@ impl ReadyTerminalRelease {
             .map(PublicationOutcome::TerminalRelease)
             .map_err(PublicationError::TerminalRelease)
     }
+}
+
+pub(super) fn backup_release(bytes: &[u8]) -> Result<(), RootRecoveryError> {
+    let _: ReleaseRecord =
+        crate::packs::backup::decode(bytes, 1024).map_err(|_| RootRecoveryError::Context)?;
+    Ok(())
 }
 
 #[cfg(test)]

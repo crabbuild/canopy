@@ -678,3 +678,23 @@ fn publish_authenticated(
     ))?)?;
     Ok(CommandResult::Success(result))
 }
+
+pub(super) async fn backup_graph(
+    proof: &NativeMergeProof,
+    seed: &[u8; 32],
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    super::backup::catalog_certificate(&proof.certificate, seed, inventory).await?;
+    if let Some(t) = &proof.transition {
+        if let Some(root) = t.refs {
+            inventory.refs(root).await?;
+        }
+        if let Some(root) = t.audit {
+            audit::backup_graph(root, inventory).await?;
+        }
+        if let Some(root) = t.candidate {
+            super::candidate_publication::audit::backup_graph(root, inventory).await?;
+        }
+    }
+    Ok(())
+}

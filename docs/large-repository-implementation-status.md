@@ -18,6 +18,33 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers and reviewed merges now use native publication. Remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Native backup and staging readiness (2026-10-06 checkpoint)
+
+Backup inventory now follows the authenticated native catalog, ref, input,
+outcome, audit and recovery graphs from the pinned Cell snapshot. SQL inventory
+uses keyset pages; traversal uses bounded depth and disk-admitted deduplication.
+Copies preserve the original creating namespaces and authenticate source and
+destination parts. Closed recovery metadata does not demand retired command
+bodies or responses that can no longer be selected. LFS remains paged and
+verified. Provider listing is used only for fault injection in the test.
+
+The strengthened backup integration passes after deleting original storage,
+with strict Git fsck, LFS and collaboration restoration, orphan exclusion,
+repeat restore and native/LFS corruption rejection. The fixture retains 25
+physical artifacts including LFS. This is a fixture count, not a capacity claim.
+
+A deterministic gate reproduced the push-option race: the original checkpoint
+receipt became available before the controller restored its active phase.
+The production pipeline now waits for readiness separately from the immutable
+receipt. The regression passes for both object formats; all four runnable
+HTTP/SSH push-option integrations pass locally. The provider case remains
+ignored under its existing qualification rule.
+
+Linux runs 37411479759 and 37411617637 at aa86f94 both report 100 passing,
+11 failing and 9 ignored multi-server tests. These repairs require a new-head
+Linux run. Selective fetch, late pre-bind SSH rejection, read-only restoration
+and detached standalone fixtures remain open. Full CI is not green.
+
 ## Native line threads and owner routing (2026-10-05 checkpoint)
 
 The [native thread and owner routing contract](design/native-thread-and-owner-routing.md)

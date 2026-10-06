@@ -383,3 +383,22 @@ async fn reopen(
         certificate,
     })
 }
+
+pub(super) async fn backup_graph(
+    root: NativeResultRoot,
+    active: bool,
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    let record = root.read(&inventory.store()).await?;
+    inventory.input(root.operation(), root.artifact()).await?;
+    for (key, body) in record.audit_bodies() {
+        inventory.artifact(key, body).await?;
+    }
+    if active {
+        super::backup::wire(record.request, inventory).await?;
+        inventory
+            .body(record.operation, record.response.body)
+            .await?;
+    }
+    Ok(())
+}

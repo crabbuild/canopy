@@ -977,3 +977,28 @@ pub(super) async fn observe_bound_registration(
     session.refresh(minimum).await?;
     Ok(())
 }
+
+pub(super) async fn backup_graph(
+    value: &NativeInputCertificate,
+    seed: &[u8; 32],
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    if !value.0.authenticated(seed) {
+        return Err(CodecError::Invalid("backup input MAC").into());
+    }
+    let data: Inputs = value.0.data()?;
+    value.scoped_check(inventory.target())?;
+    if data.format != inventory.format() {
+        return Err(CodecError::Invalid("backup input format").into());
+    }
+    if let Some(root) = data.root {
+        inventory.native_inputs(root).await?;
+    }
+    if let Some(root) = data.wire_request {
+        super::backup::wire(root, inventory).await?;
+    }
+    if let Some(root) = data.native_result {
+        super::native_result::backup_graph(root, true, inventory).await?;
+    }
+    Ok(())
+}

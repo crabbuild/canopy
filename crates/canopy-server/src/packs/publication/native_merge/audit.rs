@@ -309,3 +309,19 @@ pub(in crate::packs::publication) async fn closed_graph(
     )?;
     Ok(())
 }
+
+pub(in crate::packs::publication) async fn backup_graph(
+    root: StoredInputRoot,
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    let audit: Audit = root.read(&inventory.store(), INPUT_ROOT_BYTES).await?;
+    if !inventory.input(root.operation, root.artifact).await? {
+        return Ok(());
+    }
+    inventory.catalog_headers(audit.catalog).await?;
+    inventory.refs(audit.refs).await?;
+    if let Some(root) = audit.candidate {
+        super::super::candidate_publication::audit::backup_graph(root, inventory).await?;
+    }
+    Ok(())
+}

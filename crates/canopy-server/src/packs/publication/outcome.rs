@@ -223,3 +223,24 @@ pub(super) fn current_authority(
             generation,
         )? == data.floor)
 }
+
+pub(super) async fn backup_graph(
+    value: &OutcomeCertificate,
+    seed: &[u8; 32],
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    if !value.0.authenticated(seed) {
+        return Err(CodecError::Invalid("backup outcome MAC").into());
+    }
+    let data: OutcomeData = value.0.data()?;
+    super::backup::context(
+        data.tenant,
+        data.application,
+        data.check.token.repository,
+        inventory,
+    )?;
+    if data.format != inventory.format() {
+        return Err(CodecError::Invalid("backup outcome format").into());
+    }
+    super::backup::fact(data.floor, inventory).await
+}

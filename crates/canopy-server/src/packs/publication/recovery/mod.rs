@@ -972,3 +972,5 @@ impl From<NativeCandidateAuditError> for RootRecoveryError {
         Self::CandidateAudit(Box::new(error))
     }
 }
+
+pub(in crate::packs::publication) mod backup;

@@ -310,3 +310,5 @@ pub use candidate_publication::{
     CandidatePublicationReply, NATIVE_CANDIDATE_BYTES, NativeCandidateProof,
     NativeCandidatePublicationError, PublishNativeCandidate,
 };
+
+pub(crate) mod backup;
