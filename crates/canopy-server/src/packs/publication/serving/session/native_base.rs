@@ -53,7 +53,7 @@ impl ServingPin {
                             inner
                                 .context
                                 .files
-                                .install_workspace(cache.clone(), native, owner.clone())
+                                .install_pack_workspace(cache.clone(), native, owner.clone())
                                 .await?;
                             observation.refresh(&inner, &actor).await?;
                             job(&spool, owner.clone(), move |s| s.imported(native)).await?;

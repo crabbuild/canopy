@@ -12,6 +12,46 @@ fn key(body: &[u8]) -> ArtifactKey {
 }
 
 #[tokio::test]
+async fn selected_parts_authenticate_without_fetching_unrequested_bytes() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let artifacts = ArtifactStore::new(store.clone(), [1; 16]);
+    let mut body = vec![27; PART_BYTES + 31];
+    body[PART_BYTES..].fill(42);
+    let key = key(&body);
+    let descriptor = artifacts
+        .put(
+            key,
+            body.len() as u64,
+            key.binding_digest,
+            &mut body.as_slice(),
+        )
+        .await?;
+    let path = artifacts.path(key, descriptor.digest)?;
+    // A missing unrelated part must not affect a selected range read.
+    store.delete(&external::part(&path, 0)).await?;
+    let ranges = artifacts
+        .ranges_owned(key, descriptor, Arc::new(()))
+        .await?;
+    assert_eq!(ranges.part(1).await?.as_ref(), &[42; 31]);
+    assert!(ranges.part(0).await.is_err());
+    assert!(ranges.part(2).await.is_err());
+    assert!(ranges.part(u64::MAX).await.is_err());
+    store
+        .put(&external::part(&path, 1), vec![43; 31].into())
+        .await?;
+    assert!(matches!(ranges.part(1).await, Err(ArtifactError::Corrupt)));
+    let mut wrong = descriptor;
+    wrong.manifest_digest[0] ^= 1;
+    assert!(
+        artifacts
+            .ranges_owned(key, wrong, Arc::new(()))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnations() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let artifacts = ArtifactStore::new(Arc::clone(&store), [1; 16]);

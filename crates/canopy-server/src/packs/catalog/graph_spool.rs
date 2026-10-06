@@ -123,6 +123,24 @@ impl GraphSpool {
             Ok::<_, MetadataError>(())
         })
     }
+    /// Reuse this completed selected frontier for native Git's bounded missing
+    /// object selection. Guessed IDs cannot create new nodes through this path.
+    pub(in crate::packs) fn retry(&mut self, ids: &[ObjectId]) -> Result<(), MetadataError> {
+        if ids.len() > 128 {
+            return Err(MetadataError::Limit);
+        }
+        growth::transaction(&mut self.db, &mut self.file, self.maximum, |tx| {
+            let mut update = tx.prepare_cached(
+                "UPDATE nodes SET done=0 WHERE oid=?1 AND done=1 AND kind IS NOT NULL",
+            )?;
+            for id in ids {
+                if update.execute([id.as_ref()])? != 1 {
+                    return Err(MetadataError::Integrity);
+                }
+            }
+            Ok::<_, MetadataError>(())
+        })
+    }
     pub(in crate::packs) fn pack_seen(
         &self,
         p: NativePackDescriptor,

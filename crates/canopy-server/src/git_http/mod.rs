@@ -249,6 +249,15 @@ impl GitHttpBackend {
         Ok(process)
     }
 
+    /// Only gateways validating every want against certified live-ref
+    /// membership may use this command. Sparse transport workspaces need not
+    /// contain unrelated ref histories for Git to repeat that authorization.
+    pub(crate) fn certified_fetch_command(&self) -> Result<Command, GitHttpError> {
+        let mut command = self.transport_command()?;
+        command.args(["-c", "uploadpack.allowAnySHA1InWant=true"]);
+        Ok(command)
+    }
+
     /// Streams Git output while retaining the caller's disposable cache owner.
     pub(crate) async fn stream<T: Send + 'static>(
         &self,
@@ -259,7 +268,7 @@ impl GitHttpBackend {
             .await
     }
 
-    async fn stream_command<T: Send + 'static>(
+    pub(crate) async fn stream_command<T: Send + 'static>(
         &self,
         request: GitHttpRequest,
         keep_alive: T,

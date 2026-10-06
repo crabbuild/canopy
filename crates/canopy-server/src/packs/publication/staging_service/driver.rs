@@ -9,6 +9,11 @@ pub(super) type DriverJoin =
 /// Retain diagnostics without retaining rejected preparation values or their
 /// physical credits. Both message bytes and source traversal are bounded.
 fn failure(error: &StagingError) -> StagingError {
+    // A known stopped attempt remains distinguishable from ambiguous command
+    // evidence. Wire callers may report failure only for this terminal state.
+    if matches!(error, StagingError::Inactive) {
+        return StagingError::Inactive;
+    }
     struct Message(String);
     impl Write for Message {
         fn write_str(&mut self, value: &str) -> std::fmt::Result {

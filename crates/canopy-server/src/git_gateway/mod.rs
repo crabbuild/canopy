@@ -249,10 +249,31 @@ impl GitGateway {
                 .await
                 .map_err(|e| GatewayError::Cell(Box::new(e)))?;
             Self::validate_wants(&workspace, &fetch.wants).await?;
+            if discovery {
+                workspace
+                    .prepare_advertisement()
+                    .await
+                    .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+            } else {
+                workspace
+                    .prepare_fetch(
+                        fetch.wants.iter().copied().collect(),
+                        fetch.filter.clone(),
+                        fetch.needs_blob_sizes,
+                    )
+                    .await
+                    .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+            }
             tracing::debug!(discovery,filter=?fetch.filter,generation=workspace.fact().generation,
                 "prepared certified Git transport");
             let backend = workspace.backend(self.certificate_nonce().await?);
-            backend.stream(request, workspace.read_owner()).await?
+            backend
+                .stream_command(
+                    request,
+                    workspace.read_owner(),
+                    backend.certified_fetch_command()?,
+                )
+                .await?
         };
         Ok(GitHttpResponse {
             status: response.status,

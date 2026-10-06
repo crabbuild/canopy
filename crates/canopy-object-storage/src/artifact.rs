@@ -264,6 +264,66 @@ impl ArtifactStore {
             owner,
         })
     }
+
+    /// Authenticate the manifest before reading independently selected parts.
+    /// Each returned part is checked against that manifest. This capability
+    /// does not claim to recompute the digest of the entire artifact; callers
+    /// must already hold its certified descriptor and verify decoded objects.
+    pub async fn ranges_owned(
+        &self,
+        key: ArtifactKey,
+        descriptor: ArtifactDescriptor,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<ArtifactRanges, ArtifactError> {
+        Ok(ArtifactRanges {
+            read: self.read_owned(key, descriptor, owner).await?,
+        })
+    }
+}
+
+/// Independent bounded reads retain the caller's physical owner through
+/// provider I/O and detached hashing. Unrequested parts are never fetched.
+pub struct ArtifactRanges {
+    read: ArtifactRead,
+}
+impl ArtifactRanges {
+    pub async fn part(&self, index: u64) -> Result<Bytes, ArtifactError> {
+        self.part_owned(index, Arc::new(())).await
+    }
+    /// Cached range capabilities retain idle file admission; the active caller
+    /// supplies its work owner separately so an idle cache cannot pin a lease.
+    pub async fn part_owned(
+        &self,
+        index: u64,
+        work: Arc<dyn Send + Sync>,
+    ) -> Result<Bytes, ArtifactError> {
+        let offset = index
+            .checked_mul(PART_BYTES as u64)
+            .filter(|offset| *offset < self.read.descriptor.size)
+            .ok_or(ArtifactError::Corrupt)?;
+        let expected = self
+            .read
+            .manifest
+            .part_digest(index)
+            .ok_or(ArtifactError::Corrupt)?;
+        let bytes = external::read(
+            self.read.store.as_ref(),
+            &self.read.path,
+            &self.read.manifest,
+            self.read.descriptor.size,
+            offset,
+        )
+        .await?;
+        let owner = (self.read.owner.clone(), work);
+        tokio::task::spawn_blocking(move || {
+            let _owner = owner;
+            if blake3::hash(&bytes).as_bytes() != &expected {
+                return Err(ArtifactError::Corrupt);
+            }
+            Ok(bytes)
+        })
+        .await?
+    }
 }
 
 /// One bounded authenticated part at a time. Errors/cancellation poison the

@@ -129,9 +129,9 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     let report = deployment
         .create_backup(id, backup.clone(), worker())
         .await?;
-    // Native backup counts all retained physical artifacts, including typed
-    // catalog/ref roots and closed command/audit headers, plus the LFS body.
-    assert_eq!(report.external_objects, 25);
+    // Artifact deduplication depends on native Git's packing and exact
+    // response bytes. Verify the physical inventory below rather than a
+    // platform-specific number of distinct content-addressed artifacts.
     assert_eq!(report.cells, 2);
     deployment
         .create_backup(id, backup.clone(), worker())
@@ -166,6 +166,32 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
                 .ok_or("backup namespace differs")
         })
         .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    let native_manifests = retained
+        .iter()
+        .filter(|path| !path.contains(".parts/"))
+        .count() as u64;
+    // Repository inventory includes its one retained LFS body. Count
+    // artifacts, not provider parts, against the report.
+    assert_eq!(report.external_objects, native_manifests);
+    assert_eq!(
+        retained
+            .iter()
+            .filter(|path| path.contains("/lfs/") && !path.contains(".parts/"))
+            .count(),
+        1
+    );
+    for family in ["git-packs", "git-catalogs", "git-inputs"] {
+        assert!(
+            retained.iter().any(|path| path.contains(family)),
+            "missing {family}"
+        );
+    }
+    assert!(
+        !retained
+            .iter()
+            .any(|path| path.contains(&hex::encode(digest))),
+        "unregistered creating input must not become a backup root"
+    );
     let creating_prefix = StorePath::from(format!("{source_prefix}/{native_repository}"));
     let creating = store
         .list(Some(&creating_prefix))

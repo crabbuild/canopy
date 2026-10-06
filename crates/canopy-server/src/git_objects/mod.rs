@@ -121,15 +121,23 @@ impl Process {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct GitObjectWalk {
     process: Process,
     revisions: AbortOnDropHandle<Result<(), io::Error>>,
     missing_only: bool,
 }
 
-#[cfg(test)]
 impl GitObjectWalk {
+    pub(crate) fn selected_owned(
+        git_dir: &Path,
+        included: Vec<crate::ObjectId>,
+        filter: Option<&str>,
+        native: &crate::native_resources::NativeScope,
+        owner: ReadOwner,
+    ) -> Result<Self, ObjectReadError> {
+        Self::start_owned(git_dir, included, Vec::new(), false, filter, native, owner)
+    }
+
     #[cfg(test)]
     pub(crate) fn missing(
         git_dir: &Path,
@@ -140,6 +148,16 @@ impl GitObjectWalk {
         Self::start(git_dir, included, Vec::new(), true, filter, native)
     }
 
+    pub(crate) fn missing_owned(
+        git_dir: &Path,
+        included: Vec<crate::ObjectId>,
+        filter: Option<&str>,
+        native: &crate::native_resources::NativeScope,
+        owner: ReadOwner,
+    ) -> Result<Self, ObjectReadError> {
+        Self::start_owned(git_dir, included, Vec::new(), true, filter, native, owner)
+    }
+    #[cfg(test)]
     fn start(
         git_dir: &Path,
         included: Vec<crate::ObjectId>,
@@ -147,6 +165,25 @@ impl GitObjectWalk {
         missing_only: bool,
         filter: Option<&str>,
         native: &crate::native_resources::NativeScope,
+    ) -> Result<Self, ObjectReadError> {
+        Self::start_owned(
+            git_dir,
+            included,
+            excluded,
+            missing_only,
+            filter,
+            native,
+            std::sync::Arc::new(()),
+        )
+    }
+    fn start_owned(
+        git_dir: &Path,
+        included: Vec<crate::ObjectId>,
+        excluded: Vec<crate::ObjectId>,
+        missing_only: bool,
+        filter: Option<&str>,
+        native: &crate::native_resources::NativeScope,
+        owner: ReadOwner,
     ) -> Result<Self, ObjectReadError> {
         let filter = filter.map(|value| format!("--filter={value}"));
         let mut args = vec!["rev-list", "--objects", "--no-object-names", "--stdin"];
@@ -156,7 +193,7 @@ impl GitObjectWalk {
         if let Some(filter) = &filter {
             args.push(filter);
         }
-        let (process, mut input) = Process::start(git_dir, &args, native)?;
+        let (process, mut input) = Process::start_owned(git_dir, &args, native, owner)?;
         // Ref lists can exceed argv limits; feed stdin concurrently with stdout consumption.
         let revisions = AbortOnDropHandle::new(tokio::spawn(async move {
             for (prefix, roots) in [("", included), ("^", excluded)] {
@@ -175,7 +212,6 @@ impl GitObjectWalk {
         })
     }
 
-    #[cfg(test)]
     pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
         timeout(IO_TIMEOUT, async {
             while let Some(line) = header(&mut self.process.output).await? {
@@ -224,7 +260,65 @@ pub trait EdgeSink: Send {
     ) -> impl std::future::Future<Output = Result<(), ObjectReadError>> + Send;
 }
 
+/// Writes remain private until the caller observes canonical verification and
+/// the native process's successful completion.
+pub(crate) trait BodySink: Send {
+    fn append(
+        &mut self,
+        bytes: bytes::Bytes,
+    ) -> impl std::future::Future<Output = Result<(), ObjectReadError>> + Send;
+}
+
 impl GitObjects {
+    pub(crate) async fn copy_verified(
+        &mut self,
+        expected: crate::packs::metadata::CanonicalObject,
+        sink: &mut impl BodySink,
+    ) -> Result<(), ObjectReadError> {
+        if self.inspection_failed {
+            return Err(ObjectReadError::Malformed);
+        }
+        self.inspection_failed = true;
+        let mut object = timeout(IO_TIMEOUT, async {
+            self.requests
+                .write_all(format!("{}\n", hex::encode(expected.oid)).as_bytes())
+                .await?;
+            open_object(&mut self.batch.output, expected.oid).await
+        })
+        .await
+        .map_err(|_| ObjectReadError::Timeout)??;
+        if object.kind != expected.kind || object.size != expected.size {
+            return Err(ObjectReadError::Malformed);
+        }
+        let mut canonical = crate::git_format::ObjectHasher::new(
+            expected.oid.format(),
+            expected.kind,
+            expected.size,
+        );
+        let mut digest = blake3::Hasher::new();
+        loop {
+            let mut bytes = vec![0; 64 << 10];
+            let count = timeout(IO_TIMEOUT, object.reader.read(&mut bytes))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+            if count == 0 {
+                break;
+            }
+            bytes.truncate(count);
+            canonical.update(&bytes);
+            digest.update(&bytes);
+            timeout(IO_TIMEOUT, sink.append(bytes.into()))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+        }
+        object.finish().await?;
+        if canonical.finalize() != expected.oid || digest.finalize().as_bytes() != &expected.digest
+        {
+            return Err(ObjectReadError::Malformed);
+        }
+        self.inspection_failed = false;
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn start(
         git_dir: &Path,

@@ -29,8 +29,12 @@ impl GitGateway {
             .ref_workspace(crate::packs::publication::WorkspaceLimits::default())
             .await
             .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        workspace
+            .prepare_advertisement()
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
         let backend = workspace.backend(self.certificate_nonce().await?);
-        let mut command = backend.transport_command()?;
+        let mut command = backend.certified_fetch_command()?;
         command
             .arg("upload-pack")
             .arg(backend.git_dir())
@@ -74,6 +78,14 @@ impl GitGateway {
                     remaining -= group.len();
                     let request = fetch::FetchRequest::parse(&group)?;
                     Self::validate_wants(&workspace, &request.wants).await?;
+                    workspace
+                        .prepare_fetch(
+                            request.wants.iter().copied().collect(),
+                            request.filter.clone(),
+                            request.needs_blob_sizes,
+                        )
+                        .await
+                        .map_err(|e| GatewayError::Cell(Box::new(e)))?;
                     stdin.write_all(&group).await?;
                     stdin.flush().await?;
                     if !protocol_v2 {
@@ -183,6 +195,11 @@ impl GitGateway {
             .ok_or(InputError::Commands)?;
             commands.extend_from_slice(&options);
         }
+        // Keep only bounded wire intent for a known pre-publication refusal.
+        // This report cannot acknowledge a push or alter durable state.
+        let refusal =
+            branch_policy::commands_in_format(&commands, Some(self.repository.object_format()))?
+                .rejection(crate::push::report::REJECTED)?;
         // Stock send-pack closes its write fd after pack-objects. Delete-only
         // pushes have no pack and await status without closing stdin. Preserve
         // their negotiated options group before dispatching the completed body.
@@ -193,9 +210,36 @@ impl GitGateway {
         } else {
             Body::from(commands)
         };
-        let response = self
+        let response = match self
             .handle(rpc("POST", body), actor, None, Some(admission))
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // Only a known fenced attempt plus a current write downgrade
+                // can use the original per-ref ng report. Uncertain mutations,
+                // storage failures and lost replies retain their error path.
+                let inactive = match &error {
+                    GatewayError::Cell(source) => source
+                        .downcast_ref::<Arc<crate::packs::publication::StagingError>>()
+                        .is_some_and(|error| {
+                            matches!(**error, crate::packs::publication::StagingError::Inactive)
+                        }),
+                    _ => false,
+                };
+                if inactive
+                    && self
+                        .access_level(actor)
+                        .await?
+                        .is_some_and(|role| role < TokenScope::Write)
+                {
+                    let response = refusal.ok_or(error)?;
+                    write_body(Body::from(response.body), &mut writer, b"").await?;
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
         if response.status != 200 {
             return Err(GitHttpError::Interrupted.into());
         }

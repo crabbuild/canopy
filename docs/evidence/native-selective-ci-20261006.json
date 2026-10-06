@@ -1,0 +1,90 @@
+{
+  "base_head": "195e96d59f469ddf49bf54b0eb3206e3fdedb760",
+  "sources": {
+    "crates/canopy-git-format/src/pack_index/mod.rs": "f7f380bc9de6da545e2cfcaf11a2b710a54644420abd8e2d3d3e70888462b8de",
+    "crates/canopy-git-format/src/pack_index/tests.rs": "8d7c9556af3053d7d83773e1c060b7180df86c93885a4de3979f9b2e32a116c4",
+    "crates/canopy-object-storage/src/artifact.rs": "0a6fd498b6ef036fb7322fd414c87a75e2ca36e1711d4acbd20970dcfab91b2f",
+    "crates/canopy-object-storage/src/artifact/tests.rs": "c3bed92e00d4ed8d5f9ce0c55bd96f4c05d04500fb98ae7bc941a1c846a2993b",
+    "crates/canopy-server/src/git_cache/artifacts.rs": "e65788302f8c56eaba2d4f8748e5c7218370675ecfa5525927f4904c44d55ff8",
+    "crates/canopy-server/src/git_cache/mod.rs": "3ec2f04c075dbc3f025fb042a9e152a51a6c0cff18953eb2dea9b4c858603402",
+    "crates/canopy-server/src/git_cache/tests.rs": "03c49c42592b8f7f4a0368da46b803f56fc11347ab28a089fd2a0344046eff7a",
+    "crates/canopy-server/src/git_cache/verified.rs": "aeecdf57d51ed3230ed30f06693ed754aad29530fe4721aef5a50882d990989a",
+    "crates/canopy-server/src/git_gateway/branch_policy.rs": "b1735efd5736876871b2ee4fd23fc96857d76cf68db42fb86f661dbcb00e47a4",
+    "crates/canopy-server/src/git_gateway/fetch.rs": "e82c562fc32abc0f9cdb05ca0963fea9ddda4a9609eceb1ded504b4c5b44745e",
+    "crates/canopy-server/src/git_gateway/mod.rs": "993d600ca80b885dcb6c341c56071838efa41eb5fd8908365f6f65f6c261a294",
+    "crates/canopy-server/src/git_gateway/ssh.rs": "1cf860d7a6ff0a3110d245f810bb8320be6ff36554307c21daccf3f9c9dcd811",
+    "crates/canopy-server/src/git_http/mod.rs": "3b54b2e8d37d36829867a98c8b6733cc554f7e42c0df810dd2af687c4683dd64",
+    "crates/canopy-server/src/git_objects/mod.rs": "e7e0f9c467f99fb9c2c7676ceacb6bf1e5215b1791b9df165b6bd6729aeb880c",
+    "crates/canopy-server/src/lib.rs": "b9540acc22460674058a71d98fe8d80426eca8cb2febdc8e60414030cfe87f2b",
+    "crates/canopy-server/src/packs/catalog/files.rs": "d7257387fe68c2466c53b6c4f6245b6e5b2f671de8a3a5ba13dfced41e87b1c8",
+    "crates/canopy-server/src/packs/catalog/graph_spool.rs": "e690ef4f14cb21070817748ad9072dc119b794ec0b09a799e602be3e3755300c",
+    "crates/canopy-server/src/packs/catalog/mod.rs": "e7f14fd586b16f05491784457843e807aa3bbf446ffa83112513480df0c7a97d",
+    "crates/canopy-server/src/packs/catalog/native.rs": "4e2b4b6a21d97f695815aba1b87f11dad03519bc406718b36f09880237872e13",
+    "crates/canopy-server/src/packs/catalog/native/tests.rs": "c3fe6c17ca3e520cd8b396e85cbb28fd907845ebf7097715c6789ad8019aefd7",
+    "crates/canopy-server/src/packs/catalog/sparse.rs": "51ff764a5031a333e83f2f12691632f2f50b1af92b262d5a7dd0f2b2503de0b3",
+    "crates/canopy-server/src/packs/publication/serving/session/native_base.rs": "984656c2fc770f9eb2e870f00c95b476fbbef54810203a33a55427e4e9908a4c",
+    "crates/canopy-server/src/packs/publication/serving/session/workspace.rs": "7babc46e519d6962722aac97dd1ad92c3dc46f83e4c5b68cabeded9100941444",
+    "crates/canopy-server/src/packs/publication/serving/session/workspace/prepare.rs": "7ae137c7705979f4dbed56c6405443f2ef89180f56ff20181e31b71f089ebbe9",
+    "crates/canopy-server/src/packs/publication/staging_service/driver.rs": "f9ea042bbdb577f6f8073fc99fb7bc51476062cd46a9e4aa0dac81674e8fd348",
+    "crates/canopy-server/tests/multi_server/backup.rs": "f558588d5f96337540195d2c01c9bc1dd2f6525b39f817fb0c3747c1cf10694d",
+    "crates/canopy-server/tests/owner_restart.rs": "094a48e95baf2a7d896dbdf9cbd7b1bfa6c310c7d363d3e209cca028d184fda5",
+    "crates/canopy-server/tests/repository_cell/main.rs": "4d5627ee20e0594aea08641a76caf19de6a4a67c88ca7b8e795b4792f375e210",
+    "crates/canopy-server/tests/smart_http/main.rs": "78ba45f37fda1fc0932642721d8a148dbdc34d9df05af5dce01ff6f14732a2ee",
+    "crates/canopy-server/tests/support/native_server.rs": "8a40a8d316899c91d736b22fc93073f62a693f284677acdf199ae70bc07a22ee"
+  },
+  "manifest_digest": "267ae60c739ff0e553375405fdbb23363bfd7bf63f99b280c34930be68bef049",
+  "validation": {
+    "clippy": {
+      "command": "cargo +1.98.0 clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "/tmp/canopy-native-selective-clippy.log"
+    },
+    "harness": {
+      "tests": 96,
+      "exit_code": 0,
+      "log": "/tmp/canopy-native-harness-final.log"
+    },
+    "http_partial_clone": {
+      "passed": 2,
+      "existing_ignored": 1,
+      "log": "/tmp/canopy-selective-http-fixed.log"
+    },
+    "http_ssh_filter_matrix": {
+      "passed": 1,
+      "seconds": 127.01,
+      "log": "/tmp/canopy-selective-filters-fixed3.log"
+    },
+    "late_ssh_refusals": {
+      "passed": 1,
+      "seconds": 17.39,
+      "log": "/tmp/canopy-late-ssh-known-refusal.log"
+    },
+    "backup": {
+      "passed": 1,
+      "seconds": 109.51,
+      "log": "/tmp/canopy-backup-inventory2.log"
+    },
+    "native_standalones": {
+      "owner_restart_seconds": 9.39,
+      "atomic_both_formats_seconds": 60.55,
+      "smart_http_seconds": 15.24,
+      "logs": [
+        "/tmp/canopy-native-standalone-fixtures.log",
+        "/tmp/canopy-native-smart-http-fixed.log"
+      ]
+    },
+    "full_workspace": {
+      "state": "running",
+      "command": "cargo +1.98.0 test --workspace --locked",
+      "log": "/tmp/canopy-native-workspace-final.log"
+    }
+  },
+  "limitations": [
+    "Linux CI on this source has not completed.",
+    "Provider qualification has not run locally.",
+    "Size filters inspect candidate bodies before native response selection.",
+    "Serving membership still builds the full certified metadata closure; large-team capacity is not qualified.",
+    "Native writer preparation still installs complete inherited packs."
+  ],
+  "cutover_note": "Standalone fixture setup now uses the production resident. Retired ingestion operation 5 stays absent. No workflow or test target is disabled."
+}

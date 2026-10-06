@@ -9,7 +9,6 @@ use std::{
 };
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
-#[cfg(test)]
 use flate2::{Compression, write::ZlibEncoder};
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -29,6 +28,7 @@ pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 mod artifacts;
 mod cleanup;
 mod serving_refs;
+mod verified;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -72,7 +72,6 @@ pub(crate) struct GitCache {
     objects: Option<Arc<GitCache>>,
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
-    #[cfg(test)]
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
     packed: RwLock<Vec<crate::git_format::pack_index::PackIndex>>,
     durable_packs: RwLock<HashSet<[u8; 32]>>,
@@ -141,8 +140,7 @@ impl GitCache {
                 reservation: Some(budget.try_reserve(0)?),
                 cleanup_owner: cleanup,
                 objects,
-                #[cfg(test)]
-    object_writes: OnceLock::new(),
+                object_writes: OnceLock::new(),
                 packed: RwLock::new(Vec::new()),
                 durable_packs: RwLock::new(HashSet::new()),
                 selection: Mutex::new(()),
@@ -226,7 +224,6 @@ impl GitCache {
         .await?
     }
 
-    #[cfg(test)]
     fn object_path(&self, oid: crate::ObjectId) -> PathBuf {
         let hex = hex::encode(oid);
         self.git_dir()
@@ -235,7 +232,6 @@ impl GitCache {
             .join(&hex[2..])
     }
 
-    #[cfg(test)]
     fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
         for index in self
             .packed
@@ -258,7 +254,6 @@ impl GitCache {
         }
     }
 
-    #[cfg(test)]
     fn object_write_lock(&self, oid: crate::ObjectId) -> Arc<Mutex<()>> {
         let stripes = self
             .object_writes
@@ -266,7 +261,6 @@ impl GitCache {
         Arc::clone(&stripes[oid[0] as usize % stripes.len()])
     }
 
-    #[cfg(test)]
     fn object_writer(
         self: &Arc<Self>,
         oid: crate::ObjectId,

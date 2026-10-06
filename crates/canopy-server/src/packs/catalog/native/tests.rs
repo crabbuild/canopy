@@ -33,7 +33,9 @@ async fn native_pack_cache_evicts_idle_files_for_disk_pressure_and_reuses_verifi
         let inputs = packs(format, &[300, 301]).await?;
         let size = inputs
             .iter()
-            .map(|p| p.descriptor.pack.size + p.descriptor.index.size)
+            .map(|p| super::super::sparse::SparsePack::index_budget(p.descriptor))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
             .max()
             .ok_or("pair")?;
         let budget = DiskBudget::new(size + 4096);
@@ -96,9 +98,12 @@ async fn native_pack_failure_never_enters_cache_and_file_slot_follows_native_cac
         assert_eq!(files.stats()?.open_files, 0);
         assert_eq!(files.stats()?.downloaded_files, 0);
         let file = files.load(descriptor, Arc::new(())).await?;
+        let expected = inputs[0].fixture.objects.values().next().ok_or("object")?.0;
+        file.sparse
+            .prepare(expected.oid, file.cache.clone())
+            .await?;
         let mut reader =
             GitObjects::batch_owned(&file.cache.git_dir(), &files.native, file.cache.clone())?;
-        let expected = inputs[0].fixture.objects.values().next().ok_or("object")?.0;
         reader.read_verified(expected, 1 << 20).await?;
         files.cache.lock().map_err(|_| "cache")?.clear();
         drop(file);
