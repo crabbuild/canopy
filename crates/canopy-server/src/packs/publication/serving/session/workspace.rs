@@ -34,6 +34,7 @@ struct Core {
     pin: ServingPin,
     actor: Option<String>,
     stats: WorkspaceStats,
+    complete_packs: bool,
 }
 impl NativeWorkspace {
     pub(crate) fn backend(&self, nonce_seed: Option<[u8; 32]>) -> crate::git_http::GitHttpBackend {
@@ -126,7 +127,25 @@ impl NativeWorkspace {
                     if expected.size > limit as u64 {
                         return Err(ServingReadError::TooLarge);
                     }
-                    Ok(Some(inner.context.files.body(object, limit, owner).await?))
+                    if core.complete_packs {
+                        let mut objects = crate::git_objects::GitObjects::batch_owned(
+                            &core.cache.git_dir(),
+                            &core.cache.native,
+                            owner,
+                        )
+                        .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        let body = objects
+                            .read_verified(expected, limit)
+                            .await
+                            .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        objects
+                            .finish()
+                            .await
+                            .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        Ok(Some(body))
+                    } else {
+                        Ok(Some(inner.context.files.body(object, limit, owner).await?))
+                    }
                 },
             )
             .await
@@ -269,6 +288,17 @@ impl ServingPin {
                         let source = object.source.record.native();
                         source.validate(inner.context.repository(), inner.lease.format)?;
                         if !job(&spool, owner.clone(), move |s| s.pack_seen(source)).await? {
+                            // Producer workspaces need a complete native
+                            // baseline. Install each certified pair once, rather
+                            // than expanding every object into loose copies.
+                            if materialize {
+                                inner
+                                    .context
+                                    .files
+                                    .install_pack_workspace(cache.clone(), source, owner.clone())
+                                    .await?;
+                                observation.refresh(&inner, &actor).await?;
+                            }
                             observation.refresh(&inner, &actor).await?;
                             job(&spool, owner.clone(), move |s| s.imported(source)).await?;
                             stats.packs = stats
@@ -280,14 +310,6 @@ impl ServingPin {
                                 .checked_add(source.pack.size)
                                 .and_then(|n| n.checked_add(source.index.size))
                                 .ok_or(ServingReadError::TooLarge)?;
-                        }
-                        if materialize {
-                            inner
-                                .context
-                                .files
-                                .install_workspace(cache.clone(), &object, owner.clone())
-                                .await?;
-                            observation.refresh(&inner, &actor).await?;
                         }
                         let metadata = object.source.metadata;
                         let mut cursor = None;
@@ -335,6 +357,7 @@ impl ServingPin {
                         pin,
                         actor,
                         stats,
+                        complete_packs: materialize,
                     }),
                 })
             },

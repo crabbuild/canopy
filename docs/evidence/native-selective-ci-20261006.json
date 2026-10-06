@@ -74,9 +74,21 @@
       ]
     },
     "full_workspace": {
-      "state": "running",
+      "state": "failed",
+      "head": "759d4778f2ae9a04d426470f5354618c1e904f62",
+      "library_passed": 752,
+      "library_failed": 5,
+      "seconds": 445.3,
       "command": "cargo +1.98.0 test --workspace --locked",
-      "log": "/tmp/canopy-native-workspace-final.log"
+      "log": "/tmp/canopy-native-workspace-final.log",
+      "failures": [
+        "ancestry_growth_reuses_pairs_only_in_one_exact_native_catalog",
+        "cancelled_construction_keeps_pin_and_admission_until_suspended_provider_drains",
+        "expired_lease_does_not_resurrect_or_release_suspended_construction",
+        "suspended_construction_refuses_revoked_access_after_real_transfer_finishes",
+        "complete_native_history_crosses_shards_and_wide_parent_pages_without_loose_copies"
+      ],
+      "follow_up": "Producer workspace correction keeps each complete certified pair in one workspace and reads it without extra sparse-cache admission. Targeted 11 workspace tests pass without assertion or budget changes. Ancestry test passes isolated; full-suite resource contention still requires qualification."
     }
   },
   "limitations": [

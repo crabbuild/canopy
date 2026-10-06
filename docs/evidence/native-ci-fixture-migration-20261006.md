@@ -49,3 +49,11 @@ when the staging owner reports a known inactive terminal attempt and current
 access is below write. This is a wire rejection, not a durable publication or
 success acknowledgement. Uncertain mutations and lost replies keep their
 original error/recovery paths.
+
+Explicit producer-root workspaces install each certified complete pack/index
+pair once and read selected bodies from that workspace. This keeps native
+baselines packed, avoids per-object child processes during construction, and
+preserves the original cancellation/expiry/revocation file-admission tests.
+Ref-based fetch workspaces continue to use selective extraction. The producer
+correction changes no test assertions or admission limits; all 11 workspace
+unit tests pass at this revision.
