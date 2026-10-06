@@ -118,6 +118,35 @@ impl StagingCoordinator {
         ReadyStaging::new(client.clone(), self.inner.target.clone(), request, identity).await
     }
 
+    /// Candidate observers join by the digest of the existing frozen editorial
+    /// intent. Search only the bounded admitted jobs, without a second UUID
+    /// cache. Uncertain work keeps its original ticket/commands; once a known
+    /// attempt fully drains, a new operation can retry the same pending intent.
+    pub(crate) fn join_generated_candidate(
+        &self,
+        request: &BeginRequest,
+    ) -> Result<Option<StagingTicket>, StagingError> {
+        if crate::repository_target(
+            self.inner.target.tenant(),
+            self.inner.target.application(),
+            request.repository,
+        )
+        .map_err(|_| StagingError::Context)?
+            != self.inner.target
+        {
+            return Err(StagingError::Foreign);
+        }
+        let admitted = self.inner.admission.lock().expect("staging admission");
+        Ok(admitted
+            .jobs
+            .values()
+            .find(|job| job.actor == request.actor && job.request_digest == request.request_digest)
+            .map(|job| StagingTicket {
+                inner: self.inner.clone(),
+                job: job.clone(),
+            }))
+    }
+
     /// Joining an operation ID requires the original authenticated context,
     /// including while Begin has not yet produced a token.
     pub fn join_request(

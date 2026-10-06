@@ -503,7 +503,7 @@ pub(in crate::git_gateway) async fn bound(
         }
     }
 }
-async fn checkpoint(
+pub(in crate::git_gateway) async fn checkpoint(
     staging: &StagingCoordinator,
     ticket: &StagingTicket,
     proof: NativeInputCertificate,

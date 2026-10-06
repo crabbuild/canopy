@@ -852,3 +852,74 @@ async fn staged_service_revocation_drops_completed_owned_results_before_releasin
     fixture.runtime.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn generated_candidate_intent_joins_uncertain_original_and_retries_only_after_known_drain()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+        let first_request = f.begin([191; 16]);
+        c.fault_for_test(4);
+        let first = submit(&f, &c, first_request.operation, "owner").await?;
+        assert!(matches!(
+            terminal(&first).await?,
+            StagingState::Uncertain(_)
+        ));
+        let original = first
+            .custody_evidence_for_test()
+            .ok_or("original custody absent")?;
+        assert!(matches!(
+            f.client().resolve(&original.0).await?,
+            cellule_runtime::Resolution::Absent
+        ));
+        let mut retry = first_request.clone();
+        retry.operation = [192; 16];
+        let joined = c
+            .join_generated_candidate(&retry)?
+            .ok_or("original uncertain candidate not joined")?;
+        assert_eq!(joined.custody_evidence_for_test(), Some(original.clone()));
+        assert_eq!(c.stats().admitted, 1);
+        let mut wrong = retry.clone();
+        wrong.actor = "writer".into();
+        assert!(c.join_generated_candidate(&wrong)?.is_none());
+        wrong = retry.clone();
+        wrong.request_digest = [195; 32];
+        assert!(c.join_generated_candidate(&wrong)?.is_none());
+        wrong = retry.clone();
+        wrong.repository = [196; 16];
+        assert!(c.join_generated_candidate(&wrong).is_err());
+        c.recover(&first)?;
+        let old = active(&first).await?;
+        // Once acceptance is known, transient pending diagnostics are released.
+        // The durable custody head and SDK still select the exact original.
+        let saved = RegisteredCustody::load_latest(&f.client(), &f.target, first_request.operation)
+            .await?
+            .ok_or("original custody head missing")?;
+        assert_eq!(saved.evidence(), &original.0);
+        assert!(matches!(
+            f.client().resolve(&original.0).await?,
+            cellule_runtime::Resolution::Committed(_)
+        ));
+        assert!(matches!(joined.state(),StagingState::Active(lease) if lease.token==old.token));
+        first.stop();
+        assert!(matches!(terminal(&first).await?, StagingState::Stopped));
+        timeout(Duration::from_secs(10), async {
+            while c.pending(first_request.operation).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert!(c.join_generated_candidate(&retry)?.is_none());
+        let ready =
+            ReadyStaging::new(f.client(), f.target.clone(), retry.clone(), identity()?).await?;
+        let fresh = c.submit(ready).map_err(|(error, _)| error)?;
+        let new = active(&fresh).await?;
+        assert_eq!(new.token.operation, retry.operation);
+        assert_ne!(new.token.attempt, old.token.attempt);
+        assert_ne!(new.token.artifact_operation, old.token.artifact_operation);
+        assert!(c.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}

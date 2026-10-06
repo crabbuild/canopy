@@ -7,15 +7,51 @@ Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged 
 The native metadata follow-up is based on that main revision. The original SQL
 hydration failures have been resolved by converting real read/cache callers.
 The directory recovery fixture now uses repository-local permission metadata
-to verify separate Cells and replay after restoration. Full CI remains open because generated writers and other product callers still
-invoke retired ingestion/ref metadata. The production HTTP/SSH native writer is
+to verify separate Cells and replay after restoration. Full CI remains open because remaining product callers and fixtures still
+invoke retired ingestion/ref metadata. Generated candidate and reviewed-merge
+publication now use certified native roots. The production HTTP/SSH native writer is
 now wired through the resident lifecycle, with the remaining correctness and
 qualification gates described below. This cutover is not release qualified.
 Older checkpoint notes describe historical states.
 
 Implementation is isolated in the PR worktree. The original checkout contains an unrelated, extensive staged workspace merge; its workspace, benchmark and runtime work has been preserved. Canopy is split into Git-format, object-storage and server crates. Main now contains all completed PR #20–#30 changes through [PR #31](https://github.com/crabbuild/canopy/pull/31), merged at `db80fd836db94fff894030f02d736fe92840748c`. The PR #31 checkpoint audit verifies each directly merged PR's exact merge tree and main ancestry; that checkpoint's entire tree is identical to completed PR #30 (`5bf48677857e3d1dd769aa7f1d73eb5db00db30f`). PRs #28–#30 originally merged into stack branches and reached main through #31. Both #31 Verify runs, [37132349361](https://github.com/crabbuild/canopy/actions/runs/37132349361) and [37132329706](https://github.com/crabbuild/canopy/actions/runs/37132329706), pass harness and Rust. The merged main revision also passes [Verify 37132672371](https://github.com/crabbuild/canopy/actions/runs/37132672371).
 
-All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers, remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers and reviewed merges now use native publication. Remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
+
+## Native generated candidates and reviewed merges (2026-10-05 checkpoint)
+
+The public candidate, rebase and SHA-256 integration failures were caused by
+writers targeting retired SQL Git metadata. Generated work now runs under the
+resident staging owner and emits only its request-private generated objects.
+Concurrent observations join the original frozen intent and uncertain command;
+a fresh operation is admitted only after a known attempt fully drains. The
+independent physical verifier and private commit verifier prepare operation 55
+codec 1. Its owner transaction atomically commits native roots, the reserved
+fetch ref, immutable candidate result, typed audit and exact SDK acceptance.
+Large conflict results stay in the existing row behind a compact recovery reply.
+
+Reviewed merges now support generated strategies through operation 9 codec 8.
+They select the immutable Ready result, verify its audit and reserved ref, and
+recheck current full pull revision, reviews, checks on the generated target,
+branch policy, authorization, owner fence, pin, expiry and joint roots. The
+existing merge row and typed audit retain the actual generated target and
+candidate identity. Late SQL failures roll back publication and acceptance;
+retirement retains the first receipt and refuses missing audit metadata.
+
+The [technical design](design/native-generated-candidate-publication.md) explains
+these boundaries and reused structures. Focused public candidate, rebase and
+SHA-256 cases pass, along with transaction rollback, large negative outcomes,
+archived receipt recovery, uncertain intent joining and reviewed merges. The
+full frozen-source diagnostic passes all 753 server library cases. Multi-server
+finishes with 93 passed, 14 failed and nine ignored; owner-restart, repository-cell
+and smart-HTTP each retain one failure. All-target Clippy, production build,
+formatting and all 96 Python harness tests pass. Compared with the preceding
+local checkpoint, five candidate/rebase/SHA-256 failures are resolved and no new
+failed names were introduced. The results are recorded in
+[evidence](evidence/native-generated-publication-ci-20261005.json). Full CI remains
+open. Native line-thread creation, complete backup/peer restoration, selective
+fetch, detached legacy fixtures and recovery qualification remain required.
+These results do not qualify 10,000-engineer throughput or the full hard cutover.
 
 ## Native symbolic HEAD publication (2026-10-05 checkpoint)
 

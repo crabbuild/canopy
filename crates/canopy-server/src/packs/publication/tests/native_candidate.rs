@@ -26,7 +26,7 @@ fn oid(bytes: Vec<u8>) -> Result<ObjectId> {
     let s = String::from_utf8(bytes)?;
     Ok(crate::pulls::merge::oid(s.trim())?)
 }
-async fn write(native: &Prepared, body: &[u8], name: &str) -> Result<ObjectId> {
+pub(super) async fn write(native: &Prepared, body: &[u8], name: &str) -> Result<ObjectId> {
     let o = oid(git_input(
         native.fixture.root.path(),
         &["hash-object", "-t", "commit", "-w", "--stdin"],
@@ -45,7 +45,11 @@ async fn write(native: &Prepared, body: &[u8], name: &str) -> Result<ObjectId> {
 fn original(tree: ObjectId, parent: ObjectId, message: &str) -> Vec<u8> {
     format!("tree {}\nparent {}\nauthor Author <author@example.invalid> 1 +0000\ncommitter Original <original@example.invalid> 2 +0000\nencoding UTF-8\ngpgsig stale signature\n continuation\nmergetag stale tag\n continuation\n\n{message}\n",hex::encode(tree),hex::encode(parent)).into_bytes()
 }
-fn candidate(strategy: MergeStrategy, base: ObjectId, source: ObjectId) -> MergeCandidate {
+pub(super) fn candidate(
+    strategy: MergeStrategy,
+    base: ObjectId,
+    source: ObjectId,
+) -> MergeCandidate {
     MergeCandidate {
         request: CandidateRequest {
             id: uuid::Uuid::new_v4().to_string(),
@@ -69,7 +73,7 @@ fn candidate(strategy: MergeStrategy, base: ObjectId, source: ObjectId) -> Merge
         result: CandidateResult::Pending,
     }
 }
-fn ready(c: &MergeCandidate, tip: ObjectId, tree: ObjectId) -> MergeCandidate {
+pub(super) fn ready(c: &MergeCandidate, tip: ObjectId, tree: ObjectId) -> MergeCandidate {
     let mut c = c.clone();
     c.result = CandidateResult::Ready {
         oid: hex::encode(tip),
@@ -77,7 +81,7 @@ fn ready(c: &MergeCandidate, tip: ObjectId, tree: ObjectId) -> MergeCandidate {
     };
     c
 }
-fn initial(native: &Prepared) -> Result<(ObjectId, ObjectId)> {
+pub(super) fn initial(native: &Prepared) -> Result<(ObjectId, ObjectId)> {
     let (commit, edges) = native
         .fixture
         .objects
@@ -92,7 +96,7 @@ fn initial(native: &Prepared) -> Result<(ObjectId, ObjectId)> {
     Ok((commit.oid, tree))
 }
 
-async fn catalog(
+pub(super) async fn catalog(
     f: &Fixture,
     native: &mut Prepared,
     base: Arc<PreparationBaseResolver>,

@@ -99,6 +99,7 @@ pub(crate) fn reviewed_native_update(
     context: &cellule_runtime::registry::CommandContext<'_, '_>,
     input: &command::MergeInput,
     selection: &crate::packs::publication::RefSelection,
+    generated: Option<crate::ObjectId>,
 ) -> cellule_runtime::Result<Result<ReviewedMerge, MergeOutcome>> {
     let statement =
         super::native::with_refs(policy_statement(&input.actor, input.number), selection);
@@ -121,7 +122,7 @@ pub(crate) fn reviewed_native_update(
                 oid: Some(oid(&input.request.revision.base_oid)?),
                 version: input.request.revision.base_version,
             }),
-            new_oid: Some(oid(&input.request.revision.source_oid)?),
+            new_oid: Some(generated.unwrap_or(oid(&input.request.revision.source_oid)?)),
         },
     }))
 }
@@ -267,7 +268,7 @@ pub(crate) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))
 }
-pub(super) fn policy_statement<'a>(
+pub(crate) fn policy_statement<'a>(
     actor: impl Into<ReadIdentity<'a>>,
     number: i64,
 ) -> SqlStatement {
@@ -338,4 +339,12 @@ pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Opt
             reviews_satisfied: *required == 0 || (*approvals >= *needed && *changes == 0),
         },
     }))
+}
+
+pub(crate) fn candidate_ready(
+    sets: &[SqlResultSet],
+    revision: &super::PullRevision,
+) -> cellule_runtime::Result<Option<bool>> {
+    Ok(policy_state(sets)?
+        .map(|state| state.policy.ready && state.policy.revision.as_ref() == Some(revision)))
 }

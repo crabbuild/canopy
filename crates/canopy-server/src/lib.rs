@@ -275,6 +275,19 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/native_candidate.rs"));
                 source.update(include_bytes!("packs/publication/native_merge.rs"));
                 source.update(include_bytes!("packs/publication/native_head.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/mod.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/publish.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/audit.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/native_candidate.rs"
+                ));
+                source.update(include_bytes!("git_gateway/candidates/produce.rs"));
                 source.update(include_bytes!("packs/publication/native_head/publish.rs"));
                 source.update(include_bytes!(
                     "packs/publication/coordinator/native_head.rs"
@@ -299,6 +312,9 @@ impl CellModule for RepositoryModule {
                     "packs/publication/initialization/publish.rs"
                 ));
                 source.update(include_bytes!("packs/publication/staging_service.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/staging_service/driver.rs"
+                ));
                 source.update(include_bytes!("packs/publication/staging_receipt.rs"));
                 source.update(include_bytes!("packs/publication/admission_receipt.rs"));
                 source.update(include_bytes!("packs/publication/custody/mod.rs"));

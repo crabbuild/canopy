@@ -1,5 +1,6 @@
 use super::*;
 mod attestation;
+mod candidate_publication;
 mod compaction;
 mod completion;
 mod coordinator;

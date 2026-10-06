@@ -1309,3 +1309,5 @@ mod fairness {
         assert_eq!(queue.pop(true, 3), Some(101));
     }
 }
+
+mod native_candidate;

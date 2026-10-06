@@ -35,6 +35,7 @@ struct Transition {
     refs: Option<RefStateSnapshotRoot>,
     ref_generation: Option<u64>,
     audit: Option<crate::packs::input_artifact::StoredInputRoot>,
+    candidate: Option<crate::packs::input_artifact::StoredInputRoot>,
 }
 
 /// Exact request, native ref facts and conditional snapshot. Only a privately
@@ -50,6 +51,10 @@ pub struct NativeMergeProof {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NativeMergePreparationError {
+    #[error("native generated candidate verification failed")]
+    Candidate(#[from] NativeCandidateVerificationError),
+    #[error("native candidate audit failed")]
+    CandidateAudit(#[from] NativeCandidateAuditError),
     #[error("native merge audit root failed")]
     Root(#[from] crate::packs::InputRootError),
     #[error("native merge preparation is inactive")]
@@ -88,8 +93,7 @@ impl NativeMergeProof {
             || self.selection.repository != data.token.repository
             || self.selection.actor.as_deref() != Some(&self.input.actor)
             || self.selection.proof.is_some()
-            || self.selection.facts.len() > 2
-            || self.input.request.strategy != MergeStrategy::FastForward
+            || self.selection.facts.len() > 3
         {
             return Err(CodecError::Invalid("invalid native merge scope"));
         }
@@ -110,7 +114,8 @@ impl NativeMergeProof {
             super::ref_proof::shape(&t.plan, data.catalog.format)
                 .map_err(|_| CodecError::Invalid("native merge plan"))?;
             super::ref_proof::binding(&t.plan, &t.ancestry)?;
-            if t.plan.actor != self.input.actor
+            if t.candidate.is_some() != (self.input.request.strategy != MergeStrategy::FastForward)
+                || t.plan.actor != self.input.actor
                 || t.plan.updates.len() != 1
                 || t.plan.updates[0].new_oid.is_none()
                 || t.plan.updates[0]
@@ -150,10 +155,11 @@ impl NativeMergeProof {
         h.update(&[u8::from(transition.is_some())]);
         if let Some(t) = transition {
             h.update(&super::ref_proof::binding(&t.plan, &t.ancestry)?);
-            let mut e = BoundedEncoder::new(256)?;
+            let mut e = BoundedEncoder::new(512)?;
             t.refs.encode(&mut e)?;
             t.ref_generation.encode(&mut e)?;
             t.audit.encode(&mut e)?;
+            t.candidate.encode(&mut e)?;
             h.update(&e.finish());
         }
         Ok(*h.finalize().as_bytes())
@@ -172,6 +178,7 @@ impl WireValue for NativeMergeProof {
             t.refs.encode(e)?;
             t.ref_generation.encode(e)?;
             t.audit.encode(e)?;
+            t.candidate.encode(e)?;
         }
         Ok(())
     }
@@ -187,6 +194,7 @@ impl WireValue for NativeMergeProof {
                     refs: Option::<RefStateSnapshotRoot>::decode(d)?,
                     ref_generation: Option::<u64>::decode(d)?,
                     audit: Option::<crate::packs::input_artifact::StoredInputRoot>::decode(d)?,
+                    candidate: Option::<crate::packs::input_artifact::StoredInputRoot>::decode(d)?,
                 })
             } else {
                 None
@@ -212,7 +220,6 @@ impl PreparedCatalog {
                 if self.input_count() != 0
                     || self.input_checkpoint_digest.is_some()
                     || input.actor != self.base.capability().2.actor
-                    || input.request.strategy != MergeStrategy::FastForward
                 {
                     return Err(NativeMergePreparationError::Context);
                 }
@@ -240,7 +247,7 @@ impl PreparedCatalog {
                 {
                     return Err(NativeMergePreparationError::Context);
                 }
-                let refs = RefStateIndex::new(store, snapshot.format);
+                let refs = RefStateIndex::new(store.clone(), snapshot.format);
                 let mut selection = RefSelection {
                     repository: self.token().repository,
                     actor: Some(input.actor.clone()),
@@ -257,7 +264,7 @@ impl PreparedCatalog {
                 let mut transition = None;
                 if let Some((source, base)) = names {
                     let source_state = refs.read(snapshot.root.clone(), &source).await?;
-                    let base_state = refs.read(snapshot.root, &base).await?;
+                    let base_state = refs.read(snapshot.root.clone(), &base).await?;
                     selection.facts.push(RefFact {
                         name: source.clone(),
                         state: source_state.clone(),
@@ -268,9 +275,74 @@ impl PreparedCatalog {
                             state: base_state.clone(),
                         });
                     }
+                    let mut candidate_root = None;
+                    let target_oid = if input.request.strategy == MergeStrategy::FastForward {
+                        source_state.and_then(|s| s.oid)
+                    } else {
+                        let candidate_id = uuid::Uuid::parse_str(
+                            input
+                                .request
+                                .candidate_id
+                                .as_deref()
+                                .ok_or(NativeMergePreparationError::Context)?,
+                        )
+                        .map_err(|_| NativeMergePreparationError::Context)?;
+                        let saved = sql
+                            .query(
+                                None,
+                                statement(
+                                    super::candidate_publication::audit::SAVED,
+                                    vec![blob(candidate_id.as_bytes())],
+                                ),
+                            )
+                            .await
+                            .map_err(|e| NativeMergePreparationError::Query(Box::new(e)))?;
+                        if let Some((candidate, root)) =
+                            super::candidate_publication::audit::ready_for_merge(
+                                &saved.output,
+                                &input,
+                            )?
+                        {
+                            super::candidate_publication::audit::verify_ready(
+                                &store, &candidate, root,
+                            )
+                            .await?;
+                            self.verify_candidate_commit(
+                                &candidate,
+                                directory,
+                                budget.clone(),
+                                limits,
+                            )
+                            .await?;
+                            let name = candidate.fetch_ref();
+                            let state = refs.read(snapshot.root.clone(), &name).await?;
+                            let crate::pulls::candidates::CandidateResult::Ready { oid, .. } =
+                                &candidate.result
+                            else {
+                                return Err(NativeMergePreparationError::Context);
+                            };
+                            let oid = crate::pulls::merge::oid(oid)?;
+                            selection.facts.push(RefFact {
+                                name,
+                                state: state.clone(),
+                            });
+                            if state
+                                == Some(crate::RefExpectation {
+                                    oid: Some(oid),
+                                    version: 1,
+                                })
+                            {
+                                candidate_root = Some(root);
+                                Some(oid)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
                     selection.facts.sort_by(|a, b| a.name.cmp(&b.name));
-                    if let (Some(source_oid), Some(base_state)) =
-                        (source_state.and_then(|s| s.oid), base_state)
+                    if let (Some(source_oid), Some(base_state)) = (target_oid, base_state)
                         && base_state.oid.is_some()
                         && base_state.oid != Some(source_oid)
                     {
@@ -292,9 +364,17 @@ impl PreparedCatalog {
                         };
                         let (audit, ref_generation) = match proposed {
                             Some(refs) => {
-                                let (audit, generation) =
-                                    audit::prepare(self, &input, &plan.updates[0].name, refs)
-                                        .await?;
+                                let (audit, generation) = audit::prepare(
+                                    self,
+                                    &input,
+                                    &plan.updates[0].name,
+                                    refs,
+                                    plan.updates[0]
+                                        .new_oid
+                                        .ok_or(NativeMergePreparationError::Context)?,
+                                    candidate_root,
+                                )
+                                .await?;
                                 (Some(audit), Some(generation))
                             }
                             None => (None, None),
@@ -305,6 +385,7 @@ impl PreparedCatalog {
                             refs: proposed,
                             ref_generation,
                             audit,
+                            candidate: candidate_root,
                         });
                     }
                 }
@@ -329,7 +410,7 @@ pub struct PublishReviewedMerge;
 impl Command for PublishReviewedMerge {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 9;
-    const CODEC_VERSION: u32 = 7;
+    const CODEC_VERSION: u32 = 8;
     type Input = NativeMergeProof;
     type Output = MergeOutcome;
     fn execute(
@@ -437,11 +518,57 @@ fn publish_authenticated(
     {
         return Ok(denied(MergeOutcome::Conflict));
     }
-    let reviewed =
-        match crate::pulls::merge::reviewed_native_update(context, &input, &proof.selection)? {
-            Ok(value) => value,
-            Err(outcome) => return Ok(denied(outcome)),
+    let generated = if input.request.strategy != MergeStrategy::FastForward {
+        let Some(transition) = proof.transition.as_ref() else {
+            return Ok(denied(MergeOutcome::Conflict));
         };
+        let candidate_id = uuid::Uuid::parse_str(
+            input
+                .request
+                .candidate_id
+                .as_deref()
+                .ok_or(Error::Command("missing merge candidate"))?,
+        )
+        .map_err(|_| Error::Command("merge candidate UUID"))?;
+        let saved = context.sql(&statement(
+            super::candidate_publication::audit::SAVED,
+            vec![blob(candidate_id.as_bytes())],
+        ))?;
+        let Some((candidate, root)) =
+            super::candidate_publication::audit::ready_for_merge(&saved, &input)?
+        else {
+            return Ok(denied(MergeOutcome::Conflict));
+        };
+        if transition.candidate != Some(root) {
+            return Ok(denied(MergeOutcome::Conflict));
+        }
+        let crate::pulls::candidates::CandidateResult::Ready { oid, .. } = &candidate.result else {
+            return Ok(denied(MergeOutcome::Conflict));
+        };
+        let oid = crate::pulls::merge::oid(oid)?;
+        if !proof.selection.facts.iter().any(|fact| {
+            fact.name == candidate.fetch_ref()
+                && fact.state
+                    == Some(crate::RefExpectation {
+                        oid: Some(oid),
+                        version: 1,
+                    })
+        }) {
+            return Ok(denied(MergeOutcome::Conflict));
+        }
+        Some(oid)
+    } else {
+        None
+    };
+    let reviewed = match crate::pulls::merge::reviewed_native_update(
+        context,
+        &input,
+        &proof.selection,
+        generated,
+    )? {
+        Ok(value) => value,
+        Err(outcome) => return Ok(denied(outcome)),
+    };
     let Some(transition) = proof.transition else {
         return Ok(denied(MergeOutcome::Conflict));
     };
@@ -544,7 +671,7 @@ fn publish_authenticated(
         vec![number(ref_generation)?],
     ))?)?;
     changed(context.sql(&statement("UPDATE pull_requests SET state='merged',version=version+1,updated_ms=max(updated_ms,?2) WHERE number=?1 AND state='open' AND version=?3 AND version<9223372036854775807", vec![SqlValue::Integer(input.number),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version)]))?)?;
-    changed(context.sql(&statement("INSERT INTO pull_merges(id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", vec![blob(id.as_bytes()),blob(binding),SqlValue::Integer(input.number),blob(source),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),blob(crate::pulls::merge::oid(&input.request.revision.source_oid)?),SqlValue::Integer(input.request.revision.source_version),blob(base),SqlValue::Integer(input.request.revision.base_version),blob(encoded_audit)]))?)?;
+    changed(context.sql(&statement("INSERT INTO pull_merges(id,binding,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication,strategy,candidate_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", vec![blob(id.as_bytes()),blob(binding),SqlValue::Integer(input.number),blob(source),SqlValue::Integer(input.issued_at_ms),SqlValue::Integer(input.request.revision.pull_version),blob(crate::pulls::merge::oid(&input.request.revision.source_oid)?),SqlValue::Integer(input.request.revision.source_version),blob(base),SqlValue::Integer(input.request.revision.base_version),blob(encoded_audit), SqlValue::Text(match input.request.strategy {MergeStrategy::FastForward=>"fast_forward",MergeStrategy::MergeCommit=>"merge_commit",MergeStrategy::Squash=>"squash",MergeStrategy::Rebase=>"rebase"}.into()), input.request.candidate_id.as_ref().map(|id|uuid::Uuid::parse_str(id).map(|id|blob(id.as_bytes())).map_err(|_|Error::Command("candidate UUID"))).transpose()?.unwrap_or(SqlValue::Null)]))?)?;
     changed(context.sql(&statement(
         "DELETE FROM catalog_operations WHERE id=?1",
         vec![blob(data.token.operation)],

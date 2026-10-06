@@ -12,7 +12,7 @@ use crate::{
             StagingTicket,
         },
     },
-    pulls::merge::{MergeOutcome, MergeRequest, MergeStrategy, command::MergeInput, valid_request},
+    pulls::merge::{MergeOutcome, MergeRequest, command::MergeInput, valid_request},
 };
 use cellule_runtime::{
     InvocationError,
@@ -57,11 +57,6 @@ impl GitGateway {
             None => return Ok(MergeOutcome::NotFound),
             Some(role) if role < TokenScope::Write => return Ok(MergeOutcome::Forbidden),
             _ => {}
-        }
-        if request.strategy != MergeStrategy::FastForward {
-            return Err(failed(cellule_runtime::Error::Command(
-                "native generated merge preparation is unavailable",
-            )));
         }
         let input = MergeInput {
             actor: actor.into(),

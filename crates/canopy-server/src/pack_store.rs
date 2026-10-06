@@ -8,11 +8,11 @@ use crate::{
 };
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{
-    Error, InvocationError, MutationIdentity,
+    Error, InvocationError,
     primitives::sql::{SqlBatch, SqlResultSet, SqlStatement, SqlValue},
 };
 use object_store::ObjectStore;
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -178,6 +178,7 @@ impl PackReader {
         }
         Ok(body)
     }
+    #[cfg(test)]
     pub(crate) async fn upload(&self, path: PathBuf) -> Result<LargeBlobReference, GatewayError> {
         let hash_path = path.clone();
         let (oid, size) = tokio::task::spawn_blocking(move || {
@@ -332,99 +333,5 @@ impl RepositoryCell {
                 .and_then(|set| set.rows.first())
                 .ok_or_else(invalid)?,
         )
-    }
-    pub(crate) async fn register_pack(
-        &self,
-        identity: MutationIdentity,
-        record: &PackRecord,
-    ) -> Result<(), ReadError> {
-        let values = vec![
-            SqlValue::Blob(record.pack.sha256.to_vec()),
-            SqlValue::Blob(record.hash.to_vec()),
-            SqlValue::Blob(record.pack.oid.to_vec()),
-            SqlValue::Integer(record.pack.size.try_into().map_err(|_| invalid())?),
-            SqlValue::Blob(record.pack.blake3.to_vec()),
-            SqlValue::Blob(record.index.oid.to_vec()),
-            SqlValue::Integer(record.index.size.try_into().map_err(|_| invalid())?),
-            SqlValue::Blob(record.index.blake3.to_vec()),
-            SqlValue::Blob(record.index.sha256.to_vec()),
-        ];
-        let result = self.sql.batch(identity, SqlBatch { statements: vec![
-            SqlStatement { sql: "INSERT INTO git_packs (sha256, pack_hash, pack_oid, pack_size, pack_digest, index_oid, index_size, index_digest, index_sha256) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT DO NOTHING".into(), parameters: values },
-        ] }).await?;
-        drop(result);
-        let stored = self.pack_record(record.pack.sha256).await?;
-        if stored.hash != record.hash
-            || stored.pack.oid != record.pack.oid
-            || stored.pack.size != record.pack.size
-            || stored.pack.blake3 != record.pack.blake3
-            || stored.index.oid != record.index.oid
-            || stored.index.size != record.index.size
-            || stored.index.blake3 != record.index.blake3
-            || stored.index.sha256 != record.index.sha256
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    }
-    pub(crate) async fn approve_pack(
-        &self,
-        identity: MutationIdentity,
-        sha: [u8; 32],
-        verified_count: usize,
-    ) -> Result<(), ReadError> {
-        self.sql
-            .batch(
-                identity,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        // Every unique index member has a matching canonical SQL row.
-                        // Equal cardinality proves this pack covers the entire immutable
-                        // object table at this transaction, without scanning it on recovery.
-                        sql: "UPDATE git_packs SET approved = 1, covered_through = CASE WHEN ?2 = (SELECT COUNT(oid) FROM objects) THEN (SELECT COALESCE(MAX(sequence), 0) FROM objects) ELSE covered_through END WHERE sha256 = ?1".into(),
-                        parameters: vec![SqlValue::Blob(sha.to_vec()), SqlValue::Integer(verified_count.try_into().map_err(|_| invalid())?)],
-                    }],
-                },
-            )
-            .await?;
-        Ok(())
-    }
-    pub(crate) async fn canonical_headers(
-        &self,
-        ids: &[ObjectId],
-    ) -> Result<BTreeMap<ObjectId, (ObjectKind, u64, [u8; 32])>, ReadError> {
-        if ids.is_empty() || ids.len() > crate::object_batch::MAX_BATCH_OBJECTS {
-            return Err(invalid());
-        }
-        let placeholders = vec!["?"; ids.len()].join(",");
-        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement { sql: format!("SELECT oid, kind, size, digest FROM objects WHERE oid IN ({placeholders})"), parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect() }] }).await?;
-        let mut headers = BTreeMap::new();
-        for row in &result.output.first().ok_or_else(invalid)?.rows {
-            let [
-                SqlValue::Blob(oid),
-                SqlValue::Text(kind),
-                SqlValue::Integer(size),
-                SqlValue::Blob(digest),
-            ] = row.as_slice()
-            else {
-                return Err(invalid());
-            };
-            let kind = match kind.as_str() {
-                "blob" => ObjectKind::Blob,
-                "tree" => ObjectKind::Tree,
-                "commit" => ObjectKind::Commit,
-                "tag" => ObjectKind::Tag,
-                _ => return Err(invalid()),
-            };
-            headers.insert(
-                oid.as_slice().try_into().map_err(|_| invalid())?,
-                (
-                    kind,
-                    (*size).try_into().map_err(|_| invalid())?,
-                    digest.as_slice().try_into().map_err(|_| invalid())?,
-                ),
-            );
-        }
-        Ok(headers)
     }
 }

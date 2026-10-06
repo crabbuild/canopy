@@ -10,8 +10,8 @@ use crate::packs::{
 use canopy_object_storage::artifact::{ArtifactKind, ArtifactStore};
 use std::sync::Arc;
 
-const DOMAIN: &[u8] = b"canopy.native-reviewed-merge-audit.v1\0";
-pub(super) const SAVED: &str = "SELECT binding,id,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication FROM pull_merges WHERE id=?1";
+const DOMAIN: &[u8] = b"canopy.native-reviewed-merge-audit.v2\0";
+pub(super) const SAVED: &str = "SELECT binding,id,pull_number,oid,merged_ms,pull_version,source_oid,source_version,base_oid,base_version,publication,strategy,candidate_id FROM pull_merges WHERE id=?1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum NativeMergeAuditError {
@@ -34,11 +34,16 @@ struct Audit {
     catalog: StoredCatalog,
     refs: RefStateSnapshotRoot,
     ref_generation: u64,
+    target: crate::ObjectId,
+    candidate: Option<StoredInputRoot>,
 }
 impl Audit {
     fn shape(&self) -> Result<(), CodecError> {
         self.input.encode(&mut BoundedEncoder::new(4096)?)?;
-        if self.input.request.strategy != MergeStrategy::FastForward
+        if self.candidate.is_some() != (self.input.request.strategy != MergeStrategy::FastForward)
+            || self.target.format() != self.catalog.format
+            || (self.input.request.strategy == MergeStrategy::FastForward
+                && hex::encode(self.target) != self.input.request.revision.source_oid)
             || !self.base_ref.starts_with("refs/heads/")
             || self.base_ref.len() > crate::packs::ref_state::MAX_NAME_BYTES
             || !crate::refs::valid_ref_name(&self.base_ref)
@@ -64,7 +69,7 @@ impl Audit {
             merge: MergeRecord {
                 id: self.input.request.id.clone(),
                 number: self.input.number,
-                oid: self.input.request.revision.source_oid.clone(),
+                oid: hex::encode(self.target),
                 merged_at_ms: self.input.issued_at_ms,
                 revision: self.input.request.revision.clone(),
             },
@@ -79,7 +84,9 @@ impl WireValue for Audit {
         e.write_text(&self.base_ref)?;
         self.catalog.encode(e)?;
         self.refs.encode(e)?;
-        e.write_u64(self.ref_generation)
+        e.write_u64(self.ref_generation)?;
+        e.write_bytes(self.target.as_ref())?;
+        self.candidate.encode(e)
     }
     fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
         if d.read_bytes()? != DOMAIN {
@@ -91,6 +98,9 @@ impl WireValue for Audit {
             catalog: StoredCatalog::decode(d)?,
             refs: RefStateSnapshotRoot::decode(d)?,
             ref_generation: d.read_u64()?,
+            target: crate::ObjectId::try_from(d.read_bytes()?)
+                .map_err(|_| CodecError::Invalid("merge target OID"))?,
+            candidate: Option::<StoredInputRoot>::decode(d)?,
         };
         value.shape()?;
         Ok(value)
@@ -102,6 +112,8 @@ pub(super) async fn prepare(
     input: &MergeInput,
     base_ref: &str,
     refs: RefStateSnapshotRoot,
+    target: crate::ObjectId,
+    candidate: Option<StoredInputRoot>,
 ) -> Result<(StoredInputRoot, u64), NativeMergePreparationError> {
     let store = prepared.base.indexes().store();
     let record = Audit {
@@ -110,6 +122,8 @@ pub(super) async fn prepare(
         catalog: prepared.catalog(),
         refs,
         ref_generation: refs.read(&store).await?.generation,
+        target,
+        candidate,
     };
     let generation = record.ref_generation;
     Ok((
@@ -149,7 +163,7 @@ pub(in crate::packs::publication) fn selected(
     let Some(row) = rows(result)?.first() else {
         return Ok(None);
     };
-    if row.len() != 11 {
+    if row.len() != 13 {
         return Err(Error::Command("invalid selected merge audit"));
     }
     let (SqlValue::Blob(binding), SqlValue::Blob(publication)) = (&row[0], &row[10]) else {
@@ -162,8 +176,25 @@ pub(in crate::packs::publication) fn selected(
         request: crate::pulls::merge::MergeRequest {
             id: merge.id.clone(),
             revision: merge.revision.clone(),
-            strategy: MergeStrategy::FastForward,
-            candidate_id: None,
+            strategy: match &row[11] {
+                SqlValue::Text(value) => match value.as_str() {
+                    "fast_forward" => MergeStrategy::FastForward,
+                    "merge_commit" => MergeStrategy::MergeCommit,
+                    "squash" => MergeStrategy::Squash,
+                    "rebase" => MergeStrategy::Rebase,
+                    _ => return Err(Error::Command("merge strategy")),
+                },
+                _ => return Err(Error::Command("merge strategy type")),
+            },
+            candidate_id: match &row[12] {
+                SqlValue::Null => None,
+                SqlValue::Blob(value) => Some(
+                    uuid::Uuid::from_slice(value)
+                        .map_err(|_| Error::Command("merge candidate UUID"))?
+                        .to_string(),
+                ),
+                _ => return Err(Error::Command("merge candidate type")),
+            },
         },
     };
     if *binding != request_binding(&expected) || crate::pulls::merge::record(&row[1..10])? != *merge
@@ -209,14 +240,33 @@ async fn verify(
         .await?;
     if state
         != Some(crate::RefExpectation {
-            oid: Some(
-                crate::pulls::merge::oid(&audit.input.request.revision.source_oid)
-                    .map_err(|_| NativeMergeAuditError::Context)?,
-            ),
+            oid: Some(audit.target),
             version: audit.input.request.revision.base_version + 1,
         })
     {
         return Err(NativeMergeAuditError::Context);
+    }
+    if let Some(candidate) = audit.candidate {
+        let selected = uuid::Uuid::parse_str(
+            audit
+                .input
+                .request
+                .candidate_id
+                .as_deref()
+                .ok_or(NativeMergeAuditError::Context)?,
+        )
+        .map_err(|_| NativeMergeAuditError::Context)?;
+        let ready: super::super::candidate_publication::audit::Audit =
+            candidate.read(store, INPUT_ROOT_BYTES).await?;
+        if ready.candidate.request.id != selected.to_string()
+            || ready.candidate.number != audit.input.number
+            || ready.candidate.request.strategy != audit.input.request.strategy
+            || ready.candidate.request.revision != audit.input.request.revision
+            || !matches!(&ready.candidate.result,crate::pulls::candidates::CandidateResult::Ready{oid,..} if *oid==hex::encode(audit.target))
+            || ready.catalog.repository != store.repository()
+        {
+            return Err(NativeMergeAuditError::Context);
+        }
     }
     Ok((audit, snapshot))
 }
@@ -229,6 +279,15 @@ pub(in crate::packs::publication) async fn closed_graph(
 ) -> Result<(), RootRecoveryError> {
     let (audit, snapshot) = verify(store, root, outcome, check).await?;
     let descriptor = super::super::recovery::archive::descriptor;
+    if let Some(candidate) = audit.candidate {
+        descriptor(
+            hash,
+            candidate.operation,
+            ArtifactKind::InputRoot,
+            candidate.artifact,
+        )?;
+    }
+
     descriptor(hash, root.operation, ArtifactKind::InputRoot, root.artifact)?;
     descriptor(
         hash,

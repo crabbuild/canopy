@@ -39,6 +39,8 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("selected candidate audit failed")]
+    CandidateAudit(#[source] Box<NativeCandidateAuditError>),
     #[error("symbolic HEAD retirement metadata failed")]
     HeadMetadata(#[from] crate::packs::directory::index::IndexError),
     #[error("symbolic HEAD retirement snapshot failed")]
@@ -92,10 +94,13 @@ pub(super) enum Kind {
     Initialization,
     Merge,
     Head,
+    Candidate,
 }
 impl Kind {
     fn body_limit(self) -> u32 {
-        if self == Self::Head {
+        if self == Self::Candidate {
+            NATIVE_CANDIDATE_BYTES
+        } else if self == Self::Head {
             NATIVE_HEAD_BYTES
         } else if self == Self::Merge {
             NATIVE_MERGE_BYTES
@@ -351,7 +356,7 @@ impl RegisteredRootRecovery {
                 )
                 .await
             }
-            Kind::Policy | Kind::Initialization | Kind::Merge | Kind::Head => {
+            Kind::Policy | Kind::Initialization | Kind::Merge | Kind::Head | Kind::Candidate => {
                 Err(AttemptError::Invocation(InvocationError::NotStarted(
                     Error::Command("recovery kind requires typed phase dispatch"),
                 )))
@@ -394,6 +399,21 @@ impl RegisteredRootRecovery {
                 .dispatch_initialization(client, store, authority, original)
                 .await
                 .map(PublicationOutcome::Initialization);
+        }
+        if self.record.kind == Kind::Candidate {
+            let result = self
+                .dispatch_command::<PublishNativeCandidate>(
+                    client, store, authority, false, original,
+                )
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Candidate))?;
+            return if result.output.applied() {
+                Ok(PublicationOutcome::Candidate(result))
+            } else {
+                Err(PublicationError::Candidate(InvocationError::Rejected(
+                    Box::new(result),
+                )))
+            };
         }
         if self.record.kind == Kind::Head {
             let result = self
@@ -599,7 +619,10 @@ impl RegisteredRootRecovery {
         // Its original final receiver must record expired/revoked denials,
         // while checking actual owner, original pin and current joint roots.
         let session = if refusal_only
-            || matches!(self.record.kind, Kind::Initialization | Kind::Head)
+            || matches!(
+                self.record.kind,
+                Kind::Initialization | Kind::Head | Kind::Candidate
+            )
             || original.is_some()
         {
             None
@@ -888,4 +911,10 @@ pub(super) async fn persist_full<C: Command>(
         return Err(RootRecoveryError::Context);
     }
     Ok(registered)
+}
+
+impl From<NativeCandidateAuditError> for RootRecoveryError {
+    fn from(error: NativeCandidateAuditError) -> Self {
+        Self::CandidateAudit(Box::new(error))
+    }
 }

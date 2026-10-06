@@ -9,7 +9,9 @@ use tokio::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::{INLINE_OBJECT_LIMIT, ObjectKind, object_id};
+#[cfg(test)]
+use crate::INLINE_OBJECT_LIMIT;
+use crate::{ObjectKind, object_id};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_LIMIT: usize = 128;
@@ -43,6 +45,7 @@ struct Process {
 }
 
 impl Process {
+    #[cfg(test)]
     fn start(
         git_dir: &Path,
         args: &[&str],
@@ -118,12 +121,14 @@ impl Process {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct GitObjectWalk {
     process: Process,
     revisions: AbortOnDropHandle<Result<(), io::Error>>,
     missing_only: bool,
 }
 
+#[cfg(test)]
 impl GitObjectWalk {
     #[cfg(test)]
     pub(crate) fn missing(
@@ -170,6 +175,7 @@ impl GitObjectWalk {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
         timeout(IO_TIMEOUT, async {
             while let Some(line) = header(&mut self.process.output).await? {
@@ -199,7 +205,9 @@ impl GitObjectWalk {
 }
 
 pub(crate) struct GitObjects {
+    #[cfg(test)]
     walk: Option<GitObjectWalk>,
+    #[cfg(test)]
     inventory: Option<std::vec::IntoIter<crate::ObjectId>>,
     batch: Process,
     requests: ChildStdin,
@@ -217,6 +225,7 @@ pub trait EdgeSink: Send {
 }
 
 impl GitObjects {
+    #[cfg(test)]
     pub(crate) fn start(
         git_dir: &Path,
         included: Vec<crate::ObjectId>,
@@ -227,6 +236,7 @@ impl GitObjects {
         let (batch, requests) = Process::start(git_dir, &["cat-file", "--batch"], native)?;
         Ok(Self {
             walk: Some(walk),
+            #[cfg(test)]
             inventory: None,
             batch,
             requests,
@@ -234,6 +244,7 @@ impl GitObjects {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn packed(
         git_dir: &Path,
         ids: Vec<crate::ObjectId>,
@@ -246,6 +257,7 @@ impl GitObjects {
 
     /// Persistent native reader with caller-owned bounded index iteration.
     /// Verification uses an isolated admitted object directory without alternates.
+    #[cfg(test)]
     pub(crate) fn batch(
         git_dir: &Path,
         native: &crate::native_resources::NativeScope,
@@ -263,7 +275,9 @@ impl GitObjects {
         let (batch, requests) =
             Process::start_owned(git_dir, &["cat-file", "--batch"], native, owner)?;
         Ok(Self {
+            #[cfg(test)]
             walk: None,
+            #[cfg(test)]
             inventory: None,
             batch,
             requests,
@@ -324,6 +338,7 @@ impl GitObjects {
         Ok(canonical)
     }
 
+    #[cfg(test)]
     pub(crate) async fn next(&mut self) -> Result<Option<crate::ObjectId>, ObjectReadError> {
         if self.inspection_failed {
             return Err(ObjectReadError::Malformed);
@@ -338,6 +353,7 @@ impl GitObjects {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn read(
         &mut self,
         oid: crate::ObjectId,
@@ -360,6 +376,7 @@ impl GitObjects {
             return Err(ObjectReadError::Malformed);
         }
         timeout(IO_TIMEOUT, async move {
+            #[cfg(test)]
             if let Some(walk) = self.walk {
                 walk.finish().await?;
             }
@@ -454,60 +471,6 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
         }
         Ok(result)
     }
-    /// Verify a packed body with constant memory, including oversized blobs.
-    pub(crate) async fn fingerprint(mut self) -> Result<[u8; 32], ObjectReadError> {
-        let expected = self.oid;
-        let mut canonical =
-            crate::git_format::ObjectHasher::new(expected.format(), self.kind, self.size);
-        let mut hash = blake3::Hasher::new();
-        let mut buffer = vec![0; 64 << 10];
-        loop {
-            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
-                .await
-                .map_err(|_| ObjectReadError::Timeout)??;
-            if count == 0 {
-                break;
-            }
-            canonical.update(&buffer[..count]);
-            hash.update(&buffer[..count]);
-        }
-        self.finish().await?;
-        if canonical.finalize() != expected {
-            return Err(ObjectReadError::Malformed);
-        }
-        Ok(*hash.finalize().as_bytes())
-    }
-
-    pub(crate) async fn verify(
-        mut self,
-        kind: ObjectKind,
-        size: u64,
-        digest: [u8; 32],
-    ) -> Result<(), ObjectReadError> {
-        if self.kind != kind || self.size != size {
-            return Err(ObjectReadError::Malformed);
-        }
-        let expected = self.oid;
-        let mut canonical = crate::git_format::ObjectHasher::new(expected.format(), kind, size);
-        let mut hash = blake3::Hasher::new();
-        let mut buffer = vec![0; 64 << 10];
-        loop {
-            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
-                .await
-                .map_err(|_| ObjectReadError::Timeout)??;
-            if count == 0 {
-                break;
-            }
-            canonical.update(&buffer[..count]);
-            hash.update(&buffer[..count]);
-        }
-        self.finish().await?;
-        if canonical.finalize() != expected || hash.finalize().as_bytes() != &digest {
-            return Err(ObjectReadError::Malformed);
-        }
-        Ok(())
-    }
-
     async fn body_verified(
         mut self,
         expected: crate::packs::metadata::CanonicalObject,
@@ -541,6 +504,7 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
         .await?
     }
 
+    #[cfg(test)]
     pub(crate) async fn body(mut self) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
         let limit = if self.kind == ObjectKind::Blob {
             INLINE_OBJECT_LIMIT

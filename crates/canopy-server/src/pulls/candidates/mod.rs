@@ -218,11 +218,13 @@ impl RepositoryCell {
         Ok((snapshot, command::CandidateRefRequest { selection, action }))
     }
 }
-fn query(id: &str) -> cellule_runtime::Result<SqlBatch> {
+pub(crate) fn query(id: &str) -> cellule_runtime::Result<SqlBatch> {
     let id = uuid::Uuid::parse_str(id).map_err(|_| Error::Command("invalid candidate UUID"))?;
     Ok(SqlBatch {statements:vec![SqlStatement {sql:"SELECT binding, pull_number, actor, request, created_ms, result FROM merge_candidates WHERE id = ?1".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec())]}]})
 }
-fn decode(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
+pub(crate) fn decode(
+    sets: &[SqlResultSet],
+) -> cellule_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing candidate result"))?;
@@ -325,4 +327,14 @@ fn certified(
     Ok(
         matches!(rows.first().and_then(|set|set.rows.first()).map(Vec::as_slice),Some([SqlValue::Blob(stored)]) if *stored == body),
     )
+}
+
+pub(crate) fn intent_binding(candidate: &MergeCandidate) -> cellule_runtime::Result<Vec<u8>> {
+    let request = serde_json::to_string(&candidate.request)
+        .map_err(|_| Error::Command("candidate intent encoding"))?;
+    Ok(super::mutations::binding(&[
+        &candidate.actor,
+        &candidate.number.to_string(),
+        &request,
+    ]))
 }

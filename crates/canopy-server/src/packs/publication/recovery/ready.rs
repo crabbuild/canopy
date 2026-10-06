@@ -105,6 +105,10 @@ impl ReadyRootRecovery {
             PublicationError::Initialization(InvocationError::Pending(Box::new(
                 self.recovery.evidence().clone(),
             )))
+        } else if self.recovery.record.kind == Kind::Candidate {
+            PublicationError::Candidate(InvocationError::Pending(Box::new(
+                self.recovery.evidence().clone(),
+            )))
         } else if self.recovery.record.kind == Kind::Head {
             PublicationError::Head(InvocationError::Pending(Box::new(
                 self.recovery.evidence().clone(),

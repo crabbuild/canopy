@@ -121,6 +121,7 @@ impl WireValue for TerminalReleaseReply {
 }
 
 pub(super) enum Terminal {
+    Candidate(CandidatePublicationReply),
     Push(Box<CompletedRootPush>),
     Initialization(InitializationReply),
     Merge(crate::pulls::merge::MergeOutcome),
@@ -132,6 +133,9 @@ impl Terminal {
             sql: match self {
                 Self::Push(_) => super::super::root_completion::read::SAVED,
                 Self::Initialization(_) => super::super::initialization::publish::SAVED,
+                Self::Candidate(reply) => {
+                    return super::super::candidate_publication::audit::statement(reply);
+                }
                 Self::Head(_) => super::super::native_head::publish::SAVED,
                 Self::Merge(outcome) => {
                     return super::super::native_merge::audit::statement(outcome);
@@ -156,6 +160,15 @@ impl Terminal {
             // A known negative is the original phase knowledge. A later attempt
             // may initialize this logical operation, without rewriting that denial.
             Self::Initialization(InitializationReply::Denied(_)) => true,
+            Self::Candidate(reply) => {
+                !reply.applied()
+                    || super::super::candidate_publication::audit::selected(
+                        result,
+                        reply,
+                        &check.actor,
+                    )?
+                    .is_some()
+            }
             Self::Head(reply) => {
                 matches!(reply, PublicationReply::Denied(_))
                     || super::super::native_head::publish::selected(result, check, *reply)?
@@ -176,6 +189,13 @@ impl Terminal {
         hash: &mut blake3::Hasher,
     ) -> Result<(), RootRecoveryError> {
         match self {
+            Self::Candidate(reply) => {
+                hash.update(&encoded(reply, 512)?);
+                super::super::candidate_publication::audit::closed_graph(
+                    store, selected, reply, check, hash,
+                )
+                .await?;
+            }
             Self::Head(reply) => {
                 hash.update(&encoded(reply, 512)?);
                 if let PublicationReply::Published(published) = reply {
@@ -274,6 +294,16 @@ impl phase::Journal {
         self.may_advance(record)?;
         // A merge has its own typed permanent audit selection. Known denials
         // retain their original phase even if a later UUID attempt succeeds.
+        if record.kind == Kind::Candidate {
+            return self
+                .primary
+                .as_ref()
+                .map(|v| {
+                    v.decode_reply::<CandidatePublicationReply>()
+                        .map(Terminal::Candidate)
+                })
+                .transpose();
+        }
         if record.kind == Kind::Head {
             return self
                 .primary

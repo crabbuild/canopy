@@ -30,6 +30,7 @@ impl WireValue for Record {
             Kind::Initialization => 3,
             Kind::Merge => 4,
             Kind::Head => 5,
+            Kind::Candidate => 6,
         })?;
         self.primary.encode(e)?;
         e.write_bool(self.refusal.is_some())?;
@@ -58,6 +59,7 @@ impl WireValue for Record {
                 3 => Kind::Initialization,
                 4 => Kind::Merge,
                 5 => Kind::Head,
+                6 => Kind::Candidate,
                 _ => return Err(CodecError::Invalid("root recovery command")),
             },
             primary: Stamp::decode(d)?,
@@ -95,6 +97,7 @@ impl WireValue for Bundle {
             Kind::Initialization => 3,
             Kind::Merge => 4,
             Kind::Head => 5,
+            Kind::Candidate => 6,
         })?;
         self.primary.encode(e)?;
         e.write_bool(self.refusal.is_some())?;
@@ -115,6 +118,7 @@ impl WireValue for Bundle {
                 3 => Kind::Initialization,
                 4 => Kind::Merge,
                 5 => Kind::Head,
+                6 => Kind::Candidate,
                 _ => return Err(CodecError::Invalid("unknown recovery kind")),
             },
             primary: SavedCommand::decode(d)?,

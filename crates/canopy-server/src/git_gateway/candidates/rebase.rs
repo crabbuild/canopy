@@ -5,7 +5,7 @@ use crate::pulls::candidates::{
 };
 
 pub(super) async fn prepare(
-    repository: &RepositoryCell,
+    context: &crate::packs::publication::StagingContext,
     backend: &GitHttpBackend,
     candidate: &MergeCandidate,
     common: &str,
@@ -15,6 +15,7 @@ pub(super) async fn prepare(
     let range = format!("{}..{}", revision.base_oid, revision.source_oid);
     let limit = format!("--max-count={}", MAX_COMMITS + 1);
     let listed = run(
+        context,
         backend,
         &["rev-list", "--reverse", "--topo-order", &limit, &range],
         b"",
@@ -36,7 +37,7 @@ pub(super) async fn prepare(
     let mut parent = common;
     for commit in &commits {
         parse_oid(commit)?;
-        let size = run(backend, &["cat-file", "-s", commit], b"", &[]).await?;
+        let size = run(context, backend, &["cat-file", "-s", commit], b"", &[]).await?;
         if !size.status.success() {
             return Err(size.error());
         }
@@ -47,7 +48,7 @@ pub(super) async fn prepare(
         if size > MAX_COMMIT_BYTES {
             return unavailable(RebaseUnavailable::Limit);
         }
-        let original = run(backend, &["cat-file", "commit", commit], b"", &[]).await?;
+        let original = run(context, backend, &["cat-file", "commit", commit], b"", &[]).await?;
         if !original.status.success() {
             return Err(original.error());
         }
@@ -55,6 +56,7 @@ pub(super) async fn prepare(
             // Detect topology from Git rather than treating arbitrary malformed
             // headers as a merge. Neither case is silently flattened or dropped.
             let parents = run(
+                context,
                 backend,
                 &["rev-list", "--parents", "-n", "1", commit],
                 b"",
@@ -84,17 +86,16 @@ pub(super) async fn prepare(
     if parent != revision.source_oid {
         return Err(GatewayError::MalformedCache);
     }
-    repository
-        .prepare_ancestry(parse_oid(common)?, parse_oid(&revision.base_oid)?)
-        .await
-        .map_err(|error| GatewayError::Cell(Box::new(error)))?;
+    // Native merge-base established this boundary. The private catalog
+    // verifier checks the generated chain and its base closure before publication.
     let mut current = revision.base_oid.clone();
     let mut tree_oid = String::new();
     for (source, bytes) in commits.into_iter().zip(originals) {
         let original = Commit::parse(&bytes).ok_or(GatewayError::MalformedCache)?;
         // Replaying one change uses its original parent as the explicit base;
         // recomputing a merge base would replay the entire branch instead.
-        let (tree, conflict) = merge_tree(backend, &current, source, Some(original.parent)).await?;
+        let (tree, conflict) =
+            merge_tree(context, backend, &current, source, Some(original.parent)).await?;
         if let Some(conflict) = conflict {
             return Ok(conflict);
         }
@@ -103,6 +104,7 @@ pub(super) async fn prepare(
             return unavailable(RebaseUnavailable::Limit);
         }
         let written = run(
+            context,
             backend,
             &["hash-object", "-t", "commit", "-w", "--stdin"],
             &body,

@@ -14,6 +14,7 @@ fn worker_error(error: GitHttpError) -> CacheError {
 
 // Follow physical pack order to retain delta-base locality while verifying large
 // histories. Hash order forces needless repeated decompression of distant bases.
+#[cfg(test)]
 fn index_order(path: &Path, format: crate::ObjectFormat) -> io::Result<Vec<crate::ObjectId>> {
     let data = fs::read(path)?;
     let validated = crate::git_format::pack_index::PackIndex::open(path, format)?;
@@ -82,6 +83,7 @@ impl GitCache {
             .expect("durable inventory poisoned")
             .insert(sha);
     }
+    #[cfg(test)]
     pub(crate) async fn pack_sources(
         self: &Arc<Self>,
     ) -> Result<Vec<(crate::ObjectId, PathBuf, PathBuf, Vec<crate::ObjectId>)>, CacheError> {

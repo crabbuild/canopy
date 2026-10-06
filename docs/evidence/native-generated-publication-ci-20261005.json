@@ -1,0 +1,319 @@
+{
+  "recorded_at_utc": "2026-10-06T01:09:35.971053+00:00",
+  "base_head": "1ebb2786a3f15622d59a9b0d6420c1e7d0517e1b",
+  "host": "macOS, Rust 1.98.0; exact new-head Linux qualification required",
+  "release_qualified": false,
+  "source_files": 530,
+  "rust_files": 512,
+  "source_hash_digest": "d17d143258c8fab52eac31f699e42cd54259be4af8ec48d5b7c2d43c5caabb8f",
+  "source_manifest": "/tmp/canopy-generated-final-source.json",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML path to its file SHA256",
+  "source_unchanged_during_validation": true,
+  "validation": {
+    "source_digest": "d17d143258c8fab52eac31f699e42cd54259be4af8ec48d5b7c2d43c5caabb8f",
+    "complete": true,
+    "phases": [
+      {
+        "name": "retry",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "generated_candidate_intent_joins_uncertain_original_and_retries_only_after_known_drain"
+        ],
+        "exit_code": 0,
+        "seconds": 102.49,
+        "log": "/tmp/canopy-generated-final-retry.log",
+        "log_sha256": "b378b5a93e34d18298ee8e47c0a1c53e430d21458110f96e96810366e5ee46fc",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.24s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "transactions",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "packs::publication::tests::candidate_publication::"
+        ],
+        "exit_code": 0,
+        "seconds": 2.17,
+        "log": "/tmp/canopy-generated-final-transactions.log",
+        "log_sha256": "b809ea8f3975213a973df8535e78a0bcea6b70b235458fa72d93f88d5ddb26e7",
+        "summaries": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 751 filtered out; finished in 1.42s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "merge",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "native_merge"
+        ],
+        "exit_code": 0,
+        "seconds": 7.56,
+        "log": "/tmp/canopy-generated-final-merge.log",
+        "log_sha256": "728e3b19d0f616ba7af2f07690e16ebcd7254a6851811ca9a3425aba5ad51b40",
+        "summaries": [
+          "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 739 filtered out; finished in 7.22s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "head",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "native_head"
+        ],
+        "exit_code": 0,
+        "seconds": 5.56,
+        "log": "/tmp/canopy-generated-final-head.log",
+        "log_sha256": "10423fb77d9fc8ddb61e71a28289b9db777045a42a19cca7d1fbb93b84649959",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 750 filtered out; finished in 5.20s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "candidates",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--test",
+          "multi_server",
+          "candidates::"
+        ],
+        "exit_code": 0,
+        "seconds": 104.03,
+        "log": "/tmp/canopy-generated-final-candidates.log",
+        "log_sha256": "59ef6ae7977bff2631f7df3113d9a9959283453d69922e5dfc01ac74ebcbbdcf",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 26.74s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "rebase",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--test",
+          "multi_server",
+          "rebase::"
+        ],
+        "exit_code": 0,
+        "seconds": 18.21,
+        "log": "/tmp/canopy-generated-final-rebase.log",
+        "log_sha256": "520654d5b43656b0a93a69d87a6a677b66a62f6a80ade9b5e82504d51d166323",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 16.83s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "sha256",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--test",
+          "multi_server",
+          "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+          "--",
+          "--exact"
+        ],
+        "exit_code": 0,
+        "seconds": 9.4,
+        "log": "/tmp/canopy-generated-final-sha256.log",
+        "log_sha256": "49ad196cf211f56c42d786e4f38ed83d20efeeace75ffde990ab2819cca37b9b",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 8.50s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 44.11,
+        "log": "/tmp/canopy-generated-final-clippy.log",
+        "log_sha256": "8016738f3743ff7a6344dd03d636804e776627d3c4c34cc31ac7fa0e056d1c2d",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 797.82,
+        "log": "/tmp/canopy-generated-final-workspace.log",
+        "log_sha256": "b8e6d143a85892184d5f99ba559ebb427134d453a145e2864eeb7183f61ea549",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.05s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.09s",
+          "test result: ok. 753 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 360.54s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.43s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "test result: FAILED. 93 passed; 14 failed; 9 ignored; 0 measured; 0 filtered out; finished in 398.62s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+          "leased_server_recovers_two_repositories_with_git_and_lfs",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+          "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 64.78,
+        "log": "/tmp/canopy-generated-final-build.log",
+        "log_sha256": "0900ec22ab155c16e1caea5a43d4c5f9d9cd5d0898632803a9736b4a4740f671",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.59,
+        "log": "/tmp/canopy-generated-final-fmt.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 43.9,
+        "log": "/tmp/canopy-generated-final-harness.log",
+        "log_sha256": "651f2b86f1312d3534d475dea692087fad2ce3d2d223302def85f1913d1a501a",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.15,
+        "log": "/tmp/canopy-generated-final-diff.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "source_unchanged": true,
+    "release_qualified": false
+  },
+  "historical_linux": {
+    "head": "1ebb2786a3f15622d59a9b0d6420c1e7d0517e1b",
+    "run": "https://github.com/crabbuild/canopy/actions/runs/37391496693",
+    "result": "FAILURE; multi-server 89 passed, 22 failed, 9 ignored",
+    "log_sha256": "58862df442dc9b52bc73ce6818b54f2afea78bb45e56e3e18128d8b796afaedd",
+    "qualification_of_current_source": false
+  },
+  "qualification_note": "Current-source full workspace remains failed. Nested child-process library summaries are not additional independent passing cases. No tests or assertions were disabled; no large-team throughput or remote-provider qualification is claimed."
+}

@@ -265,6 +265,7 @@ pub struct MaintenanceRequest {
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
     registry.bind_command::<PublishReviewedMerge>()?;
     registry.bind_command::<PublishNativeHead>()?;
+    registry.bind_command::<PublishNativeCandidate>()?;
     registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
     registry.bind_command::<crate::checks::native::StartCommitCheck>()?;
     registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;
@@ -301,3 +302,10 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
 }
 #[cfg(test)]
 mod tests;
+
+mod candidate_publication;
+pub use candidate_publication::audit::NativeCandidateAuditError;
+pub use candidate_publication::{
+    CandidatePublicationReply, NATIVE_CANDIDATE_BYTES, NativeCandidateProof,
+    NativeCandidatePublicationError, PublishNativeCandidate,
+};

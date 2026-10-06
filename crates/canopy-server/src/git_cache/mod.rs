@@ -193,7 +193,7 @@ impl GitCache {
         Ok(self.reservation()?.bytes())
     }
 
-    fn writer(self: &Arc<Self>, relative: &Path) -> io::Result<CacheWriter> {
+    pub(crate) fn writer(self: &Arc<Self>, relative: &Path) -> io::Result<CacheWriter> {
         let path = self.git_dir().join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -458,6 +458,7 @@ impl GitCache {
     }
 
     /// Measures native Git's completed writes before the gateway can publish refs.
+    #[cfg(test)]
     pub(crate) async fn reconcile(self: &Arc<Self>) -> Result<(), CacheError> {
         self.reconcile_owned(Arc::new(())).await
     }
@@ -562,7 +563,7 @@ impl Drop for GitCache {
     }
 }
 
-struct CacheWriter {
+pub(crate) struct CacheWriter {
     file: File,
     cache: Arc<GitCache>,
 }
