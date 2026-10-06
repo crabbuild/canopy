@@ -1,0 +1,19 @@
+{
+  "base_commit": "54ed25636ade52ac6bcbebc1a2fe52cf00256aec",
+  "observed_full_run": "756 server unit tests passed; short-lease expiry setup returned Inactive and initial renewal regression returned Elapsed. HTTP clone passed.",
+  "change": "Warm immutable expiry metadata before starting the unchanged one-second lease. Minimize renewal regression to one reachable native blob; same five-second lease, delayed provider, two renewals, final membership, original pin and full drain. Distinguish premature worker refusal from provider-gate timeout with stage-specific diagnostics.",
+  "validation": {
+    "workspace_tests": {
+      "passed": 12,
+      "seconds": 18.16
+    },
+    "clippy": "PASS: workspace, all targets, locked, warnings denied",
+    "format": "PASS",
+    "diff_check": "PASS",
+    "full_workspace": "pending",
+    "linux_provider": "pending"
+  },
+  "sha256": {
+    "crates/canopy-server/src/packs/publication/tests/serving/workspace.rs": "6fa05ccfe00b15e98ee897df54afc7a95f0c2e0ddddcf6061b770bef10410c35"
+  }
+}

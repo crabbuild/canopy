@@ -658,6 +658,23 @@ async fn expired_lease_does_not_resurrect_or_release_suspended_construction() ->
     let tasks = TaskTracker::new();
     let (ctx, files) =
         super::body::serving_context(&f, native.store.clone(), &root, tasks.clone())?;
+    // Warm immutable metadata before the deliberately short expiry lease;
+    // cold hashing must not consume the setup phase of this gated expiry case.
+    let oid = *native.fixture.objects.keys().next().ok_or("object")?;
+    let warm = ServingOwner::start(ctx.clone(), q.clone(), f.begin([122; 16]), identity()?).await?;
+    timeout(Duration::from_secs(8), async {
+        while warm.stats().phase != ServingOwnerPhase::Ready {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let view = warm.snapshot(Some("owner".into())).await?;
+    assert!(view.headers(&[oid]).await?[0].is_some());
+    drop(view);
+    assert_eq!(
+        warm.close_and_drain().await.phase,
+        ServingOwnerPhase::Released
+    );
     let mut input = f.begin([123; 16]);
     input.lease_ms = 1000;
     let owner = ServingOwner::start(ctx, q.clone(), input, identity()?).await?;
@@ -668,7 +685,6 @@ async fn expired_lease_does_not_resurrect_or_release_suspended_construction() ->
     })
     .await?;
     let view = owner.snapshot(Some("owner".into())).await?;
-    let oid = *native.fixture.objects.keys().next().ok_or("object")?;
     assert!(view.headers(&[oid]).await?[0].is_some());
     let (dispatch, entered) = q.pause_for_test().await;
     provider.armed.store(true, Ordering::Release);
@@ -775,21 +791,52 @@ async fn joint_ref_pages_stream_ten_thousand_names_without_an_object_root_limit(
 
 #[tokio::test]
 async fn fetch_preparation_accepts_exact_renewal_after_initial_deadline() -> Result {
+    use crate::packs::ref_state::{
+        RefStateRecord, RefStateSnapshot, RefStateSnapshotRoot, RefStateTree,
+    };
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;
         let provider = Arc::new(super::blocked::Gate::new());
-        let native = prepare(format, provider.clone(), f.repository, 0)
-            .await
-            .map_err(|e| e.to_string())?;
-        let store = Arc::new(ArtifactStore::new(provider.clone(), f.repository));
-        initialize(&f, store.clone()).await?;
-        f.install_generation(2, native.catalog, Some(native.refs))
+        let (native, catalog) = super::body::catalog(&f, provider.clone()).await?;
+        // One reachable native blob isolates renewal from unrelated graph setup.
+        let oid = *native
+            .fixture
+            .objects
+            .iter()
+            .find(|(_, (o, _))| o.kind == ObjectKind::Blob)
+            .ok_or("blob")?
+            .0;
+        let refs = RefStateTree::new(native.store.clone(), format)
+            .build_sorted(
+                operation(126),
+                [RefStateRecord::new(
+                    "refs/tags/body",
+                    crate::RefExpectation {
+                        oid: Some(oid),
+                        version: 1,
+                    },
+                    format,
+                )],
+            )
             .await?;
+        let refs = RefStateSnapshotRoot::upload(
+            &native.store,
+            operation(127),
+            RefStateSnapshot {
+                repository: f.repository,
+                format,
+                generation: 2,
+                default_branch: "refs/heads/main".into(),
+                root: refs,
+            },
+        )
+        .await?;
+        f.install_generation(3, catalog, Some(refs)).await?;
         let q = super::pool::queue(&f)?;
         let root = tempfile::TempDir::new()?;
         let tasks = TaskTracker::new();
-        let (ctx, _) = super::body::serving_context(&f, store.clone(), &root, tasks.clone())?;
-        let oid = native.main;
+        let (ctx, _) =
+            super::body::serving_context(&f, native.store.clone(), &root, tasks.clone())?;
         let warm =
             ServingOwner::start(ctx.clone(), q.clone(), f.begin([120; 16]), identity()?).await?;
         timeout(Duration::from_secs(8), async {
@@ -797,9 +844,13 @@ async fn fetch_preparation_accepts_exact_renewal_after_initial_deadline() -> Res
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|e| format!("{format:?}: warm readiness: {e}; {:?}", warm.stats()))?;
         let view = warm.snapshot(Some("owner".into())).await?;
-        let workspace = view.ref_workspace(WorkspaceLimits::default()).await?;
+        let workspace = view
+            .ref_workspace(WorkspaceLimits::default())
+            .await
+            .map_err(|e| format!("{format:?}: warm workspace: {e}"))?;
         assert!(workspace.contains(&[oid]).await?[0]);
         drop((workspace, view));
         assert_eq!(
@@ -815,17 +866,39 @@ async fn fetch_preparation_accepts_exact_renewal_after_initial_deadline() -> Res
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|e| {
+            format!(
+                "{format:?}: short owner readiness: {e}; {:?}",
+                owner.stats()
+            )
+        })?;
         let view = owner.snapshot(Some("owner".into())).await?;
-        let workspace = view.ref_workspace(WorkspaceLimits::default()).await?;
+        let workspace = view
+            .ref_workspace(WorkspaceLimits::default())
+            .await
+            .map_err(|e| format!("{format:?}: short workspace: {e}; {:?}", owner.stats()))?;
         provider.armed.store(true, Ordering::Release);
-        let observer = tokio::spawn(async move {
+        let mut observer = tokio::spawn(async move {
             workspace.prepare_fetch(vec![oid], None, false).await?;
             Ok::<_, ServingReadError>(workspace)
         });
-        timeout(Duration::from_secs(8), provider.entered.acquire())
-            .await??
-            .forget();
+        timeout(Duration::from_secs(8), async {
+            tokio::select! {
+                permit = provider.entered.acquire() => {
+                    permit?.forget();
+                    Ok::<_, Box<dyn std::error::Error>>(())
+                }
+                result = &mut observer => {
+                    let error = match result {
+                        Ok(Err(error)) => format!("preparation refused before provider entry: {error}"),
+                        Err(error) => format!("preparation worker failed before provider entry: {error}"),
+                        Ok(Ok(_)) => "preparation completed without reaching the armed provider".into(),
+                    };
+                    Err(error.into())
+                },
+            }
+        }).await.map_err(|e| format!("{format:?}: provider entry: {e}; {:?}", owner.stats()))??;
         // Physical work must keep the closed owner renewing this same pin.
         owner.close();
         tokio::time::sleep(Duration::from_millis(RENEWAL_LEASE_MS * 3 / 2)).await;
@@ -840,9 +913,12 @@ async fn fetch_preparation_accepts_exact_renewal_after_initial_deadline() -> Res
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?;
+        .await
+        .map_err(|e| format!("{format:?}: exact renewals: {e}; {:?}", owner.stats()))?;
         provider.proceed.add_permits(1);
-        let workspace = timeout(Duration::from_secs(8), observer).await???;
+        let workspace = timeout(Duration::from_secs(8), observer)
+            .await
+            .map_err(|e| format!("{format:?}: renewed completion: {e}; {:?}", owner.stats()))???;
         assert!(workspace.contains(&[oid]).await?[0]);
         assert_eq!(pin_count(&f).await?, 1);
         drop((workspace, view));
