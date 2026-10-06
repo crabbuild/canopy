@@ -18,6 +18,24 @@ Implementation is isolated in the PR worktree. The original checkout contains an
 
 All five Cellule dependency declarations and six lockfile entries pin `161067f5a21703b3e257024bcb64e565fd9657b4` from [Cellule PR #50](https://github.com/crabbuild/cellule/pull/50), including the admitted owner fence, exact-command snapshot and admitted-mutation APIs. Historical validation below remains attributed to its original source revisions. Trusted ref-plan certification, typed catalog/ref publication, immutable exact-response completion and the class/account-fair dispatcher exist. The local production cutover now selects their registry/schema and initializes new repositories through certified empty roots. Production HTTP/SSH receive-pack now uses the resident native pipeline. Generated producers and reviewed merges now use native publication. Remaining authoritative readers, complete startup recovery and the final schema hard cutover remain open.
 
+## Read-only residency restoration (2026-10-06 checkpoint)
+
+The failing physical-root equality assertion was diagnosed using authenticated
+Cellule VFS snapshots. A cold clone changes only `catalog_custody_commands`,
+`catalog_serving_pins`, `sys_meta` and `sys_requests`: serving acquisitions
+register exact command recovery and pin the selected generation. Product rows
+are unchanged. A physical root comparison therefore conflicts with durable
+serving custody.
+
+The integration now compares every table and requires identical repository
+identity/allocation, catalog/ref, LFS, collaboration and other product rows.
+It separately preserves staging intents, existing custody identities and exact
+receipts, permits runtime sequence/time advancement, and requires one serving
+pin for the current generation. All six repositories restore, clone, fsck and
+retrieve LFS successfully in the focused test (18.11 seconds). Workspace
+all-target Clippy with warnings denied passes. New-head Linux and the remaining
+selective-fetch, late SSH refusal and standalone fixture work remain open.
+
 ## Native backup and staging readiness (2026-10-06 checkpoint)
 
 Backup inventory now follows the authenticated native catalog, ref, input,

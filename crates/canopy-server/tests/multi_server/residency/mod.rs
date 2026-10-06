@@ -28,7 +28,7 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
         settings.store_prefix.clone(),
         *application.as_bytes(),
     );
-    let authority = CellAuthority::new(layout);
+    let authority = CellAuthority::new(layout.clone());
     let server = CanopyServer::start(settings, store).await?;
     let local_root = workspace.path().join("server/canopy-pack-v1");
     let local = workspace.path().join("source");
@@ -92,6 +92,12 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
             .await?
             .ok_or("Cell missing")?;
         let root = before.value().root.clone();
+        let before_rows = durable_rows(
+            &layout,
+            &target,
+            &workspace.path().join(format!("before-{index}.sqlite")),
+        )
+        .await?;
         let clone = workspace.path().join(format!("clone-{index}"));
         run_git(
             None,
@@ -126,10 +132,21 @@ async fn repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_n
             .load(target.cell_id())
             .await?
             .ok_or("Cell missing")?;
-        assert_eq!(
-            after.value().root,
-            root,
-            "read-only restoration published a new root"
+        let after_rows = durable_rows(
+            &layout,
+            &target,
+            &workspace.path().join(format!("after-{index}.sqlite")),
+        )
+        .await?;
+        assert_read_only_restore(&before_rows, &after_rows);
+        assert!(
+            after
+                .value()
+                .root
+                .as_ref()
+                .ok_or("restored root absent")?
+                .commit_sequence
+                >= root.as_ref().ok_or("original root absent")?.commit_sequence
         );
     }
     server.shutdown().await?;
@@ -304,4 +321,116 @@ async fn invalid_residency_limits_fail_before_creating_local_state() -> Result {
         assert!(!path.exists());
     }
     Ok(())
+}
+
+// Inspect authenticated roots through Cellule's VFS; restored files may contain
+// sparse placeholders that ordinary SQLite cannot read independently.
+type DurableRows =
+    std::collections::BTreeMap<String, Vec<Vec<cellule_ltx::rusqlite::types::Value>>>;
+
+fn assert_read_only_restore(before: &DurableRows, after: &DurableRows) {
+    use cellule_ltx::rusqlite::types::Value;
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        "restoration changed the schema inventory"
+    );
+    for (table, rows) in before {
+        let restored = &after[table];
+        match table.as_str() {
+            "catalog_custody_commands" => {
+                // Serving purpose is 1. Existing staging intents (purpose 0)
+                // remain exact; a read cannot admit publication work.
+                let staging = |values: &Vec<Vec<Value>>| {
+                    values
+                        .iter()
+                        .filter(|row| row[0] == Value::Integer(0))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(staging(rows), staging(restored));
+                for original in rows {
+                    assert!(
+                        restored.iter().any(|row| row[..6] == original[..6]),
+                        "restoration replaced a custody intent"
+                    );
+                }
+            }
+            "catalog_serving_pins" => {
+                assert_eq!(restored.len(), 1, "one current generation must be pinned");
+                let generation = &after["catalog_state"][0][1];
+                for row in restored {
+                    assert_eq!(
+                        &row[4], generation,
+                        "serving pin selected another generation"
+                    );
+                }
+            }
+            "sys_requests" => {
+                for row in rows {
+                    assert!(
+                        restored.contains(row),
+                        "restoration replaced a durable receipt"
+                    );
+                }
+            }
+            "sys_meta" => {
+                let normalize = |values: &Vec<Vec<Value>>| {
+                    let mut values = values.clone();
+                    assert_eq!(values.len(), 1);
+                    // Serving commands advance sequence and logical time.
+                    values[0][3] = Value::Integer(0);
+                    values[0][4] = Value::Integer(0);
+                    values
+                };
+                assert_eq!(normalize(rows), normalize(restored));
+            }
+            _ => assert_eq!(rows, restored, "read-only restoration changed {table}"),
+        }
+    }
+}
+
+async fn durable_rows(
+    layout: &CellStorageLayout,
+    target: &cellule_runtime::CellTarget,
+    path: &Path,
+) -> Result<DurableRows> {
+    let control = CellAuthority::new(layout.clone())
+        .load(target.cell_id())
+        .await?
+        .ok_or("repository absent")?;
+    let root = control.value().ltx_root().ok_or("root absent")?;
+    let replica = cellule_ltx::CellReplica::new(
+        layout.clone(),
+        *target.cell_id().as_bytes(),
+        *control.value().incarnation.as_bytes(),
+        cellule_ltx::Limits::default(),
+    )?;
+    let root = replica.open_root(&root).await?.open_read_only(path)?;
+    let c = root.connection()?;
+    let mut names = c.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name")?;
+    let names = names
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut result = std::collections::BTreeMap::new();
+    for name in names {
+        let quoted = name.replace('"', "\"\"");
+        let query = c.prepare(&format!("SELECT * FROM \"{quoted}\""))?;
+        let count = query.column_count();
+        let order = (1..=count)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        drop(query);
+        let mut query = c.prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY {order}"))?;
+        let rows = query
+            .query_map([], |row| {
+                (0..count)
+                    .map(|i| row.get(i))
+                    .collect::<std::result::Result<Vec<cellule_ltx::rusqlite::types::Value>, _>>()
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        result.insert(name, rows);
+    }
+    Ok(result)
 }
