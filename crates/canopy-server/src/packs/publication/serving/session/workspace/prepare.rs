@@ -64,12 +64,20 @@ impl NativeWorkspace {
                             .indexes
                             .refs()
                             .cursor(refs.root.clone(), None, true)?;
+                    let mut writer = core
+                        .cache
+                        .serving_refs(owner.clone(), true)
+                        .await
+                        .map_err(crate::packs::catalog::NativeReadError::from)?;
+                    let mut page = Vec::with_capacity(crate::refs::REF_PAGE_SIZE);
                     while let Some(record) = cursor.next().await? {
                         observation.refresh(&inner, &actor).await?;
                         let mut id = record.state().oid.ok_or(ServingReadError::Context)?;
                         let mut finished = false;
-                        // Peeling requires only the advertised object and nested tags,
-                        // never an unrelated commit's ancestors or tree history.
+                        let mut peeled = None;
+                        let mut expected = None;
+                        // Certified metadata supplies peeled targets. Native Git can
+                        // advertise fully peeled packed refs without pack bodies.
                         for _ in 0..128 {
                             let reader = inner.catalog().await?;
                             let object = reader
@@ -77,11 +85,10 @@ impl NativeWorkspace {
                                 .await?
                                 .ok_or(ServingReadError::Context)?;
                             let kind = object.entry.header.object.kind;
-                            inner
-                                .context
-                                .files
-                                .install_workspace(core.cache.clone(), &object, owner.clone())
-                                .await?;
+                            if expected.is_some_and(|expected| expected != kind) {
+                                return Err(ServingReadError::Context);
+                            }
+
                             observation.refresh(&inner, &actor).await?;
                             if kind != ObjectKind::Tag {
                                 finished = true;
@@ -99,11 +106,33 @@ impl NativeWorkspace {
                                 return Err(ServingReadError::Context);
                             }
                             id = edges[0].child;
+                            peeled = Some(id);
+                            expected = Some(edges[0].expected_kind);
                         }
                         if !finished {
                             return Err(ServingReadError::TooLarge);
                         }
+                        page.push((record.name().to_owned(), record.state().clone(), peeled));
+                        if page.len() == crate::refs::REF_PAGE_SIZE {
+                            writer = writer
+                                .append_peeled(std::mem::replace(
+                                    &mut page,
+                                    Vec::with_capacity(crate::refs::REF_PAGE_SIZE),
+                                ))
+                                .await
+                                .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        }
                     }
+                    if !page.is_empty() {
+                        writer = writer
+                            .append_peeled(page)
+                            .await
+                            .map_err(crate::packs::catalog::NativeReadError::from)?;
+                    }
+                    writer
+                        .finish()
+                        .await
+                        .map_err(crate::packs::catalog::NativeReadError::from)?;
                     inner.observe(actor).await?;
                     Ok(())
                 },

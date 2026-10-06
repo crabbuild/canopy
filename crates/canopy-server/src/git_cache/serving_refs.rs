@@ -1,24 +1,35 @@
 //! Count-bounded ref pages streamed into one unpublished, admitted native cache.
 use super::*;
-use crate::git_objects::ReadOwner;
+use crate::{ObjectId, git_objects::ReadOwner};
 
 pub(crate) struct ServingRefsWriter {
     output: BufWriter<CacheWriter>,
     last: String,
+    replace: bool,
     _owner: ReadOwner,
 }
 impl GitCache {
     pub(crate) async fn serving_refs(
         self: &Arc<Self>,
         owner: ReadOwner,
+        fully_peeled: bool,
     ) -> Result<ServingRefsWriter, CacheError> {
         let cache = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut output = BufWriter::new(cache.writer(Path::new("packed-refs"))?);
-            output.write_all(b"# pack-refs with: sorted\n")?;
+            let mut output = BufWriter::new(cache.writer(Path::new(if fully_peeled {
+                "packed-refs.lock"
+            } else {
+                "packed-refs"
+            }))?);
+            output.write_all(if fully_peeled {
+                b"# pack-refs with: peeled fully-peeled sorted\n"
+            } else {
+                b"# pack-refs with: sorted\n"
+            })?;
             Ok(ServingRefsWriter {
                 output,
                 last: String::new(),
+                replace: fully_peeled,
                 _owner: owner,
             })
         })
@@ -27,14 +38,25 @@ impl GitCache {
 }
 impl ServingRefsWriter {
     pub(crate) async fn append(
-        mut self,
+        self,
         page: Vec<(String, RefExpectation)>,
+    ) -> Result<Self, CacheError> {
+        self.append_peeled(
+            page.into_iter()
+                .map(|(name, state)| (name, state, None))
+                .collect(),
+        )
+        .await
+    }
+    pub(crate) async fn append_peeled(
+        mut self,
+        page: Vec<(String, RefExpectation, Option<ObjectId>)>,
     ) -> Result<Self, CacheError> {
         if page.len() > crate::refs::REF_PAGE_SIZE {
             return Err(CacheError::InvalidHead);
         }
         tokio::task::spawn_blocking(move || {
-            for (name, state) in page {
+            for (name, state, peeled) in page {
                 let Some(oid) = state.oid else {
                     return Err(CacheError::InvalidHead);
                 };
@@ -46,6 +68,12 @@ impl ServingRefsWriter {
                     return Err(CacheError::InvalidHead);
                 }
                 writeln!(self.output, "{} {name}", hex::encode(oid))?;
+                if let Some(peeled) = peeled {
+                    if peeled.is_zero() || peeled.format() != oid.format() {
+                        return Err(CacheError::InvalidHead);
+                    }
+                    writeln!(self.output, "^{}", hex::encode(peeled))?;
+                }
                 self.last = name;
             }
             Ok(self)
@@ -56,6 +84,10 @@ impl ServingRefsWriter {
         tokio::task::spawn_blocking(move || {
             self.output.flush()?;
             self.output.get_ref().file.sync_all()?;
+            if self.replace {
+                let path = self.output.get_ref().cache.git_dir();
+                std::fs::rename(path.join("packed-refs.lock"), path.join("packed-refs"))?;
+            }
             Ok(())
         })
         .await?

@@ -230,7 +230,7 @@ impl ServingPin {
                             .refs()
                             .cursor(refs.root.clone(), None, true)?;
                     let mut writer = cache
-                        .serving_refs(owner.clone())
+                        .serving_refs(owner.clone(), false)
                         .await
                         .map_err(crate::packs::catalog::NativeReadError::from)?;
                     loop {
