@@ -22,6 +22,7 @@ pub struct ReadyRootPush {
     pub(super) owner: PushPreparation,
     command: RootCommand,
     pub(super) refusal: bool,
+    fallback: Option<Arc<ReadyRootPush>>,
 }
 impl PreparedCatalog {
     pub async fn ready_root_push(
@@ -49,6 +50,7 @@ impl PreparedCatalog {
             owner: PushPreparation::Catalog(self.clone()),
             command: RootCommand::Publish(command),
             refusal: false,
+            fallback: None,
         })
     }
 }
@@ -101,6 +103,7 @@ impl PreparationSession {
             owner: PushPreparation::Outcome(self.clone()),
             command: RootCommand::Outcome(command),
             refusal,
+            fallback: None,
         })
     }
 }
@@ -117,6 +120,30 @@ impl RootCommand {
     }
 }
 impl ReadyRootPush {
+    /// Freeze the same-attempt refusal before final publication admission.
+    /// Recovery executes it only after the original publication is known denied.
+    pub fn with_refusal(mut self, refusal: Arc<ReadyRootPush>) -> Result<Self, RootPushReadyError> {
+        let source = refusal.owner.session();
+        let session = self.owner.session();
+        if self.fallback.is_some()
+            || !matches!(self.command, RootCommand::Publish(_))
+            || !refusal.refusal
+            || source.target != session.target
+            || source.check != session.check
+            || source.ceiling != session.ceiling
+            || !Arc::ptr_eq(&source.deadline, &session.deadline)
+            || !Arc::ptr_eq(&source.fenced, &session.fenced)
+        {
+            return Err(PreparationBaseError::Context.into());
+        }
+        self.fallback = Some(refusal);
+        Ok(self)
+    }
+    fn fallback_command(&self) -> Option<&PreparedCommand<CompleteRootOutcome>> {
+        self.fallback
+            .as_ref()
+            .and_then(|value| value.refusal_command())
+    }
     /// Preserve the original factory's shared lifecycle authority while
     /// dispatching from its exact registered SDK snapshot and body.
     pub fn bind_recovery(
@@ -131,7 +158,7 @@ impl ReadyRootPush {
         if !registered.matches_original(
             kind,
             self.command.evidence(),
-            None,
+            self.fallback_command().map(|command| command.evidence()),
             self.owner.session(),
             store,
         ) {
@@ -193,7 +220,7 @@ impl ReadyRootPush {
                     session,
                     command,
                     super::super::recovery::Kind::Publish,
-                    None,
+                    self.fallback_command(),
                     Some(previous),
                     store,
                     identity,
@@ -245,10 +272,12 @@ impl ReadyRootPush {
         let session = self.owner.session();
         match &self.command {
             RootCommand::Publish(command) => {
-                super::super::recovery::persist(
+                super::super::recovery::persist_full(
                     session,
                     command,
                     super::super::recovery::Kind::Publish,
+                    self.fallback_command(),
+                    None,
                     store,
                     identity,
                     fault,

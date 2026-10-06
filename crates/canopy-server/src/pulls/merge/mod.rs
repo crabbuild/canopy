@@ -32,7 +32,7 @@ pub struct MergeRecord {
     pub merged_at_ms: i64,
     pub revision: PullRevision,
 }
-pub(super) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
+pub(crate) fn record(row: &[SqlValue]) -> cellule_runtime::Result<MergeRecord> {
     let [
         SqlValue::Blob(id),
         SqlValue::Integer(number),
@@ -67,7 +67,7 @@ pub struct ReviewPolicy {
     pub reviews_satisfied: bool,
 }
 /// The final transaction's domain outcome; only Applied moves refs.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum MergeOutcome {
     Applied { merge: MergeRecord },
@@ -85,9 +85,46 @@ pub(crate) struct ReviewedMerge {
     update: RefUpdate,
 }
 impl ReviewedMerge {
+    pub(crate) fn update(&self) -> &RefUpdate {
+        &self.update
+    }
     pub(crate) fn authorizes(&self, update: &RefUpdate) -> bool {
         self.update == *update
     }
+}
+/// Called only inside the native publisher's authenticated final transaction.
+/// This constructs the same exact-update capability as the original merge
+/// command; client facts alone cannot satisfy the current review predicate.
+pub(crate) fn reviewed_native_update(
+    context: &cellule_runtime::registry::CommandContext<'_, '_>,
+    input: &command::MergeInput,
+    selection: &crate::packs::publication::RefSelection,
+    generated: Option<crate::ObjectId>,
+) -> cellule_runtime::Result<Result<ReviewedMerge, MergeOutcome>> {
+    let statement =
+        super::native::with_refs(policy_statement(&input.actor, input.number), selection);
+    let Some(state) = policy_state(&context.sql(&SqlBatch {
+        statements: vec![statement],
+    })?)?
+    else {
+        return Ok(Err(MergeOutcome::NotFound));
+    };
+    if !state.policy.ready || state.policy.revision.as_ref() != Some(&input.request.revision) {
+        return Ok(Err(MergeOutcome::Conflict));
+    }
+    if !state.policy.reviews_satisfied {
+        return Ok(Err(MergeOutcome::ReviewsRequired));
+    }
+    Ok(Ok(ReviewedMerge {
+        update: RefUpdate {
+            name: state.base,
+            expected: Some(RefExpectation {
+                oid: Some(oid(&input.request.revision.base_oid)?),
+                version: input.request.revision.base_version,
+            }),
+            new_oid: Some(generated.unwrap_or(oid(&input.request.revision.source_oid)?)),
+        },
+    }))
 }
 pub(super) struct ReviewState {
     pub(super) policy: ReviewPolicy,
@@ -117,27 +154,36 @@ pub(crate) fn valid_request(request: &MergeRequest) -> bool {
 }
 
 impl RepositoryCell {
-    /// Reads current review requirements and eligible decisions in one Cell observation.
+    /// Reads current review requirements against authenticated native ref facts.
     pub async fn pull_review_policy<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
         number: i64,
-    ) -> Result<Observed<Option<ReviewPolicy>>, Invocation> {
-        let actor = actor.into();
-        actor.validate().map_err(Invocation::NotStarted)?;
+    ) -> Result<Observed<Option<ReviewPolicy>>, super::native::NativePullError> {
+        let result = self.pull_review_state(actor.into(), number).await?;
+        Ok(Observed {
+            output: result.output.map(|state| state.policy),
+            receipt: result.receipt,
+        })
+    }
+    async fn pull_review_state(
+        &self,
+        actor: ReadIdentity<'_>,
+        number: i64,
+    ) -> Result<Observed<Option<ReviewState>>, super::native::NativePullError> {
+        if number < 1 {
+            return Err(Error::Command("invalid pull number").into());
+        }
         let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![policy_statement(actor, number)],
-                },
-            )
+            .native_pull_rows(actor, super::native::ReadKind::ReviewPolicy(number))
             .await?;
         Ok(Observed {
-            output: policy_state(&result.output)
-                .map_err(Invocation::NotStarted)?
-                .map(|state| state.policy),
+            output: result
+                .output
+                .as_deref()
+                .map(policy_state)
+                .transpose()?
+                .flatten(),
             receipt: result.receipt,
         })
     }
@@ -157,17 +203,11 @@ impl RepositoryCell {
                 "invalid merge request",
             )));
         }
-        let observed = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![policy_statement(actor, number)],
-                },
-            )
+        let state = self
+            .pull_review_state(ReadIdentity::Account(actor), number)
             .await
-            .map_err(preparation)?;
-        let state = policy_state(&observed.output).map_err(InvocationError::NotStarted)?;
+            .map_err(preparation)?
+            .output;
         if state.is_some_and(|state| {
             state.writable
                 && state.policy.ready
@@ -223,12 +263,12 @@ fn preparation(
         source: Box::new(error),
     })
 }
-pub(super) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
+pub(crate) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
     parse_oid(text)
         .and_then(|value| value.try_into().ok())
         .ok_or(Error::Command("invalid merge object ID"))
 }
-pub(super) fn policy_statement<'a>(
+pub(crate) fn policy_statement<'a>(
     actor: impl Into<ReadIdentity<'a>>,
     number: i64,
 ) -> SqlStatement {
@@ -299,4 +339,12 @@ pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Opt
             reviews_satisfied: *required == 0 || (*approvals >= *needed && *changes == 0),
         },
     }))
+}
+
+pub(crate) fn candidate_ready(
+    sets: &[SqlResultSet],
+    revision: &super::PullRevision,
+) -> cellule_runtime::Result<Option<bool>> {
+    Ok(policy_state(sets)?
+        .map(|state| state.policy.ready && state.policy.revision.as_ref() == Some(revision)))
 }

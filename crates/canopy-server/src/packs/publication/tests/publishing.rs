@@ -18,6 +18,7 @@ pub(super) struct Graph {
     pub(super) other: ObjectId,
     pub(super) blob: ObjectId,
     pub(super) store: Arc<canopy_object_storage::artifact::ArtifactStore>,
+    pub(super) provider: Arc<dyn object_store::ObjectStore>,
 }
 pub(super) fn update(name: &str, old: Option<(ObjectId, i64)>, new: Option<ObjectId>) -> RefUpdate {
     RefUpdate {
@@ -82,6 +83,7 @@ pub(super) async fn assembled(
             other,
             blob,
             store: native.store,
+            provider: native.provider,
         })
     })
     .await
@@ -130,6 +132,10 @@ async fn history(
         )
         .await?,
     )?;
+    repack(native).await?;
+    Ok((tip, other))
+}
+pub(super) async fn repack(native: &mut Prepared) -> Result {
     git_input(native.fixture.root.path(), &["repack", "-ad"], b"").await?;
     let path = std::fs::read_dir(native.fixture.root.path().join("objects/pack"))?
         .find_map(|entry| {
@@ -170,7 +176,7 @@ async fn history(
     native.descriptor.index = artifact_index;
     native.descriptor.git_checksum = index.pack_checksum();
     native.descriptor.object_count = index.len();
-    Ok((tip, other))
+    Ok(())
 }
 async fn proof(graph: &Graph, updates: Vec<RefUpdate>) -> Result<RefPublicationProof> {
     Ok(Box::pin(graph.prepared.ref_proof(
@@ -182,7 +188,15 @@ async fn proof(graph: &Graph, updates: Vec<RefUpdate>) -> Result<RefPublicationP
     .await?)
 }
 pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
-    Ok(handle.query(0, 64 << 10, |connection| {
+    state_except_operation(handle, None).await
+}
+// Terminal merge semantics intentionally close only one exact operation.
+// All other operation, root, ref, checkpoint and policy facts remain compared.
+pub(super) async fn state_except_operation(
+    handle: &CellHandle,
+    exclude: Option<[u8; 16]>,
+) -> Result<Vec<u8>> {
+    Ok(handle.query(0, 64 << 10, move |connection| {
         let mut refs = connection.prepare("SELECT name,oid,version FROM refs ORDER BY name")?;
         let refs = refs.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<Vec<u8>>>(1)?,row.get::<_,i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut catalog = connection.prepare("SELECT generation,catalog,certificate,refs FROM catalog_generations ORDER BY generation")?;
@@ -216,8 +230,8 @@ pub(super) async fn state(handle: &CellHandle) -> Result<Vec<u8>> {
             let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Option<Vec<u8>>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<i64>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,Option<Vec<u8>>>(7)?,row.get::<_,Option<Vec<u8>>>(8)?,row.get::<_,Option<Vec<u8>>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?);
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root outcome hash"))?);
         }
-        let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations ORDER BY id")?;
-        let mut rows=operations.query([])?;
+        let mut operations=connection.prepare("SELECT id,actor,request_digest,artifact_operation,generation,attestation,attestation_digest FROM catalog_operations WHERE ?1 IS NULL OR id!=?1 ORDER BY id")?;
+        let mut rows=operations.query([exclude.map(|id|id.to_vec())])?;
         while let Some(row)=rows.next()? {
             let record=(row.get::<_,Vec<u8>>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Option<u64>>(4)?,row.get::<_,Option<Vec<u8>>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?);
             hash.update(&serde_json::to_vec(&record).map_err(|_|Error::Command("fixture root operation hash"))?);
@@ -300,6 +314,7 @@ pub(super) async fn next_graph(
         other: old.other,
         blob: old.blob,
         store: Arc::clone(&old.store),
+        provider: Arc::clone(&old.provider),
     })
 }
 
@@ -401,7 +416,7 @@ async fn catalog_ref_membership_kind_and_tampered_bindings_cannot_publish() -> R
                     limits()
                 )
                 .await,
-            Err(RefProofError::Invalid)
+            Err(super::super::RefProofError::Invalid)
         ));
     }
     let input = proof(
@@ -573,7 +588,7 @@ async fn ancestry_growth_reuses_pairs_only_in_one_exact_native_catalog() -> Resu
                 &other.prepared.base
             )
             .await,
-            Err(RefProofError::Invalid)
+            Err(super::super::RefProofError::Invalid)
         ));
         assert!(matches!(
             walk.is_ancestor(
@@ -954,5 +969,112 @@ async fn expired_and_claimed_proofs_and_mutable_publication_facts_fail_closed() 
     drop(fresh.prepared);
     cleaned(fresh.root.path(), &fresh.budget).await?;
     fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reviewed_merge_requires_native_ancestry_without_a_fast_forward_branch_rule() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let fixture = Fixture::new(format).await?;
+        let graph = assembled(&fixture, [241; 16], 16).await?;
+        let changes = plan(vec![
+            update(
+                "refs/heads/merge",
+                Some((graph.initial, 1)),
+                Some(graph.tip),
+            ),
+            update(
+                "refs/heads/unrelated",
+                Some((graph.initial, 1)),
+                Some(graph.other),
+            ),
+            update(
+                "refs/heads/backwards",
+                Some((graph.tip, 1)),
+                Some(graph.initial),
+            ),
+            update(
+                "refs/heads/unchanged",
+                Some((graph.tip, 1)),
+                Some(graph.tip),
+            ),
+            update("refs/heads/created", None, Some(graph.tip)),
+            update("refs/heads/deleted", Some((graph.initial, 1)), None),
+        ]);
+        let before = state(&fixture.handle).await?;
+        let proof = graph
+            .prepared
+            .ref_proof_with_required_ancestry(
+                changes.clone(),
+                graph.root.path(),
+                graph.budget.clone(),
+                limits(),
+            )
+            .await?;
+        assert_eq!(
+            proof.ancestry,
+            vec![0b0011_1001],
+            "merges require native ancestry evidence even without a branch fast-forward rule"
+        );
+        assert_eq!(
+            proof.certificate.data()?.refs_digest,
+            Some(super::super::ref_proof::binding(&changes, &proof.ancestry)?)
+        );
+        assert_eq!(
+            state(&fixture.handle).await?,
+            before,
+            "proof construction must not publish or populate SQL refs"
+        );
+        let selective = graph
+            .prepared
+            .ref_proof(
+                changes.clone(),
+                graph.root.path(),
+                graph.budget.clone(),
+                limits(),
+            )
+            .await?;
+        assert_eq!(
+            selective.ancestry,
+            vec![0b0011_1000],
+            "ordinary pushes must retain policy-driven ancestry work"
+        );
+        assert_ne!(
+            proof.certificate.data()?.refs_digest,
+            selective.certificate.data()?.refs_digest
+        );
+        let mut forged = proof.clone();
+        forged.ancestry[0] |= 2;
+        assert_ne!(
+            forged.certificate.data()?.refs_digest,
+            Some(super::super::ref_proof::binding(
+                &forged.plan,
+                &forged.ancestry
+            )?),
+            "an unrelated history cannot become proven by changing transport bits"
+        );
+        let invalid = plan(vec![update(
+            "refs/heads/not-a-commit",
+            Some((graph.initial, 1)),
+            Some(graph.blob),
+        )]);
+        assert!(matches!(
+            graph
+                .prepared
+                .ref_proof_with_required_ancestry(
+                    invalid,
+                    graph.root.path(),
+                    graph.budget.clone(),
+                    limits(),
+                )
+                .await,
+            Err(super::super::RefProofError::Invalid)
+        ));
+        assert_eq!(state(&fixture.handle).await?, before);
+
+        drop(graph.prepared);
+        cleaned(graph.root.path(), &graph.budget).await?;
+        fixture.runtime.shutdown().await?;
+    }
     Ok(())
 }

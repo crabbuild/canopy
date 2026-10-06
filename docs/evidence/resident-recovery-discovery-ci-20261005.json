@@ -1,0 +1,274 @@
+{
+  "recorded_at_utc": "2026-10-05T22:42:15.834260+00:00",
+  "base_head": "823092222fd043c2a0e3ce7deab8cdab40cd097c",
+  "host": "macOS, Rust 1.98.0; current-head Linux qualification required",
+  "release_qualified": false,
+  "source_files": 519,
+  "rust_files": 501,
+  "source_hash_digest": "923f13824b06e38897b342cbd837e716ba5771966efbe56b50b833b927605f45",
+  "source_manifest": "/tmp/canopy-resident-recovery-race-final-source.json",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML path to its file SHA256",
+  "source_unchanged_during_validation": true,
+  "validation": {
+    "source_digest": "923f13824b06e38897b342cbd837e716ba5771966efbe56b50b833b927605f45",
+    "phases": [
+      {
+        "name": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "resident_discovery_defers_registered_root_until_live_producer_handoff",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 1.39,
+        "log": "/tmp/canopy-resident-recovery-race-final-focused-final.log",
+        "log_sha256": "9f57a1c5372fee91183e774492c577ba6d0e3e4c30ce870bb6ca14c14519ccb5",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.43s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "discovery",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::tests::recovery_discovery::",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 2.23,
+        "log": "/tmp/canopy-resident-recovery-race-final-discovery-final.log",
+        "log_sha256": "ed024e9f2276f1a8edfcfac38ec19d54509cb2f8bbebee62a27c2fb58c74bc6b",
+        "summaries": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 745 filtered out; finished in 1.84s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "staged",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::tests::staging_service::publication::",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 3.43,
+        "log": "/tmp/canopy-resident-recovery-race-final-staged-final.log",
+        "log_sha256": "2b39b293a537301fb9fb536ce7f6dabdbd4cc785ec232979ead16f5b75a3fef9",
+        "summaries": [
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 737 filtered out; finished in 3.04s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "registry",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::registry::tests::production_registers_packed_and_policy_metadata_contracts",
+          "--locked",
+          "--",
+          "--exact"
+        ],
+        "exit_code": 0,
+        "seconds": 0.43,
+        "log": "/tmp/canopy-resident-recovery-race-final-registry-final.log",
+        "log_sha256": "36163c43a9d9d49855aaa365245f0989c5412865912f931f86f90f430e13a8f9",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.07s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 40.67,
+        "log": "/tmp/canopy-resident-recovery-race-final-clippy-final.log",
+        "log_sha256": "1f2390b5b69a58446bab65b3c146a59cc5d75161ce06c5ad478670688fff4523",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "library",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 357.74,
+        "log": "/tmp/canopy-resident-recovery-race-final-library-final.log",
+        "log_sha256": "cd0b306e13443439550a017d7b060ec820225369475a98f3e2af44be7cbc8062",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.09s",
+          "test result: ok. 747 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 356.78s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "history",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--test",
+          "multi_server",
+          "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+          "--locked",
+          "--",
+          "--exact"
+        ],
+        "exit_code": 0,
+        "seconds": 64.53,
+        "log": "/tmp/canopy-resident-recovery-race-final-history-final.log",
+        "log_sha256": "1080f3b7b8a0486c4ec412fc5a6df1c7daae8d6e7b0fcd7c2fcf696161b0e7ef",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 8.76s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 41.99,
+        "log": "/tmp/canopy-resident-recovery-race-final-build-final.log",
+        "log_sha256": "2fb5ee3e0c93f986baf18411573eb6a8eb0ab49ad1d68f8032148b56d7e7a923",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.3,
+        "log": "/tmp/canopy-resident-recovery-race-final-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 42.08,
+        "log": "/tmp/canopy-resident-recovery-race-final-harness-final.log",
+        "log_sha256": "461ca7bc24683d2d817838e6659f3190da63952e09fee985385bce03f1ee6a6e",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.04,
+        "log": "/tmp/canopy-resident-recovery-race-final-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "complete": true,
+    "release_qualified": false,
+    "source_unchanged": true
+  },
+  "failing_first": {
+    "reason": "Actual Cell root recovery discovery submits and retires a newly registered original while its live producer is paused before held handoff; submitted=1, release_submitted=1, expected no submission. The new resident constructor carried but did not consult staging ownership in this failing-first run.",
+    "path": "/tmp/canopy-resident-recovery-race-before.log",
+    "sha256": "627868a835cbeec9efa7cc60e8cda1f02193707c0ac343db35d6b84f14544443",
+    "summaries": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.23s"
+    ]
+  },
+  "first_fixed": {
+    "path": "/tmp/canopy-resident-recovery-race-after.log",
+    "sha256": "be6a9c0de778b148b815d1262d18d234e8901a68aefb2c485eabe94de550ad0a",
+    "summaries": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.65s"
+    ]
+  },
+  "causal_fix": "Production root discovery shares the existing staging coordinator. An already admitted cold ticket is checked first; otherwise only exact bound LeaseCheck ownership defers discovery. No duplicate guard, SDK identity, recovery journal or schema is weakened.",
+  "regression_scope": [
+    "Both SHA-1 and SHA-256; producer paused after actual durable registration; two complete discovery passes leave original SDK acceptance absent and queue admissions zero; the same registered command then publishes through its live staging owner.",
+    "Equal logical UUID with another artifact operation, actor or admission sequence cannot defer discovery. Existing cold recovery, uncertain command and held-publication tests retain their original assertions."
+  ],
+  "historical_full_workspace": "docs/evidence/native-candidate-verification-ci-20261005.json",
+  "historical_full_totals": {
+    "passed": 871,
+    "failed": 23,
+    "ignored": 9
+  },
+  "qualification_limits": [
+    "Focused current-source gates are not a full green workspace claim. The previous complete macOS inventory and its source digest remain historical evidence, not a run of this source.",
+    "Parent Linux PR/push jobs both fail the branch-deletion family with HTTP500/logical publication already admitted. Exact current-head Linux jobs and full release gates still required.",
+    "Generated candidate Ready/catalog/fetch-ref publication, generated reviewed merge, default-branch/thread writers, peer/backup recovery, selective fetch, complete retention/GC/final DDL, acceleration/fair maintenance, attribution and large-team load proof remain open.",
+    "No test was ignored or assertion weakened, and no Verify workflow was changed. Existing macOS oversized compact-unwind linker warning remains recorded."
+  ]
+}

@@ -18,6 +18,7 @@ use std::sync::Arc;
 mod codec;
 pub(in crate::packs) mod graph_spool;
 mod native;
+mod sparse;
 pub use native::{NativeFileStats, NativeReadError};
 mod files;
 pub use files::{CatalogFileLimits, CatalogFileStats, CatalogFiles, MAX_OPEN_CATALOG_FILES};

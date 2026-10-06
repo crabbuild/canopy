@@ -9,9 +9,9 @@ use crate::packs::{
         index::{IndexError, NodeRef},
         snapshot::DirectorySnapshot,
     },
-    metadata::{MetadataError, MetadataLimits, MetadataSegment},
+    metadata::{MetadataError, MetadataLimits, MetadataSegment, StoredSegment},
     sources::{NativePackDescriptor, SourceIndex, SourceRecord, SourceRoot},
-    verification::{PhysicalError, PhysicalPackWitness},
+    verification::{PhysicalError, PhysicalPackWitness, StagedNativeMetadata},
 };
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_ltx::DiskBudget;
@@ -162,6 +162,7 @@ async fn merge_sources(
 /// subtrees are reused; only exact verified incoming shards insert new leaves.
 /// Failure/cancellation poisons the operation and never yields PreparedCatalog.
 pub struct CatalogPreparation {
+    staging: Option<StagingContext>,
     base: Arc<PreparationBaseResolver>,
     store: Arc<ArtifactStore>,
     sources: Arc<SourceIndex>,
@@ -170,6 +171,7 @@ pub struct CatalogPreparation {
     snapshot: DirectorySnapshot,
     directory: Option<DirectoryBuilder>,
     budget: DiskBudget,
+    input_limits: MetadataLimits,
     output_limits: MetadataLimits,
     closure: Option<ClosureVerifier>,
     active: Option<NativePackDescriptor>,
@@ -204,13 +206,57 @@ impl CatalogPreparation {
         limits: MetadataLimits,
         output_limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
+        Self::new_inner(root, budget, base, limits, output_limits, None).await
+    }
+    /// Production construction retains the admitted worker through every
+    /// detached assembler job, while the finished private proof owns no worker.
+    pub async fn new_staged(
+        context: &StagingContext,
+        root: &Path,
+        budget: DiskBudget,
+        base: Arc<PreparationBaseResolver>,
+        limits: MetadataLimits,
+    ) -> Result<Self, CatalogPreparationError> {
+        context.ensure_live().map_err(PhysicalError::from)?;
+        if context.token().map_err(PhysicalError::from)? != base.context_token()
+            || context.format() != base.context().format
+        {
+            return Err(CatalogPreparationError::Integrity);
+        }
+        Self::new_inner(
+            root,
+            budget,
+            base,
+            limits,
+            MetadataLimits {
+                max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
+                ..limits
+            },
+            Some(context.clone()),
+        )
+        .await
+    }
+    async fn new_inner(
+        root: &Path,
+        budget: DiskBudget,
+        base: Arc<PreparationBaseResolver>,
+        limits: MetadataLimits,
+        output_limits: MetadataLimits,
+        staging: Option<StagingContext>,
+    ) -> Result<Self, CatalogPreparationError> {
         DirectoryPartitioner::validate_limits(output_limits)?;
         let (lease, deadline) = base.live_lease()?;
         let indexes = base.indexes();
         let (snapshot, source_root) = base.catalog_parts();
         let root = root.to_owned();
+        let activity = staging.as_ref().map_or_else(
+            || Arc::new(()) as crate::git_objects::ReadOwner,
+            StagingContext::physical_owner,
+        );
         let work = async {
+            let workspace_activity = activity.clone();
             let workspace = tokio::task::spawn_blocking(move || {
+                let _activity = workspace_activity;
                 tempfile::Builder::new()
                     .prefix("canopy-catalog-preparation-")
                     .tempdir_in(root)
@@ -219,15 +265,17 @@ impl CatalogPreparation {
             })
             .await??;
             let context = base.context();
-            let closure = ClosureVerifier::new_in_workspace(
+            let closure = ClosureVerifier::new_in_workspace_owned(
                 Arc::clone(&workspace),
                 budget.clone(),
                 context,
                 limits,
+                activity.clone(),
             )
             .await?;
             let directory_budget = budget.clone();
             let directory = tokio::task::spawn_blocking(move || {
+                let _activity = activity;
                 let mut builder = DirectoryBuilder::new(
                     workspace.path(),
                     directory_budget,
@@ -242,6 +290,7 @@ impl CatalogPreparation {
             .await??;
             base.live_lease()?;
             Ok(Self {
+                staging,
                 base,
                 store: indexes.store(),
                 sources: indexes.sources(),
@@ -250,6 +299,7 @@ impl CatalogPreparation {
                 snapshot,
                 directory: Some(directory),
                 budget,
+                input_limits: limits,
                 output_limits,
                 closure: Some(closure),
                 active: None,
@@ -266,7 +316,16 @@ impl CatalogPreparation {
             return Err(CatalogPreparationError::Integrity);
         }
         self.failed = true;
+        if let Some(context) = &self.staging {
+            context.ensure_live().map_err(PhysicalError::from)?;
+        }
         Ok(self.base.live_lease()?.1)
+    }
+    fn physical_owner(&self) -> crate::git_objects::ReadOwner {
+        self.staging.as_ref().map_or_else(
+            || Arc::new(()) as crate::git_objects::ReadOwner,
+            StagingContext::physical_owner,
+        )
     }
     pub fn begin_pack(
         &mut self,
@@ -326,7 +385,7 @@ impl CatalogPreparation {
         segment: Arc<MetadataSegment>,
     ) -> Result<(), CatalogPreparationError> {
         let deadline = self.start()?;
-        timeout_at(deadline, self.add_inner(segment))
+        timeout_at(deadline, self.add_inner(segment, None))
             .await
             .map_err(|_| PreparationBaseError::Inactive)??;
         self.base.live_lease()?;
@@ -336,6 +395,7 @@ impl CatalogPreparation {
     async fn add_inner(
         &mut self,
         segment: Arc<MetadataSegment>,
+        stored: Option<StoredSegment>,
     ) -> Result<(), CatalogPreparationError> {
         let native = self.active.ok_or(CatalogPreparationError::Integrity)?;
         self.closure
@@ -348,15 +408,25 @@ impl CatalogPreparation {
             .take()
             .ok_or(CatalogPreparationError::Integrity)?;
         let pinned = Arc::clone(&segment);
+        let activity = self.physical_owner();
         self.directory = Some(
             tokio::task::spawn_blocking(move || {
+                let _activity = activity;
                 let mut directory = directory;
                 directory.add_segment(&pinned)?;
                 Ok::<_, MetadataError>(directory)
             })
             .await??,
         );
-        let metadata = segment.upload(&self.store).await?;
+        let metadata = match stored {
+            Some(stored) if stored.segment == segment.descriptor() => stored,
+            Some(_) => return Err(CatalogPreparationError::Integrity),
+            None => {
+                segment
+                    .upload_owned(&self.store, self.physical_owner())
+                    .await?
+            }
+        };
         let record = SourceRecord {
             metadata,
             pack: native.pack,
@@ -377,6 +447,61 @@ impl CatalogPreparation {
                 .await?,
         );
         Ok(())
+    }
+    /// Consume the complete physical witness and its admitted ordinal replay.
+    /// Download/authenticate/copy one shard at a time; reuse each uploaded
+    /// SourceRecord instead of uploading metadata again during bound assembly.
+    pub async fn add_staged_pack(
+        &mut self,
+        input: StagedNativeMetadata,
+    ) -> Result<(), CatalogPreparationError> {
+        let deadline = self.start()?;
+        let context = self
+            .staging
+            .clone()
+            .ok_or(CatalogPreparationError::Integrity)?;
+        // The complete operation is poisoned on cancellation, including a
+        // failed/absent provider artifact or an incomplete descriptor replay.
+        let result = timeout_at(deadline, async {
+            let native = input.witness.native();
+            self.failed = false;
+            self.begin_retained_pack(input.witness).await?;
+            self.failed = true;
+            let workspace = self
+                .directory
+                .as_ref()
+                .ok_or(CatalogPreparationError::Integrity)?
+                .workspace();
+            let root = workspace
+                .as_ref()
+                .ok_or(CatalogPreparationError::Integrity)?
+                .path();
+            let mut offset = 0;
+            while let Some((stored, end)) = input.replay.next(&context, native, offset).await? {
+                context.ensure_live().map_err(PhysicalError::from)?;
+                let segment = MetadataSegment::download_owned(
+                    root,
+                    self.budget.clone(),
+                    &self.store,
+                    stored,
+                    self.input_limits,
+                    None,
+                    context.physical_owner(),
+                )
+                .await?;
+                self.add_inner(segment, Some(stored)).await?;
+                offset = end;
+            }
+            context.ensure_live().map_err(PhysicalError::from)?;
+            self.failed = false;
+            self.finish_pack().await
+        })
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)?;
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
     }
     pub async fn finish_pack(&mut self) -> Result<(), CatalogPreparationError> {
         let deadline = self.start()?;
@@ -418,9 +543,11 @@ impl CatalogPreparation {
             .directory
             .take()
             .ok_or(CatalogPreparationError::Integrity)?;
-        let budget = self.budget;
+        let budget = self.budget.clone();
         let limits = self.output_limits;
+        let activity = self.physical_owner();
         let (partitioner, witness) = tokio::task::spawn_blocking(move || {
+            let _activity = activity;
             if witness.object_count() == 0 {
                 drop(directory);
                 Ok((None, witness))
@@ -437,7 +564,9 @@ impl CatalogPreparation {
         let mut incoming_root = None;
         if let Some(mut partitioner) = partitioner {
             loop {
+                let activity = self.physical_owner();
                 let (next, retained) = tokio::task::spawn_blocking(move || {
+                    let _activity = activity;
                     let next = partitioner.next_run()?;
                     Ok::<_, MetadataError>((next, partitioner))
                 })
@@ -446,7 +575,7 @@ impl CatalogPreparation {
                 let Some(run) = next else {
                     break;
                 };
-                let stored = run.upload(&self.store).await?;
+                let stored = run.upload_owned(&self.store, self.physical_owner()).await?;
                 incoming_root = Some(
                     index
                         .insert(incoming_root, context.operation, stored)

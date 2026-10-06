@@ -10,7 +10,8 @@ mod spool;
 pub use spool::VerifiedObject;
 pub(super) mod physical;
 pub use physical::{
-    PhysicalError, PhysicalLimits, PhysicalPackWitness, PhysicalPartition, PhysicalVerifier,
+    NativeMetadataLimits, PhysicalError, PhysicalLimits, PhysicalPackWitness, PhysicalPartition,
+    PhysicalVerifier, StagedNativeMetadata,
 };
 
 /// The service retains its admitted private native workspace and process

@@ -33,6 +33,10 @@ pub use session::PreparationSession;
 mod base;
 pub use base::{PreparationBaseError, PreparationBaseResolver};
 mod certificate;
+mod commit_membership;
+mod ref_observation;
+pub(crate) use commit_membership::{CommitMembership, MembershipRequest};
+pub(crate) use ref_observation::{REF_SELECTION_BYTES, RefSelection};
 pub(in crate::packs) mod codec;
 pub use certificate::{
     AttestationOutcome, CERTIFICATE_BYTES, CatalogCertificate, RegisteredCatalog,
@@ -51,6 +55,17 @@ pub use initialization::{
 };
 mod ref_snapshot;
 pub use ref_snapshot::{PreparedRefSnapshot, RefSnapshotPreparationError};
+mod native_head;
+pub use native_head::{
+    HeadRequest, NATIVE_HEAD_BYTES, NativeHeadPreparationError, NativeHeadProof, PublishNativeHead,
+};
+mod native_candidate;
+pub use native_candidate::NativeCandidateVerificationError;
+mod native_merge;
+pub use native_merge::audit::NativeMergeAuditError;
+pub use native_merge::{
+    NATIVE_MERGE_BYTES, NativeMergePreparationError, NativeMergeProof, PublishReviewedMerge,
+};
 mod ref_policy;
 pub use ref_policy::{
     CheckRefPolicyGuard, MAX_REF_POLICY_GUARDS, MAX_REF_POLICY_WATCHES, PreparedRefPolicyGuard,
@@ -77,9 +92,10 @@ pub use coordinator::{
     PublicationClass, PublicationCoordinator, PublicationError, PublicationLimits,
     PublicationOutcome, PublicationScheduleError, PublicationState, PublicationStats,
     PublicationTicket, ReadyBoundRecovery, ReadyCatalogCompaction, ReadyCatalogPush,
-    ReadyInitialization, ReadyNativeInputs, ReadyPreparation, ReadyPublication, ReadyRefPolicyPage,
-    ReadyRootPush, RecoveryBindingFailure, RefPolicyReadyError, RefPolicyRefusalFailure,
-    RegisteredNativeInputs, RootPushReadyError, ServingDrainAdmission,
+    ReadyInitialization, ReadyNativeHead, ReadyNativeInputs, ReadyNativeMerge, ReadyPreparation,
+    ReadyPublication, ReadyRefPolicyPage, ReadyRootPush, RecoveryBindingFailure,
+    RefPolicyReadyError, RefPolicyRefusalFailure, RegisteredNativeInputs, RootPushReadyError,
+    ServingDrainAdmission,
 };
 pub use scan::{RecoveryScanBudget, RecoveryScanSettings};
 mod commands;
@@ -98,6 +114,7 @@ pub use recovery::{
     TerminalReleaseInput, TerminalReleaseReply,
 };
 mod staging_service;
+pub(crate) use staging_service::StagingBudget;
 pub use staging_service::{
     ReadyStaging, StagedInputsTicket, StagedPublicationFailure, StagedPublicationTicket,
     StagingBound, StagingContext, StagingCoordinator, StagingError, StagingLimits, StagingState,
@@ -246,6 +263,17 @@ pub struct MaintenanceRequest {
 /// Bind the packed production contract. Inline publication/completion adapters
 /// are deliberately excluded; qualification binds its historical fixtures itself.
 pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
+    registry.bind_command::<PublishReviewedMerge>()?;
+    registry.bind_command::<PublishNativeHead>()?;
+    registry.bind_command::<PublishNativeCandidate>()?;
+    registry.bind_command::<crate::branch_rules::command::SetBranchRule>()?;
+    registry.bind_command::<crate::checks::native::StartCommitCheck>()?;
+    registry.bind_query::<crate::checks::native::ReadCommitChecks>()?;
+    registry.bind_command::<crate::pulls::native::CreateNativePull>()?;
+    registry.bind_command::<crate::pulls::native::ReviewNativePull>()?;
+    registry.bind_command::<crate::pulls::native::CreateNativeThread>()?;
+    registry.bind_command::<crate::pulls::candidates::command::PrepareCandidate>()?;
+    registry.bind_query::<crate::pulls::native::ReadNativePulls>()?;
     registry.bind_command::<ReleaseServingPin>()?;
     registry.bind_query::<CheckServingPin>()?;
     registry.bind_query::<SelectServingGeneration>()?;
@@ -275,3 +303,12 @@ pub fn register(registry: &mut RegistryBuilder) -> cellule_runtime::Result<()> {
 }
 #[cfg(test)]
 mod tests;
+
+mod candidate_publication;
+pub use candidate_publication::audit::NativeCandidateAuditError;
+pub use candidate_publication::{
+    CandidatePublicationReply, NATIVE_CANDIDATE_BYTES, NativeCandidateProof,
+    NativeCandidatePublicationError, PublishNativeCandidate,
+};
+
+pub(crate) mod backup;

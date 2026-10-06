@@ -41,6 +41,53 @@ Final uncertainty appears as StagingState::Uncertain with the original typed Pub
 
 The inline response observer is service-internal access to an already admitted result. Root observers use root_response(store), which selects the durable actor/operation/request result under current read authorization and the original receipt before streaming authenticated bytes. Externally requested replay must use the corresponding authenticated replay_push_response or replay_root_push_response preflight. A receipt or caller-selected root grants no artifact access. Compaction results cannot become push responses. A known catalog conflict terminates this local lifecycle; a subsequent Claim and freshly reconciled proof must enter a new admitted lifecycle rather than replacing an ambiguous command.
 
+## Open gate: refusal after pre-bind Write revocation
+
+The production SSH regression `late_ssh_push_refusals_report_both_refs_and_survive_restore`
+still fails when the writer becomes a reader during native pack upload. The
+admitted operation preserves both refs and their generation, but Write-dependent
+checkpoint registration and fresh staging probes stop before a terminal response
+is committed. Post-bound policy-refusal qualification does not cover this case.
+
+The next implementation must introduce a private **refusal-only capability for
+an already admitted staging attempt**. Do not lower Begin, Claim, Bind, catalog
+proof issuance or ref publication to Read. Reuse the existing attempt token,
+actor/request digest, lease/pin, immutable request/native-result roots, bounded
+root command and exact recovery journal. The terminal capability must not open
+a catalog base, acquire a generation floor, renew preparation, or produce a
+positive completion. Its response must pass current completed-request Read
+selection, including after restore.
+
+Implement and qualify these boundaries in order:
+
+1. Authenticate the original admission and current owner, remaining expiry and
+   exact request checkpoint. A reader cannot allocate a fresh write attempt;
+   terminal preparation cannot replace an uncertain checkpoint command.
+2. Add purpose-specific custody for sealing the admitted native result after
+   revocation. Authenticate the predecessor, original wire request and creating
+   namespace. Keep generic checkpoint/proof authority unchanged. Drain the
+   actual upload/native workers before final handoff.
+3. Freeze an explicit refusal-only root completion with no publication floor.
+   Bind that constraint and the selected input checkpoint into the MAC. Reuse
+   the same immutable outcome layout and exact-command artifacts; an unbound
+   refusal cannot select the native successful report or publish any pack/ref.
+4. Permit first-writer recovery registration only for that authenticated terminal
+   purpose after Write loss. The Repository Cell must independently verify the
+   purpose, original actor/token/checkpoint, actual owner, live pin and expiry.
+   Preserve the same command through ambiguous registration and execution.
+5. Integrate terminal handoff with the existing staging worker/result drain and
+   fair dispatch, without manufacturing a bound lease or retaining a worker
+   activity in its final ready value. Success or an unrecorded synthetic `ng`
+   cannot be returned before durable completed-root selection.
+
+Required negatives include a reader starting a push, a forged purpose/body,
+wrong actor/request/checkpoint, expired or replaced attempt, stale owner, ref
+publication through terminal custody, and uncertainty followed by cancellation
+and restart. Exercise Write-to-Read revocation during upload in SHA-1 and SHA-256,
+verify both exact per-ref refusals, unchanged refs/generation, restored replay and
+unrelated writers' progress. Full access removal must not grant response replay.
+This is a pending implementation contract, not a completed authority change.
+
 ## Terminal recovery retirement
 
 After an immutable root outcome and its recovery phase are durably known, the service can start `RecoverySupervisor::start_retiring` with current repository administration and actual owner custody. It prepares a private terminal release through the existing maintenance queue, transferring the same recovery headers/journal to the selected immutable push row and freeing that preparation pin atomically. Original uncertain release commands remain charged and recoverable even after the pin disappears. Live staging uncertainty keeps its original owner. Follow the [terminal retention contract](terminal-publication-retention.md) for exact eligibility, retained edges and receipt recovery; this path grants no provider deletion authority. Production startup must wire the service as part of the mandatory hard cutover.

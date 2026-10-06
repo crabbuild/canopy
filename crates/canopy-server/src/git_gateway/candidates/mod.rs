@@ -14,7 +14,9 @@ use cellule_runtime::InvocationError;
 use std::process::{ExitStatus, Stdio};
 use tokio::io::AsyncWriteExt;
 
+mod produce;
 mod rebase;
+pub(crate) use produce::ProducedCandidate;
 
 impl GitGateway {
     pub(crate) async fn prepare_candidate(
@@ -23,9 +25,6 @@ impl GitGateway {
         number: i64,
         request: CandidateRequest,
     ) -> Result<CandidateOutcome, GatewayError> {
-        // Serialize native mutations with pushes; each candidate still gets a
-        // disposable cache. The Cell command rechecks refs and authority later.
-        let _push = self.push.lock().await;
         let identity = new_identity()?;
         let reserved = self
             .candidate_command(CandidateAction::Reserve {
@@ -41,45 +40,7 @@ impl GitGateway {
         if candidate.result != CandidateResult::Pending {
             return Ok(CandidateOutcome::Applied(candidate));
         }
-        let policy = self
-            .repository
-            .pull_review_policy(actor, number)
-            .await
-            .map_err(|error| GatewayError::Cell(Box::new(error)))?
-            .output;
-        if policy.is_none_or(|policy| {
-            !policy.ready || policy.revision.as_ref() != Some(&candidate.request.revision)
-        }) {
-            return Ok(CandidateOutcome::Conflict);
-        }
-        let cached = self.build_cache(actor, &[]).await?;
-        let result = prepare_native(&self.repository, &cached.backend, &candidate).await?;
-        if !valid_result(&result) {
-            return Err(GitHttpError::TooLarge.into());
-        }
-        cached.backend.cache.reconcile().await?;
-        if let CandidateResult::Ready { oid, .. } = &result {
-            let plan = PushPlan {
-                actor: actor.into(),
-                updates: vec![RefUpdate {
-                    name: candidate.fetch_ref(),
-                    expected: None,
-                    new_oid: Some(parse_oid(oid)?),
-                }],
-            };
-            self.persist_objects(&cached.backend, &cached.refs, &plan)
-                .await?;
-            self.repository
-                .prepare_graph(&plan)
-                .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?;
-        }
-        self.candidate_command(CandidateAction::Finish {
-            actor: actor.into(),
-            id: candidate.request.id,
-            result,
-        })
-        .await
+        self.publish_candidate(*candidate).await
     }
 
     async fn candidate_command(
@@ -99,12 +60,13 @@ impl GitGateway {
 }
 
 async fn prepare_native(
-    repository: &RepositoryCell,
+    context: &crate::packs::publication::StagingContext,
     backend: &GitHttpBackend,
     candidate: &MergeCandidate,
 ) -> Result<CandidateResult, GatewayError> {
     let revision = &candidate.request.revision;
     let related = run(
+        context,
         backend,
         &["merge-base", &revision.base_oid, &revision.source_oid],
         b"",
@@ -118,12 +80,18 @@ async fn prepare_native(
     }
     if candidate.request.strategy == MergeStrategy::Rebase {
         let common = output_oid(&related.stdout)?;
-        return rebase::prepare(repository, backend, candidate, &common).await;
+        return rebase::prepare(context, backend, candidate, &common).await;
     }
     // Native merge-tree consolidates multiple merge bases itself. Never select
     // one merge base or infer a clean result from an empty conflict-path list.
-    let (tree_oid, conflict) =
-        merge_tree(backend, &revision.base_oid, &revision.source_oid, None).await?;
+    let (tree_oid, conflict) = merge_tree(
+        context,
+        backend,
+        &revision.base_oid,
+        &revision.source_oid,
+        None,
+    )
+    .await?;
     if let Some(conflict) = conflict {
         return Ok(conflict);
     }
@@ -146,7 +114,7 @@ async fn prepare_native(
     if !message.ends_with('\n') {
         message.push('\n');
     }
-    let commit = run(backend, &args, message.as_bytes(), &environment).await?;
+    let commit = run(context, backend, &args, message.as_bytes(), &environment).await?;
     if !commit.status.success() {
         return Err(commit.error());
     }
@@ -166,6 +134,7 @@ fn output_oid(bytes: &[u8]) -> Result<String, GatewayError> {
 }
 
 async fn merge_tree(
+    context: &crate::packs::publication::StagingContext,
     backend: &GitHttpBackend,
     base: &str,
     source: &str,
@@ -184,7 +153,7 @@ async fn merge_tree(
         args.push(&explicit);
     }
     args.extend([base, source]);
-    let merged = run(backend, &args, b"", &[]).await?;
+    let merged = run(context, backend, &args, b"", &[]).await?;
     if !matches!(merged.status.code(), Some(0 | 1)) {
         return Err(merged.error());
     }
@@ -235,10 +204,21 @@ impl Output {
     }
 }
 pub(super) async fn run(
+    context: &crate::packs::publication::StagingContext,
     backend: &GitHttpBackend,
     args: &[&str],
     input: &[u8],
     environment: &[(&str, &str)],
+) -> Result<Output, GatewayError> {
+    run_owned(backend, args, input, environment, context.physical_owner()).await
+}
+
+pub(super) async fn run_owned(
+    backend: &GitHttpBackend,
+    args: &[&str],
+    input: &[u8],
+    environment: &[(&str, &str)],
+    owner: crate::git_objects::ReadOwner,
 ) -> Result<Output, GatewayError> {
     let mut command = crate::native_git::command(&backend.git_dir())?;
     command
@@ -251,7 +231,7 @@ pub(super) async fn run(
         .stderr(Stdio::piped());
     let mut process = GitProcess::spawn(
         command,
-        Arc::clone(&backend.cache),
+        (Arc::clone(&backend.cache), owner),
         backend
             .cache
             .native
@@ -281,7 +261,7 @@ pub(super) async fn run(
             drop(stdin);
             Ok::<_, GitHttpError>(())
         },
-        read_bounded(stdout, 128 * 1024),
+        read_bounded(stdout, 300 * 1024),
         read_bounded(stderr, 64 * 1024)
     )?;
     let status = process.wait().await?;

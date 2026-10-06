@@ -72,6 +72,51 @@ struct Pair {
     index: Arc<InputFile>,
 }
 impl GitHttpBackend {
+    /// Git writes its verified push certificate as a request-private loose
+    /// blob. The immutable native result retains these exact audit bytes; this
+    /// disposable blob is not an incoming pack or a reachable Git object.
+    pub(crate) async fn remove_disposable_certificate(
+        &self,
+        context: &StagingContext,
+        oid: crate::ObjectId,
+    ) -> Result<(), NativeCaptureError> {
+        context.ensure_live()?;
+        if oid.format() != context.format() {
+            return Err(NativeCaptureError::Context);
+        }
+        let cache = self.cache.clone();
+        let activity = context.physical_owner();
+        tokio::task::spawn_blocking(move || {
+            let _activity = activity;
+            let fence = crate::native_git::lock_file(
+                &cache.git_dir().join(crate::native_git::WORKER_LOCK),
+            )?;
+            fence.try_lock().map_err(std::io::Error::from)?;
+            let hex = hex::encode(oid);
+            let directory = cache.git_dir().join("objects").join(&hex[..2]);
+            match std::fs::remove_file(directory.join(&hex[2..])) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            match std::fs::remove_dir(directory) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+            fence.unlock()?;
+            Ok::<_, NativeCaptureError>(())
+        })
+        .await??;
+        self.cache.reconcile_owned(context.physical_owner()).await?;
+        context.ensure_live()?;
+        Ok(())
+    }
+
     /// Run inside a StagingTicket producer after native receive completes. The
     /// returned inputs establish authenticated bytes, not physical decoding,
     /// closure, ref authorization or a durable completed network response.
@@ -143,6 +188,9 @@ impl GitHttpBackend {
                 {
                     return Err(NativeCaptureError::Limit);
                 }
+                if NativePackDescriptor::is_empty_pair(format, &path, &index_path)? {
+                    continue;
+                }
                 let native = NativePackDescriptor::inspect_files(
                     token.repository,
                     token.artifact_operation,
@@ -171,37 +219,128 @@ impl GitHttpBackend {
         })
         .await??;
         context.ensure_live()?;
-        let mut inputs = Vec::with_capacity(pairs.len());
-        for Pair {
-            mut native,
-            pack,
-            index,
-        } in pairs
-        {
-            context.ensure_live()?;
-            native.pack = upload_file(
-                pack,
-                store,
-                native.key(ArtifactKind::Pack)?,
-                native.pack.size,
-                native.pack.digest,
-            )
-            .await?;
-            context.ensure_live()?;
-            native.index = upload_file(
-                index,
-                store,
-                native.key(ArtifactKind::Index)?,
-                native.index.size,
-                native.index.digest,
-            )
-            .await?;
-            context.ensure_live()?;
-            inputs.push(native);
-        }
-        context.ensure_live()?;
-        Ok(inputs)
+        upload_pairs(context, store, pairs).await
     }
+
+    /// Only the producer's exact newly generated pair is captured. Existing
+    /// immutable base packs and loose intermediates are never re-ingested.
+    pub(crate) async fn stage_generated_pack(
+        &self,
+        context: &StagingContext,
+        store: &ArtifactStore,
+        limits: PhysicalLimits,
+        checksum: &str,
+    ) -> Result<Vec<NativePackDescriptor>, NativeCaptureError> {
+        let token = context.token()?;
+        let format = context.format();
+        if token.repository != store.repository()
+            || format != self.cache.object_format
+            || checksum.len() != format.bytes() * 2
+            || !checksum
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(NativeCaptureError::Context);
+        }
+        let _selection = self.cache.selection.lock().await;
+        self.cache.reconcile_owned(context.physical_owner()).await?;
+        let cache = self.cache.clone();
+        let owner = context.physical_owner();
+        let checksum = checksum.to_owned();
+        let claim = cache
+            .native
+            .try_admit(crate::native_resources::NativeWork::Read)?;
+        let pair = tokio::task::spawn_blocking(move || {
+            let _claim = claim;
+            let fence = crate::native_git::lock_file(
+                &cache.git_dir().join(crate::native_git::WORKER_LOCK),
+            )?;
+            fence.try_lock().map_err(std::io::Error::from)?;
+            let pin = Arc::new(CapturePin {
+                _fence: fence,
+                cache,
+                _owner: owner,
+            });
+            let path = pin.cache.git_dir().join("objects/pack").join(format!(
+                "canopy-generated-{}-{}.pack",
+                hex::encode(token.artifact_operation),
+                checksum
+            ));
+            let index_path = path.with_extension("idx");
+            if !std::fs::symlink_metadata(&path)?.is_file()
+                || !std::fs::symlink_metadata(&index_path)?.is_file()
+            {
+                return Err(NativeCaptureError::Context);
+            }
+            if std::fs::metadata(&path)?.len() > limits.max_pack_bytes
+                || std::fs::metadata(&index_path)?.len() > limits.max_index_bytes
+            {
+                return Err(NativeCaptureError::Limit);
+            }
+            let native = NativePackDescriptor::inspect_files(
+                token.repository,
+                token.artifact_operation,
+                format,
+                &path,
+                &index_path,
+            )?;
+            if hex::encode(native.git_checksum) != checksum
+                || NativePackDescriptor::is_empty_pair(format, &path, &index_path)?
+            {
+                return Err(NativeCaptureError::Context);
+            }
+            Ok::<_, NativeCaptureError>(Pair {
+                native,
+                pack: Arc::new(InputFile {
+                    path,
+                    _pin: pin.clone(),
+                }),
+                index: Arc::new(InputFile {
+                    path: index_path,
+                    _pin: pin,
+                }),
+            })
+        })
+        .await??;
+        upload_pairs(context, store, vec![pair]).await
+    }
+}
+
+async fn upload_pairs(
+    context: &StagingContext,
+    store: &ArtifactStore,
+    pairs: Vec<Pair>,
+) -> Result<Vec<NativePackDescriptor>, NativeCaptureError> {
+    let mut inputs = Vec::with_capacity(pairs.len());
+    for Pair {
+        mut native,
+        pack,
+        index,
+    } in pairs
+    {
+        context.ensure_live()?;
+        native.pack = upload_file(
+            pack,
+            store,
+            native.key(ArtifactKind::Pack)?,
+            native.pack.size,
+            native.pack.digest,
+        )
+        .await?;
+        context.ensure_live()?;
+        native.index = upload_file(
+            index,
+            store,
+            native.key(ArtifactKind::Index)?,
+            native.index.size,
+            native.index.digest,
+        )
+        .await?;
+        context.ensure_live()?;
+        inputs.push(native);
+    }
+    context.ensure_live()?;
+    Ok(inputs)
 }
 
 #[cfg(test)]

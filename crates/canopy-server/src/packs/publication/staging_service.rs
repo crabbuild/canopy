@@ -20,6 +20,7 @@ use tokio::{
 
 mod bound;
 use bound::accept_bound;
+mod driver;
 mod publication;
 mod restore;
 mod retirement;
@@ -97,6 +98,8 @@ pub enum StagingError {
     Clock,
     #[error("staging worker panicked")]
     Worker,
+    #[error("owned push workflow failed: {0}")]
+    DriverFailure(Box<str>),
     #[error("input preparation failed")]
     Input(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("staging begin failed")]
@@ -324,6 +327,7 @@ struct ActorAdmission {
 #[derive(Default)]
 struct Admission {
     closed: bool,
+    paused: bool,
     retirement_probe: bool,
     retirement_probes: u64,
     retirement_failures: u64,
@@ -332,15 +336,28 @@ struct Admission {
     jobs: HashMap<[u8; 16], Arc<Job>>,
     actors: HashMap<String, ActorAdmission>,
 }
+#[cfg(test)]
+type CheckpointProbeGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 struct Inner {
     authority: PreparationAuthority,
     target: CellTarget,
     limits: StagingLimits,
+    budget: StagingBudget,
+    resident: Option<(
+        CellClient,
+        PublicationCoordinator,
+        Arc<canopy_object_storage::artifact::ArtifactStore>,
+    )>,
     admission: Mutex<Admission>,
     workers: Arc<Semaphore>,
     drained: Notify,
     #[cfg(test)]
     fault: std::sync::atomic::AtomicU8,
+    #[cfg(test)]
+    checkpoint_probe_gate: Mutex<Option<CheckpointProbeGate>>,
 }
 struct Local {
     lease: Option<StagingLease>,
@@ -360,6 +377,10 @@ struct Local {
     fenced: bool,
     recovery: bool,
     renew: bool,
+    driver_started: bool,
+    driver_graceful: bool,
+    // Diagnostic only: rejected producer values can own physical worker pins.
+    driver_failure: Option<Arc<StagingError>>,
 }
 trait RetainedWork: Any + Send + Sync {
     fn fence_completed(&self);
@@ -376,8 +397,12 @@ struct Job {
     target: CellTarget,
     actor: String,
     operation: [u8; 16],
+    request_digest: [u8; 32],
+    driver: Mutex<Option<driver::DriverJoin>>,
+    driver_stop: tokio_util::sync::CancellationToken,
     restored_evidence: Option<cellule_runtime::PendingMutation>,
     actor_workers: Arc<Semaphore>,
+    operation_permit: Mutex<Option<crate::admission::AdmissionPermit>>,
     local: Mutex<Local>,
     work: Mutex<WorkSlots>,
     exact: Mutex<Option<Exact>>,
@@ -591,11 +616,92 @@ pub struct StagingStats {
     pub retirement_restarts: u64,
     pub retirement_running: bool,
 }
+/// Node-wide capacity shared by every resident repository. Physical worker
+/// claims are retained by the existing activity owner, including detached work.
+#[derive(Clone)]
+pub(crate) struct StagingBudget {
+    operations: Arc<crate::admission::AccountAdmission>,
+    workers: Arc<crate::admission::AccountAdmission>,
+}
+impl StagingBudget {
+    pub(crate) fn new(operations: usize, workers: usize) -> Result<Self, StagingError> {
+        if operations < 2 || workers < 2 {
+            return Err(StagingError::InvalidLimits);
+        }
+        Ok(Self {
+            operations: Arc::new(crate::admission::AccountAdmission::new(
+                operations,
+                "node staging operations",
+                "account staging operations",
+            )),
+            workers: Arc::new(crate::admission::AccountAdmission::new(
+                workers,
+                "node staging workers",
+                "account staging workers",
+            )),
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn available(&self) -> (usize, usize) {
+        (self.operations.available(), self.workers.available())
+    }
+}
+/// Pauses an idle resident while its other services attempt eviction. A busy
+/// serving pool or a canceled eviction restores admission through this guard.
+pub(crate) struct StagingQuiescence {
+    inner: Arc<Inner>,
+}
+impl StagingQuiescence {
+    pub(crate) fn commit(self) {
+        self.inner
+            .admission
+            .lock()
+            .expect("staging admission")
+            .closed = true;
+    }
+}
+impl Drop for StagingQuiescence {
+    fn drop(&mut self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.paused = false;
+    }
+}
 impl StagingCoordinator {
+    /// Discovery may defer only to this exact bound attempt, including its
+    /// actor, owner epoch, admission sequence and artifact operation. A reused
+    /// logical UUID or an unrelated historical pin is insufficient.
+    pub(in crate::packs::publication) fn owns_bound(&self, check: &LeaseCheck) -> bool {
+        let Some(ticket) = self.pending(check.token.operation) else {
+            return false;
+        };
+        let local = ticket.job.local.lock().expect("staging local");
+        local
+            .bound
+            .as_ref()
+            .is_some_and(|session| session.check == *check)
+    }
+    pub(in crate::packs::publication) fn matches_target(&self, target: &CellTarget) -> bool {
+        self.inner.target == *target
+    }
     pub fn new(
         target: CellTarget,
         limits: StagingLimits,
         authority: PreparationAuthority,
+    ) -> Result<Self, StagingError> {
+        limits.validate()?;
+        // Standalone coordinators keep their original per-repository limits.
+        // Production residents share a node budget through new_with_budget.
+        let budget = StagingBudget::new(
+            limits.operations.max(limits.per_actor * 2),
+            limits.workers.max(limits.workers_per_actor * 2),
+        )?;
+        Self::new_with_budget(target, limits, authority, budget)
+    }
+    pub(crate) fn new_with_budget(
+        target: CellTarget,
+        limits: StagingLimits,
+        authority: PreparationAuthority,
+        budget: StagingBudget,
     ) -> Result<Self, StagingError> {
         limits.validate()?;
         if !authority.matches(&target) {
@@ -606,11 +712,15 @@ impl StagingCoordinator {
                 authority,
                 target,
                 limits,
+                budget,
+                resident: None,
                 admission: Mutex::new(Admission::default()),
                 workers: Arc::new(Semaphore::new(limits.workers)),
                 drained: Notify::new(),
                 #[cfg(test)]
                 fault: std::sync::atomic::AtomicU8::new(0),
+                #[cfg(test)]
+                checkpoint_probe_gate: Mutex::new(None),
             }),
         })
     }
@@ -622,7 +732,7 @@ impl StagingCoordinator {
         let mut admission = self.inner.admission.lock().expect("staging admission");
         let error = if ready.inner.target != self.inner.target {
             Some(StagingError::Foreign)
-        } else if admission.closed {
+        } else if admission.closed || admission.paused {
             Some(StagingError::Closed)
         } else if !matches!(ready.inner.command, Exact::Restored(_))
             && ready.inner.request.lease_ms != self.inner.limits.lease_ms
@@ -645,6 +755,15 @@ impl StagingCoordinator {
         if let Some(error) = error {
             return Err((error, ready));
         }
+        let operation_permit = match self
+            .inner
+            .budget
+            .operations
+            .try_acquire(crate::ReadIdentity::Account(&ready.inner.request.actor))
+        {
+            Ok(permit) => permit,
+            Err(_) => return Err((StagingError::Capacity, ready)),
+        };
         let actor = admission
             .actors
             .entry(ready.inner.request.actor.clone())
@@ -665,8 +784,12 @@ impl StagingCoordinator {
             target: ready.inner.target,
             actor: ready.inner.request.actor,
             operation: ready.inner.request.operation,
+            request_digest: ready.inner.request.request_digest,
+            driver: Mutex::new(None),
+            driver_stop: tokio_util::sync::CancellationToken::new(),
             restored_evidence,
             actor_workers,
+            operation_permit: Mutex::new(Some(operation_permit)),
             local: Mutex::new(Local {
                 lease: None,
                 bound: None,
@@ -687,6 +810,9 @@ impl StagingCoordinator {
                 fenced: false,
                 recovery: false,
                 renew: false,
+                driver_started: false,
+                driver_graceful: false,
+                driver_failure: None,
             }),
             work: Mutex::new(WorkSlots::default()),
             exact: Mutex::new(Some(ready.inner.command)),
@@ -754,39 +880,114 @@ impl StagingCoordinator {
             retirement_running: a.retirement_probe,
         }
     }
+    pub(crate) fn try_quiesce(&self) -> Option<StagingQuiescence> {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        if admission.paused || !admission.jobs.is_empty() || admission.retirement_probe {
+            return None;
+        }
+        admission.paused = true;
+        Some(StagingQuiescence {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+    /// Seal node admission while already-owned receive workflows finish. Other
+    /// callback producers retain their existing cancel-and-physical-drain contract.
+    pub(crate) fn close_admission(&self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.closed = true;
+        for job in admission.jobs.values() {
+            let mut local = job.local.lock().expect("staging local");
+            if !local.driver_graceful {
+                local.stop = true;
+                job.driver_stop.cancel();
+                job.changed.notify_one();
+            }
+        }
+    }
+
+    pub(crate) async fn finish_receive_workflows(&self) {
+        let jobs: Vec<_> = self
+            .inner
+            .admission
+            .lock()
+            .expect("staging admission")
+            .jobs
+            .values()
+            .cloned()
+            .collect();
+        // Timeout abandons only this join observer. Forced close below retains
+        // and joins every actual controller, worker and uncertain command.
+        let _ = tokio::time::timeout(
+            Duration::from_secs(30),
+            futures_util::future::join_all(jobs.iter().map(|job| driver::drain(job))),
+        )
+        .await;
+    }
+
+    pub(crate) fn close(&self) {
+        let mut admission = self.inner.admission.lock().expect("staging admission");
+        admission.closed = true;
+        for job in admission.jobs.values() {
+            job.local.lock().expect("staging local").stop = true;
+            job.driver_stop.cancel();
+            job.changed.notify_one();
+        }
+        self.inner.drained.notify_waiters();
+    }
     /// Stop admission and renew while accepted workers drain. Uncertain exact
     /// commands remain charged and returned; explicit recovery remains possible.
     pub async fn close_and_drain(&self) -> Vec<StagingTicket> {
+        self.close();
         loop {
             let wake = self.inner.drained.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
-            {
-                let mut a = self.inner.admission.lock().expect("staging admission");
-                a.closed = true;
-                for job in a.jobs.values() {
-                    job.local.lock().expect("staging local").stop = true;
-                    job.changed.notify_one();
-                }
+            let pending = {
+                let a = self.inner.admission.lock().expect("staging admission");
                 if a.jobs.values().all(|j| {
                     matches!(*j.status.borrow(), StagingState::Uncertain(_))
                         && j.local.lock().expect("staging local").workers == 0
                 }) {
-                    return a
-                        .jobs
-                        .values()
-                        .map(|job| StagingTicket {
-                            inner: Arc::clone(&self.inner),
-                            job: Arc::clone(job),
-                        })
-                        .collect();
+                    Some(
+                        a.jobs
+                            .values()
+                            .map(|job| StagingTicket {
+                                inner: Arc::clone(&self.inner),
+                                job: Arc::clone(job),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
                 }
+            };
+            if let Some(pending) = pending {
+                for ticket in &pending {
+                    driver::drain(&ticket.job).await;
+                }
+                return pending;
             }
             wake.await;
         }
     }
     #[cfg(test)]
-    pub(super) fn fault_for_test(&self, fault: u8) {
+    pub(crate) fn pause_checkpoint_probe_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, receive) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        *self
+            .inner
+            .checkpoint_probe_gate
+            .lock()
+            .expect("checkpoint gate") = Some((entered, wait));
+        (receive, release)
+    }
+    #[cfg(test)]
+    pub(crate) fn fault_for_test(&self, fault: u8) {
         self.inner
             .fault
             .store(fault, std::sync::atomic::Ordering::Release);
@@ -821,6 +1022,25 @@ pub struct StagedInputsTicket {
     registration: Arc<InputRegistration>,
 }
 impl StagedInputsTicket {
+    /// Order the next producer after the controller has installed its fresh
+    /// phase. `wait` independently retains the original committed receipt.
+    pub(crate) async fn wait_ready(&self) -> Result<Receipt, Arc<StagingError>> {
+        let receipt = self.wait().await?;
+        let mut state = self.job.status.subscribe();
+        loop {
+            match state.borrow_and_update().clone() {
+                StagingState::Active(_) | StagingState::Bound(_) => return Ok(receipt),
+                StagingState::Uncertain(error) | StagingState::Fenced(error) => return Err(error),
+                StagingState::Stopped | StagingState::Published(_) => {
+                    return Err(Arc::new(StagingError::Inactive));
+                }
+                _ => {}
+            }
+            if state.changed().await.is_err() {
+                return Err(Arc::new(StagingError::Worker));
+            }
+        }
+    }
     /// Observe the original durable registration receipt. An uncertain error
     /// retains the exact command in the coordinator; recover and wait again.
     /// A receipt is not a fresh authority or lease observation.
@@ -844,7 +1064,7 @@ impl StagedInputsTicket {
 }
 impl StagingTicket {
     #[cfg(test)]
-    pub(super) fn custody_evidence_for_test(
+    pub(crate) fn custody_evidence_for_test(
         &self,
     ) -> Option<(
         cellule_runtime::PendingMutation,
@@ -969,6 +1189,26 @@ impl StagingTicket {
             }
         }
     }
+    /// Observe final publication without treating the intermediate Bound phase
+    /// as completion. Cancellation only drops this watch receiver.
+    pub async fn wait_completion(&self) -> StagingState {
+        let mut status = self.job.status.subscribe();
+        loop {
+            let state = status.borrow_and_update().clone();
+            if matches!(
+                state,
+                StagingState::Published(_)
+                    | StagingState::Uncertain(_)
+                    | StagingState::Fenced(_)
+                    | StagingState::Stopped
+            ) {
+                return state;
+            }
+            if status.changed().await.is_err() {
+                return status.borrow().clone();
+            }
+        }
+    }
     pub async fn wait_terminal(&self) -> StagingState {
         let mut status = self.job.status.subscribe();
         loop {
@@ -1000,6 +1240,7 @@ impl StagingTicket {
     }
     pub fn stop(&self) {
         self.job.local.lock().expect("staging local").stop = true;
+        self.job.driver_stop.cancel();
         self.job.changed.notify_one();
     }
     pub async fn open_base(
@@ -1097,6 +1338,12 @@ impl StagingTicket {
         let actor_permit = Arc::clone(&self.job.actor_workers)
             .try_acquire_owned()
             .map_err(|_| StagingError::Capacity)?;
+        let node_permit = self
+            .inner
+            .budget
+            .workers
+            .try_acquire(crate::ReadIdentity::Account(&self.job.actor))
+            .map_err(|_| StagingError::Capacity)?;
         let (token, format) = {
             let mut l = self.job.local.lock().expect("staging local");
             if (l.seal && !bound)
@@ -1131,6 +1378,7 @@ impl StagingTicket {
             job: Arc::clone(&self.job),
             permit: Some(permit),
             actor_permit: Some(actor_permit),
+            node_permit: Some(node_permit),
         });
         let context = StagingContext {
             job: Arc::clone(&self.job),
@@ -1291,11 +1539,13 @@ struct Activity {
     job: Arc<Job>,
     permit: Option<OwnedSemaphorePermit>,
     actor_permit: Option<OwnedSemaphorePermit>,
+    node_permit: Option<crate::admission::AdmissionPermit>,
 }
 impl Drop for Activity {
     fn drop(&mut self) {
         drop(self.actor_permit.take());
         drop(self.permit.take());
+        drop(self.node_permit.take());
         self.job.local.lock().expect("staging local").workers -= 1;
         self.job.changed.notify_one();
         self.inner.drained.notify_waiters();
@@ -1627,6 +1877,8 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         .clone()
                         .expect("bound checkpoint slot");
                     registration.finish(Ok(value.receipt));
+                    #[cfg(test)]
+                    checkpoint_probe_for_test(&inner).await;
                     let matched = matches!(&value.output, StagingReply::Granted(lease)
                         if lease.token == session.lease.token && lease.format == session.lease.format);
                     let result = if matched {
@@ -1716,6 +1968,10 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                         if l.lease.is_none() {
                             l.lease = Some(*lease);
                         }
+                    }
+                    #[cfg(test)]
+                    if checkpoint {
+                        checkpoint_probe_for_test(&inner).await;
                     }
                     match probe(&job, value.receipt).await {
                         Ok((lease, deadline)) => {
@@ -1904,20 +2160,26 @@ async fn run(inner: Arc<Inner>, job: Arc<Job>, mut recover: bool) {
                 }
             }
             Next::Stop => {
-                let mut local = job.local.lock().expect("staging local");
-                local.fenced = true;
-                if let Some(session) = &local.bound {
-                    session.fence();
+                {
+                    let mut local = job.local.lock().expect("staging local");
+                    local.fenced = true;
+                    if let Some(session) = &local.bound {
+                        session.fence();
+                    }
+                    // A failed controller must remain a failure before or after
+                    // Bind. Preserve the original receipt as historical evidence;
+                    // reporting Bound here would strand completion observers.
+                    let state = match &local.driver_failure {
+                        Some(error) => StagingState::Fenced(error.clone()),
+                        None => local
+                            .bound_result
+                            .clone()
+                            .map(StagingState::Bound)
+                            .unwrap_or(StagingState::Stopped),
+                    };
+                    job.status.send_replace(state);
                 }
-                // Keep the original binding receipt observable after graceful stop.
-                job.status.send_replace(
-                    local
-                        .bound_result
-                        .clone()
-                        .map(StagingState::Bound)
-                        .unwrap_or(StagingState::Stopped),
-                );
-                drop(local);
+                driver::drain(&job).await;
                 remove(&inner, &job);
                 return;
             }
@@ -2082,10 +2344,12 @@ async fn finish_fence(inner: &Inner, job: &Job, error: StagingError) {
     let error = Arc::new(error);
     job.status
         .send_replace(StagingState::Fenced(Arc::clone(&error)));
+    job.driver_stop.cancel();
     if let Some(registration) = job.checkpoint.lock().expect("staging checkpoint").as_ref() {
         registration.finish(Err(error));
     }
     drain_work(job).await;
+    driver::drain(job).await;
     remove(inner, job);
 }
 async fn drain_work(job: &Job) {
@@ -2116,10 +2380,29 @@ fn bound_state(local: &Local) -> StagingState {
 fn remove(inner: &Inner, job: &Job) {
     let mut a = inner.admission.lock().expect("staging admission");
     a.jobs.remove(&job.operation);
+    drop(
+        job.operation_permit
+            .lock()
+            .expect("staging operation permit")
+            .take(),
+    );
     let count = a.actors.get_mut(&job.actor).expect("staging actor");
     count.operations -= 1;
     if count.operations == 0 {
         a.actors.remove(&job.actor);
     }
     inner.drained.notify_waiters();
+}
+
+#[cfg(test)]
+async fn checkpoint_probe_for_test(inner: &Inner) {
+    let gate = inner
+        .checkpoint_probe_gate
+        .lock()
+        .expect("checkpoint gate")
+        .take();
+    if let Some((entered, wait)) = gate {
+        let _ = entered.send(());
+        let _ = wait.await;
+    }
 }

@@ -485,3 +485,101 @@ async fn root_outcome_exact_recovery_preserves_commits_and_refuses_expired_input
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn resident_discovery_defers_registered_root_until_live_producer_handoff() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let request = Request::new(format, false, false, [249; 16]).await?;
+        let native = PushCompletionRequest {
+            plan: None,
+            response: GitHttpResponse {
+                status: 503,
+                headers: Vec::new(),
+                body: b"native refusal\n".to_vec(),
+            },
+            options: Vec::new(),
+            certificate: None,
+        };
+        retain(&request, native).await?;
+        request.ticket.seal()?;
+        assert!(matches!(
+            request.ticket.wait_terminal().await,
+            StagingState::Bound(_)
+        ));
+        let session = request.ticket.bound_session()?;
+        let ready = session
+            .ready_root_outcome(
+                identity()?,
+                &request.store,
+                request.directory.path(),
+                request.disk.clone(),
+                None,
+            )
+            .await?;
+        assert!(request.coordinator.owns_bound(&session.check));
+        let mut other = session.check.clone();
+        other.token.artifact_operation[0] ^= 1;
+        assert!(!request.coordinator.owns_bound(&other));
+        other = session.check.clone();
+        other.actor = "other".into();
+        assert!(!request.coordinator.owns_bound(&other));
+        other = session.check.clone();
+        other.token.attempt += 1;
+        assert!(!request.coordinator.owns_bound(&other));
+        let evidence = ready.evidence_for_test();
+        let registered = ready.persist_recovery(&request.store, identity()?).await?;
+        let ready = ready.bind_recovery(registered, &request.store)?;
+        let f = &request.fixture;
+        let queue = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
+        let service = RecoverySupervisor::start_resident(
+            f.client(),
+            f.target.clone(),
+            (*request.store).clone(),
+            (queue.clone(), Arc::new(request.coordinator.clone())),
+            f.scans(RecoveryScanLimits {
+                page: 1,
+                interval: Duration::from_millis(10),
+            }),
+            f.authority(),
+            super::super::super::terminal_retention::maintenance(&f.handle, f.repository).await?,
+        )?;
+        // Keep the producer paused after durable registration. Two full scan
+        // passes must not execute its original command or steal admission.
+        timeout(Duration::from_secs(10), async {
+            while service.stats().passes < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let stats = service.stats();
+        assert_eq!(stats.failures, 0, "{stats:?}");
+        assert_eq!(
+            stats.submitted, 0,
+            "live producer lost ownership: {stats:?}"
+        );
+        assert!(stats.deferred > 0);
+        assert_eq!(queue.stats().await.admitted, 0);
+        assert!(matches!(
+            f.client().resolve(&evidence).await?,
+            cellule_runtime::Resolution::Absent
+        ));
+        let observer = request.ticket.publish_wait(&queue, ready).await?;
+        assert!(matches!(
+            observer.wait().await,
+            PublicationState::Finished(Ok(PublicationOutcome::RootPush(_)))
+        ));
+        assert!(matches!(
+            request.ticket.wait_terminal().await,
+            StagingState::Published(_)
+        ));
+        service.shutdown().await?;
+        assert!(queue.close_and_drain().await.is_empty());
+        assert!(request.coordinator.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}

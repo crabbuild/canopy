@@ -20,14 +20,7 @@ fn denied(
 }
 
 async fn expire(expires_at_ms: i64) -> Result {
-    let now = sql::now(0)?;
-    if now <= expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(u64::try_from(
-            expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(expires_at_ms).await
 }
 
 #[tokio::test]

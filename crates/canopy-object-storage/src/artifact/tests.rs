@@ -12,6 +12,46 @@ fn key(body: &[u8]) -> ArtifactKey {
 }
 
 #[tokio::test]
+async fn selected_parts_authenticate_without_fetching_unrequested_bytes() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let artifacts = ArtifactStore::new(store.clone(), [1; 16]);
+    let mut body = vec![27; PART_BYTES + 31];
+    body[PART_BYTES..].fill(42);
+    let key = key(&body);
+    let descriptor = artifacts
+        .put(
+            key,
+            body.len() as u64,
+            key.binding_digest,
+            &mut body.as_slice(),
+        )
+        .await?;
+    let path = artifacts.path(key, descriptor.digest)?;
+    // A missing unrelated part must not affect a selected range read.
+    store.delete(&external::part(&path, 0)).await?;
+    let ranges = artifacts
+        .ranges_owned(key, descriptor, Arc::new(()))
+        .await?;
+    assert_eq!(ranges.part(1).await?.as_ref(), &[42; 31]);
+    assert!(ranges.part(0).await.is_err());
+    assert!(ranges.part(2).await.is_err());
+    assert!(ranges.part(u64::MAX).await.is_err());
+    store
+        .put(&external::part(&path, 1), vec![43; 31].into())
+        .await?;
+    assert!(matches!(ranges.part(1).await, Err(ArtifactError::Corrupt)));
+    let mut wrong = descriptor;
+    wrong.manifest_digest[0] ^= 1;
+    assert!(
+        artifacts
+            .ranges_owned(key, wrong, Arc::new(()))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn catalog_artifacts_bind_their_own_digest_and_isolate_retired_incarnations() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let artifacts = ArtifactStore::new(Arc::clone(&store), [1; 16]);
@@ -366,4 +406,116 @@ async fn empty_manifest_must_certify_the_empty_part() -> Result {
 
 fn key_for_empty() -> ArtifactKey {
     key(b"")
+}
+
+// Release even on assertion failure: runtime shutdown must not strand a thread.
+struct Release(Option<std::sync::mpsc::Sender<()>>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+#[test]
+fn canceled_queued_artifact_hashes_retain_physical_owner_until_actual_drain() -> Result {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    for phase in 0..3 {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let artifacts = ArtifactStore::new(store.clone(), [1; 16]);
+        let body = b"physically retained input";
+        let key = key(body);
+        let descriptor = runtime.block_on(artifacts.put(
+            key,
+            body.len() as u64,
+            key.binding_digest,
+            &mut body.as_slice(),
+        ))?;
+        let owner: Arc<dyn Send + Sync> = Arc::new(());
+        let weak = Arc::downgrade(&owner);
+        let (entered, running) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let release = Release(Some(release));
+        let blocker = runtime.spawn_blocking(move || {
+            let _ = entered.send(());
+            let _ = wait.recv();
+        });
+        running.recv_timeout(Duration::from_secs(5))?;
+        runtime.block_on(async {
+            match phase {
+                0 => {
+                    let mut reader = artifacts.read_owned(key, descriptor, owner.clone()).await?;
+                    {
+                        let pending = reader.next();
+                        tokio::pin!(pending);
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                                .await
+                                .is_err()
+                        );
+                    }
+                    assert!(matches!(reader.next().await, Err(ArtifactError::Corrupt)));
+                    drop(reader);
+                }
+                1 => {
+                    let mut input = body.as_slice();
+                    let pending = artifacts.put_owned(
+                        key,
+                        body.len() as u64,
+                        key.binding_digest,
+                        &mut input,
+                        owner.clone(),
+                    );
+                    tokio::pin!(pending);
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                            .await
+                            .is_err()
+                    );
+                }
+                _ => {
+                    let mut upload = external::Upload::new_owned(
+                        store.clone(),
+                        Path::from("stage"),
+                        owner.clone(),
+                    )
+                    .await?;
+                    upload.write(Bytes::from_static(body)).await?;
+                    let digests = [key.binding_digest];
+                    let destination = Path::from("destination");
+                    {
+                        let pending =
+                            upload.publish_hashed(&destination, body.len() as u64, &digests);
+                        tokio::pin!(pending);
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                                .await
+                                .is_err()
+                        );
+                    }
+                    assert!(matches!(
+                        store.head(&Path::from("destination")).await,
+                        Err(object_store::Error::NotFound { .. })
+                    ));
+                    drop(upload);
+                }
+            }
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })?;
+        // All async owners are gone. The confirmed queued hash alone owns it.
+        drop(owner);
+        assert!(weak.upgrade().is_some(), "phase {phase}");
+        drop(release);
+        runtime.block_on(async {
+            blocker.await?;
+            tokio::task::spawn_blocking(|| ()).await?;
+            Ok::<_, tokio::task::JoinError>(())
+        })?;
+        assert!(weak.upgrade().is_none(), "phase {phase}");
+    }
+    Ok(())
 }

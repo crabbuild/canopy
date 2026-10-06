@@ -16,6 +16,10 @@ mod refs;
 mod selection_drain;
 mod workspace;
 
+// Allow real SQL/provider callbacks under concurrent load. Renewal cases
+// retain borrowers beyond this initial lease; expiry cases use their own clocks.
+const RENEWAL_LEASE_MS: u64 = 5_000;
+
 async fn initialize(f: &Fixture, store: Arc<ArtifactStore>) -> Result<GenerationFact> {
     let (prepared, root, budget) = Box::pin(empty(f, [241; 16], store.clone())).await?;
     let prepared = Arc::new(prepared);

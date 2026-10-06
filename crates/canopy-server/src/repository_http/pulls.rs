@@ -7,9 +7,7 @@ use crate::{
     },
     server::{RepositoryRoute, mutation_identity},
 };
-use cellule_runtime::{
-    Committed, InvocationError, MutationIdentity, primitives::sql::SqlResultSet,
-};
+use cellule_runtime::{Committed, MutationIdentity};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
@@ -338,7 +336,7 @@ pub(super) async fn review(
 }
 fn changed(
     state: &RepositoryHttp,
-    result: Result<Committed<PullChange>, InvocationError<Vec<SqlResultSet>>>,
+    result: Result<Committed<PullChange>, impl std::fmt::Display>,
     created: bool,
 ) -> Response<Body> {
     match result {

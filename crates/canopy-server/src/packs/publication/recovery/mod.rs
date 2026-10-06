@@ -39,6 +39,14 @@ const DOMAIN: &[u8] = b"canopy.publication-command-recovery.v4\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RootRecoveryError {
+    #[error("selected candidate audit failed")]
+    CandidateAudit(#[source] Box<NativeCandidateAuditError>),
+    #[error("symbolic HEAD retirement metadata failed")]
+    HeadMetadata(#[from] crate::packs::directory::index::IndexError),
+    #[error("symbolic HEAD retirement snapshot failed")]
+    HeadSnapshot(#[from] RefSnapshotPreparationError),
+    #[error("selected native merge audit failed")]
+    MergeAudit(#[source] Box<NativeMergeAuditError>),
     #[error("closed initialization graph failed")]
     Initialization(#[from] super::initialization::InitializationVerificationError),
     #[error("closed native audit graph failed")]
@@ -65,6 +73,12 @@ pub enum RootRecoveryError {
     Context,
 }
 
+impl From<NativeMergeAuditError> for RootRecoveryError {
+    fn from(error: NativeMergeAuditError) -> Self {
+        Self::MergeAudit(Box::new(error))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootRecoveryCertificate(CertificateEnvelope);
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,10 +92,19 @@ pub(super) enum Kind {
     Outcome,
     Policy,
     Initialization,
+    Merge,
+    Head,
+    Candidate,
 }
 impl Kind {
     fn body_limit(self) -> u32 {
-        if self == Self::Initialization {
+        if self == Self::Candidate {
+            NATIVE_CANDIDATE_BYTES
+        } else if self == Self::Head {
+            NATIVE_HEAD_BYTES
+        } else if self == Self::Merge {
+            NATIVE_MERGE_BYTES
+        } else if self == Self::Initialization {
             INITIALIZATION_BYTES
         } else if self == Self::Policy {
             REF_POLICY_PAGE_BYTES
@@ -322,6 +345,25 @@ impl RegisteredRootRecovery {
         authority: &PreparationAuthority,
         original: Option<&PreparationSession>,
     ) -> Result<Committed<RootCompletionReply>, PublicationError> {
+        if self.record.kind == Kind::Publish && self.record.refusal.is_some() {
+            let refusing = std::sync::atomic::AtomicBool::new(false);
+            let result = Box::pin(self.dispatch_bound(
+                client,
+                store,
+                authority,
+                &refusing,
+                original,
+                #[cfg(test)]
+                None,
+            ))
+            .await?;
+            return match result {
+                PublicationOutcome::RootPush(value) => Ok(value),
+                _ => Err(PublicationError::RootPush(InvocationError::NotStarted(
+                    Error::Command("armed root dispatch outcome differs"),
+                ))),
+            };
+        }
         let result = match self.record.kind {
             Kind::Publish => {
                 self.dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
@@ -333,7 +375,7 @@ impl RegisteredRootRecovery {
                 )
                 .await
             }
-            Kind::Policy | Kind::Initialization => {
+            Kind::Policy | Kind::Initialization | Kind::Merge | Kind::Head | Kind::Candidate => {
                 Err(AttemptError::Invocation(InvocationError::NotStarted(
                     Error::Command("recovery kind requires typed phase dispatch"),
                 )))
@@ -377,7 +419,51 @@ impl RegisteredRootRecovery {
                 .await
                 .map(PublicationOutcome::Initialization);
         }
-        if self.record.kind != Kind::Policy {
+        if self.record.kind == Kind::Candidate {
+            let result = self
+                .dispatch_command::<PublishNativeCandidate>(
+                    client, store, authority, false, original,
+                )
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Candidate))?;
+            return if result.output.applied() {
+                Ok(PublicationOutcome::Candidate(result))
+            } else {
+                Err(PublicationError::Candidate(InvocationError::Rejected(
+                    Box::new(result),
+                )))
+            };
+        }
+        if self.record.kind == Kind::Head {
+            let result = self
+                .dispatch_command::<PublishNativeHead>(client, store, authority, false, original)
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Head))?;
+            return if matches!(result.output, PublicationReply::Published(_)) {
+                Ok(PublicationOutcome::Head(result))
+            } else {
+                Err(PublicationError::Head(InvocationError::Rejected(Box::new(
+                    result,
+                ))))
+            };
+        }
+        if self.record.kind == Kind::Merge {
+            let result = self
+                .dispatch_command::<PublishReviewedMerge>(client, store, authority, false, original)
+                .await
+                .map_err(|e| e.publication(self.evidence(), PublicationError::Merge))?;
+            return if matches!(
+                result.output,
+                crate::pulls::merge::MergeOutcome::Applied { .. }
+            ) {
+                Ok(PublicationOutcome::Merge(result))
+            } else {
+                Err(PublicationError::Merge(InvocationError::Rejected(
+                    Box::new(result),
+                )))
+            };
+        }
+        if self.record.kind != Kind::Policy && self.record.refusal.is_none() {
             let result = match original {
                 Some(original) => {
                     self.dispatch_root(client, store, authority, Some(original))
@@ -387,16 +473,35 @@ impl RegisteredRootRecovery {
             };
             return result.map(PublicationOutcome::RootPush);
         }
-        let result = self
-            .dispatch_command::<RegisterRefPolicyPage>(client, store, authority, false, original)
-            .await;
-        let refused = match &result {
-            Ok(value) => {
-                matches!(value.output, RefPolicyReply::Denied(_))
-                    || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
-            }
-            Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
-            _ => false,
+        let mut page = None;
+        let mut root = None;
+        let refused = if self.record.kind == Kind::Policy {
+            let result = self
+                .dispatch_command::<RegisterRefPolicyPage>(
+                    client, store, authority, false, original,
+                )
+                .await;
+            let refused = match &result {
+                Ok(value) => {
+                    matches!(value.output, RefPolicyReply::Denied(_))
+                        || matches!(value.output, RefPolicyReply::Registered(progress) if !progress.valid)
+                }
+                Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
+                _ => false,
+            };
+            page = Some(result);
+            refused
+        } else {
+            let result = self
+                .dispatch_command::<CompleteRootPush>(client, store, authority, false, original)
+                .await;
+            let refused = match &result {
+                Ok(value) => matches!(value.output, RootCompletionReply::Denied(_)),
+                Err(AttemptError::Invocation(InvocationError::Rejected(_))) => true,
+                _ => false,
+            };
+            root = Some(result);
+            refused
         };
         if refused {
             let journal = self
@@ -413,9 +518,15 @@ impl RegisteredRootRecovery {
                     source: Box::new(RootRecoveryError::Codec(source)),
                 })?
             {
-                return Err(PublicationError::PolicyPage(InvocationError::Pending(
-                    Box::new(self.evidence().clone()),
-                )));
+                return Err(if self.record.kind == Kind::Policy {
+                    PublicationError::PolicyPage(InvocationError::Pending(Box::new(
+                        self.evidence().clone(),
+                    )))
+                } else {
+                    PublicationError::RootPush(InvocationError::Pending(Box::new(
+                        self.evidence().clone(),
+                    )))
+                });
             }
             refusing.store(true, std::sync::atomic::Ordering::Release);
             let evidence = self
@@ -461,9 +572,18 @@ impl RegisteredRootRecovery {
                 Err(error) => Err(error.publication(evidence, PublicationError::RootPush)),
             };
         }
-        result
-            .map(PublicationOutcome::PolicyPage)
-            .map_err(|error| error.publication(self.evidence(), PublicationError::PolicyPage))
+        if let Some(result) = page {
+            result
+                .map(PublicationOutcome::PolicyPage)
+                .map_err(|error| error.publication(self.evidence(), PublicationError::PolicyPage))
+        } else {
+            match root.expect("root or policy dispatch") {
+                Ok(value) => phase::normalize_root(Ok(value))
+                    .map(PublicationOutcome::RootPush)
+                    .map_err(PublicationError::RootPush),
+                Err(error) => Err(error.publication(self.evidence(), PublicationError::RootPush)),
+            }
+        }
     }
     async fn known<C: Command>(
         &self,
@@ -548,33 +668,41 @@ impl RegisteredRootRecovery {
         // Write query here would hide an expired/revoked attempt before that
         // original command could record its definitive denial. Bound live
         // initialization still retains and checks its original local guard.
-        let session =
-            if refusal_only || self.record.kind == Kind::Initialization || original.is_some() {
-                None
-            } else {
-                match PreparationSession::open(
-                    client.clone(),
-                    self.evidence().target().clone(),
-                    self.record.check.clone(),
-                    None,
-                    authority.clone(),
-                )
-                .await
-                {
-                    Ok(session) => Some(session),
-                    Err(error) => {
-                        if let Some(known) = self.known::<C>(client, store, refusal).await? {
-                            return Ok(known);
-                        }
-                        return Err(AttemptError::Invocation(InvocationError::NotStarted(
-                            Error::Facility {
-                                name: "publication recovery custody",
-                                source: Box::new(error),
-                            },
-                        )));
+        // Frozen HEAD metadata also needs no native work or new preparation.
+        // Its original final receiver must record expired/revoked denials,
+        // while checking actual owner, original pin and current joint roots.
+        let session = if refusal_only
+            || matches!(
+                self.record.kind,
+                Kind::Initialization | Kind::Head | Kind::Candidate
+            )
+            || original.is_some()
+        {
+            None
+        } else {
+            match PreparationSession::open(
+                client.clone(),
+                self.evidence().target().clone(),
+                self.record.check.clone(),
+                None,
+                authority.clone(),
+            )
+            .await
+            {
+                Ok(session) => Some(session),
+                Err(error) => {
+                    if let Some(known) = self.known::<C>(client, store, refusal).await? {
+                        return Ok(known);
                     }
+                    return Err(AttemptError::Invocation(InvocationError::NotStarted(
+                        Error::Facility {
+                            name: "publication recovery custody",
+                            source: Box::new(error),
+                        },
+                    )));
                 }
-            };
+            }
+        };
         // A command can settle while body I/O or custody acquisition is in flight.
         if let Some(known) = self.known::<C>(client, store, refusal).await? {
             return Ok(known);
@@ -712,7 +840,8 @@ pub(super) async fn persist_full<C: Command>(
         || command.evidence().incarnation() != check.token.owner.incarnation
         || command.input_bytes().is_empty()
         || command.input_bytes().len() > kind.body_limit() as usize
-        || (kind == Kind::Policy) != refusal.is_some()
+        || (kind == Kind::Policy && refusal.is_none())
+        || (refusal.is_some() && !matches!(kind, Kind::Policy | Kind::Publish))
     {
         return Err(RootRecoveryError::Context);
     }
@@ -837,3 +966,11 @@ pub(super) async fn persist_full<C: Command>(
     }
     Ok(registered)
 }
+
+impl From<NativeCandidateAuditError> for RootRecoveryError {
+    fn from(error: NativeCandidateAuditError) -> Self {
+        Self::CandidateAudit(Box::new(error))
+    }
+}
+
+pub(in crate::packs::publication) mod backup;

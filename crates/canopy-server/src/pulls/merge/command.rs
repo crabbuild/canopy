@@ -8,7 +8,7 @@ use cellule_runtime::{
     codec::WireValue, registry::CommandContext, registry::CommandResult,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MergeInput {
     pub actor: String,
@@ -82,22 +82,7 @@ impl Command for MergePull {
             .map_err(|_| Error::Command("invalid merge UUID"))?;
         // Bind actor, parent and full intent. Command timestamps are not part of
         // application retry identity, so a lost reply can use a fresh command.
-        let binding = super::super::mutations::binding(&[
-            &input.actor,
-            &input.number.to_string(),
-            &input.request.revision.pull_version.to_string(),
-            &input.request.revision.source_oid,
-            &input.request.revision.source_version.to_string(),
-            &input.request.revision.base_oid,
-            &input.request.revision.base_version.to_string(),
-            match input.request.strategy {
-                MergeStrategy::FastForward => "fast_forward",
-                MergeStrategy::MergeCommit => "merge_commit",
-                MergeStrategy::Squash => "squash",
-                MergeStrategy::Rebase => "rebase",
-            },
-            input.request.candidate_id.as_deref().unwrap_or(""),
-        ]);
+        let binding = request_binding(&input);
         let previous = context.sql(&SqlBatch {
             statements: vec![SqlStatement {
                 sql: "SELECT binding, id, pull_number, oid, merged_ms, pull_version, source_oid, source_version, base_oid, base_version FROM pull_merges WHERE id = ?1"
@@ -192,4 +177,23 @@ impl Command for MergePull {
             },
         }))
     }
+}
+
+pub(crate) fn request_binding(input: &MergeInput) -> Vec<u8> {
+    super::super::mutations::binding(&[
+        &input.actor,
+        &input.number.to_string(),
+        &input.request.revision.pull_version.to_string(),
+        &input.request.revision.source_oid,
+        &input.request.revision.source_version.to_string(),
+        &input.request.revision.base_oid,
+        &input.request.revision.base_version.to_string(),
+        match input.request.strategy {
+            MergeStrategy::FastForward => "fast_forward",
+            MergeStrategy::MergeCommit => "merge_commit",
+            MergeStrategy::Squash => "squash",
+            MergeStrategy::Rebase => "rebase",
+        },
+        input.request.candidate_id.as_deref().unwrap_or(""),
+    ])
 }

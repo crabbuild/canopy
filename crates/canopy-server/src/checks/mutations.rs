@@ -45,34 +45,37 @@ impl RepositoryCell {
         identity: MutationIdentity,
         actor: &str,
         input: NewCheck<'_>,
-    ) -> Result<Committed<CheckChange>, Invocation> {
-        for name in [actor, input.context] {
-            validate_component(name).map_err(Invocation::NotStarted)?;
+    ) -> Result<Committed<CheckChange>, NativeCheckError> {
+        for value in [actor, input.context] {
+            validate_component(value)?;
         }
-        validate_repository_id(input.id).map_err(Invocation::NotStarted)?;
+        validate_repository_id(input.id)?;
         if input.context_version < 1 {
-            return Err(Invocation::NotStarted(Error::Command(
-                "invalid check context version",
-            )));
+            return Err(Error::Command("invalid check context version").into());
         }
-        let mut parameters = vec![
-            SqlValue::Text(actor.into()),
-            SqlValue::Blob(input.id.to_vec()),
-            SqlValue::Blob(input.oid.to_vec()),
-            SqlValue::Text(input.context.into()),
-            SqlValue::Integer(input.context_version),
-        ];
-        let decision = format!(
-            "CASE WHEN NOT ({ACCESS}) OR NOT EXISTS (SELECT 1 FROM objects WHERE oid = ?3 AND kind = 'commit') OR NOT EXISTS (SELECT 1 FROM check_contexts WHERE name = ?4) THEN 'missing' WHEN NOT EXISTS (SELECT 1 FROM check_contexts WHERE name = ?4 AND reporter = ?1) THEN 'forbidden' WHEN NOT EXISTS (SELECT 1 FROM check_contexts WHERE name = ?4 AND version = ?5 AND enabled = 1) OR EXISTS (SELECT 1 FROM check_runs WHERE id = ?2 AND (oid != ?3 OR context != ?4 OR context_version != ?5 OR reporter != ?1)) THEN 'conflict' ELSE 'applied' END"
-        );
-        let check = SqlStatement {
-            sql: format!("SELECT {decision}"),
-            parameters: parameters.clone(),
-        };
-        parameters.push(SqlValue::Integer(identity.issued_at_ms));
-        self.check_change(identity, vec![check,
-            SqlStatement { sql: format!("INSERT INTO check_runs (id, oid, context, context_version, reporter, state, version, summary, created_ms, updated_ms) SELECT ?2, ?3, ?4, ?5, ?1, 'queued', 1, '', ?6, ?6 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM check_runs WHERE id = ?2)"), parameters },
-        ]).await
+        let (_snapshot, selection) = self
+            .check_selection(ReadIdentity::Account(actor), input.oid)
+            .await?;
+        let result = self
+            .application
+            .command::<native::StartCommitCheck>(
+                &self.target,
+                identity,
+                native::CheckStart {
+                    selection,
+                    id: input.id,
+                    context: input.context.into(),
+                    context_version: input.context_version,
+                },
+            )
+            .await;
+        // A recorded policy rejection is a domain outcome with its original
+        // receipt. Pending/transport failures must never be converted to one.
+        match result {
+            Ok(value) => Ok(value),
+            Err(InvocationError::Rejected(value)) => Ok(*value),
+            Err(error) => Err(NativeCheckError::Start(Box::new(error))),
+        }
     }
 
     /// Advances an active attempt for its still-configured reporter and policy version.

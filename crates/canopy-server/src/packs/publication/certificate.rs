@@ -79,8 +79,11 @@ impl CertificateData {
                 .any(|value| *value > i64::MAX as u64)
             || (self.input_count == 0) != (self.object_count == 0)
             || (self.object_count == 0 && self.edge_count != 0)
-            || (self.input_checkpoint_digest.is_some()
-                && (self.input_count == 0 || self.compaction))
+            // A delete-only/ref-only push retains authenticated request and
+            // native outcome custody without adding any physical pack. Its
+            // checkpoint is still checked by final publication. Compaction
+            // has no native push checkpoint.
+            || (self.input_checkpoint_digest.is_some() && self.compaction)
             || (self.compaction && (self.refs_digest.is_some() || self.completion_digest.is_some()))
         {
             return Err(CodecError::Invalid("invalid catalog attestation facts"));

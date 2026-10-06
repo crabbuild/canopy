@@ -37,6 +37,7 @@ pub mod issues;
 pub mod blob {
     //! Verified, immutable Git blob bodies stored outside the Repository Cell.
 
+    #[cfg(test)]
     pub(crate) use canopy_object_storage::blob::blob_path;
     pub use canopy_object_storage::blob::{
         LargeBlobError, LargeBlobRead, LargeBlobReference, LargeBlobStore,
@@ -174,6 +175,12 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("deployment/mod.rs"));
                 source.update(include_bytes!("deployment/root.rs"));
+                source.update(include_bytes!("deployment/backup/bodies.rs"));
+                source.update(include_bytes!("deployment/backup/native.rs"));
+                source.update(include_bytes!("packs/backup.rs"));
+                source.update(include_bytes!("packs/directory/index/visit.rs"));
+                source.update(include_bytes!("packs/publication/backup.rs"));
+                source.update(include_bytes!("packs/publication/recovery/backup.rs"));
                 source.update(include_bytes!("server/mod.rs"));
                 source.update(include_bytes!("server/lifecycle.rs"));
                 source.update(include_bytes!("admission.rs"));
@@ -195,11 +202,13 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
                 source.update(include_bytes!("git_cache/artifacts.rs"));
+                source.update(include_bytes!("git_cache/verified.rs"));
                 source.update(include_bytes!("git_cache/serving_refs.rs"));
                 source.update(include_bytes!("git_cache/cleanup.rs"));
                 source.update(include_bytes!("git_cache/mod.rs"));
                 source.update(include_bytes!("git_cache/maintenance.rs"));
                 source.update(include_bytes!("packs/catalog/native.rs"));
+                source.update(include_bytes!("packs/catalog/sparse.rs"));
                 source.update(include_bytes!("packs/catalog/reader.rs"));
                 source.update(include_bytes!("packs/catalog/graph_spool.rs"));
                 source.update(include_bytes!("packs/catalog/files.rs"));
@@ -208,6 +217,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("native_git/process.rs"));
                 source.update(include_bytes!("native_git/process/fence.rs"));
                 source.update(include_bytes!("git_gateway/mod.rs"));
+                source.update(include_bytes!("git_gateway/merge.rs"));
+                source.update(include_bytes!("git_gateway/head.rs"));
                 source.update(include_bytes!("git_gateway/candidates/mod.rs"));
                 source.update(include_bytes!("git_gateway/fetch.rs"));
                 source.update(include_bytes!("git_gateway/discovery.rs"));
@@ -216,11 +227,17 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("git_gateway/preflight/retention.rs"));
                 source.update(include_bytes!("git_gateway/branch_policy.rs"));
                 source.update(include_bytes!("git_gateway/push.rs"));
+                source.update(include_bytes!("git_gateway/push/native.rs"));
                 source.update(include_bytes!("git_input/mod.rs"));
                 source.update(include_bytes!("git_http/capture.rs"));
                 source.update(include_bytes!("git_http/mod.rs"));
                 source.update(include_bytes!("packs/verification/mod.rs"));
                 source.update(include_bytes!("packs/verification/physical.rs"));
+                source.update(include_bytes!("packs/verification/physical/staged.rs"));
+                source.update(include_bytes!("packs/closure/verifier.rs"));
+                source.update(include_bytes!("packs/directory/mod.rs"));
+                source.update(include_bytes!("packs/directory/writer.rs"));
+                source.update(include_bytes!("packs/publication/prepare.rs"));
                 source.update(include_bytes!("packs/verification/spool.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
                 source.update(include_bytes!("packs/input_artifact.rs"));
@@ -264,6 +281,30 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/completion.rs"));
                 source.update(include_bytes!("packs/publication/ref_proof.rs"));
                 source.update(include_bytes!("packs/publication/ref_snapshot.rs"));
+                source.update(include_bytes!("packs/publication/native_candidate.rs"));
+                source.update(include_bytes!("packs/publication/native_merge.rs"));
+                source.update(include_bytes!("packs/publication/native_head.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/mod.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/publish.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/candidate_publication/audit.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/native_candidate.rs"
+                ));
+                source.update(include_bytes!("git_gateway/candidates/produce.rs"));
+                source.update(include_bytes!("packs/publication/native_head/publish.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/native_head.rs"
+                ));
+                source.update(include_bytes!("packs/publication/native_merge/audit.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/native_merge.rs"
+                ));
                 source.update(include_bytes!("packs/publication/initialization.rs"));
                 source.update(include_bytes!(
                     "packs/publication/coordinator/initialization.rs"
@@ -280,6 +321,9 @@ impl CellModule for RepositoryModule {
                     "packs/publication/initialization/publish.rs"
                 ));
                 source.update(include_bytes!("packs/publication/staging_service.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/staging_service/driver.rs"
+                ));
                 source.update(include_bytes!("packs/publication/staging_receipt.rs"));
                 source.update(include_bytes!("packs/publication/admission_receipt.rs"));
                 source.update(include_bytes!("packs/publication/custody/mod.rs"));
@@ -325,6 +369,9 @@ impl CellModule for RepositoryModule {
                     "packs/publication/serving/session/workspace.rs"
                 ));
                 source.update(include_bytes!(
+                    "packs/publication/serving/session/workspace/prepare.rs"
+                ));
+                source.update(include_bytes!(
                     "packs/publication/serving/session/native_base.rs"
                 ));
                 source.update(include_bytes!("git_read/mod.rs"));
@@ -340,6 +387,19 @@ impl CellModule for RepositoryModule {
                 ));
                 source.update(include_bytes!("packs/publication/serving/ownership.rs"));
                 source.update(include_bytes!("packs/publication/serving/schema.sql"));
+                source.update(include_bytes!("packs/publication/ref_observation.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/ref_observation/selection.rs"
+                ));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/ref_observation.rs"
+                ));
+                source.update(include_bytes!("pulls/native/mod.rs"));
+                source.update(include_bytes!("pulls/native/codec.rs"));
+                source.update(include_bytes!("pulls/native/client.rs"));
+                source.update(include_bytes!("pulls/native/threads.rs"));
+                source.update(include_bytes!("pulls/threads.rs"));
+                source.update(include_bytes!("pulls/native/reads.rs"));
                 source.update(include_bytes!("packs/publication/registry.rs"));
                 source.update(include_bytes!("server/catalog_initialization.rs"));
                 source.update(include_bytes!("server/residency/mod.rs"));
@@ -363,10 +423,15 @@ impl CellModule for RepositoryModule {
                     "../../canopy-object-storage/src/external.rs"
                 ));
                 source.update(include_bytes!("push/mod.rs"));
-                source.update(include_bytes!("push/plan.rs"));
                 source.update(include_bytes!("push/report.rs"));
                 source.update(include_bytes!("access.rs"));
                 source.update(include_bytes!("visibility.rs"));
+                source.update(include_bytes!("checks/native.rs"));
+                source.update(include_bytes!("checks/native/codec.rs"));
+                source.update(include_bytes!("packs/publication/commit_membership.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/serving/session/membership.rs"
+                ));
                 source.update(include_bytes!("checks/mod.rs"));
                 source.update(include_bytes!("checks/mutations.rs"));
                 source.update(include_bytes!("pulls/mod.rs"));
@@ -450,6 +515,7 @@ pub struct RepositoryCell {
     // reference must not retain its original disk budget after gateway eviction.
     pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
     serving: std::sync::Mutex<Option<std::sync::Weak<packs::publication::ServingPool>>>,
+    staging: std::sync::Mutex<Option<std::sync::Weak<packs::publication::StagingCoordinator>>>,
 }
 
 impl RepositoryCell {
@@ -478,12 +544,40 @@ impl RepositoryCell {
             target,
             pack_readers: std::sync::Mutex::new(Vec::new()),
             serving: std::sync::Mutex::new(None),
+            staging: std::sync::Mutex::new(None),
         })
     }
 
     pub(crate) fn attach_serving(&self, pool: &std::sync::Arc<packs::publication::ServingPool>) {
         *self.serving.lock().expect("repository serving pool") =
             Some(std::sync::Arc::downgrade(pool));
+    }
+    pub(crate) fn attach_staging(
+        &self,
+        staging: &std::sync::Arc<packs::publication::StagingCoordinator>,
+    ) {
+        *self.staging.lock().expect("repository staging coordinator") =
+            Some(std::sync::Arc::downgrade(staging));
+    }
+    /// Obtain the resident's owned write lifecycle. Admission still checks live
+    /// custody and actor limits; retaining this handle cannot keep a Cell resident.
+    pub fn staging_coordinator(
+        &self,
+    ) -> Result<
+        std::sync::Arc<packs::publication::StagingCoordinator>,
+        packs::publication::StagingError,
+    > {
+        let staging = self
+            .staging
+            .lock()
+            .expect("repository staging coordinator")
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or(packs::publication::StagingError::Inactive)?;
+        if staging.stats().closed {
+            return Err(packs::publication::StagingError::Closed);
+        }
+        Ok(staging)
     }
     /// Borrow the resident's certified joint generation; a detached caller
     /// cannot abandon its acquisition or extend a released residency.

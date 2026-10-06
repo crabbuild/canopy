@@ -3,10 +3,14 @@ use crate::{
     RepositoryModule,
     access::{access_statement, decode_access},
     directory::TokenScope,
+    packs::publication::{REF_SELECTION_BYTES, RefSelection},
 };
 use cellule_runtime::{CellModule, Command, registry::CommandResult};
 
-#[derive(Deserialize, Serialize)]
+pub(crate) const INPUT_BYTES: u32 = REF_SELECTION_BYTES + (256 << 10);
+pub(crate) const OUTPUT_BYTES: u32 = 1 << 20;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub(crate) enum CandidateAction {
     Reserve {
@@ -22,7 +26,7 @@ pub(crate) enum CandidateAction {
     },
 }
 impl CandidateAction {
-    fn valid(&self) -> bool {
+    pub(super) fn valid(&self) -> bool {
         match self {
             Self::Reserve {
                 actor,
@@ -44,6 +48,19 @@ impl CandidateAction {
             }
         }
     }
+    pub(crate) fn actor(&self) -> &str {
+        match self {
+            Self::Reserve { actor, .. } | Self::Finish { actor, .. } => actor,
+        }
+    }
+    pub(crate) fn digest(&self) -> Result<[u8; 32], CodecError> {
+        let mut e = BoundedEncoder::new(256 << 10)?;
+        self.encode(&mut e)?;
+        let mut h = blake3::Hasher::new();
+        h.update(b"canopy.native-candidate-intent.v1\0");
+        h.update(&e.finish());
+        Ok(*h.finalize().as_bytes())
+    }
 }
 impl WireValue for CandidateAction {
     fn encode(&self, out: &mut BoundedEncoder) -> Result<(), CodecError> {
@@ -63,20 +80,56 @@ impl WireValue for CandidateAction {
         Ok(result)
     }
 }
+
+/// Certified current refs authorize only editorial reservation or a negative
+/// preparation result. A Ready result requires joint generated publication;
+/// no request DTO or serving observation can grant that write authority.
+#[derive(Clone, Debug)]
+pub(crate) struct CandidateRefRequest {
+    pub(crate) selection: RefSelection,
+    pub(crate) action: CandidateAction,
+}
+impl WireValue for CandidateRefRequest {
+    fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
+        if self.selection.actor.as_deref() != Some(self.action.actor())
+            || self.selection.facts.len() > 2
+            || matches!(
+                &self.action,
+                CandidateAction::Finish {
+                    result: CandidateResult::Ready { .. },
+                    ..
+                }
+            )
+        {
+            return Err(CodecError::Invalid(
+                "invalid native candidate editorial scope",
+            ));
+        }
+        self.selection.encode(e)?;
+        self.action.encode(e)
+    }
+    fn decode(d: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
+        let value = Self {
+            selection: RefSelection::decode(d)?,
+            action: CandidateAction::decode(d)?,
+        };
+        value.encode(&mut BoundedEncoder::new(INPUT_BYTES)?)?;
+        Ok(value)
+    }
+}
 pub(crate) struct PrepareCandidate;
 impl Command for PrepareCandidate {
     const MODULE: &'static str = RepositoryModule::NAME;
     const ID: u32 = 10;
-    const CODEC_VERSION: u32 = 2;
-    type Input = CandidateAction;
+    const CODEC_VERSION: u32 = 3;
+    type Input = CandidateRefRequest;
     type Output = CandidateOutcome;
     fn execute(
         context: &mut CommandContext<'_, '_>,
-        action: CandidateAction,
+        input: CandidateRefRequest,
     ) -> cellule_runtime::Result<CommandResult<CandidateOutcome>> {
-        let actor = match &action {
-            CandidateAction::Reserve { actor, .. } | CandidateAction::Finish { actor, .. } => actor,
-        };
+        input.encode(&mut BoundedEncoder::new(INPUT_BYTES)?)?;
+        let actor = input.action.actor();
         let rejected = |value| Ok(CommandResult::Rejected(value));
         let role = decode_access(&context.sql(&SqlBatch {
             statements: vec![access_statement(actor)],
@@ -87,6 +140,16 @@ impl Command for PrepareCandidate {
         if role < TokenScope::Write {
             return rejected(CandidateOutcome::Forbidden);
         }
+        if !input.selection.authorized(
+            context.target().cell_id(),
+            Some(context.owner_fence()),
+            context.now_ms(),
+            input.action.digest()?,
+            |q| context.sql(q),
+        )? {
+            return rejected(CandidateOutcome::Conflict);
+        }
+        let action = input.action;
         let (candidate, binding) = match action {
             CandidateAction::Reserve {
                 actor,
@@ -132,17 +195,15 @@ impl Command for PrepareCandidate {
                         candidate,
                     ))));
                 }
-                if let CandidateResult::Ready { oid, tree_oid } = &result
-                    && !certified(context, &candidate, oid, tree_oid)?
-                {
-                    return rejected(CandidateOutcome::Conflict);
-                }
                 candidate.result = result;
                 (candidate, None)
             }
         };
         let Some(state) = policy_state(&context.sql(&SqlBatch {
-            statements: vec![policy_statement(&candidate.actor, candidate.number)],
+            statements: vec![super::super::native::with_refs(
+                policy_statement(&candidate.actor, candidate.number),
+                &input.selection,
+            )],
         })?)?
         else {
             return rejected(CandidateOutcome::NotFound);
@@ -169,36 +230,17 @@ impl Command for PrepareCandidate {
                 })?;
             SqlStatement {sql:"INSERT INTO merge_candidates (id,binding,pull_number,actor,request,created_ms,result,source_oid,base_oid) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec()),SqlValue::Blob(binding),SqlValue::Integer(candidate.number),SqlValue::Text(candidate.actor.clone()),SqlValue::Text(request),SqlValue::Integer(candidate.created_at_ms),SqlValue::Text(result),SqlValue::Blob(oid(&candidate.request.revision.source_oid)?.to_vec()),SqlValue::Blob(oid(&candidate.request.revision.base_oid)?.to_vec())]}
         } else {
-            let ready = match &candidate.result {
-                CandidateResult::Ready { oid: commit, .. } => SqlValue::Blob(oid(commit)?.to_vec()),
-                _ => SqlValue::Null,
-            };
             SqlStatement {
-                sql: "UPDATE merge_candidates SET result = ?2, oid = ?3 WHERE id = ?1".into(),
+                sql: "UPDATE merge_candidates SET result = ?2 WHERE id = ?1".into(),
                 parameters: vec![
                     SqlValue::Blob(id.as_bytes().to_vec()),
                     SqlValue::Text(result),
-                    ready,
                 ],
             }
         };
         context.sql(&SqlBatch {
             statements: vec![statement],
         })?;
-        if let CandidateResult::Ready { oid: commit, .. } = &candidate.result {
-            // A candidate becomes fetchable in the same transaction as its ready
-            // result. The reserved namespace cannot be changed by ordinary pushes.
-            context.sql(&SqlBatch {
-                statements: vec![SqlStatement {
-                    sql: "INSERT INTO refs (name, oid, version) VALUES (?1, ?2, 1)".into(),
-                    parameters: vec![
-                        SqlValue::Text(candidate.fetch_ref()),
-                        SqlValue::Blob(oid(commit)?.to_vec()),
-                    ],
-                }],
-            })?;
-            crate::refs::advance_generation(context)?;
-        }
         Ok(CommandResult::Success(CandidateOutcome::Applied(Box::new(
             candidate,
         ))))

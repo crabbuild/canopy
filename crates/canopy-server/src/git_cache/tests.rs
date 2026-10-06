@@ -1,5 +1,67 @@
 use super::*;
 
+#[tokio::test]
+async fn streamed_native_extraction_publishes_only_a_verified_complete_object()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{git_objects::GitObjects, packs::metadata::CanonicalObject};
+    for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(32 << 20);
+        let native = crate::native_resources::NativeResources::default()
+            .scope(crate::native_resources::NativeClass::Foreground);
+        let source = GitCache::create(
+            root.path().into(),
+            budget.clone(),
+            "refs/heads/main",
+            format,
+            native.clone(),
+        )
+        .await?;
+        let target = GitCache::create(
+            root.path().into(),
+            budget.clone(),
+            "refs/heads/main",
+            format,
+            native.clone(),
+        )
+        .await?;
+        let mut body = vec![0; 2 << 20];
+        blake3::Hasher::new()
+            .update(b"streamed native extraction")
+            .finalize_xof()
+            .fill(&mut body);
+        let expected = CanonicalObject {
+            oid: object_id(format, ObjectKind::Blob, &body),
+            kind: ObjectKind::Blob,
+            size: body.len() as u64,
+            digest: *blake3::hash(&body).as_bytes(),
+        };
+        source
+            .store_object(expected.oid, expected.kind, body.clone())
+            .await?;
+        let mut wrong = expected;
+        wrong.digest[0] ^= 1;
+        assert!(
+            target
+                .copy_native_owned(source.git_dir(), wrong, source.clone())
+                .await
+                .is_err()
+        );
+        assert!(!target.object_present(expected.oid)?);
+        target
+            .copy_native_owned(source.git_dir(), expected, source.clone())
+            .await?;
+        assert!(target.object_present(expected.oid)?);
+        let mut objects = GitObjects::batch_owned(&target.git_dir(), &native, target.clone())?;
+        assert_eq!(objects.read_verified(expected, body.len()).await?, body);
+        objects.finish().await?;
+        drop(source);
+        drop(target);
+        wait_for_cleanup(&budget).await?;
+    }
+    Ok(())
+}
+
 async fn wait_for_cleanup(budget: &DiskBudget) -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while budget.used() != 0 {

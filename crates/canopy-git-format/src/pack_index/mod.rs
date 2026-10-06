@@ -161,6 +161,20 @@ impl PackIndex {
         self.ids_at(0)
     }
 
+    /// Scan native offsets in hash order using one fixed page. Callers may
+    /// build an admitted disk index of packed extents without retaining an
+    /// object-count-sized heap vector or performing a hash lookup per entry.
+    pub fn offsets(&self) -> IndexOffsets<'_> {
+        IndexOffsets {
+            index: self,
+            next: 0,
+            buffer: Box::new([0; PAGE]),
+            start: 0,
+            end: 0,
+            failed: false,
+        }
+    }
+
     /// Start a bounded sequential read at a checked native ordinal. Immutable
     /// metadata shards use this to cover contiguous ranges without rescanning
     /// earlier index entries or materializing all IDs.
@@ -267,6 +281,45 @@ pub struct IndexIds<'a> {
     start: usize,
     end: usize,
     failed: bool,
+}
+
+pub struct IndexOffsets<'a> {
+    index: &'a PackIndex,
+    next: u32,
+    buffer: Box<[u8; PAGE]>,
+    start: usize,
+    end: usize,
+    failed: bool,
+}
+impl Iterator for IndexOffsets<'_> {
+    type Item = io::Result<u64>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed || self.next == self.index.count {
+            return None;
+        }
+        if self.start == self.end {
+            let records = (self.index.count - self.next).min((PAGE / 4) as u32) as usize;
+            self.end = records * 4;
+            self.start = 0;
+            if let Err(error) = read_at(
+                &self.index.file,
+                &mut self.buffer[..self.end],
+                self.index.offsets + u64::from(self.next) * 4,
+            ) {
+                self.failed = true;
+                return Some(Err(error));
+            }
+        }
+        let mut encoded = [0; 4];
+        encoded.copy_from_slice(&self.buffer[self.start..self.start + 4]);
+        self.start += 4;
+        self.next += 1;
+        let result = self.index.offset(u32::from_be_bytes(encoded));
+        if result.is_err() {
+            self.failed = true;
+        }
+        Some(result)
+    }
 }
 impl Iterator for IndexIds<'_> {
     type Item = io::Result<ObjectId>;

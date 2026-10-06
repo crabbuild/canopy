@@ -544,3 +544,136 @@ async fn bound_final_observes_shared_coordinator_recovery_without_losing_lifecyc
     f.runtime.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn bound_publication_waits_for_contended_admission_without_losing_original_command() -> Result
+{
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+        let p = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
+        let ticket = super::bound::bind(&f, &c, [236; 16], "owner").await?;
+        let session = ticket.bound_session()?;
+        let input = ready(&session).await?;
+        let future = ticket.publish_wait(&p, input);
+        tokio::pin!(future);
+        p.with_admission_for_test(|| {
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(
+                matches!(future.as_mut().poll(&mut context), Poll::Pending),
+                "mutex contention must wait without consuming the prepared command"
+            );
+            assert!(ticket.pending_publication().is_none());
+            assert!(matches!(ticket.state(), StagingState::Bound(_)));
+        })
+        .await;
+        let observer = timeout(Duration::from_secs(10), future).await??;
+        finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;
+        assert_eq!(observer.response().await?, refused());
+        assert!(matches!(
+            terminal(&ticket).await?,
+            StagingState::Published(Ok(_))
+        ));
+        assert!(c.close_and_drain().await.is_empty());
+        assert!(p.close_and_drain().await.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_publication_wait_ceiling_never_admits_or_executes_the_retained_command() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+        let p = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits::default(),
+            f.publication_budget.clone(),
+        )?;
+        let ticket = super::bound::bind(&f, &c, [237; 16], "owner").await?;
+        let session = ticket.bound_session()?;
+        let input = ready(&session).await?;
+        ticket.expire_bound_for_test()?;
+        let failure = timeout(
+            Duration::from_secs(10),
+            p.with_admission_async_for_test(ticket.publish_wait(&p, input)),
+        )
+        .await?
+        .err()
+        .ok_or("publication admitted under a locked mutex")?;
+        assert!(matches!(failure.reason, StagingError::Inactive));
+        assert!(ticket.pending_publication().is_none());
+        assert_eq!(p.stats().await.admitted, 0);
+        assert_eq!(
+            super::super::completion::completed_pushes(&f.handle).await?,
+            0
+        );
+        drop(failure);
+        // Bound is terminal for the staging phase, but expiry completes later.
+        // Wait for the lifecycle outcome rather than racing its status update.
+        let state = timeout(Duration::from_secs(10), ticket.wait_completion()).await?;
+        assert!(matches!(state, StagingState::Fenced(_)), "{state:?}");
+        assert!(c.close_and_drain().await.is_empty());
+        assert!(p.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_publication_wait_keeps_real_quota_refusal_immediate_and_unexecuted() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let f = Fixture::new(format).await?;
+        let c = StagingCoordinator::new(f.target.clone(), StagingLimits::default(), f.authority())?;
+        let p = PublicationCoordinator::new(
+            f.target.clone(),
+            PublicationLimits {
+                per_actor: 1,
+                ..PublicationLimits::default()
+            },
+            f.publication_budget.clone(),
+        )?;
+        let first = super::bound::bind(&f, &c, [238; 16], "owner").await?;
+        let second = super::bound::bind(&f, &c, [239; 16], "owner").await?;
+        let first_input = ready(&first.bound_session()?).await?;
+        let second_input = ready(&second.bound_session()?).await?;
+        let (release, entered) = p.pause_for_test().await;
+        let observer = first.publish_wait(&p, first_input).await?;
+        timeout(Duration::from_secs(10), entered).await??;
+        let failure = timeout(
+            Duration::from_secs(1),
+            second.publish_wait(&p, second_input),
+        )
+        .await?
+        .err()
+        .ok_or("actor quota exceeded")?;
+        assert!(matches!(
+            failure.reason,
+            StagingError::PublicationAdmission(PublicationScheduleError::Capacity)
+        ));
+        assert!(second.pending_publication().is_none());
+        assert!(matches!(second.state(), StagingState::Bound(_)));
+        assert_eq!(p.stats().await.admitted, 1);
+        drop(failure);
+        release
+            .send(())
+            .map_err(|_| "held publication disappeared")?;
+        finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;
+        assert_eq!(
+            super::super::completion::completed_pushes(&f.handle).await?,
+            1
+        );
+        assert!(c.close_and_drain().await.is_empty());
+        assert!(p.close_and_drain().await.is_empty());
+        f.runtime.shutdown().await?;
+    }
+    Ok(())
+}

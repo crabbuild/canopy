@@ -5,10 +5,16 @@ use std::sync::{
     Weak,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{Duration, Instant, timeout_at},
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 pub const MAX_SERVING_GENERATIONS: u8 = 4;
+// Bound detached request observers as well as latency. The producer retains its
+// slot and exact release after this wait expires; timeout is never reclamation.
+const ROLLOVER_WAIT: Duration = Duration::from_secs(2);
 #[derive(Clone, Copy, Debug)]
 pub struct ServingPoolLimits {
     pub generations: u8,
@@ -25,6 +31,7 @@ impl Default for ServingPoolLimits {
 struct Slot {
     requested_generation: u64,
     touched: u64,
+    retiring: bool,
     owner: ServingOwner,
 }
 struct State {
@@ -41,6 +48,8 @@ struct Inner {
     stop: CancellationToken,
     requests: TaskTracker,
     drain: TaskTracker,
+    #[cfg(test)]
+    selection_started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 struct Lifetime(Weak<Inner>);
 impl Drop for Lifetime {
@@ -94,6 +103,8 @@ impl ServingPool {
             stop: CancellationToken::new(),
             requests: TaskTracker::new(),
             drain: TaskTracker::new(),
+            #[cfg(test)]
+            selection_started: std::sync::Mutex::new(None),
         });
         let work = inner.clone();
         inner.drain.spawn(async move {
@@ -158,6 +169,18 @@ impl ServingPool {
             .map_err(ServingReadError::Task)?
     }
     #[cfg(test)]
+    pub(in crate::packs::publication) fn observe_selection_for_test(
+        &self,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self
+            .inner
+            .selection_started
+            .lock()
+            .expect("selection observer") = Some(sender);
+        receiver
+    }
+    #[cfg(test)]
     pub(in crate::packs::publication) async fn owners_for_test(&self) -> Vec<ServingOwner> {
         self.inner
             .state
@@ -178,77 +201,130 @@ impl Inner {
         if self.stop.is_cancelled() || self.paused.load(Ordering::Acquire) {
             return Err(ServingReadError::Inactive.into());
         }
-        let selected = self.context.select(actor.clone()).await?;
-        let owner = {
-            let mut state = self.state.lock().await;
-            if state.closed || self.stop.is_cancelled() || self.paused.load(Ordering::Acquire) {
-                return Err(ServingReadError::Inactive.into());
+        let mut rollover_deadline = None;
+        // Concurrent viewers may consume a released slot first. Bound retries
+        // even under continuous publication; admission already bounds waiters.
+        for _ in 0..=self.limits.generations {
+            // Permission and current generation can change while release waits.
+            #[cfg(test)]
+            if let Some(observer) = self
+                .selection_started
+                .lock()
+                .expect("selection observer")
+                .take()
+            {
+                let _ = observer.send(());
             }
-            state.slots.retain(|slot| !slot.owner.is_drained());
-            state.clock = state.clock.saturating_add(1);
-            let touched = state.clock;
-            if let Some(slot) = state.slots.iter_mut().find(|slot| {
-                let stats = slot.owner.stats();
-                match stats.token {
-                    Some(token) => {
-                        stats.phase == ServingOwnerPhase::Ready
-                            && token.generation == selected.generation
-                    }
-                    None => {
-                        stats.phase == ServingOwnerPhase::Acquiring
-                            && slot.requested_generation == selected.generation
-                    }
+            let selected = self.context.select(actor.clone()).await?;
+            enum Selection {
+                Borrow(ServingOwner),
+                Retire(ServingOwner),
+            }
+            let selection = {
+                let mut state = self.state.lock().await;
+                if state.closed || self.stop.is_cancelled() || self.paused.load(Ordering::Acquire) {
+                    return Err(ServingReadError::Inactive.into());
                 }
-            }) {
-                slot.touched = touched;
-                slot.owner.clone()
-            } else {
-                if state.slots.len() >= usize::from(self.limits.generations) {
-                    // Keep the closing slot until its real producer finishes.
-                    // Retry is explicit; there is no unbounded retired inventory
-                    // or wait behind old provider I/O inside the pool lock.
-                    let mut order: Vec<_> = (0..state.slots.len()).collect();
-                    order.sort_by_key(|i| state.slots[*i].touched);
-                    for i in order {
-                        if state.slots[i].owner.retire_if_idle() {
-                            break;
+                state.slots.retain(|slot| !slot.owner.is_drained());
+                state.clock = state.clock.saturating_add(1);
+                let touched = state.clock;
+                if let Some(slot) = state.slots.iter_mut().find(|slot| {
+                    if slot.retiring {
+                        return false;
+                    }
+                    let stats = slot.owner.stats();
+                    match stats.token {
+                        Some(token) => {
+                            stats.phase == ServingOwnerPhase::Ready
+                                && token.generation == selected.generation
+                        }
+                        None => {
+                            stats.phase == ServingOwnerPhase::Acquiring
+                                && slot.requested_generation == selected.generation
                         }
                     }
-                    return Err(ServingReadError::Capability(Error::Capacity(
-                        "repository serving generations",
-                    ))
-                    .into());
+                }) {
+                    slot.touched = touched;
+                    Selection::Borrow(slot.owner.clone())
+                } else if state.slots.len() >= usize::from(self.limits.generations) {
+                    // No slot leaves the inventory before its real producer
+                    // exits. Closing is shared; no waiter owns a replacement
+                    // release or a second retired-owner inventory.
+                    let mut order: Vec<_> = (0..state.slots.len()).collect();
+                    order.sort_by_key(|i| state.slots[*i].touched);
+                    let retiring = order
+                        .iter()
+                        .copied()
+                        .find(|i| {
+                            let slot = &mut state.slots[*i];
+                            if !slot.retiring && slot.owner.retire_if_idle() {
+                                slot.retiring = true;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .or_else(|| order.into_iter().find(|i| state.slots[*i].retiring));
+                    match retiring {
+                        Some(i) => Selection::Retire(state.slots[i].owner.clone()),
+                        None => return Err(generation_capacity()),
+                    }
+                } else {
+                    let operation = *uuid::Uuid::new_v4().as_bytes();
+                    let mut digest = blake3::Hasher::new();
+                    digest.update(b"canopy.serving-pool.v1");
+                    digest.update(&self.context.repository());
+                    digest.update(&operation);
+                    let owner = ServingOwner::start(
+                        self.context.clone(),
+                        self.coordinator.clone(),
+                        BeginRequest {
+                            repository: self.context.repository(),
+                            operation,
+                            request_digest: *digest.finalize().as_bytes(),
+                            actor: self.context.administrator().to_owned(),
+                            lease_ms: self.limits.lease_ms,
+                        },
+                        crate::server::mutation_identity()
+                            .map_err(|error| ServingOwnerError::Clock(Box::new(error)))?,
+                    )
+                    .await?;
+                    state.slots.push(Slot {
+                        requested_generation: selected.generation,
+                        touched,
+                        retiring: false,
+                        owner: owner.clone(),
+                    });
+                    Selection::Borrow(owner)
                 }
-                let operation = *uuid::Uuid::new_v4().as_bytes();
-                let mut digest = blake3::Hasher::new();
-                digest.update(b"canopy.serving-pool.v1");
-                digest.update(&self.context.repository());
-                digest.update(&operation);
-                let owner = ServingOwner::start(
-                    self.context.clone(),
-                    self.coordinator.clone(),
-                    BeginRequest {
-                        repository: self.context.repository(),
-                        operation,
-                        request_digest: *digest.finalize().as_bytes(),
-                        actor: self.context.administrator().to_owned(),
-                        lease_ms: self.limits.lease_ms,
-                    },
-                    crate::server::mutation_identity()
-                        .map_err(|error| ServingOwnerError::Clock(Box::new(error)))?,
-                )
-                .await?;
-                state.slots.push(Slot {
-                    requested_generation: selected.generation,
-                    touched,
-                    owner: owner.clone(),
-                });
-                owner
+            };
+            match selection {
+                Selection::Borrow(owner) => {
+                    // Acquisition may accept a newer fact than selection.
+                    return Ok(owner.snapshot_admitted(actor, permit).await?);
+                }
+                Selection::Retire(owner) => {
+                    // Never wait for provider I/O or exact release under the
+                    // pool lock. Shutdown can cancel this bounded observation
+                    // without canceling the independently owned producer.
+                    // Initial Cell selection may queue behind unrelated work.
+                    // Charge the observation budget only once retirement starts;
+                    // subsequent retries share it rather than extending it.
+                    let deadline =
+                        *rollover_deadline.get_or_insert_with(|| Instant::now() + ROLLOVER_WAIT);
+                    let drain = owner.drain_observer();
+                    tokio::select! {
+                        _ = self.stop.cancelled() => return Err(ServingReadError::Inactive.into()),
+                        result = timeout_at(deadline, drain.wait()) => {
+                            if result.is_err() {
+                                return Err(generation_capacity());
+                            }
+                        }
+                    }
+                }
             }
-        };
-        // The accepted acquisition may select a newer fact than the observation.
-        // Return its fact; never label that capability with the requested hint.
-        Ok(owner.snapshot_admitted(actor, permit).await?)
+        }
+        Err(generation_capacity())
     }
     async fn quiesce(self: Arc<Self>) -> Result<bool, ServingOwnerError> {
         let state = self.state.lock().await;
@@ -294,4 +370,8 @@ impl Inner {
         // tracker here, which also owns this quiesce operation.
         Ok(true)
     }
+}
+
+fn generation_capacity() -> ServingOwnerError {
+    ServingReadError::Capability(Error::Capacity("repository serving generations")).into()
 }

@@ -60,10 +60,11 @@ fn validates_empty_and_multi_page_indexes_for_both_formats() -> io::Result<()> {
             index.pack_checksum(),
             ObjectId::try_from(vec![7; format.bytes()]).unwrap()
         );
-        for (n, oid) in index.ids().enumerate() {
+        for (n, (oid, offset)) in index.ids().zip(index.offsets()).enumerate() {
             let oid = oid?;
             assert_eq!(u32::from_be_bytes(oid[..4].try_into().unwrap()), n as u32);
             assert_eq!(index.find(oid)?.unwrap().offset, 12 + n as u64);
+            assert_eq!(index.find(oid)?.unwrap().offset, offset?);
         }
         // Shards start at a native ordinal, including positions crossing the
         // iterator's buffer boundary. The end is a valid empty iterator.
@@ -93,6 +94,20 @@ fn validates_empty_and_multi_page_indexes_for_both_formats() -> io::Result<()> {
                 })?
                 .is_none()
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn offset_pages_cover_native_positions_across_a_page_boundary() -> io::Result<()> {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let index = open(&fixture(format, 20_001), format)?;
+        let mut count = 0;
+        for offset in index.offsets() {
+            assert_eq!(offset?, 12 + count);
+            count += 1;
+        }
+        assert_eq!(count, 20_001);
     }
     Ok(())
 }
@@ -159,6 +174,7 @@ fn supports_large_offsets_and_rejects_out_of_range_references() -> io::Result<()
         rehash(&mut bytes, format);
         let index = open(&bytes, format)?;
         assert_eq!(index.find(format.zero())?.unwrap().offset, 0x1_0000_0010);
+        assert_eq!(index.offsets().next().unwrap()?, 0x1_0000_0010);
         bytes[offsets..offsets + 4].copy_from_slice(&0x8000_0001_u32.to_be_bytes());
         rehash(&mut bytes, format);
         assert!(open(&bytes, format).is_err());

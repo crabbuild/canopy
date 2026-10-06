@@ -175,13 +175,37 @@ impl CatalogFiles {
     pub(in crate::packs) async fn install_workspace(
         &self,
         cache: Arc<crate::git_cache::GitCache>,
+        source: &ResolvedObject,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .install(cache, source, owner, true)
+            .await
+    }
+    pub(in crate::packs) async fn install_transient_workspace(
+        &self,
+        cache: Arc<crate::git_cache::GitCache>,
+        source: &ResolvedObject,
+        owner: crate::git_objects::ReadOwner,
+    ) -> Result<(), super::native::NativeReadError> {
+        self.native
+            .as_ref()
+            .ok_or(super::native::NativeReadError::Unavailable)?
+            .install(cache, source, owner, false)
+            .await
+    }
+    pub(in crate::packs) async fn install_pack_workspace(
+        &self,
+        cache: Arc<crate::git_cache::GitCache>,
         source: super::super::sources::NativePackDescriptor,
         owner: crate::git_objects::ReadOwner,
     ) -> Result<(), super::native::NativeReadError> {
         self.native
             .as_ref()
             .ok_or(super::native::NativeReadError::Unavailable)?
-            .install(cache, source, owner)
+            .install_pack(cache, source, owner)
             .await
     }
     pub(in crate::packs) async fn graph_spool(

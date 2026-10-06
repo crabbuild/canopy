@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 mod bodies;
 mod enrollment;
+mod native;
 
 const MAX_CELLS: usize = 100_000;
 
@@ -42,6 +43,8 @@ pub enum BackupError {
     Io(#[from] std::io::Error),
     #[error("backup task failed")]
     Task(#[from] tokio::task::JoinError),
+    #[error("backup native artifact graph failed")]
+    Native(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("backup rejected: {0}")]
     Invalid(&'static str),
 }

@@ -9,6 +9,9 @@ async fn refs(path: &Path) -> Result<Vec<u8>> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stock_git_history_refs_and_shallow_fetch_survive_fresh_disk_restore() -> Result {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;
     let address = available_address().await?;

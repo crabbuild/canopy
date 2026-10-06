@@ -478,3 +478,87 @@ fn status(code: StatusCode) -> Response {
     *response.status_mut() = code;
     response
 }
+
+const FORWARD_HOPS: &str = "canopy-forward-hops";
+
+impl NodePeer {
+    /// Forward transport bytes to the current resident owner. The verified
+    /// fleet advertisement supplies the TLS endpoint; the original credential
+    /// is independently authenticated there. Never redirect clients or retry a
+    /// consumed request body after an ambiguous receive-pack.
+    pub(crate) async fn forward_repository(
+        &self,
+        target: &CellTarget,
+        request: axum::http::Request<Body>,
+    ) -> Result<axum::http::Response<Body>, ServerError> {
+        let owner = self.live_owner(target).await?.ok_or(Error::Fenced)?;
+        if owner.session() == self.0.session {
+            // Ownership changed after route selection. Let a new request bind
+            // the local capability; this request must not use the stale gateway.
+            return Err(Error::Fenced.into());
+        }
+        let (parts, body) = request.into_parts();
+        let hops = match parts.headers.get(FORWARD_HOPS) {
+            None => 0,
+            Some(value) => value
+                .to_str()
+                .ok()
+                .and_then(|s| s.parse::<u8>().ok())
+                .filter(|n| *n < 2)
+                .ok_or(Error::PeerAuthorization("repository forwarding hop limit"))?,
+        };
+        let mut url = endpoint(owner.endpoint())?;
+        url.set_path(parts.uri.path());
+        url.set_query(parts.uri.query());
+        let mut headers = parts.headers;
+        strip_connection_headers(&mut headers);
+        headers.remove(axum::http::header::HOST);
+        headers.insert(
+            FORWARD_HOPS,
+            axum::http::HeaderValue::from_static(if hops == 0 { "1" } else { "2" }),
+        );
+        let response = self
+            .0
+            .client
+            .request(parts.method, url)
+            .headers(headers)
+            .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+            .send()
+            .await
+            .map_err(|e| transport_error(e, true))?;
+        let status = response.status();
+        let mut headers = response.headers().clone();
+        strip_connection_headers(&mut headers);
+        let mut result = axum::http::Response::new(Body::from_stream(response.bytes_stream()));
+        *result.status_mut() = status;
+        *result.headers_mut() = headers;
+        Ok(result)
+    }
+}
+
+fn strip_connection_headers(headers: &mut axum::http::HeaderMap) {
+    // Connection may nominate additional hop-local headers. Copy their names
+    // before mutation; forwarding credentials never come from extensions.
+    let named: Vec<_> = headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| axum::http::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .collect();
+    for name in named {
+        headers.remove(name);
+    }
+    for name in [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    ] {
+        headers.remove(name);
+    }
+}

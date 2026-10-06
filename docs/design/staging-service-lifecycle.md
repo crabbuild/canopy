@@ -1,6 +1,6 @@
 # Service owned staging lifecycle
 
-`StagingCoordinator` now owns admitted Begin/Claim/Renew/RegisterStagedInputs/Bind commands, input and bound tasks and completed results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH/mirror/generated producer selection, durable takeover reconstruction, full process admission and large-team qualification remain required.
+`StagingCoordinator` now owns admitted Begin/Claim/Renew/RegisterStagedInputs/Bind commands, input and bound tasks and completed results through observer cancellation and exact outcome recovery. It composes the [stored staging phases](staged-input-retention.md) with fresh deadline observations and the existing private catalog pipeline. Production HTTP/SSH receive-pack now selects this lifecycle. Generated producers, durable takeover reconstruction, complete physical admission and large-team qualification remain required.
 
 ## Admission and ownership
 
@@ -49,6 +49,11 @@ A known registration stores its original receipt before a fresh CheckStaging que
 ## Seal and catalog handoff
 
 Call seal when the input phase should finish. It prevents new producer admission and enters Draining. Existing producers and retained completed results continue under renewed staging custody. Bind does not begin until all input slots have drained through handoff or failure. This prevents a canceled observer from silently losing a physical witness while the service advances to catalog preparation.
+
+`wait_terminal()` observes staging handoff, including the intermediate Bound
+state. Callers waiting for expiry or final publication must use
+`wait_completion()`, which waits for Published, Uncertain, Fenced or Stopped.
+Observing Bound does not establish an expiry result or completed publication.
 
 Bind uses a newly prepared original command 42 and registrar 41 under the shared registered custody protocol. Known binding preserves the token, creating namespace and artifact expiry, and adds only the current catalog floor. Bound records that durable result and its original receipt; its recorded timestamps are not a fresh live-lease observation. Stage contexts become inactive after handoff. The operation remains admitted through bound preparation. `ticket.open_base` refreshes at the binding receipt and uses the existing PreparationBaseResolver with the supervisor's shared session, validating current access and expiry while inheriting automatic renewal, shutdown fencing and the bound residence ceiling.
 
@@ -99,3 +104,51 @@ StagingStats exposes completed probe queries, failed observations/fingerprint co
 
 
 Seven additional regression families exercise all seven original custody actions in SHA-1/SHA-256, closed coordinators and dropped observers, stopped staging/bound renewals with live callbacks and retained completed resources, unavailable private queries without absent-command execution or known-phase retries, an old ordinal after an explicit successor, malformed stop rejection, a corrupt head followed by a valid head and later repair, exclusion of input checkpoints despite an older stop, and 130 admitted operations spanning multiple probe pages plus restart at an earlier key after idle. The native/domain codecs reject the all-zero operation ID; the multi-page fixture uses valid nonzero IDs rather than weakening that invariant. The initial warm fixture observed the preceding binding before the renewal; it now waits for the actual uncertain renewal. The checkpoint fixture now registers an explicit successor instead of using the fresh-operation factory against an existing journal. Final frozen-source evidence is recorded in the implementation status.
+
+## Bounded physical metadata handoff
+
+The admitted native verifier now uploads/releases one metadata shard per step
+and retains ordered `SourceRecord` descriptors on admitted disk. The creating
+result contains a complete witness and descriptor replay; it contains no worker
+context or open metadata database, so transferring it cannot block Bind.
+The source tree's digest order is distinct from physical ordinal order.
+
+A bound catalog builder checks its staging context, selects the exact retained
+native input checkpoint, and authenticates/copies one stored shard at a time.
+It reuses the stored metadata artifact instead of uploading it again. Blocking
+closure/directory jobs, file reads/writes and artifact hash jobs retain the same
+activity pin. A failure or cancellation cannot yield a private prepared catalog.
+Completed private proofs do not retain worker activity across final publication.
+
+This API composition is a prerequisite, not live transport conversion or a
+full-history deadline/throughput result. Resident service drain, adopted older
+input verification, remaining request/policy work and actual producer wiring
+remain release work. Current qualification and limits are tracked in the
+[implementation status](../large-repository-implementation-status.md).
+
+
+## Production receive workflow and shutdown grace
+
+HTTP and SSH transfer one authenticated encoded receive request to `drive_receive`
+before awaiting status. Its controller registers wire custody, retrieves staged
+native/result/descriptor outputs, registers checkpoints, drains physical workers,
+binds once, and orders the existing policy/ref/completed-root protocol. Each
+byte-bounded page advances by its actual minted end offset. Returned success is
+selected from the durable completed root under current read authorization.
+
+Node shutdown first closes ingress and staging admission. Already-owned receive
+controllers get a shared 30-second grace while serving, native admission, Cell
+heartbeat and workspace ownership remain available. The grace is a controller
+finish window, not a deadline for draining physical jobs or uncertain mutations.
+After it expires, ordinary forced close cancels/joins controllers and drains the
+existing worker/exact recovery owners before the lower services can close.
+Generic `drive` callback producers continue to cancel immediately. Public stop,
+lease/authority fencing and forced close retain their previous semantics.
+
+Stock SSH qualification disconnects the request after real native pack upload is
+paused, starts shutdown, proves release remains blocked, resumes upload, and
+checks the new commit and blob through cold clone and strict fsck. Late Write-to-Read
+revocation before Bind still requires a separately authorized durable refusal
+path. No current lease, completed receipt or generic callback may bypass that
+missing authority transition. Request/result/policy physical pins and authenticated
+older-owner adoption remain unfinished release gates.

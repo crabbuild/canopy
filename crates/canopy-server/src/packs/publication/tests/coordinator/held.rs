@@ -204,7 +204,7 @@ async fn held_admission_uses_existing_account_bytes_and_returns_refused_ready() 
         .await
         .err()
         .ok_or("contended synchronous admission unexpectedly accepted")?;
-    assert_eq!(failure.reason, PublicationScheduleError::Capacity);
+    assert_eq!(failure.reason, PublicationScheduleError::Busy);
     attempts[1].3 = Some(failure.ready);
     // The same logical operation cannot have a second held/executing slot.
     let duplicate = Box::pin(attempts[0].0.ready_push(

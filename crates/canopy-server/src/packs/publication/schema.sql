@@ -238,8 +238,8 @@ CREATE TABLE pull_requests (
     state TEXT NOT NULL CHECK(state IN ('open', 'closed', 'merged')),
     draft INTEGER NOT NULL CHECK(draft IN (0, 1)),
     version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
-    source_ref TEXT NOT NULL REFERENCES refs(name),
-    base_ref TEXT NOT NULL REFERENCES refs(name) CHECK(source_ref != base_ref),
+    source_ref TEXT NOT NULL,
+    base_ref TEXT NOT NULL CHECK(source_ref != base_ref),
     initial_source_oid BLOB NOT NULL CHECK(length(initial_source_oid) IN (20, 32)),
     initial_base_oid BLOB NOT NULL CHECK(length(initial_base_oid) IN (20, 32)),
     created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
@@ -282,8 +282,19 @@ CREATE TABLE pull_merges (
     source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
     source_version INTEGER NOT NULL CHECK(source_version > 0),
     base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
-    base_version INTEGER NOT NULL CHECK(base_version > 0)
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    publication BLOB NOT NULL CHECK(length(publication) BETWEEN 1 AND 128),
+    strategy TEXT NOT NULL DEFAULT 'fast_forward' CHECK(strategy IN ('fast_forward','merge_commit','squash','rebase')),
+    candidate_id BLOB REFERENCES merge_candidates(id) CHECK(candidate_id IS NULL OR length(candidate_id)=16),
+    CHECK((strategy='fast_forward' AND candidate_id IS NULL) OR (strategy!='fast_forward' AND candidate_id IS NOT NULL))
 ) WITHOUT ROWID;
+CREATE TRIGGER pull_merge_immutable BEFORE UPDATE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_not_replaced BEFORE INSERT ON pull_merges
+WHEN EXISTS(SELECT 1 FROM pull_merges WHERE id=NEW.id OR pull_number=NEW.pull_number)
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_retained BEFORE DELETE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge audit retained'); END;
 
 CREATE TABLE merge_candidates (
     id BLOB PRIMARY KEY CHECK(length(id) = 16),
@@ -295,8 +306,20 @@ CREATE TABLE merge_candidates (
     result TEXT NOT NULL CHECK(length(CAST(result AS BLOB)) <= 262144),
     source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
     base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
-    oid BLOB CHECK(oid IS NULL OR length(oid) IN (20, 32))
+    oid BLOB CHECK(oid IS NULL OR length(oid) IN (20, 32)),
+    native_publication BLOB CHECK(native_publication IS NULL OR (typeof(native_publication)='blob' AND length(native_publication) BETWEEN 1 AND 512))
 ) WITHOUT ROWID;
+CREATE TRIGGER candidate_intent_immutable BEFORE UPDATE ON merge_candidates
+WHEN NEW.id IS NOT OLD.id OR NEW.binding IS NOT OLD.binding OR NEW.pull_number IS NOT OLD.pull_number OR NEW.actor IS NOT OLD.actor OR NEW.request IS NOT OLD.request OR NEW.created_ms IS NOT OLD.created_ms OR NEW.source_oid IS NOT OLD.source_oid OR NEW.base_oid IS NOT OLD.base_oid
+BEGIN SELECT RAISE(ABORT,'candidate intent immutable'); END;
+CREATE TRIGGER candidate_completed_immutable BEFORE UPDATE ON merge_candidates
+WHEN json_extract(OLD.result,'$.state') IS NOT 'pending' AND (NEW.result IS NOT OLD.result OR NEW.oid IS NOT OLD.oid OR NEW.native_publication IS NOT OLD.native_publication)
+BEGIN SELECT RAISE(ABORT,'candidate result immutable'); END;
+CREATE TRIGGER candidate_intent_not_replaced BEFORE INSERT ON merge_candidates
+WHEN EXISTS(SELECT 1 FROM merge_candidates WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT,'candidate intent retained'); END;
+CREATE TRIGGER candidate_intent_retained BEFORE DELETE ON merge_candidates
+BEGIN SELECT RAISE(ABORT,'candidate intent retained'); END;
 
 CREATE TABLE pull_threads (
     number INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -587,3 +610,19 @@ BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;
 CREATE TRIGGER catalog_custody_stop_immutable BEFORE UPDATE OF stopped ON catalog_custody_commands
 WHEN OLD.stopped IS NOT NULL AND NEW.stopped IS NOT OLD.stopped
 BEGIN SELECT RAISE(ABORT, 'custody retirement is immutable'); END;
+
+-- Symbolic HEAD outcomes retain the original joint roots for exact retirement.
+CREATE TABLE catalog_head_updates (
+    id BLOB PRIMARY KEY CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    request BLOB NOT NULL CHECK(length(request)<=131072),
+    result BLOB NOT NULL CHECK(length(result)<=512),
+    fact BLOB NOT NULL CHECK(length(fact)<=512)
+) STRICT;
+CREATE TRIGGER catalog_head_updates_immutable BEFORE UPDATE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is immutable');
+END;
+CREATE TRIGGER catalog_head_updates_retained BEFORE DELETE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is retained');
+END;

@@ -103,7 +103,7 @@ These limits bound individual requests and publication work. They do not cap tot
 | LFS request deadline | Batch: 120 seconds; object PUT: 120-second input idle timeout with no whole-transfer deadline; timeout returns 408 | Git HTTP router / LFS service |
 | Git request admission | No receive-pack byte quota; 64 MiB for other requests; 120-second input idle deadline | anonymous request spool |
 | Ref mutation | check actor's write role, compare expected optional OID and monotonic version; retain deletion records and apply all updates in one Cell transaction | `FinalizePush` |
-| Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
+| Symbolic HEAD | Accepted immutable `RefStateSnapshot.default_branch`, initially `refs/heads/main`; owner-authorized joint-root compare-and-set | `PublishNativeHead`, operation 54, codec 1 |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer, rejection decision and ordered push notes atomically with accepted refs | `CompletePush`, codec 5 |
 | Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
@@ -155,26 +155,50 @@ implemented yet.
 
 ### Ref snapshots and default branch
 
-The `ref_generation` singleton advances once in the same transaction as each
-accepted ref plan or default-branch update, including selecting the same branch.
-Typed finalization and HTTP completion share the ref-plan update; rejected plans,
-failed HEAD preconditions, completed-request replay and object/ACL writes do not
-advance it. Ref queries return at most 256 rows with HEAD and generation in one SQLite
-statement, including an empty terminal page. A continuation must supply the
-first page's generation. Changes invalidate the scan even when tips return to
-their previous OIDs or names are deleted and recreated. The gateway discards
-partial scans and tries at most three scans, then returns HTTP 503.
-Successful scans therefore describe one coherent ref state. That state can
-become older while its disposable cache is hydrated; admitted readers retain
-the selected generation, and immutable objects remain readable without GC.
+The accepted immutable ref snapshot's generation advances once for every
+accepted ref plan or HEAD update, including selecting the same branch. Ref
+records retain independent monotonic versions and deletion history. HEAD-only
+changes reuse the existing ref tree without changing those records. Ref pages
+select the same certified joint catalog/ref generation; continuations must use
+the unchanged ref generation. A push or HEAD ABA invalidates that precondition.
 
-HEAD must name a valid `refs/heads/` reference under Canopy's UTF-8,
-255-byte ref policy. Changing it requires the owner, an expected ref generation,
-and either a live target branch or no live branches. Owner authorization, target
-existence and generation comparison occur in one Cell SQL update. Concurrent
-ref changes and HEAD ABA invalidate the precondition. The SDK's mutation identity
-replays its recorded result; the HTTP API uses an explicit generation and requires
-a fresh GET after an ambiguous reply. It does not silently retry updates.
+HEAD must name a valid UTF-8 `refs/heads/` reference within the ref metadata's
+65,535-byte name limit. The HTTP body has a separate 8 KiB limit. Changing HEAD
+requires the current repository owner, an admin-scoped token, the expected ref
+generation, and either a live target branch or no live branches. The private
+preparation reads the held immutable tree. Checking for any live branch uses a
+seek and one live cursor result, skipping whole tombstoned subtrees.
+
+Operation 54 carries a purpose-bound catalog certificate, original request and
+conditional new snapshot. The final Cell transaction rechecks current owner,
+ACL, actual fence, exact original pin, expiry, retention floor and current joint
+roots, then publishes roots, immutable `catalog_head_updates` outcome, checkpoint,
+attempt closure and the original recovery phase together. No network observer
+owns the command. The resident staging/publication lifecycle retains its original
+prepared command and owner through cancellation and uncertain acknowledgements.
+Results fit the existing 512-byte recovery phase limit. A known SDK receipt or
+journal is resolved before body downloads or new custody. A cold absent HEAD
+command performs no new native work; its final receiver can record the original
+expiry or revocation denial without first requiring fresh Write authorization.
+
+Typed retirement checks the immutable selected outcome and bounded catalog,
+directory and ref snapshot headers before transferring the original journal to
+shared recovery receipts and releasing the transient pin. A missing selected
+snapshot retains the pin. The permanent original outcome cannot be updated or
+deleted. This authorizes no provider deletion; physical collection and quota
+qualification remain separate work.
+
+The HTTP API uses an explicit generation and requires a fresh GET after an
+ambiguous reply. It does not silently retry an update. Repository discovery,
+and default-branch GET read the existing constant-size `ref_generation` summary
+with current read access in the same query. Every successful native push,
+reviewed merge and HEAD publication updates its generation atomically with the
+accepted immutable ref snapshot. Push and merge preserve HEAD; operation 54
+changes both fields. The private merge proof binds the generation read from its
+prepared immutable snapshot (operation 9 codec 7). Ref-free completions and
+refusals leave the summary unchanged. Stock Git reads the accepted immutable
+snapshot. Metadata reads perform no artifact I/O, acquire no serving pin and
+publish no Cell root. The detached SQL HEAD setter fails closed.
 
 `GET /api/repositories/<name>/default-branch` requires repository read access,
 including anonymous public access. It returns `repository_id`, `reference` and `generation`.
@@ -1142,8 +1166,10 @@ acknowledged state is recovered from object storage. Normal shutdown may leave
 local files for the next startup to reclaim.
 
 One supervisor owns node startup, the listener, Cell drain and the workspace.
-`CanopyServer::start` waits for its readiness result; cancelling that wait closes
-the control channel and requests drain after admitted initialization settles.
+`CanopyServer::start` waits for its readiness result. A reported startup error
+also joins the supervisor before returning, so completion includes release of
+its task-owned startup resources. Successful readiness retains the running
+supervisor in the handle. Cancelling either wait closes the control channel and requests drain after admitted initialization settles.
 Dropping a returned handle also requests drain. `shutdown()` waits for completion,
 but cancelling the wait leaves that same supervisor running. The Tokio runtime
 must stay alive for cleanup to finish. This does not make runtime destruction,
@@ -1618,6 +1644,26 @@ increasing creation number. The OID must identify a stored Git commit; absent
 objects, trees, tags and blobs are not check targets. A context does not imply
 branch protection; an enabled branch rule must explicitly require it.
 
+Native commit reads and starts use the resident serving snapshot's authenticated
+catalog headers to prove kind and existence. The private `CommitMembership`
+factory issues a bounded purpose-specific MAC binding tenant, application,
+repository, actor, commit OID, serving token and exact retained catalog/ref fact.
+Header lookup runs under the existing tracked physical read owner and admission;
+it reads bounded metadata and does not hydrate native pack bodies. The caller
+keeps its serving snapshot through the final receiver.
+
+Repository command 49 starts a check; query 50 reads the bounded latest-check
+page. Both verify the MAC, actual Cell identity, current read access, exact live
+pin and retained fact. Command 49 also checks the actual admitted owner fence.
+Pin expiry uses a refreshed wall clock clamped to runtime logical time. An
+unrelated publication may advance current head while the original retained pin
+remains authoritative. Producer release, expiry, access loss, or a substituted
+actor/OID/repository invalidates that authority. Command policy decisions and
+conditional insertion occur in the same transaction. Recorded rejections retain
+their receipts and map to domain HTTP outcomes; pending invocation errors remain
+ambiguous. Inputs are bounded at 4 KiB and commit pages at 256 KiB / 32 contexts.
+The existing check metadata tables, creation order and policy triggers are reused.
+
 Only the configured reporter can start runs. The owner has no implicit reporting
 bypass and must explicitly configure itself as reporter if desired. Starting
 requires the enabled context's current version and current repository read access.
@@ -1666,7 +1712,8 @@ HTTP routes:
 Each context contains name, reporter, enabled and version. Each run contains id,
 OID, context, context_version, reporter, state, version, summary, created_at_ms
 and updated_at_ms. Mutation UUIDs are canonical lowercase with the supported
-RFC variant/version; OIDs use 40 lowercase hexadecimal characters. All writes
+RFC variant/version; OIDs use 40 or 64 lowercase hexadecimal characters for
+the repository's SHA-1 or SHA-256 format. All writes
 carry the repository UUID to prevent stale names from targeting another Cell.
 Missing membership/resources/non-commit targets return 404, authority or scope
 failure returns 403, identity/version/terminal-state conflicts return 409, and
@@ -1706,8 +1753,10 @@ admin-scoped owner token and `{repository_id, rule}`. `rule` contains `reference
 are 422. Repository identity is a UUID precondition. The body limit is 16 KiB
 with a 30-second receive deadline. The Cell command rechecks owner authority.
 
-The one authoritative `refs::apply_refs` function applies to typed
-`FinalizePush`, HTTP `CompletePush`, and `MergePull`. Before any ref writes, each enabled rule
+The historical SQL publisher used `refs::apply_refs` for typed
+`FinalizePush`, HTTP `CompletePush`, and `MergePull`. Native publication instead
+uses privately certified immutable ref roots and reuses current branch/check
+predicates; native reviewed merge operation 9, codec 7 is described below. Before any ref writes, each enabled rule
 checks deletion policy, ancestry and every required check. For a non-deletion,
 the selected attempt is the greatest creation number matching the proposed
 commit, context and current context version. It must have state `success` and
@@ -1719,8 +1768,11 @@ ref mutation, including deletion and recreation. Otherwise deletion depends on
 `deny_deletions`; checks and fast-forward policy govern non-deletions. Branch
 creation needs checks but has no old ancestry to prove.
 
-Verified commit objects provide `commit_parents(child, parent)` when graph
-closure is certified. Only commit-parent edges enter that table. Immutable
+In the retired SQL graph contract, verified commit objects provided
+`commit_parents(child, parent)` when graph closure was certified. Native
+preparation reads verified catalog commit headers and uses MAC-bound ancestry
+evidence; it does not populate these retired tables. The historical contract
+below does not describe native production authority. Only commit-parent edges enter that table. Immutable
 `commit_ancestry(ancestor, descendant)` certificates avoid graph traversal in the
 ref transaction. Operation 7, codec 1 accepts at most 128 child/parent steps.
 Every step must exist in verified parent links and lead either to the claimed
@@ -1800,8 +1852,9 @@ backfill path for old object certificates lacking parent rows.
 author, editorial content, open/closed state, draft flag, optimistic version,
 fixed source/base branch names, initial commit OIDs and timestamps. Pull and issue
 numbers have separate sequences. A pull does not store a mutable copy of current
-branch state: reads join the two durable `refs` rows in the same Cell observation.
-This avoids fanout writes to every open pull after a push. Retained ref tombstones
+branch state: reads join privately authenticated facts from the current immutable
+ref snapshot with editorial rows in one final Cell observation. This avoids
+fanout writes to every open pull after a push. Retained ref tombstones
 expose deleted tips as null without losing their versions. Original commit OIDs
 remain available in details. Pulls may share the same source/base pair.
 
@@ -1846,15 +1899,153 @@ results continue to use their configured context versions, as documented above.
 A fresh development prefix is required; old memberships have no generation
 backfill. A future migration must initialize those before enabling these APIs.
 
-All three mutations are bounded guarded SQL batches through the registered Cell
-SQL command. Their recorded pre-mutation domain decision, conditional write and
-result number share the same transaction. Runtime receipt replay preserves the
+Creation and review use typed commands 51 and 53; editorial edits use the existing
+registered Cell SQL command. Their recorded pre-mutation domain decision,
+conditional write and result number share the same transaction. Runtime receipt replay preserves the
 original outcome. Application UUID bindings provide HTTP retry semantics across
 fresh command identities. Failed domain decisions leave pull/review content
 unchanged. The SDK accepts an authenticated actor assertion; HTTP authenticates
 before reading the body and the Cell rechecks membership/authority at mutation.
 As with issues, already admitted token revocation follows the existing admission
 boundary; repository revocation is checked again in the write.
+
+Native ref observations reuse the MAC envelope, serving token and joint catalog/ref
+fact. Issuance derives exact OIDs, versions, tombstones and never-present names
+from the immutable ref tree inside the tracked physical read owner. Its
+constant-sized certificate binds repository, actor, actual Cell, request purpose
+and payload digest, and the complete sorted fact vector digest. Receivers verify
+the repository seed/MAC, fresh access, exact unexpired serving pin, admitted command
+owner fence and equality with the **current** joint generation before using facts.
+A retained historical generation alone cannot authorize current ref policy.
+Altered payloads or facts, another Cell, later joint publication and physical pin
+release invalidate the observation. Ref lookup requires no native pack bodies.
+
+Facts shadow `refs` only in a parameterized statement-local CTE. No SQL ref mirror
+is populated; the fresh production schema removes the obsolete source/base foreign
+keys into that table. Existing editorial rows, UUID digests, member versions and
+review-head ordering remain authoritative for collaboration. Inputs admit at most
+128 unique sorted refs, 512 KiB of total name bytes and 65,535 bytes per name, within
+an 816 KiB operation input bound. Mutation results admit 16 bytes. Unknown names
+and deleted tombstones remain distinct authenticated facts; neither supplies a
+live tip for a new pull or review.
+
+Query 52, codec 2, reads lists, details, review applicability and review policy
+with a 1 MiB output bound. Policy is a distinct request purpose: a prepared policy
+observation cannot authorize a detail query or another pull number.
+The initial bounded selection binds pull numbers, editorial versions and ref names.
+The final query repeats that selection and rejects a mismatch before joining the
+certified refs. The adapter makes at most three attempts with fresh selections;
+continued movement returns an explicit error, never a partial or skewed page.
+Each final transaction rechecks current access, including anonymous public access
+and public-to-private changes after preparation. Known denied mutations still
+reach the final command without a proof; its fresh access decision records
+NotFound while access remains denied, or Conflict if it has changed. Pending or
+transport failures remain errors. Review-policy reads join the authenticated
+native tips with current rules, review heads and member generations in the final
+query. Changes to rules or decisions after preparation are reflected immediately;
+ref/editorial changes invalidate the prepared observation. Tombstones remove the
+reviewed revision; recreating the same OID with a later ref version cannot restore
+old approvals. Merge ancestry preparation uses this same native policy reader.
+The public merge adapter and generated Git producers still need native
+publication integration and are not qualified by these read operations. Codec 2 is a hard
+cutover of this unreleased query; no old input decoder is retained.
+
+Native merge preparation has a separate
+`PreparedCatalog::ref_proof_with_required_ancestry` factory. Unlike ordinary
+`ref_proof`, it walks every non-vacuous base-to-target predicate regardless of
+branch rules. It reuses `RefPublicationProof`, the signed plan/evidence digest,
+verified native commit headers and the bounded disk-backed walker. False bits
+remain negative facts; a decoded bit vector grants no authority. Creation,
+deletion and identical tips retain the existing vacuous predicate semantics,
+with deletion permissions checked separately at publication. Ordinary pushes
+continue to compute ancestry only where their current policy requires it.
+
+Both factories retain the preparation's live lease, timeout, cancellation and
+scratch budget. Neither publishes roots or populates SQL refs/ancestry. A final
+native merge receiver must authenticate the exact proof and conditional ref
+snapshot, check current access/reviews/checks and ref versions, and commit joint
+roots, pull state and UUID result under the actual owner fence and durable
+recovery journal. The native receiver and resident fast-forward adapter described below exist.
+Typed terminal release is described below. The historical SQL merge description
+below is not qualification of generated native merge strategies.
+
+`PublishReviewedMerge` reuses operation 9 with codec 7 and a 256 KiB input / 512
+byte output contract. It replaces the registered contract rather than decoding
+legacy codec 4. Its private factory requires a ref-only `PreparedCatalog`: no
+incoming pack or native push-result checkpoint is accepted. It reads at most two
+source/base facts from that preparation's immutable ref root, verifies native
+ancestry, and prepares the conditional ref snapshot while preserving HEAD.
+The existing catalog MAC binds actor, exact request including preparation time,
+fact vector, plan/evidence, proposed ref root and permanent audit root under a
+distinct merge purpose.
+No serving-only proof, arbitrary root or transport bit grants write authority.
+
+The final command requires its exact registered SDK command and body before
+evaluating the domain transition. It authenticates the catalog certificate,
+checks current write authority, then replays an exactly bound application UUID
+before testing new policy. A new merge requires the actual owner fence, live
+matching operation and pin, retained base and equality with the current joint
+generation. Authenticated facts join current editorial, review-head and member
+metadata in the same statement-local CTE as native pull reads. The exact reviewed
+update privately satisfies only its require-PR gate; ancestry and current check
+context/reporter results remain mandatory even on unprotected branches.
+
+Joint catalog/ref roots, pull state/version, immutable UUID result, preparation
+checkpoint and operation consumption share the final Cell transaction and its
+durable recovery journal. Every authenticated terminal result also closes its
+exact matching operation under the actual owner fence, including domain refusals
+and applied UUID replays. It cannot close a successor or unauthenticated
+proposal; the independent pin remains until typed retirement. Errors after the
+first write roll back operation closure, domain changes, phase and SDK acceptance.
+Rejected requests do not insert `pull_merges`, so a fresh owned attempt may retry
+the same application UUID after policy changes. The older attempt still recovers
+its original refusal and receipt. `ReadyNativeMerge` binds its exact original
+command and private owner into the existing fair `ReadyBoundRecovery` dispatcher;
+Kind `Merge` cannot be restored or decoded as a push outcome.
+
+The current SHA-256 maximum result encodes to 493 bytes, within the unchanged
+512-byte journal cap. Known results survive original factory loss, SQLite loss
+and actual owner restoration. An applied UUID row also retains a bounded
+`StoredInputRoot` descriptor containing its typed request, catalog and ref
+snapshot. The final merge transaction saves that descriptor atomically with the
+result; SQL guards prohibit replacing, updating or deleting the row. Terminal
+release selects the original UUID audit, authenticates its typed catalog roots
+and exact published base-ref path, and transfers the original recovery phase
+into the existing immutable receipt archive before deleting the pin. A fresh
+UUID replay must close its own operation first and selects the original audit,
+not its new proposal. Known denials retain their original phase after later
+success and require authoritative operation closure. This authorizes no provider
+deletion; complete retained-root inventory and descendant reclamation remain
+required. See [terminal retention](design/terminal-publication-retention.md).
+The HTTP fast-forward adapter now uses `GitGateway::merge_pull`. It checks
+current access after body ingestion, then gives an independent fresh attempt to
+the resident staging controller. A bounded, domain-separated intent digest binds
+the repository, actor, pull and exact request. A fresh SDK identity is never
+substituted for an uncertain original command. Ref-only Bind selects the current
+certified joint generation; an admitted bound worker owns catalog preparation
+and ancestry verification using the gateway's scratch, disk and native resources.
+
+Resident root recovery discovery shares the existing staging coordinator.
+A newly registered recovery head can precede the producer's held publication
+handoff; discovery must not execute or retire it while that exact bound attempt
+is still owned. After looking up already admitted cold work, the scanner checks
+the full bound `LeaseCheck` against the staging owner and defers a match. Logical
+UUID equality alone is insufficient. This creates no additional admission or
+SQL mirror. The original lifecycle retains live command recovery, and abandoned
+heads without a matching bound owner continue through the cold discovery path.
+
+The producer result is retrieved before Finishing, then `ReadyNativeMerge`
+registers and binds its original command into fair publication. HTTP timeout or
+observer cancellation leaves this resident-owned workflow and exact recovery
+intact. Known refusals use the normal 404/403/409 mappings; unknown acceptance
+remains unavailable and asks for the same application UUID/revision.
+
+The direct historical `RepositoryCell::merge_pull` API still uses retired codec
+4 and is not the product HTTP path. Generated merge/squash/rebase strategies are
+not accepted by this factory; their producers and native publication remain
+required work. Complete merge-specific cancellation/startup reconstruction,
+queued authority/policy races and pre-Bind intent retention qualification remain
+required beyond the generic resident lifecycle tests.
 
 Six HTTP operations live under `/api/repositories/<name>/pulls`: GET/POST the
 collection, GET/PUT `/<number>`, GET/POST `/<number>/reviews`. Every mutation
@@ -2154,7 +2345,11 @@ moves refs. Source must descend from base for this strategy even when the branch
 rule does not require fast-forward pushes. Non-ancestor or unrelated histories
 conflict. There is no synthesized commit, implicit rebase or strategy fallback.
 
-Operation 9, codec 4 publishes the merge in one Repository Cell command:
+Historical SQL merge contract (operation 9, codec 4; no longer registered in
+the native production registry): the old command performed the following
+transaction. The native operation 9, codec 7 contract above replaces its storage
+authority. Public/resident adapter conversion remains open; this historical
+section is not evidence that the current merge endpoint works.
 
 1. Check current write authority. For an existing application UUID, compare its
    binding to actor, pull number, full requested revision and strategy; an exact
@@ -2204,6 +2399,13 @@ remain open. No dependency or lockfile changed.
 
 ### Native merge, squash and rebase candidates
 
+In the current packed cutover, operation 10 codec 3 supports native editorial
+reservation and negative preparation completion. Generated `ready` publication
+and the resident generated producer remain incomplete. The generated-object
+workflow below is required delivery scope; retired SQLite object/ref ingestion
+does not implement it. This distinction applies even when a pending intent or
+negative result is already durable.
+
 Preparation and branch publication are separate actions. A writer POSTs
 `/api/repositories/<name>/pulls/<number>/merge-candidates` with `repository_id`,
 canonical UUID `id`, exact pull `revision`, and `strategy`. `merge_commit` and
@@ -2221,7 +2423,44 @@ its original request fields, pull `number`, `actor`, `created_at_ms`, and `resul
 | `unrelated` | none | Native Git found no common ancestor; cannot publish |
 | `rebase_unavailable` | `reason` | `merge_history`, `no_commits`, `limit` or `commit_format`; cannot publish |
 
-Operation 10, codec 2 reserves the UUID against actor, pull and complete intent.
+Operation 10, codec 3 reserves the UUID against actor, pull and complete intent.
+Its input reuses `CandidateAction` and `RefSelection`. A serving observation
+authenticates the exact action purpose, actor, selected native OIDs/versions,
+actual owner, live pin and current joint generation. The final transaction
+checks fresh write access and projects those facts into the existing pull-policy
+statement instead of reading the retired SQL ref table. The client keeps its
+serving snapshot through dispatch. Known access denials reach the typed command
+without a proof, preserving their original durable refusal.
+
+Reservation and negative completion change only existing candidate editorial
+rows. They do not move roots, create fetch refs or authorize physical deletion.
+Even an authentic serving observation bound to a `Ready` payload cannot grant
+generated write authority: this command's codec rejects that scope, and the
+client requires the forthcoming joint generated publisher. There is no codec 2
+compatibility decoder. A SQL failure rolls back both the editorial write and
+SDK acceptance, allowing the original prepared command to retry unchanged.
+
+The private prepared native catalog now provides `verify_candidate_commit`.
+It checks the reserved actor, valid intent, repository object format and selected
+commit/tree/source/base membership. Merge and squash commits must match exact
+parent order, author/committer, reserved UTC second and message bytes. Both the
+Git OID and canonical BLAKE3 body digest must match the physically verified
+header; verifying these strategies requires no native body/pack download.
+
+For rebase, at most 128 original commit bodies are read through bounded shared
+native-pack custody. Each rewritten commit is verified by canonical headers and
+exact expected bytes, preserving original author, encoding and message while
+removing stale signatures and replacing tree, parent and committer. The source
+and rewritten chains advance together. One admitted, disk-backed traversal of
+base ancestry checks the bounded original set: only the final remaining source
+anchor may already be reachable from base. Skipping a source commit or replaying
+base history is refused. Original body reads reuse the native pack cache; new
+commit bodies do not require a second download or subprocess. The shared lease
+and timeout cover preparation. This verifier adds no publication authority,
+SDK command, schema or compatibility decoder: the forthcoming resident factory
+and final transaction must bind these facts to exact intent/ref publication and
+recheck fresh policy, access, owner, generation and custody.
+
 It retains the first timestamp. Retrying completed preparation returns the
 original result, even if the pull later changes or merges; current write access
 is still required for POST. GET requires current read access. For pending
@@ -2253,10 +2492,12 @@ native worker is trusted to compute the merge tree; the Cell validates exact
 canonical commit bytes and certified graph closure before recording readiness.
 It does not independently recompute the merge algorithm.
 
-Generated objects use the same verified SQLite/chunk/external-blob ingestion as
-pushes. A ready result and `refs/canopy/merge-candidates/<UUID>` commit in one
-transaction, advancing the ref generation for cache invalidation and coherent
-pagination. The entire `refs/canopy` namespace, including its root, is reserved.
+The cutover's generated publisher must use the same physically verified native
+pack/catalog lifecycle as pushes. Its ready result, certified joint roots and
+`refs/canopy/merge-candidates/<UUID>` must commit in one transaction, advancing
+the ref generation for cache invalidation and coherent pagination. The retired
+SQLite/chunk/external object ingestion and SQL ref insertion are not a fallback.
+The entire `refs/canopy` namespace, including its root, is reserved.
 The authoritative publisher rejects direct creation, replacement and deletion
 there; native receive hooks give per-ref rejection reports. Mixed pushes may
 still publish permitted siblings, while atomic pushes reject the group. Ready
@@ -2287,8 +2528,10 @@ native peak disk/memory/CPU bounds and crash-left cleanup remain release gates.
 Candidate input/result objects and their ancestor closure are retention roots.
 No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
 historic candidates need quota/retention policy before persistent public use.
-Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
-codec 4 require a fresh development prefix. No dependency or lockfile changes.
+Schema 1 remains unreleased and requires a fresh development prefix. The native
+editorial increment reuses the existing candidate request/result/table and
+ref-observation structures, with operation 10 codec 3; reviewed native merge is
+operation 9 codec 7. No dependency or lockfile changes are needed for this step.
 
 
 ## Repository browser
@@ -2307,7 +2550,7 @@ A different UUID returns 409; malformed input returns 422. The response is
 | `{"kind":"history","commit":"<OID>"}` | `history` | Up to 32 commits following only the first parent |
 
 `resolved` contains `reference`, nullable `oid`/`version`, and `generation`.
-Default HEAD and its ref tip come from one SQL observation. A missing/deleted
+Default HEAD and its ref tip come from the same accepted immutable ref snapshot. A missing/deleted
 reference returns null OID. Subsequent tree/file/history queries use the returned
 lowercase SHA-1 object ID, preserving that snapshot through ref changes.
 Annotated tags are peeled to commits, with at most 16 object visits. Tags to

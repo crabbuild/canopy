@@ -5,7 +5,9 @@ impl WireValue for Record {
         if self.root.operation != self.check.token.artifact_operation {
             return Err(CodecError::Invalid("root recovery namespace"));
         }
-        if (self.kind == Kind::Policy) != self.refusal.is_some() {
+        if (self.kind == Kind::Policy && self.refusal.is_none())
+            || (self.refusal.is_some() && !matches!(self.kind, Kind::Policy | Kind::Publish))
+        {
             return Err(CodecError::Invalid(
                 "policy recovery requires frozen refusal",
             ));
@@ -28,6 +30,9 @@ impl WireValue for Record {
             Kind::Outcome => 1,
             Kind::Policy => 2,
             Kind::Initialization => 3,
+            Kind::Merge => 4,
+            Kind::Head => 5,
+            Kind::Candidate => 6,
         })?;
         self.primary.encode(e)?;
         e.write_bool(self.refusal.is_some())?;
@@ -54,6 +59,9 @@ impl WireValue for Record {
                 1 => Kind::Outcome,
                 2 => Kind::Policy,
                 3 => Kind::Initialization,
+                4 => Kind::Merge,
+                5 => Kind::Head,
+                6 => Kind::Candidate,
                 _ => return Err(CodecError::Invalid("root recovery command")),
             },
             primary: Stamp::decode(d)?,
@@ -77,7 +85,9 @@ impl WireValue for Record {
 impl WireValue for Bundle {
     fn encode(&self, e: &mut BoundedEncoder) -> Result<(), CodecError> {
         self.primary.validate(self.kind.body_limit())?;
-        if (self.kind == Kind::Policy) != self.refusal.is_some() {
+        if (self.kind == Kind::Policy && self.refusal.is_none())
+            || (self.refusal.is_some() && !matches!(self.kind, Kind::Policy | Kind::Publish))
+        {
             return Err(CodecError::Invalid("missing frozen refusal"));
         }
         if let Some(refusal) = &self.refusal {
@@ -89,6 +99,9 @@ impl WireValue for Bundle {
             Kind::Outcome => 1,
             Kind::Policy => 2,
             Kind::Initialization => 3,
+            Kind::Merge => 4,
+            Kind::Head => 5,
+            Kind::Candidate => 6,
         })?;
         self.primary.encode(e)?;
         e.write_bool(self.refusal.is_some())?;
@@ -107,6 +120,9 @@ impl WireValue for Bundle {
                 1 => Kind::Outcome,
                 2 => Kind::Policy,
                 3 => Kind::Initialization,
+                4 => Kind::Merge,
+                5 => Kind::Head,
+                6 => Kind::Candidate,
                 _ => return Err(CodecError::Invalid("unknown recovery kind")),
             },
             primary: SavedCommand::decode(d)?,

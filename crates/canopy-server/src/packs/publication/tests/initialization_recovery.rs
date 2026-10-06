@@ -270,13 +270,7 @@ async fn original_initialization_receipt_survives_lost_ack_expiry_body_loss_and_
     edit(&f, "UPDATE repository_identity SET owner='replacement'").await?;
     drop(registered);
     let (runtime, handle, client) = super::durable_recovery::restore_owner(&f, &check).await?;
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= mutation.expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(u64::try_from(
-            mutation.expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
+    wait_for_sdk_expiry(mutation.expires_at_ms).await?;
     assert!(matches!(
         client.resolve(&original).await?,
         Resolution::Expired

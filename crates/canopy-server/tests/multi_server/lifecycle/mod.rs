@@ -634,11 +634,19 @@ async fn startup_rejects_ignored_conditional_writes_before_enrollment() -> Resul
         let files = tempfile::TempDir::new()?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
+        let mut caller_listener = Some(listener);
         let settings = config(address, files.path().join("server"));
         let result = if prebound {
-            CanopyServer::start_with_listener(settings, store.clone(), listener).await
+            CanopyServer::start_with_listener(
+                settings,
+                store.clone(),
+                caller_listener.take().unwrap(),
+            )
+            .await
         } else {
-            drop(listener);
+            // This failure precedes listener creation. Keep the caller's
+            // reservation through the probe and verify startup refuses bad
+            // storage even while its requested address is occupied.
             CanopyServer::start(settings, store.clone()).await
         };
         assert!(matches!(
@@ -649,6 +657,7 @@ async fn startup_rejects_ignored_conditional_writes_before_enrollment() -> Resul
         ));
         let remaining = store.list_with_delimiter(None).await?;
         assert!(remaining.objects.is_empty() && remaining.common_prefixes.is_empty());
+        drop(caller_listener);
         let rebound = TcpListener::bind(address).await?;
         assert_eq!(rebound.local_addr()?, address);
     }

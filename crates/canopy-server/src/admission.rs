@@ -4,9 +4,9 @@ use crate::ReadIdentity;
 use cellule_runtime::Error;
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, Weak},
 };
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Node and account admission retained together by work and streamed output.
 pub struct AdmissionPermit {
@@ -47,10 +47,14 @@ impl AccountAdmission {
     }
 
     pub(crate) async fn acquire(&self, actor: ReadIdentity<'_>) -> Result<AdmissionPermit, Error> {
+        self.try_acquire(actor)
+    }
+
+    pub(crate) fn try_acquire(&self, actor: ReadIdentity<'_>) -> Result<AdmissionPermit, Error> {
         let total = Arc::clone(&self.total)
             .try_acquire_owned()
             .map_err(|_| Error::Capacity(self.total_capacity))?;
-        let semaphore = self.account(actor).await;
+        let semaphore = self.account(actor);
         let account = semaphore
             .try_acquire_owned()
             .map_err(|_| Error::Capacity(self.account_capacity))?;
@@ -67,7 +71,6 @@ impl AccountAdmission {
         // cannot fill every pending position while another account has work.
         let _account_waiting = self
             .waiting_account(actor)
-            .await
             .try_acquire_owned()
             .map_err(|_| Error::Capacity(self.account_capacity))?;
         let _waiting = self
@@ -76,7 +79,6 @@ impl AccountAdmission {
             .map_err(|_| Error::Capacity(self.total_capacity))?;
         let account = self
             .account(actor)
-            .await
             .acquire_owned()
             .await
             .map_err(|_| Error::Capacity(self.account_capacity))?;
@@ -90,15 +92,15 @@ impl AccountAdmission {
         })
     }
 
-    async fn account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
-        Self::semaphore(&self.accounts, actor, self.account_limit).await
+    fn account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
+        Self::semaphore(&self.accounts, actor, self.account_limit)
     }
 
-    async fn waiting_account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
-        Self::semaphore(&self.waiting_accounts, actor, self.account_limit).await
+    fn waiting_account(&self, actor: ReadIdentity<'_>) -> Arc<Semaphore> {
+        Self::semaphore(&self.waiting_accounts, actor, self.account_limit)
     }
 
-    async fn semaphore(
+    fn semaphore(
         entries: &Mutex<HashMap<Option<String>, Weak<Semaphore>>>,
         actor: ReadIdentity<'_>,
         limit: usize,
@@ -108,7 +110,7 @@ impl AccountAdmission {
             ReadIdentity::Anonymous => None,
         };
         {
-            let mut accounts = entries.lock().await;
+            let mut accounts = entries.lock().expect("account admission");
             // Permits retain their semaphore through detached ownership work.
             // Active or waiting admission bounds this map; expired accounts need no state.
             accounts.retain(|_, semaphore| semaphore.strong_count() != 0);
@@ -234,6 +236,9 @@ mod tests {
                     .unwrap(),
             );
         }
-        assert_eq!(admission.accounts.lock().await.len(), 1);
+        assert_eq!(
+            admission.accounts.lock().expect("account admission").len(),
+            1
+        );
     }
 }

@@ -57,16 +57,23 @@ pub(in crate::packs::publication::tests) async fn head_expiring(
     };
     let mut mutation = identity()?;
     if short_expiry {
-        mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+        // Accepted-history tests need time to commit on loaded CI workers;
+        // they still wait for real SDK expiry before observing cold recovery.
+        // Intentionally unexecuted expiry cases retain their short window.
+        mutation.expires_at_ms =
+            mutation.issued_at_ms + if execute_original { 10_000 } else { 1_000 };
     }
     let command = PreparedCustody::prepare(&f.client(), &f.target, action, mutation).await?;
     let original = command.evidence().clone();
     let registered = command.register(&f.client(), identity()?).await?;
-    let committed = if execute_original {
-        Some(registered.recover(&f.client()).await?)
-    } else {
-        None
-    };
+    let committed =
+        if execute_original {
+            Some(registered.recover(&f.client()).await.map_err(|error| {
+                format!("initial acceptance for custody kind {kind}: {error:?}")
+            })?)
+        } else {
+            None
+        };
     Ok((original, committed))
 }
 async fn restore(
@@ -84,12 +91,7 @@ async fn settle(ticket: &StagingTicket) -> Result<StagingState> {
     Ok(timeout(Duration::from_secs(10), ticket.wait()).await?)
 }
 async fn expired(evidence: &PendingMutation) -> Result {
-    let until = evidence.identity().expires_at_ms;
-    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    if now <= until {
-        tokio::time::sleep(Duration::from_millis((until - now + 1) as u64)).await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(evidence.identity().expires_at_ms).await
 }
 
 #[tokio::test]
@@ -159,10 +161,12 @@ async fn cold_staging_keeps_all_original_receipts_after_sdk_expiry_and_actual_ow
                 super::super::durable_recovery::restore_owner(&f, &check(old)).await?;
             assert_ne!(handle.owner_fence(), old.owner);
             expired(&evidence).await?;
-            assert!(matches!(
-                client.resolve(&evidence).await?,
-                Resolution::Expired
-            ));
+            let resolution = client.resolve(&evidence).await?;
+            assert!(
+                matches!(resolution, Resolution::Expired),
+                "format {format:?}, custody kind {kind}, expiry {}: {resolution:?}",
+                evidence.identity().expires_at_ms
+            );
             let (service, ticket) =
                 restore(&f, client.clone(), kind, StagingLimits::default()).await?;
             assert!(matches!(settle(&ticket).await?, StagingState::Fenced(_)));

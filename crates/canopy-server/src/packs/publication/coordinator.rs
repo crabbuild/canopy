@@ -23,6 +23,10 @@ use tokio::{
 const COMMAND_RESERVATION: u64 = 8 << 20;
 const INLINE_BYTES: u32 = 4 << 20;
 mod initialization;
+mod native_head;
+pub use native_head::ReadyNativeHead;
+mod native_merge;
+pub use native_merge::ReadyNativeMerge;
 mod inputs;
 pub use initialization::ReadyInitialization;
 pub use inputs::{NativeInputReadyError, ReadyNativeInputs, RegisteredNativeInputs};
@@ -192,6 +196,8 @@ pub enum PublicationScheduleError {
     InvalidLimits,
     #[error("publication coordinator is closed")]
     Closed,
+    #[error("publication admission mutex is busy")]
+    Busy,
     #[error("publication admission capacity exceeded")]
     Capacity,
     #[error("publication belongs to another repository coordinator")]
@@ -455,11 +461,19 @@ impl PublicationCoordinator {
         let ready = ready.into();
         let Ok(mut state) = self.inner.state.try_lock() else {
             return Err(Box::new(PublicationAdmissionFailure {
-                reason: PublicationScheduleError::Capacity,
+                reason: PublicationScheduleError::Busy,
                 ready,
             }));
         };
         self.admit(&mut state, ready, true)
+    }
+    /// Waiting here reserves no quota and dispatches no command. The caller
+    /// must capture the held ticket synchronously before yielding again.
+    pub(in crate::packs::publication) async fn held_admission(&self) -> HeldAdmission<'_> {
+        HeldAdmission {
+            coordinator: self,
+            state: self.inner.state.lock().await,
+        }
     }
     fn admit(
         &self,
@@ -797,9 +811,31 @@ impl PublicationCoordinator {
         )
     }
     #[cfg(test)]
+    pub(super) async fn with_admission_async_for_test<T>(
+        &self,
+        inspect: impl std::future::Future<Output = T>,
+    ) -> T {
+        let _state = self.inner.state.lock().await;
+        inspect.await
+    }
+    #[cfg(test)]
     pub(super) async fn with_admission_for_test<T>(&self, inspect: impl FnOnce() -> T) -> T {
         let _state = self.inner.state.lock().await;
         inspect()
+    }
+}
+/// A short synchronous handoff while the fair admission mutex is held.
+/// No guard or prepared command may be retained across another await.
+pub(in crate::packs::publication) struct HeldAdmission<'a> {
+    coordinator: &'a PublicationCoordinator,
+    state: tokio::sync::MutexGuard<'a, State>,
+}
+impl HeldAdmission<'_> {
+    pub(in crate::packs::publication) fn reserve(
+        &mut self,
+        ready: ReadyPublication,
+    ) -> Result<PublicationTicket, Box<PublicationAdmissionFailure>> {
+        self.coordinator.admit(&mut self.state, ready, true)
     }
 }
 impl PublicationTicket {
@@ -1273,3 +1309,5 @@ mod fairness {
         assert_eq!(queue.pop(true, 3), Some(101));
     }
 }
+
+mod native_candidate;

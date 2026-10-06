@@ -4,14 +4,7 @@ use cellule_runtime::Resolution;
 use tokio::time::{Duration, timeout};
 
 async fn expired(value: &cellule_runtime::PendingMutation) -> Result {
-    let now = sql::now(0)?;
-    if now <= value.identity().expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(
-            (value.identity().expires_at_ms - now + 1) as u64,
-        ))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(value.identity().expires_at_ms).await
 }
 async fn registered(f: &Fixture, kind: u8) -> Result<RegisteredCustody> {
     Ok(

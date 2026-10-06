@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct FetchRequest {
     pub(super) wants: BTreeSet<crate::ObjectId>,
     pub(super) filter: Option<String>,
+    pub(super) needs_blob_sizes: bool,
 }
 
 impl FetchRequest {
@@ -14,6 +15,7 @@ impl FetchRequest {
             return Ok(Self {
                 wants: BTreeSet::new(),
                 filter: None,
+                needs_blob_sizes: false,
             });
         }
         Self::parse(
@@ -60,18 +62,23 @@ impl FetchRequest {
             }
             bytes = &bytes[length..];
         }
-        let filter = filter
-            .map(|value| {
+        let (filter, needs_blob_sizes) = match filter {
+            Some(value) => {
                 let value = std::str::from_utf8(value).map_err(|_| InputError::Fetch)?;
-                check_filter_policy(value)?;
-                Ok::<_, InputError>(value.to_owned())
-            })
-            .transpose()?;
-        Ok(Self { wants, filter })
+                (Some(value.to_owned()), check_filter_policy(value)?)
+            }
+            None => (None, false),
+        };
+        Ok(Self {
+            wants,
+            filter,
+            needs_blob_sizes,
+        })
     }
 }
 
-fn check_filter_policy(value: &str) -> Result<(), InputError> {
+fn check_filter_policy(value: &str) -> Result<bool, InputError> {
+    let mut needs_blob_sizes = false;
     // rev-list does not enforce uploadpackfilter.*. Match the transport policy
     // before traversal, including escaped subfilters, so sparse filters cannot
     // inspect pattern blobs outside the validated wants.
@@ -87,6 +94,8 @@ fn check_filter_policy(value: &str) -> Result<(), InputError> {
                     .map_err(|_| InputError::Fetch)?;
                 pending.push(std::borrow::Cow::Owned(decoded.into_owned()));
             }
+        } else if value.starts_with("blob:limit=") {
+            needs_blob_sizes = true;
         } else if value != "blob:none"
             && !value.starts_with("blob:limit=")
             && !value.starts_with("tree:")
@@ -95,7 +104,7 @@ fn check_filter_policy(value: &str) -> Result<(), InputError> {
             return Err(InputError::Fetch);
         }
     }
-    Ok(())
+    Ok(needs_blob_sizes)
 }
 
 impl GitGateway {

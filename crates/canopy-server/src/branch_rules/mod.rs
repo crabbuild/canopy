@@ -179,7 +179,14 @@ impl RepositoryCell {
             .query(
                 None,
                 SqlBatch {
-                    statements: updates.iter().map(policy_statement).collect(),
+                    // Native preparation establishes ancestry in its private
+                    // workspace; final publication supplies catalog-certified
+                    // evidence. Metadata reads must not consult the retired
+                    // mutable commit_ancestry cache.
+                    statements: updates
+                        .iter()
+                        .map(|update| policy_statement_with_ancestry(update, false))
+                        .collect(),
                 },
             )
             .await?;
@@ -246,6 +253,13 @@ pub(crate) struct Policy {
     require_pull_request: bool,
 }
 impl Policy {
+    pub(crate) fn allows_reviewed(
+        &self,
+        update: &RefUpdate,
+        reviewed: &crate::pulls::merge::ReviewedMerge,
+    ) -> bool {
+        self.allows_ref(update, true) && (!self.require_pull_request || reviewed.authorizes(update))
+    }
     pub(crate) fn allows(&self, update: &RefUpdate, require_ancestry: bool) -> bool {
         !self.require_pull_request && self.allows_ref(update, require_ancestry)
     }

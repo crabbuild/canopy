@@ -63,7 +63,14 @@ impl RepositoryManager {
             let Some(role) = route.repository.access_level(actor, None).await?.output else {
                 return Ok(None);
             };
-            let head = route.repository.default_branch(None).await?.output;
+            let Some(head) = route
+                .repository
+                .default_branch_for(actor, None)
+                .await?
+                .output
+            else {
+                return Ok(None);
+            };
             let visibility = route.repository.visibility().await?.output;
             Ok(Some(RepositoryDetails {
                 entry,

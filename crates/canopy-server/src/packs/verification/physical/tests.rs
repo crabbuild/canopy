@@ -13,7 +13,7 @@ use std::{future::Future, path::Path};
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub(in crate::packs) struct Prepared {
     pub(in crate::packs) fixture: Fixture,
-    provider: Arc<dyn ObjectStore>,
+    pub(in crate::packs) provider: Arc<dyn ObjectStore>,
     pub(in crate::packs) store: Arc<ArtifactStore>,
     pub(in crate::packs) descriptor: NativePackDescriptor,
 }

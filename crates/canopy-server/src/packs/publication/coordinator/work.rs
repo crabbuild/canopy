@@ -335,6 +335,9 @@ impl ReadyPublication {
 
 #[derive(Clone, Debug)]
 pub enum PublicationOutcome {
+    Candidate(Committed<CandidatePublicationReply>),
+    Head(Committed<PublicationReply>),
+    Merge(Committed<crate::pulls::merge::MergeOutcome>),
     ServingRelease(Committed<ServingReleaseReply>),
     ServingCommand(Committed<ServingReply>),
     Initialization(Committed<InitializationReply>),
@@ -350,6 +353,12 @@ pub enum PublicationOutcome {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum PublicationError {
+    #[error("native candidate publication: {0}")]
+    Candidate(#[source] InvocationError<CandidatePublicationReply>),
+    #[error("symbolic HEAD publication: {0}")]
+    Head(#[source] InvocationError<PublicationReply>),
+    #[error("native reviewed merge publication: {0}")]
+    Merge(#[source] InvocationError<crate::pulls::merge::MergeOutcome>),
     #[error("serving pin release: {0}")]
     ServingRelease(#[source] InvocationError<ServingReleaseReply>),
     #[error("serving custody command: {0}")]
@@ -401,6 +410,9 @@ impl PublicationError {
             Self::ServingRelease(error) => kind(error),
             Self::ServingCommand(error) => kind(error),
             Self::Initialization(error) => kind(error),
+            Self::Merge(error) => kind(error),
+            Self::Candidate(error) => kind(error),
+            Self::Head(error) => kind(error),
             Self::Push(error) => kind(error),
             Self::RootPush(error) => kind(error),
             Self::PolicyPage(error) => kind(error),
@@ -424,6 +436,9 @@ impl PublicationError {
             Self::ServingRelease(error) => unknown(error),
             Self::ServingCommand(error) => unknown(error),
             Self::Initialization(error) => unknown(error),
+            Self::Merge(error) => unknown(error),
+            Self::Candidate(error) => unknown(error),
+            Self::Head(error) => unknown(error),
             Self::Push(error) => unknown(error),
             Self::RootPush(error) => unknown(error),
             Self::PolicyPage(error) => unknown(error),

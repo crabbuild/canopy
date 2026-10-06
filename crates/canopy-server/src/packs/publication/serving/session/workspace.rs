@@ -3,11 +3,7 @@
 //! membership spool authorizes wants; file presence never grants reachability.
 use super::*;
 use crate::packs::{catalog::graph_spool::GraphSpool, metadata::MetadataError};
-use crate::{
-    ObjectId,
-    git_cache::GitCache,
-    git_objects::{GitObjects, ReadOwner},
-};
+use crate::{ObjectId, git_cache::GitCache, git_objects::ReadOwner};
 
 #[derive(Clone, Copy, Debug)]
 pub struct WorkspaceLimits {
@@ -38,6 +34,7 @@ struct Core {
     pin: ServingPin,
     actor: Option<String>,
     stats: WorkspaceStats,
+    complete_packs: bool,
 }
 impl NativeWorkspace {
     pub(crate) fn backend(&self, nonce_seed: Option<[u8; 32]>) -> crate::git_http::GitHttpBackend {
@@ -58,6 +55,7 @@ impl NativeWorkspace {
     }
     // Raw paths/owners stay crate-private. A decoded DTO cannot mint a native
     // read capability; producers must authorize requests and use contains.
+    #[cfg(test)]
     pub(crate) fn git_dir(&self) -> std::path::PathBuf {
         self.core.cache.git_dir()
     }
@@ -129,18 +127,25 @@ impl NativeWorkspace {
                     if expected.size > limit as u64 {
                         return Err(ServingReadError::TooLarge);
                     }
-                    let mut objects =
-                        GitObjects::batch_owned(&workspace.git_dir(), &core.cache.native, owner)
+                    if core.complete_packs {
+                        let mut objects = crate::git_objects::GitObjects::batch_owned(
+                            &core.cache.git_dir(),
+                            &core.cache.native,
+                            owner,
+                        )
+                        .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        let body = objects
+                            .read_verified(expected, limit)
+                            .await
                             .map_err(crate::packs::catalog::NativeReadError::from)?;
-                    let body = objects
-                        .read_verified(expected, limit)
-                        .await
-                        .map_err(crate::packs::catalog::NativeReadError::from)?;
-                    objects
-                        .finish()
-                        .await
-                        .map_err(crate::packs::catalog::NativeReadError::from)?;
-                    Ok(Some(body))
+                        objects
+                            .finish()
+                            .await
+                            .map_err(crate::packs::catalog::NativeReadError::from)?;
+                        Ok(Some(body))
+                    } else {
+                        Ok(Some(inner.context.files.body(object, limit, owner).await?))
+                    }
                 },
             )
             .await
@@ -173,6 +178,7 @@ impl ServingPin {
             return Err(ServingReadError::Context);
         }
         let roots = roots.map(<[ObjectId]>::to_vec);
+        let materialize = roots.is_some();
         let pin = self.clone();
         self.read_session(
             actor.clone(),
@@ -224,7 +230,7 @@ impl ServingPin {
                             .refs()
                             .cursor(refs.root.clone(), None, true)?;
                     let mut writer = cache
-                        .serving_refs(owner.clone())
+                        .serving_refs(owner.clone(), false)
                         .await
                         .map_err(crate::packs::catalog::NativeReadError::from)?;
                     loop {
@@ -282,11 +288,17 @@ impl ServingPin {
                         let source = object.source.record.native();
                         source.validate(inner.context.repository(), inner.lease.format)?;
                         if !job(&spool, owner.clone(), move |s| s.pack_seen(source)).await? {
-                            inner
-                                .context
-                                .files
-                                .install_workspace(cache.clone(), source, owner.clone())
-                                .await?;
+                            // Producer workspaces need a complete native
+                            // baseline. Install each certified pair once, rather
+                            // than expanding every object into loose copies.
+                            if materialize {
+                                inner
+                                    .context
+                                    .files
+                                    .install_pack_workspace(cache.clone(), source, owner.clone())
+                                    .await?;
+                                observation.refresh(&inner, &actor).await?;
+                            }
                             observation.refresh(&inner, &actor).await?;
                             job(&spool, owner.clone(), move |s| s.imported(source)).await?;
                             stats.packs = stats
@@ -345,6 +357,7 @@ impl ServingPin {
                         pin,
                         actor,
                         stats,
+                        complete_packs: materialize,
                     }),
                 })
             },
@@ -389,3 +402,5 @@ impl Observation {
         Ok(())
     }
 }
+
+mod prepare;

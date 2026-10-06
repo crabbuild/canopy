@@ -53,7 +53,7 @@ impl ServingPin {
                             inner
                                 .context
                                 .files
-                                .install_workspace(cache.clone(), native, owner.clone())
+                                .install_pack_workspace(cache.clone(), native, owner.clone())
                                 .await?;
                             observation.refresh(&inner, &actor).await?;
                             job(&spool, owner.clone(), move |s| s.imported(native)).await?;
@@ -69,7 +69,7 @@ impl ServingPin {
                     .await?;
                 let mut names = inner.context.indexes.refs().cursor(refs.root, None, true)?;
                 let mut writer = cache
-                    .serving_refs(owner.clone())
+                    .serving_refs(owner.clone(), false)
                     .await
                     .map_err(crate::packs::catalog::NativeReadError::from)?;
                 loop {

@@ -1,7 +1,6 @@
 //! Real Cell receipts, pre-admission recovery and the original command's atomic result.
 use super::{publishing::edit, *};
 use cellule_runtime::{Committed, Resolution};
-use tokio::time::Duration;
 
 async fn prepare(f: &Fixture, action: CustodyAction) -> Result<PreparedCustody> {
     Ok(PreparedCustody::prepare(&f.client(), &f.target, action, identity()?).await?)
@@ -22,14 +21,7 @@ fn token(output: &CustodyReply) -> Result<PreparationToken> {
     }
 }
 async fn expire(identity: MutationIdentity) -> Result {
-    let now = sql::now(0)?;
-    if now <= identity.expires_at_ms {
-        tokio::time::sleep(Duration::from_millis(u64::try_from(
-            identity.expires_at_ms - now + 1,
-        )?))
-        .await;
-    }
-    Ok(())
+    wait_for_sdk_expiry(identity.expires_at_ms).await
 }
 
 #[tokio::test]
@@ -283,7 +275,7 @@ async fn denied_begin_is_original_knowledge_after_sdk_expiry_and_authority_chang
         let f = Fixture::new(format).await?;
         let operation = [234; 16];
         let mut mutation = identity()?;
-        mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+        mutation.expires_at_ms = mutation.issued_at_ms + 10_000;
         let original = PreparedCustody::prepare(
             &f.client(),
             &f.target,
@@ -328,7 +320,7 @@ async fn cold_owner_restoration_recovers_claim_and_renew_receipts_without_revivi
             let started = execute(&f, CustodyAction::BeginPreparation(f.begin(operation))).await?;
             let old = token(&started.output)?;
             let mut mutation = identity()?;
-            mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+            mutation.expires_at_ms = mutation.issued_at_ms + 10_000;
             let action = if claim {
                 CustodyAction::ClaimPreparation(request(old))
             } else {
@@ -337,7 +329,12 @@ async fn cold_owner_restoration_recovers_claim_and_renew_receipts_without_revivi
             let original =
                 PreparedCustody::prepare(&f.client(), &f.target, action, mutation).await?;
             let registered = original.register(&f.client(), identity()?).await?;
-            let accepted = registered.recover(&f.client()).await?;
+            // Allow loaded CI workers to commit before testing actual expiry.
+            // The post-restore Expired assertion below remains mandatory.
+            let accepted = registered
+                .recover(&f.client())
+                .await
+                .map_err(|error| format!("initial acceptance before owner restore: {error:?}"))?;
             let token = token(&accepted.output)?;
             let (runtime, handle, client) =
                 super::durable_recovery::restore_owner(&f, &check(token)).await?;
@@ -416,7 +413,7 @@ async fn denied_renewal_preserves_knowledge_and_exact_successor_claim_survives_r
             assert_ne!(prior, original);
             edit(&f, "UPDATE catalog_operations SET expires_at_ms=0; UPDATE catalog_leases SET expires_at_ms=0").await?;
             let mut mutation = identity()?;
-            mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+            mutation.expires_at_ms = mutation.issued_at_ms + 10_000;
             let action = if staging {
                 CustodyAction::RenewStaging(request(prior))
             } else {
@@ -727,7 +724,7 @@ async fn denied_claim_keeps_its_original_receipt_after_sdk_expiry_and_cold_resto
             .await?;
             let successor = token(&accepted.output)?;
             let mut mutation = identity()?;
-            mutation.expires_at_ms = mutation.issued_at_ms + 1_000;
+            mutation.expires_at_ms = mutation.issued_at_ms + 10_000;
             let action = if staging {
                 CustodyAction::ClaimStaging(request(old))
             } else {

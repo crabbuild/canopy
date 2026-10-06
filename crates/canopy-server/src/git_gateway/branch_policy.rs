@@ -295,7 +295,7 @@ fn quote(value: &str) -> String {
 fn commands(bytes: &[u8]) -> Result<PushCommands, InputError> {
     commands_in_format(bytes, None)
 }
-fn commands_in_format(
+pub(super) fn commands_in_format(
     mut bytes: &[u8],
     format: Option<crate::ObjectFormat>,
 ) -> Result<PushCommands, InputError> {

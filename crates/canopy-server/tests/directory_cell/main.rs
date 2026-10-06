@@ -2,8 +2,6 @@ mod accounts;
 mod capacity;
 mod compatibility;
 mod expiry;
-#[path = "../support/objects.rs"]
-mod objects;
 #[path = "../support/retained_directory.rs"]
 mod retained_directory;
 mod ssh_keys;
@@ -15,12 +13,12 @@ use std::{
 };
 
 use canopy_server::{
-    CanopyApplication, ObjectKind, RepositoryCell, RepositoryModule, build_descriptor,
+    CanopyApplication, RepositoryCell, RepositoryModule, build_descriptor,
     directory::{
         self, CreateAccountOutcome, DirectoryCell, DirectoryModule, RenameOutcome, RepositoryState,
         TokenScope,
     },
-    object_id, repository_target,
+    repository_target,
 };
 use cellule_app::{ApplicationHandle, CellApplication};
 use cellule_ltx::{CellReplica, DiskBudget, Host, Limits};
@@ -283,20 +281,24 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
             .output,
         renamed
     );
-    let body = b"stored only in alpha";
-    let oid = objects::put(&first_repository, identity(6)?, ObjectKind::Blob, body)
-        .await?
-        .output;
+    // Directory candidates identify Cells but do not share their permissions.
+    // Exercise authoritative repository metadata here; packed object publication
+    // has its own native receive and cold-restore qualification.
+    let grant_identity = identity(6)?;
+    let grant = first_repository
+        .grant_member(grant_identity, "alice", "bob", TokenScope::Write)
+        .await?;
+    assert!(grant.output);
     assert_eq!(
-        oid,
-        object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, body)
-    );
-    assert!(
-        second_repository
-            .existing_objects(&[oid])
+        first_repository
+            .access_level("bob", Some(grant.receipt))
             .await?
-            .output
-            .is_empty()
+            .output,
+        Some(TokenScope::Write)
+    );
+    assert_eq!(
+        second_repository.access_level("bob", None).await?.output,
+        None
     );
     first_runtime.shutdown().await?;
 
@@ -384,12 +386,33 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         second_id,
         canopy_server::ObjectFormat::Sha1,
     )?;
+    assert!(alpha.identity_matches("alice", None).await?.output);
+    assert!(beta.identity_matches("alice", None).await?.output);
     assert_eq!(
-        alpha.object(oid, None).await?.output,
-        Some((ObjectKind::Blob, body.to_vec()))
+        alpha.access_level("bob", Some(grant.receipt)).await?.output,
+        Some(TokenScope::Write)
     );
-    assert!(beta.existing_objects(&[oid]).await?.output.is_empty());
-    assert_eq!(alpha.access_level("bob", None).await?.output, None);
+    assert_eq!(beta.access_level("bob", None).await?.output, None);
+    let replayed = alpha
+        .grant_member(grant_identity, "alice", "bob", TokenScope::Write)
+        .await?;
+    assert_eq!(replayed.receipt, grant.receipt);
+    assert!(replayed.output);
+    // The same logical request ID is scoped to its Cell even after restoration.
+    let beta_grant = beta
+        .grant_member(grant_identity, "alice", "bob", TokenScope::Read)
+        .await?;
+    assert!(beta_grant.output);
+    assert_eq!(
+        beta.access_level("bob", Some(beta_grant.receipt))
+            .await?
+            .output,
+        Some(TokenScope::Read)
+    );
+    assert_eq!(
+        alpha.access_level("bob", None).await?.output,
+        Some(TokenScope::Write)
+    );
     second_runtime.shutdown().await?;
     Ok(())
 }

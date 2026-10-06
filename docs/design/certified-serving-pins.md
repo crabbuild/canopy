@@ -217,11 +217,23 @@ must resolve their revision/ref through that accepted snapshot.
 The pool admits each viewer before spawning private request work. Its permit
 covers selection, acquisition waiting and the returned snapshot borrow. Observer
 cancellation detaches accepted work, and the owner's original stays retained.
-At capacity, the pool initiates closure of one least-recently-used unborrowed
-owner and returns an explicit capacity error. Its slot remains charged until the
-real producer has exited; there is no unbounded retired-owner list or waiting
-behind old provider work under the pool lock. Borrowed old generations remain
-immutable. Their independent owners keep renewing while other generations work.
+At capacity, the pool initiates closure of a least-recently-used unborrowed
+owner and observes its independently owned release outside the pool lock. A
+request starts its two-second rollover observation budget when it first needs
+to retire an owner; initial authenticated Cell selection does not consume this
+budget. Later release observations and selection retries share that deadline.
+The request performs at most one retry per configured generation slot. Concurrent waiters can join an already closing
+owner. Each retry selects the current generation under current viewer access;
+closing owners cannot accept new borrows. Sequential readers can therefore move
+through more than four publications without retrying at the client.
+
+The retiring slot remains charged until the real producer has exited. Timeout,
+observer cancellation and a lost release acknowledgement cannot remove its slot
+or pin, cancel its exact release, or allocate a fifth owner. All borrowed slots
+still produce an immediate capacity error. A slow or uncertain release returns
+capacity when the bounded observation expires and remains recoverable. There is
+no separate retired-owner inventory. Borrowed old generations remain immutable;
+their independent owners keep renewing while other generations work.
 
 Eviction pauses acquisition/borrowing and uses a nonwaiting owner handshake.
 The producer driver must be idle, with no pending original, outstanding borrow

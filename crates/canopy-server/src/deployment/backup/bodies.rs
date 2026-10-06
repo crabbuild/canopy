@@ -1,23 +1,8 @@
 use super::*;
-use crate::{
-    blob::{LargeBlobReference, LargeBlobStore, blob_path},
-    lfs::{LfsObject, lfs_path, verify_lfs_object},
-};
-use cellule_ltx::rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use crate::lfs::{LfsObject, lfs_path, verify_lfs_object};
+use cellule_ltx::rusqlite::{Connection, OpenFlags, params};
 use cellule_runtime::{NodeLeaseGuard, cell::catalog::CatalogRole};
 use object_store::{ObjectStore, prefix::PrefixStore};
-
-#[derive(Clone, Copy)]
-enum BodyKind {
-    Git,
-    Pack,
-    PackIndex,
-    Lfs,
-}
-enum Reference {
-    Git(LargeBlobReference),
-    Lfs(LfsObject),
-}
 
 impl Deployment {
     pub(super) async fn verify_bodies(
@@ -82,7 +67,8 @@ impl Deployment {
                 u64::from(verified.page_size()) * u64::from(verified.database_pages());
             let _disk = host.local_disk_budget().try_reserve(database_bytes)?;
             verified.restore(&database).await?;
-            let repository_id = read_identity(database.clone()).await?;
+            let identity = native::identity(database.clone()).await?;
+            let repository_id = identity.as_ref().map(|value| value.repository);
             if let Some(id) = repository_id {
                 let target = crate::repository_target(
                     self.identity.tenant(),
@@ -95,22 +81,34 @@ impl Deployment {
                     ));
                 }
             }
-            for kind in [
-                BodyKind::Git,
-                BodyKind::Pack,
-                BodyKind::PackIndex,
-                BodyKind::Lfs,
-            ] {
+            count = count
+                .checked_add(
+                    native::verify(
+                        self,
+                        host,
+                        guard,
+                        &database,
+                        &directory,
+                        identity,
+                        source,
+                        source_store.clone(),
+                        destination_store.clone(),
+                    )
+                    .await?,
+                )
+                .ok_or(BackupError::Invalid("external object count overflow"))?;
+            {
                 let mut cursor = Vec::new();
                 loop {
-                    let page = read_page(database.clone(), kind, cursor).await?;
+                    let page = read_page(database.clone(), cursor).await?;
                     if page.is_empty() {
                         break;
                     }
-                    cursor = match page.last().ok_or(BackupError::Invalid("empty page"))? {
-                        Reference::Git(value) => value.oid.to_vec(),
-                        Reference::Lfs(value) => value.sha256.to_vec(),
-                    };
+                    cursor = page
+                        .last()
+                        .ok_or(BackupError::Invalid("empty page"))?
+                        .sha256
+                        .to_vec();
                     for reference in page {
                         // A crash may leave a provisioned Cell before owner initialization.
                         // That Cell can be empty, but external bytes require a durable UUID.
@@ -118,16 +116,10 @@ impl Deployment {
                             "external body has no repository identity",
                         ))?;
                         guard.check()?;
-                        let path = match &reference {
-                            Reference::Git(value) => blob_path(repository_id, &value.sha256),
-                            Reference::Lfs(value) => lfs_path(repository_id, &value.sha256),
-                        };
+                        let path = lfs_path(repository_id, &reference.sha256);
                         if let (Some(source), Some(source_store)) = (source, &source_store) {
                             verify(source_store.clone(), repository_id, &reference).await?;
-                            let size = match &reference {
-                                Reference::Git(value) => value.size,
-                                Reference::Lfs(value) => value.size,
-                            };
+                            let size = reference.size;
                             crate::external::copy_parts(
                                 self.layout.store().inner().as_ref(),
                                 &source.parts().chain(path.parts()).collect(),
@@ -161,73 +153,29 @@ impl Deployment {
     }
 }
 
-async fn read_identity(database: PathBuf) -> BackupResult<Option<[u8; 16]>> {
-    tokio::task::spawn_blocking(move || {
-        let connection = Connection::open_with_flags(
-            database,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        let id: Option<Vec<u8>> = connection
-            .query_row(
-                "SELECT repository_id FROM repository_identity WHERE singleton = 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        id.map(|id| {
-            id.try_into()
-                .map_err(|_| BackupError::Invalid("invalid repository UUID"))
-        })
-        .transpose()
-    })
-    .await?
-}
-
 async fn verify(
     store: Arc<dyn ObjectStore>,
     repository_id: [u8; 16],
-    reference: &Reference,
+    reference: &LfsObject,
 ) -> BackupResult<()> {
-    match reference {
-        Reference::Git(value) => {
-            LargeBlobStore::new(store, repository_id)
-                .verify(value)
-                .await?;
-        }
-        Reference::Lfs(value) => {
-            verify_lfs_object(store, repository_id, *value, None).await?;
-        }
-    }
+    verify_lfs_object(store, repository_id, *reference, None).await?;
     Ok(())
 }
 
-async fn read_page(
-    database: PathBuf,
-    kind: BodyKind,
-    cursor: Vec<u8>,
-) -> BackupResult<Vec<Reference>> {
+async fn read_page(database: PathBuf, cursor: Vec<u8>) -> BackupResult<Vec<LfsObject>> {
     tokio::task::spawn_blocking(move || {
         let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
-        let sql = match kind {
-            BodyKind::Git => "SELECT oid, size, digest, external_sha256 FROM objects WHERE storage = 'external' AND oid > ?1 ORDER BY oid LIMIT 256",
-            BodyKind::Pack => "SELECT DISTINCT pack_oid, pack_size, pack_digest, sha256 FROM git_packs WHERE pack_oid > ?1 ORDER BY pack_oid LIMIT 256",
-            BodyKind::PackIndex => "SELECT DISTINCT index_oid, index_size, index_digest, index_sha256 FROM git_packs WHERE index_oid > ?1 ORDER BY index_oid LIMIT 256",
-            BodyKind::Lfs => "SELECT sha256, size, digest, sha256 FROM lfs_objects WHERE sha256 > ?1 ORDER BY sha256 LIMIT 256",
-        };
-        let mut statement = connection.prepare(sql)?;
+        let mut statement = connection.prepare("SELECT sha256,size,digest FROM lfs_objects WHERE sha256 > ?1 ORDER BY sha256 LIMIT 256")?;
         let mut rows = statement.query(params![cursor])?;
         let mut page = Vec::new();
         while let Some(row) = rows.next()? {
-            let oid: Vec<u8> = row.get(0)?;
+            let sha256: Vec<u8> = row.get(0)?;
             let size: i64 = row.get(1)?;
             let digest: Vec<u8> = row.get(2)?;
-            let sha256: Vec<u8> = row.get(3)?;
-            let size = u64::try_from(size).map_err(|_| BackupError::Invalid("invalid body size"))?;
-            let digest = digest.try_into().map_err(|_| BackupError::Invalid("invalid body digest"))?;
-            let sha256 = sha256.try_into().map_err(|_| BackupError::Invalid("invalid body SHA-256"))?;
-            page.push(match kind {
-                BodyKind::Git | BodyKind::Pack | BodyKind::PackIndex => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3: digest, sha256 }),
-                BodyKind::Lfs => Reference::Lfs(LfsObject { sha256, size, parts_digest: digest }),
+            page.push(LfsObject {
+                sha256: sha256.try_into().map_err(|_| BackupError::Invalid("invalid LFS SHA-256"))?,
+                size: size.try_into().map_err(|_| BackupError::Invalid("invalid LFS size"))?,
+                parts_digest: digest.try_into().map_err(|_| BackupError::Invalid("invalid LFS digest"))?,
             });
         }
         Ok(page)

@@ -8,6 +8,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 pub(crate) const PAGE: usize = 16;
 const THREAD_COLUMNS: &str = "number, id, author, body, resolved, version, created_ms, updated_ms, pull_version, source_oid, source_version, base_oid, base_version, merge_base, path, side, line, blob_oid";
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ThreadIntent {
     pub id: [u8; 16],
     pub target: ComparisonTarget,
@@ -157,69 +159,11 @@ impl RepositoryCell {
         identity: MutationIdentity,
         actor: &str,
         pull: i64,
-        input: &ThreadIntent,
+        input: ThreadIntent,
         anchor: LineAnchor,
-    ) -> Result<Committed<PullChange>, Invocation> {
-        validate_component(actor).map_err(Invocation::NotStarted)?;
-        validate_repository_id(input.id).map_err(Invocation::NotStarted)?;
-        if pull < 1
-            || !valid_body(&input.body)
-            || input.body.trim().is_empty()
-            || input.path_base64 != anchor.path_base64
-            || input.side != anchor.side
-            || input.line != anchor.line
-        {
-            return Err(invalid("thread intent differs from verified anchor"));
-        }
-        let r = &anchor.revision;
-        let mut parameters = vec![
-            SqlValue::Text(actor.into()),
-            SqlValue::Integer(pull),
-            SqlValue::Blob(input.id.to_vec()),
-            SqlValue::Blob(input.digest(actor, pull)),
-            SqlValue::Integer(r.pull_version),
-            SqlValue::Blob(
-                parse_oid(&r.source_oid).ok_or_else(|| invalid("invalid thread source"))?,
-            ),
-            SqlValue::Integer(r.source_version),
-            SqlValue::Blob(parse_oid(&r.base_oid).ok_or_else(|| invalid("invalid thread base"))?),
-            SqlValue::Integer(r.base_version),
-        ];
-        let eligible = match &input.target {
-            ComparisonTarget::Current { .. } => format!("EXISTS (SELECT 1 FROM {JOINS} WHERE p.number = ?2 AND p.version = ?5 AND s.oid = ?6 AND s.version = ?7 AND b.oid = ?8 AND b.version = ?9)"),
-            ComparisonTarget::Review { number } => { parameters.push(SqlValue::Integer(*number)); "EXISTS (SELECT 1 FROM pull_reviews WHERE pull_number = ?2 AND number = ?10 AND pull_version = ?5 AND source_oid = ?6 AND source_version = ?7 AND base_oid = ?8 AND base_version = ?9)".into() },
-            ComparisonTarget::Merged {} => "EXISTS (SELECT 1 FROM pull_merges WHERE pull_number = ?2 AND pull_version = ?5 AND source_oid = ?6 AND source_version = ?7 AND base_oid = ?8 AND base_version = ?9)".into(),
-            ComparisonTarget::Thread { .. } => return Err(invalid("threads are not creation targets")),
-        };
-        let decision = format!(
-            "CASE WHEN NOT ({ACCESS}) OR NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2) THEN 'missing' WHEN EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3 AND (pull_number != ?2 OR creation_digest != ?4)) THEN 'conflict' WHEN EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3) THEN 'applied' WHEN NOT ({eligible}) THEN 'conflict' ELSE 'applied' END"
-        );
-        let check = SqlStatement {
-            sql: format!("SELECT {decision}"),
-            parameters: parameters.clone(),
-        };
-        parameters.resize(10, SqlValue::Null);
-        parameters.extend([
-            SqlValue::Text(input.body.clone()),
-            SqlValue::Blob(
-                parse_oid(&anchor.merge_base)
-                    .ok_or_else(|| invalid("invalid thread merge base"))?,
-            ),
-            SqlValue::Blob(
-                URL_SAFE_NO_PAD
-                    .decode(&anchor.path_base64)
-                    .map_err(|_| invalid("invalid verified path"))?,
-            ),
-            SqlValue::Text(anchor.side.as_str().into()),
-            SqlValue::Integer(anchor.line),
-            SqlValue::Blob(
-                parse_oid(&anchor.blob_oid).ok_or_else(|| invalid("invalid thread blob"))?,
-            ),
-            SqlValue::Integer(identity.issued_at_ms),
-        ]);
-        self.pull_change(identity, vec![check, SqlStatement {
-            sql: format!("INSERT INTO pull_threads (id, creation_digest, pull_number, author, body, resolved, version, pull_version, source_oid, source_version, base_oid, base_version, merge_base, path, side, line, blob_oid, created_ms, updated_ms) SELECT ?3, ?4, ?2, ?1, ?11, 0, 1, ?5, ?6, ?7, ?8, ?9, ?12, ?13, ?14, ?15, ?16, ?17, ?17 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3)"), parameters,
-        }, SqlStatement { sql: "SELECT number FROM pull_threads WHERE id = ?1".into(), parameters: vec![SqlValue::Blob(input.id.to_vec())] }]).await
+    ) -> Result<Committed<PullChange>, native::NativePullError> {
+        self.native_create_thread(identity, actor, pull, input, anchor)
+            .await
     }
     pub(crate) async fn resolve_thread(
         &self,
@@ -393,4 +337,78 @@ fn comment(row: &[SqlValue]) -> cellule_runtime::Result<Comment> {
         body: body.clone(),
         created_at_ms: *created,
     })
+}
+
+pub(in crate::pulls) fn creation_statements(
+    actor: &str,
+    pull: i64,
+    input: &ThreadIntent,
+    anchor: &LineAnchor,
+    now_ms: i64,
+) -> cellule_runtime::Result<Vec<SqlStatement>> {
+    validate_component(actor)?;
+    validate_repository_id(input.id)?;
+    if pull < 1
+        || !valid_body(&input.body)
+        || input.body.trim().is_empty()
+        || input.path_base64 != anchor.path_base64
+        || input.side != anchor.side
+        || input.line != anchor.line
+    {
+        return Err(Error::Command("thread intent differs from verified anchor"));
+    }
+    let r = &anchor.revision;
+    let mut parameters = vec![
+        SqlValue::Text(actor.into()),
+        SqlValue::Integer(pull),
+        SqlValue::Blob(input.id.to_vec()),
+        SqlValue::Blob(input.digest(actor, pull)),
+        SqlValue::Integer(r.pull_version),
+        SqlValue::Blob(parse_oid(&r.source_oid).ok_or(Error::Command("invalid thread source"))?),
+        SqlValue::Integer(r.source_version),
+        SqlValue::Blob(parse_oid(&r.base_oid).ok_or(Error::Command("invalid thread base"))?),
+        SqlValue::Integer(r.base_version),
+    ];
+    let eligible = match &input.target {
+            ComparisonTarget::Current { .. } => format!("EXISTS (SELECT 1 FROM {JOINS} WHERE p.number = ?2 AND p.version = ?5 AND s.oid = ?6 AND s.version = ?7 AND b.oid = ?8 AND b.version = ?9)"),
+            ComparisonTarget::Review { number } => { parameters.push(SqlValue::Integer(*number)); "EXISTS (SELECT 1 FROM pull_reviews WHERE pull_number = ?2 AND number = ?10 AND pull_version = ?5 AND source_oid = ?6 AND source_version = ?7 AND base_oid = ?8 AND base_version = ?9)".into() },
+            ComparisonTarget::Merged {} => "EXISTS (SELECT 1 FROM pull_merges WHERE pull_number = ?2 AND pull_version = ?5 AND source_oid = ?6 AND source_version = ?7 AND base_oid = ?8 AND base_version = ?9)".into(),
+            ComparisonTarget::Thread { .. } => return Err(Error::Command("threads are not creation targets")),
+        };
+    let decision = format!(
+        "CASE WHEN NOT ({ACCESS}) OR NOT EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2) THEN 'missing' WHEN EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3 AND (pull_number != ?2 OR creation_digest != ?4)) THEN 'conflict' WHEN EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3) THEN 'applied' WHEN NOT ({eligible}) THEN 'conflict' ELSE 'applied' END"
+    );
+    let check = SqlStatement {
+        sql: format!("SELECT {decision}"),
+        parameters: parameters.clone(),
+    };
+    parameters.resize(10, SqlValue::Null);
+    parameters.extend([
+        SqlValue::Text(input.body.clone()),
+        SqlValue::Blob(
+            parse_oid(&anchor.merge_base).ok_or(Error::Command("invalid thread merge base"))?,
+        ),
+        SqlValue::Blob(
+            URL_SAFE_NO_PAD
+                .decode(&anchor.path_base64)
+                .map_err(|_| Error::Command("invalid verified path"))?,
+        ),
+        SqlValue::Text(anchor.side.as_str().into()),
+        SqlValue::Integer(anchor.line),
+        SqlValue::Blob(parse_oid(&anchor.blob_oid).ok_or(Error::Command("invalid thread blob"))?),
+        SqlValue::Integer(now_ms),
+    ]);
+    Ok(vec![
+        check,
+        SqlStatement {
+            sql: format!(
+                "INSERT INTO pull_threads (id, creation_digest, pull_number, author, body, resolved, version, pull_version, source_oid, source_version, base_oid, base_version, merge_base, path, side, line, blob_oid, created_ms, updated_ms) SELECT ?3, ?4, ?2, ?1, ?11, 0, 1, ?5, ?6, ?7, ?8, ?9, ?12, ?13, ?14, ?15, ?16, ?17, ?17 WHERE ({decision}) = 'applied' AND NOT EXISTS (SELECT 1 FROM pull_threads WHERE id = ?3)"
+            ),
+            parameters,
+        },
+        SqlStatement {
+            sql: "SELECT number FROM pull_threads WHERE id = ?1".into(),
+            parameters: vec![SqlValue::Blob(input.id.to_vec())],
+        },
+    ])
 }

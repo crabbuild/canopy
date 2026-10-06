@@ -18,8 +18,10 @@ mod changes;
 mod cursor;
 mod rewrite;
 mod update;
+mod visit;
 pub use changes::RangeChanges;
 pub use cursor::RangeCursor;
+pub(crate) use visit::{ArtifactVisitor, IndexVisitor, WalkResult};
 
 pub const FANOUT: usize = 128;
 pub const NODE_BYTES: u32 = 64 << 10;

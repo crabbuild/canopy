@@ -33,6 +33,48 @@ impl RefStateIndex {
     ) -> Result<RefTransition, RefStateError> {
         super::super::publication::codec::artifact_valid(operation)?;
         super::super::publication::ref_proof::shape(plan, self.format())?;
+        self.prepare_checked(base, operation, plan).await
+    }
+
+    /// Private reserved-ref creation. This tree output grants no write authority;
+    /// the generated publisher must authenticate the verified candidate scope.
+    pub(crate) async fn prepare_candidate(
+        &self,
+        base: Option<RefStateRoot>,
+        operation: [u8; 16],
+        candidate: &crate::pulls::candidates::MergeCandidate,
+    ) -> Result<RefTransition, RefStateError> {
+        use crate::pulls::candidates::{CandidateResult, valid_request};
+        let CandidateResult::Ready { oid, .. } = &candidate.result else {
+            return Err(RefStateError::Changed);
+        };
+        if !valid_request(&candidate.request)
+            || crate::directory::validate_component(&candidate.actor).is_err()
+        {
+            return Err(RefStateError::Changed);
+        }
+        let oid = crate::pulls::merge::oid(oid).map_err(|_| RefStateError::Changed)?;
+        if oid.format() != self.format() || oid.is_zero() {
+            return Err(RefStateError::Changed);
+        }
+        super::super::publication::codec::artifact_valid(operation)?;
+        let plan = PushPlan {
+            actor: candidate.actor.clone(),
+            updates: vec![crate::RefUpdate {
+                name: candidate.fetch_ref(),
+                expected: None,
+                new_oid: Some(oid),
+            }],
+        };
+        self.prepare_checked(base, operation, &plan).await
+    }
+
+    async fn prepare_checked(
+        &self,
+        base: Option<RefStateRoot>,
+        operation: [u8; 16],
+        plan: &PushPlan,
+    ) -> Result<RefTransition, RefStateError> {
         if let Some(root) = &base {
             self.tree.validate_root(root.clone()).await?;
         }

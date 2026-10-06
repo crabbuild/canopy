@@ -58,6 +58,7 @@ struct FileAdmission {
 }
 struct PackFile {
     cache: Arc<GitCache>,
+    sparse: super::sparse::SparsePack,
     _admission: Arc<FileAdmission>,
 }
 impl NativeFiles {
@@ -153,12 +154,7 @@ impl NativeFiles {
         if let Some(file) = self.cached(descriptor)? {
             return Ok(file);
         }
-        let bytes = descriptor
-            .pack
-            .size
-            .checked_add(descriptor.index.size)
-            .and_then(|size| size.checked_add(4096))
-            .ok_or(NativeReadError::Capacity)?;
+        let bytes = super::sparse::SparsePack::index_budget(descriptor)?;
         if bytes > self.budget.capacity() {
             return Err(NativeReadError::Capacity);
         }
@@ -177,28 +173,20 @@ impl NativeFiles {
             },
         )
         .await?;
-        cache
-            .download_native_owned(&self.store, descriptor, Arc::clone(&lifetime))
-            .await?;
+        let sparse = super::sparse::SparsePack::new(
+            cache.clone(),
+            &self.store,
+            descriptor,
+            self.native.clone(),
+            lifetime.clone(),
+            admission.clone(),
+        )
+        .await?;
         let file = Arc::new(PackFile {
             cache,
+            sparse,
             _admission: admission,
         });
-        let verify = Arc::clone(&file);
-        let claim = self
-            .native
-            .try_admit(crate::native_resources::NativeWork::Read)
-            .map_err(ObjectReadError::from)?;
-        tokio::task::spawn_blocking(move || {
-            let (_owner, _claim) = (lifetime, claim);
-            let pack = verify.cache.git_dir().join(format!(
-                "objects/pack/pack-{}.pack",
-                hex::encode(descriptor.git_checksum)
-            ));
-            descriptor.verify_files(&pack, &pack.with_extension("idx"))?;
-            Ok::<_, IndexError>(())
-        })
-        .await??;
         self.downloads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let evicted = {
@@ -251,7 +239,7 @@ impl NativeFiles {
         )
         .await?)
     }
-    pub(super) async fn install(
+    pub(super) async fn install_pack(
         &self,
         cache: Arc<GitCache>,
         descriptor: NativePackDescriptor,
@@ -278,6 +266,35 @@ impl NativeFiles {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
+    pub(super) async fn install(
+        &self,
+        cache: Arc<GitCache>,
+        object: &ResolvedObject,
+        owner: ReadOwner,
+        retain: bool,
+    ) -> Result<(), NativeReadError> {
+        let file = self
+            .load(object.source.record.native(), owner.clone())
+            .await?;
+        let owner: ReadOwner = Arc::new((owner, file.clone()));
+        file.sparse
+            .prepare(object.entry.header.object.oid, owner.clone())
+            .await?;
+        // Retain verified canonical objects in the bounded service cache.
+        // Request workspaces are disposable and cannot provide warm fetches.
+        if retain {
+            file.cache
+                .copy_native_owned(
+                    file.cache.git_dir(),
+                    object.entry.header.object,
+                    owner.clone(),
+                )
+                .await?;
+        }
+        cache
+            .copy_native_owned(file.cache.git_dir(), object.entry.header.object, owner)
+            .await
+    }
     pub(super) async fn body(
         &self,
         object: ResolvedObject,
@@ -294,6 +311,9 @@ impl NativeFiles {
             .load(object.source.record.native(), Arc::clone(&owner))
             .await?;
         let process_owner: ReadOwner = Arc::new((owner, Arc::clone(&file)));
+        file.sparse
+            .prepare(expected.oid, process_owner.clone())
+            .await?;
         let mut objects =
             GitObjects::batch_owned(&file.cache.git_dir(), &self.native, process_owner)?;
         let body = objects.read_verified(expected, limit).await?;

@@ -218,7 +218,7 @@ async fn create_inner(
         .thread_retry(&actor.account, number, &intent)
         .await
     {
-        Ok(Some(result)) => return changed(state, Ok(result), true),
+        Ok(Some(result)) => return changed::<std::convert::Infallible>(state, Ok(result), true),
         Ok(None) => (),
         Err(error) => return pulls::failed(error),
     }
@@ -250,18 +250,15 @@ async fn create_inner(
         state,
         route
             .repository
-            .create_thread(identity, &actor.account, number, &intent, anchor)
+            .create_thread(identity, &actor.account, number, intent, anchor)
             .await
             .map(|result| result.output),
         true,
     )
 }
-fn changed(
+fn changed<E: std::fmt::Display>(
     state: &RepositoryHttp,
-    result: Result<
-        PullChange,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::primitives::sql::SqlResultSet>>,
-    >,
+    result: Result<PullChange, E>,
     created: bool,
 ) -> Response<Body> {
     match result {

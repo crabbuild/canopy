@@ -56,6 +56,13 @@ impl RefTransition {
     }
 }
 impl RefStateIndex {
+    pub(crate) async fn visit<V: super::directory::index::IndexVisitor<RefStateRecord> + ?Sized>(
+        &self,
+        root: RefStateRoot,
+        visitor: &mut V,
+    ) -> super::directory::index::WalkResult<()> {
+        self.tree.visit(root, visitor).await
+    }
     pub fn new(store: Arc<ArtifactStore>, format: ObjectFormat) -> Self {
         Self {
             tree: RefStateTree::new(store, format),

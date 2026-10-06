@@ -134,16 +134,97 @@ impl RepositoryCell {
         identity: MutationIdentity,
         action: command::CandidateAction,
     ) -> Result<Committed<CandidateOutcome>, InvocationError<CandidateOutcome>> {
+        let (_snapshot, input) = self
+            .prepare_candidate_action(action)
+            .await
+            .map_err(|source| {
+                InvocationError::NotStarted(Error::Facility {
+                    name: "native candidate observation",
+                    source: Box::new(source),
+                })
+            })?;
         self.application
-            .command::<command::PrepareCandidate>(&self.target, identity, action)
+            .command::<command::PrepareCandidate>(&self.target, identity, input)
             .await
     }
+
+    pub(crate) async fn prepare_candidate_action(
+        &self,
+        action: command::CandidateAction,
+    ) -> Result<
+        (
+            Option<crate::packs::publication::ServingSnapshot>,
+            command::CandidateRefRequest,
+        ),
+        super::native::NativePullError,
+    > {
+        validate_component(action.actor())?;
+        if !action.valid() {
+            return Err(Error::Command("invalid candidate action").into());
+        }
+        if matches!(
+            &action,
+            command::CandidateAction::Finish {
+                result: CandidateResult::Ready { .. },
+                ..
+            }
+        ) {
+            return Err(
+                Error::Command("native generated candidate publication is unavailable").into(),
+            );
+        }
+        let number = match &action {
+            command::CandidateAction::Reserve { number, .. } => Some(*number),
+            command::CandidateAction::Finish { actor, id, .. } => {
+                let id = uuid::Uuid::parse_str(id)
+                    .map_err(|_| Error::Command("invalid candidate UUID"))?;
+                let selected = self.sql.query(None, SqlBatch {statements: vec![SqlStatement {
+                    sql: format!("SELECT pull_number FROM merge_candidates WHERE id=?2 AND actor=?1 AND ({ACCESS})"),
+                    parameters: vec![ReadIdentity::Account(actor).parameter(), SqlValue::Blob(id.as_bytes().to_vec())],
+                }]}).await.map_err(|e| super::native::NativePullError::Metadata(Box::new(e)))?;
+                match selected
+                    .output
+                    .first()
+                    .and_then(|s| s.rows.first())
+                    .map(Vec::as_slice)
+                {
+                    Some([SqlValue::Integer(number)]) if *number > 0 => Some(*number),
+                    None => None,
+                    _ => return Err(Error::Command("invalid candidate number selection").into()),
+                }
+            }
+        };
+        let selected = self.sql.query(None, SqlBatch {statements: vec![SqlStatement {
+            sql: format!("SELECT source_ref,base_ref FROM pull_requests WHERE number=?2 AND ({ACCESS})"),
+            parameters: vec![ReadIdentity::Account(action.actor()).parameter(), number.map_or(SqlValue::Null, SqlValue::Integer)],
+        }]}).await.map_err(|e| super::native::NativePullError::Metadata(Box::new(e)))?;
+        let mut names = match selected
+            .output
+            .first()
+            .and_then(|s| s.rows.first())
+            .map(Vec::as_slice)
+        {
+            Some([SqlValue::Text(source), SqlValue::Text(base)]) => {
+                vec![source.clone(), base.clone()]
+            }
+            None => Vec::new(),
+            _ => return Err(Error::Command("invalid candidate ref selection").into()),
+        };
+        names.sort();
+        names.dedup();
+        let (snapshot, selection) = self
+            .pull_ref_selection(action.actor(), action.digest()?, &names)
+            .await?;
+        Ok((snapshot, command::CandidateRefRequest { selection, action }))
+    }
 }
-fn query(id: &str) -> cellule_runtime::Result<SqlBatch> {
+pub(crate) fn query(id: &str) -> cellule_runtime::Result<SqlBatch> {
     let id = uuid::Uuid::parse_str(id).map_err(|_| Error::Command("invalid candidate UUID"))?;
     Ok(SqlBatch {statements:vec![SqlStatement {sql:"SELECT binding, pull_number, actor, request, created_ms, result FROM merge_candidates WHERE id = ?1".into(),parameters:vec![SqlValue::Blob(id.as_bytes().to_vec())]}]})
 }
-fn decode(sets: &[SqlResultSet]) -> cellule_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
+pub(crate) fn decode(
+    sets: &[SqlResultSet],
+) -> cellule_runtime::Result<Option<(Vec<u8>, MergeCandidate)>> {
     let set = sets
         .first()
         .ok_or(Error::Command("missing candidate result"))?;
@@ -246,4 +327,14 @@ fn certified(
     Ok(
         matches!(rows.first().and_then(|set|set.rows.first()).map(Vec::as_slice),Some([SqlValue::Blob(stored)]) if *stored == body),
     )
+}
+
+pub(crate) fn intent_binding(candidate: &MergeCandidate) -> cellule_runtime::Result<Vec<u8>> {
+    let request = serde_json::to_string(&candidate.request)
+        .map_err(|_| Error::Command("candidate intent encoding"))?;
+    Ok(super::mutations::binding(&[
+        &candidate.actor,
+        &candidate.number.to_string(),
+        &request,
+    ]))
 }

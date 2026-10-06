@@ -45,3 +45,15 @@ async fn verify(
     while reader.next().await?.is_some() {}
     super::super::recovery::archive::descriptor(hash, key.operation, key.kind, body)
 }
+
+pub(in crate::packs::publication) async fn backup_graph(
+    root: NativeOutcomeRoot,
+    inventory: &mut crate::packs::backup::Inventory<'_>,
+) -> crate::packs::directory::index::WalkResult<()> {
+    let record: OutcomeRecord = root.0.read(&inventory.store(), INPUT_ROOT_BYTES).await?;
+    inventory.input(root.operation(), root.artifact()).await?;
+    super::super::native_result::backup_graph(record.native, false, inventory).await?;
+    inventory
+        .body(record.body_operation, record.response.body)
+        .await
+}

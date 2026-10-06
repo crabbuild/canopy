@@ -182,6 +182,11 @@ fn ancestry_policy_page(
     }
     Ok((end, SqlBatch { statements }))
 }
+#[derive(Clone, Copy)]
+enum AncestryRequirement {
+    Policy,
+    Required,
+}
 impl PreparedCatalog {
     /// Validate targets through this prepared catalog. Ancestry is computed
     /// only for currently enabled fast-forward rules; final publication checks
@@ -194,9 +199,35 @@ impl PreparedCatalog {
         limits: MetadataLimits,
     ) -> Result<RefPublicationProof, RefProofError> {
         let (_, deadline) = self.base.live_lease()?;
-        timeout_at(deadline, self.ref_proof_inner(plan, root, budget, limits))
-            .await
-            .map_err(|_| PreparationBaseError::Inactive)?
+        timeout_at(
+            deadline,
+            self.ref_proof_inner(plan, root, budget, limits, AncestryRequirement::Policy),
+        )
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)?
+    }
+    /// Certify every non-vacuous ancestry predicate through the privately
+    /// verified native catalog, independent of branch rules. Reviewed merge
+    /// publication must use this path: even an unprotected branch requires
+    /// ancestry evidence. False bits remain explicit negative facts.
+    ///
+    /// Reuses the ordinary proof/MAC and bounded disk-backed walker. This is
+    /// preparation only; final publication must still check current refs,
+    /// reviews/checks/access and its actual owner/lease in one transaction.
+    pub async fn ref_proof_with_required_ancestry(
+        &self,
+        plan: PushPlan,
+        root: &Path,
+        budget: DiskBudget,
+        limits: MetadataLimits,
+    ) -> Result<RefPublicationProof, RefProofError> {
+        let (_, deadline) = self.base.live_lease()?;
+        timeout_at(
+            deadline,
+            self.ref_proof_inner(plan, root, budget, limits, AncestryRequirement::Required),
+        )
+        .await
+        .map_err(|_| PreparationBaseError::Inactive)?
     }
     async fn ref_proof_inner(
         &self,
@@ -204,8 +235,11 @@ impl PreparedCatalog {
         root: &Path,
         budget: DiskBudget,
         limits: MetadataLimits,
+        ancestry: AncestryRequirement,
     ) -> Result<RefPublicationProof, RefProofError> {
-        let (plan, bits) = self.ref_evidence(plan, root, budget, limits).await?;
+        let (plan, bits) = self
+            .ref_evidence_with_ancestry(plan, root, budget, limits, ancestry)
+            .await?;
         let certificate = self
             .issue_certificate(Some(binding(&plan, &bits)?), None)
             .await?;
@@ -224,6 +258,27 @@ impl PreparedCatalog {
         root: &Path,
         budget: DiskBudget,
         limits: MetadataLimits,
+    ) -> Result<(PushPlan, Vec<u8>), RefProofError> {
+        self.ref_evidence_with_ancestry(plan, root, budget, limits, AncestryRequirement::Policy)
+            .await
+    }
+    pub(super) async fn required_ref_evidence(
+        &self,
+        plan: PushPlan,
+        root: &Path,
+        budget: DiskBudget,
+        limits: MetadataLimits,
+    ) -> Result<(PushPlan, Vec<u8>), RefProofError> {
+        self.ref_evidence_with_ancestry(plan, root, budget, limits, AncestryRequirement::Required)
+            .await
+    }
+    async fn ref_evidence_with_ancestry(
+        &self,
+        plan: PushPlan,
+        root: &Path,
+        budget: DiskBudget,
+        limits: MetadataLimits,
+        ancestry: AncestryRequirement,
     ) -> Result<(PushPlan, Vec<u8>), RefProofError> {
         shape(&plan, self.catalog().format)?;
         if plan.actor != self.base.capability().2.actor {
@@ -256,21 +311,31 @@ impl PreparedCatalog {
         let mut start = 0;
         while start < plan.updates.len() {
             self.ensure_live()?;
-            let (end, batch) = ancestry_policy_page(&plan.updates, start)?;
-            let policies = sql
-                .query(None, batch)
-                .await
-                .map_err(|error| RefProofError::Query(Box::new(error)))?;
+            let (end, policies) = match ancestry {
+                AncestryRequirement::Required => ((start + 128).min(plan.updates.len()), None),
+                AncestryRequirement::Policy => {
+                    let (end, batch) = ancestry_policy_page(&plan.updates, start)?;
+                    let policies = sql
+                        .query(None, batch)
+                        .await
+                        .map_err(|error| RefProofError::Query(Box::new(error)))?
+                        .output;
+                    if policies.len() != end - start {
+                        return Err(RefProofError::Invalid);
+                    }
+                    (end, Some(policies))
+                }
+            };
             let updates = &plan.updates[start..end];
-            if policies.output.len() != updates.len() {
-                return Err(RefProofError::Invalid);
-            }
-            for (at, (update, policy)) in updates.iter().zip(policies.output).enumerate() {
+            for (at, update) in updates.iter().enumerate() {
                 let index = start + at;
-                let required = match policy.rows.first().map(Vec::as_slice) {
-                    Some([SqlValue::Integer(0)]) => false,
-                    Some([SqlValue::Integer(1)]) => true,
-                    _ => return Err(RefProofError::Invalid),
+                let required = match policies.as_ref() {
+                    None => true,
+                    Some(policies) => match policies[at].rows.first().map(Vec::as_slice) {
+                        Some([SqlValue::Integer(0)]) => false,
+                        Some([SqlValue::Integer(1)]) => true,
+                        _ => return Err(RefProofError::Invalid),
+                    },
                 };
                 let old = update.expected.as_ref().and_then(|old| old.oid);
                 if old.is_none() || old == update.new_oid || update.new_oid.is_none() {

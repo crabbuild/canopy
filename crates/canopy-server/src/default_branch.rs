@@ -6,7 +6,7 @@ use cellule_runtime::{
     primitives::sql::SqlValue,
 };
 
-use crate::{RepositoryCell, directory::validate_component, refs::valid_ref_name};
+use crate::{ReadIdentity, RepositoryCell, directory::validate_component, refs::valid_ref_name};
 
 /// Repository symbolic HEAD and the ref generation required to change it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,13 +39,42 @@ impl RepositoryCell {
         })
     }
 
-    /// Changes HEAD only for the owner at the expected ref generation.
-    ///
-    /// The target must be a live branch, or there must be no live branches.
-    /// False means authorization, generation or target existence failed.
+    /// Reads the constant-size summary with current access in the same query.
+    /// Native publishers update this row atomically with the immutable snapshot;
+    /// metadata reads acquire no serving pin and publish no Cell root.
+    pub async fn default_branch_for(
+        &self,
+        actor: ReadIdentity<'_>,
+        minimum: Option<Receipt>,
+    ) -> Result<Observed<Option<DefaultBranch>>, InvocationError<Vec<SqlResultSet>>> {
+        actor.validate().map_err(InvocationError::NotStarted)?;
+        let result = self.sql.query(minimum, SqlBatch {
+            statements: vec![SqlStatement {
+                sql: format!("SELECT generation, default_branch FROM ref_generation WHERE singleton=1 AND ({}) AND EXISTS (SELECT 1 FROM catalog_state s JOIN catalog_generations g ON g.generation=s.generation WHERE s.singleton=1 AND g.refs IS NOT NULL)", crate::access::READ_ACCESS),
+                parameters: vec![actor.parameter()],
+            }],
+        }).await?;
+        let output = result
+            .output
+            .first()
+            .ok_or_else(|| {
+                InvocationError::NotStarted(Error::Command("missing HEAD query result"))
+            })?
+            .rows
+            .first()
+            .map(|row| decode_head(row))
+            .transpose()
+            .map_err(InvocationError::NotStarted)?;
+        Ok(Observed {
+            output,
+            receipt: result.receipt,
+        })
+    }
+
+    /// Retired SQL writer: HEAD changes require resident native publication.
     pub async fn set_default_branch(
         &self,
-        identity: MutationIdentity,
+        _identity: MutationIdentity,
         actor: &str,
         expected_generation: i64,
         reference: &str,
@@ -56,21 +85,9 @@ impl RepositoryCell {
                 "invalid default branch update",
             )));
         }
-        // HEAD and the pagination fence change in the same owner-authorized
-        // statement. A concurrent push or HEAD ABA makes a stale update fail.
-        let result = self.sql.batch(identity, SqlBatch {
-            statements: vec![SqlStatement {
-                sql: "UPDATE ref_generation SET default_branch = ?1, generation = generation + 1 WHERE singleton = 1 AND generation = ?2 AND EXISTS (SELECT 1 FROM repository_identity WHERE owner = ?3) AND (EXISTS (SELECT 1 FROM refs WHERE name = ?1 AND oid IS NOT NULL) OR NOT EXISTS (SELECT 1 FROM refs WHERE name GLOB 'refs/heads/*' AND oid IS NOT NULL))".into(),
-                parameters: vec![SqlValue::Text(reference.into()), SqlValue::Integer(expected_generation), SqlValue::Text(actor.into())],
-            }],
-        }).await?;
-        Ok(Committed {
-            output: result
-                .output
-                .first()
-                .is_some_and(|set| set.rows_affected == 1),
-            receipt: result.receipt,
-        })
+        Err(InvocationError::NotStarted(Error::Command(
+            "default branch changes require resident native publication",
+        )))
     }
 }
 

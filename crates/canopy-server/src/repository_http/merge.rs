@@ -3,7 +3,6 @@ use crate::pulls::{
     PullRevision,
     merge::{MergeOutcome, MergeRequest, MergeStrategy, valid_request},
 };
-use cellule_runtime::InvocationError;
 use std::time::Duration;
 
 const WORK_TIMEOUT_MS: u32 = 120_000;
@@ -118,14 +117,13 @@ async fn serve(
     };
     identity.expires_at_ms = expires_at_ms;
     let operation = route
-        .repository
+        .gateway
         .merge_pull(identity, &actor.account, number, request);
     let outcome =
         match tokio::time::timeout(Duration::from_millis(u64::from(WORK_TIMEOUT_MS)), operation)
             .await
         {
-            Ok(Ok(result)) if (state.manager.ready)() => result.output,
-            Ok(Err(InvocationError::Rejected(rejected))) => rejected.output,
+            Ok(Ok(result)) if (state.manager.ready)() => result,
             Ok(Err(error)) => return failed(error),
             Ok(Ok(_)) => return unavailable(),
             Err(_) => {

@@ -5,6 +5,8 @@ use crate::ReadIdentity;
 pub mod candidates;
 pub mod merge;
 mod mutations;
+pub(crate) mod native;
+pub use native::NativePullError;
 pub(crate) mod threads;
 
 use crate::{
@@ -184,55 +186,54 @@ pub(crate) fn valid_review(input: &NewReview<'_>) -> bool {
 }
 
 impl RepositoryCell {
-    /// Lists 32 pull summaries with coherent current branches; missing access returns None.
+    /// A bounded coherent page from editorial SQL and privately certified native refs.
     pub async fn pulls<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
         after: i64,
         state: Option<PullState>,
-    ) -> Result<Observed<Option<Vec<PullSummary>>>, Invocation> {
-        let actor = actor.into();
+    ) -> Result<Observed<Option<Vec<PullSummary>>>, NativePullError> {
         if after < 0 {
-            return Err(invalid("invalid pull cursor"));
+            return Err(Error::Command("invalid pull cursor").into());
         }
-        actor.validate().map_err(Invocation::NotStarted)?;
-        let mut parameters = vec![actor.parameter(), SqlValue::Integer(after)];
-        let filter = if let Some(state) = state {
-            parameters.push(SqlValue::Text(state.as_str().into()));
-            "AND p.state = ?3"
-        } else {
-            ""
-        };
-        let result = self.pull_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS})"), parameters: vec![actor.parameter()] },
-            SqlStatement { sql: format!("SELECT {COLUMNS} FROM {JOINS} WHERE p.number > ?2 {filter} AND ({ACCESS}) ORDER BY p.number LIMIT {PULL_PAGE_SIZE}"), parameters },
-        ).await?;
+        let result = self
+            .native_pull_rows(actor.into(), native::ReadKind::Page { after, state })
+            .await?;
         let output = result
             .output
-            .map(|rows| rows.iter().map(|row| summary(row)).collect())
-            .transpose()
-            .map_err(Invocation::NotStarted)?;
+            .map(|sets| {
+                sets.first()
+                    .ok_or(Error::Command("missing native pull page"))?
+                    .rows
+                    .iter()
+                    .map(|row| summary(row))
+                    .collect()
+            })
+            .transpose()?;
         Ok(Observed {
             output,
             receipt: result.receipt,
         })
     }
-    /// Reads a pull, original tips and live ref state under current read membership.
+    /// Current branch facts and editorial details share the final typed observation.
     pub async fn pull<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
         number: i64,
-    ) -> Result<Observed<Option<PullRequest>>, Invocation> {
-        let actor = actor.into();
-        actor.validate().map_err(Invocation::NotStarted)?;
-        let result = self.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-            sql: format!("SELECT {COLUMNS}, p.body, p.initial_source_oid, p.initial_base_oid, merged.id, merged.pull_number, merged.oid, merged.merged_ms, merged.pull_version, merged.source_oid, merged.source_version, merged.base_oid, merged.base_version FROM {JOINS} LEFT JOIN pull_merges merged ON merged.pull_number = p.number WHERE p.number = ?2 AND ({ACCESS})"),
-            parameters: vec![actor.parameter(), SqlValue::Integer(number)],
-        }] }).await?;
-        let rows = result
-            .output
-            .first()
-            .ok_or_else(|| invalid("missing pull result"))?;
+    ) -> Result<Observed<Option<PullRequest>>, NativePullError> {
+        if number < 1 {
+            return Err(Error::Command("invalid pull number").into());
+        }
+        let result = self
+            .native_pull_rows(actor.into(), native::ReadKind::Detail(number))
+            .await?;
+        let Some(sets) = result.output else {
+            return Ok(Observed {
+                output: None,
+                receipt: result.receipt,
+            });
+        };
+        let rows = sets.first().ok_or(Error::Command("missing pull result"))?;
         let output = rows
             .rows
             .first()
@@ -265,33 +266,36 @@ impl RepositoryCell {
                 })
             })
             .transpose()
-            .map_err(Invocation::NotStarted)?;
+            .map_err(NativePullError::Invalid)?;
         Ok(Observed {
             output,
             receipt: result.receipt,
         })
     }
-    /// Reads 16 immutable reviews with current applicability; missing pull/access returns None.
+    /// Immutable reviews with applicability checked against current exact native refs.
     pub async fn pull_reviews<'a>(
         &self,
         actor: impl Into<ReadIdentity<'a>>,
         number: i64,
         after: i64,
-    ) -> Result<Observed<Option<Vec<PullReview>>>, Invocation> {
-        let actor = actor.into();
-        if after < 0 {
-            return Err(invalid("invalid review cursor"));
+    ) -> Result<Observed<Option<Vec<PullReview>>>, NativePullError> {
+        if number < 1 || after < 0 {
+            return Err(Error::Command("invalid review cursor").into());
         }
-        actor.validate().map_err(Invocation::NotStarted)?;
-        let result = self.pull_rows(
-            SqlStatement { sql: format!("SELECT ({ACCESS}) AND EXISTS (SELECT 1 FROM pull_requests WHERE number = ?2)"), parameters: vec![actor.parameter(), SqlValue::Integer(number)] },
-            SqlStatement { sql: format!("SELECT r.number, r.id, r.reviewer, r.kind, r.body, r.pull_version, r.source_oid, r.source_version, r.base_oid, r.base_version, coalesce(({APPLICABLE}), 0), r.created_ms FROM pull_reviews r JOIN pull_requests p ON p.number = r.pull_number JOIN refs s ON s.name = p.source_ref JOIN refs b ON b.name = p.base_ref WHERE r.pull_number = ?2 AND r.number > ?3 AND ({ACCESS}) ORDER BY r.number LIMIT {REVIEW_PAGE_SIZE}"), parameters: vec![actor.parameter(), SqlValue::Integer(number), SqlValue::Integer(after)] },
-        ).await?;
+        let result = self
+            .native_pull_rows(actor.into(), native::ReadKind::Reviews { number, after })
+            .await?;
         let output = result
             .output
-            .map(|rows| rows.iter().map(|row| review(row)).collect())
-            .transpose()
-            .map_err(Invocation::NotStarted)?;
+            .map(|sets| {
+                sets.first()
+                    .ok_or(Error::Command("missing native review page"))?
+                    .rows
+                    .iter()
+                    .map(|row| review(row))
+                    .collect()
+            })
+            .transpose()?;
         Ok(Observed {
             output,
             receipt: result.receipt,

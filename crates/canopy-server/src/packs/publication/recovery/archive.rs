@@ -121,8 +121,11 @@ impl WireValue for TerminalReleaseReply {
 }
 
 pub(super) enum Terminal {
+    Candidate(CandidatePublicationReply),
     Push(Box<CompletedRootPush>),
     Initialization(InitializationReply),
+    Merge(crate::pulls::merge::MergeOutcome),
+    Head(PublicationReply),
 }
 impl Terminal {
     fn selected_statement(&self, operation: [u8; 16]) -> SqlStatement {
@@ -130,6 +133,13 @@ impl Terminal {
             sql: match self {
                 Self::Push(_) => super::super::root_completion::read::SAVED,
                 Self::Initialization(_) => super::super::initialization::publish::SAVED,
+                Self::Candidate(reply) => {
+                    return super::super::candidate_publication::audit::statement(reply);
+                }
+                Self::Head(_) => super::super::native_head::publish::SAVED,
+                Self::Merge(outcome) => {
+                    return super::super::native_merge::audit::statement(outcome);
+                }
             }
             .into(),
             parameters: vec![blob(operation)],
@@ -150,14 +160,101 @@ impl Terminal {
             // A known negative is the original phase knowledge. A later attempt
             // may initialize this logical operation, without rewriting that denial.
             Self::Initialization(InitializationReply::Denied(_)) => true,
+            Self::Candidate(reply) => {
+                !reply.applied()
+                    || super::super::candidate_publication::audit::selected(
+                        result,
+                        reply,
+                        &check.actor,
+                    )?
+                    .is_some()
+            }
+            Self::Head(reply) => {
+                matches!(reply, PublicationReply::Denied(_))
+                    || super::super::native_head::publish::selected(result, check, *reply)?
+                        .is_some()
+            }
+            Self::Merge(outcome) => {
+                !matches!(outcome, crate::pulls::merge::MergeOutcome::Applied { .. })
+                    || super::super::native_merge::audit::selected(result, outcome, &check.actor)?
+                        .is_some()
+            }
         })
     }
     async fn closed_graph(
         &self,
         store: &ArtifactStore,
+        selected: &[SqlResultSet],
+        check: &LeaseCheck,
         hash: &mut blake3::Hasher,
     ) -> Result<(), RootRecoveryError> {
         match self {
+            Self::Candidate(reply) => {
+                hash.update(&encoded(reply, 512)?);
+                super::super::candidate_publication::audit::closed_graph(
+                    store, selected, reply, check, hash,
+                )
+                .await?;
+            }
+            Self::Head(reply) => {
+                hash.update(&encoded(reply, 512)?);
+                if let PublicationReply::Published(published) = reply {
+                    let (request, fact) =
+                        super::super::native_head::publish::selected(selected, check, *reply)?
+                            .ok_or(RootRecoveryError::Context)?;
+                    let catalog = fact.catalog.ok_or(RootRecoveryError::Context)?;
+                    let snapshot =
+                        crate::packs::catalog::CatalogSnapshot::download(store, catalog).await?;
+                    crate::packs::directory::snapshot::DirectorySnapshot::download(
+                        store,
+                        snapshot.directory,
+                    )
+                    .await?;
+                    let refs = fact.refs.ok_or(RootRecoveryError::Context)?;
+                    let state = refs
+                        .read(store)
+                        .await
+                        .map_err(super::super::RefSnapshotPreparationError::from)?;
+                    if state.repository != check.token.repository
+                        || state.format != catalog.format
+                        || state.generation != published.ref_generation
+                        || state.default_branch != request.reference
+                    {
+                        return Err(RootRecoveryError::Context);
+                    }
+                    descriptor(
+                        hash,
+                        catalog.operation,
+                        ArtifactKind::CatalogNode,
+                        catalog.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        snapshot.directory.operation,
+                        ArtifactKind::CatalogNode,
+                        snapshot.directory.artifact,
+                    )?;
+                    descriptor(
+                        hash,
+                        refs.operation(),
+                        ArtifactKind::InputRoot,
+                        refs.artifact(),
+                    )?;
+                }
+            }
+            Self::Merge(outcome) => {
+                hash.update(&encoded(outcome, 512)?);
+                if let Some(root) =
+                    super::super::native_merge::audit::selected(selected, outcome, &check.actor)?
+                {
+                    super::super::native_merge::audit::closed_graph(
+                        store, root, outcome, check, hash,
+                    )
+                    .await?;
+                } else if matches!(outcome, crate::pulls::merge::MergeOutcome::Applied { .. }) {
+                    return Err(RootRecoveryError::Context);
+                }
+            }
             Self::Push(terminal) => {
                 super::super::root_completion::closed_graph(store, terminal.root, hash).await?
             }
@@ -195,6 +292,36 @@ impl phase::Journal {
     pub(super) fn terminal(&self, record: &Record) -> Result<Option<Terminal>, CodecError> {
         // Validation is required even when only a primary result is selected.
         self.may_advance(record)?;
+        // A merge has its own typed permanent audit selection. Known denials
+        // retain their original phase even if a later UUID attempt succeeds.
+        if record.kind == Kind::Candidate {
+            return self
+                .primary
+                .as_ref()
+                .map(|v| {
+                    v.decode_reply::<CandidatePublicationReply>()
+                        .map(Terminal::Candidate)
+                })
+                .transpose();
+        }
+        if record.kind == Kind::Head {
+            return self
+                .primary
+                .as_ref()
+                .map(|v| v.decode_reply::<PublicationReply>().map(Terminal::Head))
+                .transpose();
+        }
+        if record.kind == Kind::Merge {
+            return self
+                .primary
+                .as_ref()
+                .map(|value| {
+                    value
+                        .decode_reply::<crate::pulls::merge::MergeOutcome>()
+                        .map(Terminal::Merge)
+                })
+                .transpose();
+        }
         if record.kind == Kind::Initialization {
             return self
                 .primary
@@ -206,7 +333,7 @@ impl phase::Journal {
                 })
                 .transpose();
         }
-        let result = if record.kind == Kind::Policy {
+        let result = if record.kind == Kind::Policy || self.refused(record)? {
             if !self.refused(record)? {
                 return Ok(None);
             }
@@ -332,7 +459,9 @@ impl RegisteredRootRecovery {
             )?;
             record = next;
         }
-        terminal.closed_graph(store, &mut hash).await?;
+        terminal
+            .closed_graph(store, &row.output, &self.record.check, &mut hash)
+            .await?;
         let proof = Proof {
             recovery: self.certificate.clone(),
             phase: *blake3::hash(&encoded(&journal, 2048)?).as_bytes(),
@@ -361,7 +490,7 @@ impl RegisteredRootRecovery {
         })
     }
 }
-fn validate_bundle(
+pub(super) fn validate_bundle(
     bundle: &Bundle,
     record: &Record,
     target: &CellTarget,
@@ -659,6 +788,12 @@ impl ReadyTerminalRelease {
             .map(PublicationOutcome::TerminalRelease)
             .map_err(PublicationError::TerminalRelease)
     }
+}
+
+pub(super) fn backup_release(bytes: &[u8]) -> Result<(), RootRecoveryError> {
+    let _: ReleaseRecord =
+        crate::packs::backup::decode(bytes, 1024).map_err(|_| RootRecoveryError::Context)?;
+    Ok(())
 }
 
 #[cfg(test)]
