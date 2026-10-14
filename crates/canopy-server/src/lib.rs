@@ -4,11 +4,10 @@ use std::sync::OnceLock;
 
 use cellule_app::{ApplicationBuilder, ApplicationHandle, CellApplication, CellType};
 use cellule_runtime::{
-    ApplicationId, BuildDescriptor, CellModule, CellTarget, Committed, Digest, Error,
-    MigrationDescriptor, ModuleDescriptor, NamespaceDescriptor, NamespaceId, Observed, Receipt,
-    RegistryBuilder, SqlCell, SqlModule, TenantId, cell::catalog::CatalogRole,
-    primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
-    primitives::sql::register_sql, registry::OperationDescriptor,
+    ApplicationId, BuildDescriptor, CellModule, CellTarget, Digest, Error, MigrationDescriptor,
+    ModuleDescriptor, NamespaceDescriptor, NamespaceId, RegistryBuilder, SqlCell, SqlModule,
+    TenantId, cell::catalog::CatalogRole, primitives::sql::register_sql,
+    registry::OperationDescriptor,
 };
 
 mod access;
@@ -16,7 +15,6 @@ mod admission;
 pub use admission::AdmissionPermit;
 mod visibility;
 pub use visibility::{RepositoryVisibility, Visibility};
-mod ancestry;
 pub mod branch_rules;
 pub mod checks;
 mod default_branch;
@@ -34,22 +32,9 @@ mod git_read;
 mod graph;
 pub mod http;
 pub mod issues;
-pub mod blob {
-    //! Verified, immutable Git blob bodies stored outside the Repository Cell.
-
-    #[cfg(test)]
-    pub(crate) use canopy_object_storage::blob::blob_path;
-    pub use canopy_object_storage::blob::{
-        LargeBlobError, LargeBlobRead, LargeBlobReference, LargeBlobStore,
-    };
-}
 pub mod lfs;
 mod native_git;
 pub mod native_resources;
-mod object_batch;
-mod object_chunks;
-mod object_reads;
-mod pack_store;
 pub mod packs;
 pub mod pulls;
 mod push;
@@ -62,10 +47,8 @@ mod web;
 
 pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
-pub use object_batch::ObjectBatch;
-pub use object_chunks::ObjectStageError;
 pub use push::{PushCertificateReceipt, PushError, PushReceipt, VerifiedPushCertificate};
-pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
+pub use refs::{PushPlan, RefExpectation, RefPage, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
 pub const REPOSITORY_SCHEMA_VERSION: u32 = 4;
@@ -128,33 +111,6 @@ pub(crate) fn validate_repository_id(repository: [u8; 16]) -> cellule_runtime::R
     Ok(())
 }
 
-/// Byte location for a verified Git object record.
-pub enum ObjectStorage {
-    Inline(Vec<u8>),
-    Chunked {
-        upload: [u8; 16],
-        size: u64,
-        blake3: [u8; 32],
-    },
-    Packed {
-        size: u64,
-        blake3: [u8; 32],
-        pack: [u8; 32],
-    },
-    External {
-        size: u64,
-        blake3: [u8; 32],
-        sha256: [u8; 32],
-    },
-}
-
-/// Immutable Git object returned by one bounded Repository Cell read.
-pub struct StoredObject {
-    pub oid: crate::ObjectId,
-    pub kind: ObjectKind,
-    pub storage: ObjectStorage,
-}
-
 pub struct RepositoryModule;
 
 impl SqlModule for RepositoryModule {
@@ -197,14 +153,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph/mod.rs"));
-                source.update(include_bytes!("ancestry.rs"));
                 source.update(include_bytes!("branch_rules/mod.rs"));
                 source.update(include_bytes!("branch_rules/command.rs"));
-                source.update(include_bytes!("graph/preparation.rs"));
-                source.update(include_bytes!("object_batch/mod.rs"));
-                source.update(include_bytes!("object_chunks/mod.rs"));
-                source.update(include_bytes!("object_reads/mod.rs"));
-                source.update(include_bytes!("pack_store.rs"));
                 source.update(include_bytes!("git_objects/mod.rs"));
                 source.update(include_bytes!("git_cache/artifacts.rs"));
                 source.update(include_bytes!("git_cache/verified.rs"));
@@ -422,9 +372,6 @@ impl CellModule for RepositoryModule {
                     "../../canopy-object-storage/src/artifact.rs"
                 ));
                 source.update(include_bytes!(
-                    "../../canopy-object-storage/src/blob/mod.rs"
-                ));
-                source.update(include_bytes!(
                     "../../canopy-object-storage/src/external.rs"
                 ));
                 source.update(include_bytes!("push/mod.rs"));
@@ -517,9 +464,6 @@ pub struct RepositoryCell {
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
-    // Gateways own the cache lifetime. Sharing the reader through a weak
-    // reference must not retain its original disk budget after gateway eviction.
-    pack_readers: std::sync::Mutex<Vec<std::sync::Weak<pack_store::PackReader>>>,
     serving: std::sync::Mutex<Option<std::sync::Weak<packs::publication::ServingPool>>>,
     staging: std::sync::Mutex<Option<std::sync::Weak<packs::publication::StagingCoordinator>>>,
 }
@@ -548,7 +492,6 @@ impl RepositoryCell {
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
-            pack_readers: std::sync::Mutex::new(Vec::new()),
             serving: std::sync::Mutex::new(None),
             staging: std::sync::Mutex::new(None),
         })
@@ -609,176 +552,6 @@ impl RepositoryCell {
             ReadIdentity::Account(value) => Some(value.to_owned()),
         };
         pool.snapshot(actor).await
-    }
-
-    /// Prepares bounded graph certificates, then publishes one all-or-none ref plan.
-    pub async fn finalize_push(
-        &self,
-        identity: cellule_runtime::MutationIdentity,
-        plan: PushPlan,
-    ) -> std::result::Result<Committed<bool>, cellule_runtime::InvocationError<bool>> {
-        // Keep each transport-heavy phase in its own allocation. Embedding all
-        // three futures multiplies stack copies when debug callers poll a push.
-        Box::pin(self.prepare_graph(&plan)).await?;
-        Box::pin(self.prepare_branch_proofs(&plan)).await?;
-        Box::pin(
-            self.application
-                .command::<FinalizePush>(&self.target, identity, plan),
-        )
-        .await
-    }
-
-    pub async fn object(
-        &self,
-        oid: crate::ObjectId,
-        minimum: Option<Receipt>,
-    ) -> std::result::Result<
-        Observed<Option<(ObjectKind, Vec<u8>)>>,
-        cellule_runtime::InvocationError<Vec<cellule_runtime::primitives::sql::SqlResultSet>>,
-    > {
-        let result = self
-            .sql
-            .query(
-                minimum,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql:
-                            "SELECT kind, body, digest, size, chunk_id, storage, external_sha256 FROM objects WHERE oid = ?1"
-                                .into(),
-                        parameters: vec![SqlValue::Blob(oid.to_vec())],
-                    }],
-                },
-            )
-            .await?;
-        let Some(row) = result.output.first().and_then(|set| set.rows.first()) else {
-            return Ok(Observed {
-                output: None,
-                receipt: result.receipt,
-            });
-        };
-        let [
-            SqlValue::Text(kind),
-            body,
-            SqlValue::Blob(digest),
-            SqlValue::Integer(size),
-            upload,
-            SqlValue::Text(storage),
-            locator,
-        ] = row.as_slice()
-        else {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("invalid stored object row"),
-            ));
-        };
-        let kind = match kind.as_str() {
-            "blob" => ObjectKind::Blob,
-            "tree" => ObjectKind::Tree,
-            "commit" => ObjectKind::Commit,
-            "tag" => ObjectKind::Tag,
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid stored object kind"),
-                ));
-            }
-        };
-        if storage == "packed" {
-            let SqlValue::Blob(pack) = locator else {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid pack locator"),
-                ));
-            };
-            let pack: [u8; 32] = pack.as_slice().try_into().map_err(|_| {
-                cellule_runtime::InvocationError::NotStarted(Error::Command("invalid pack locator"))
-            })?;
-            if *size < 0 || *size > INLINE_OBJECT_LIMIT as i64 {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("object exceeds bounded body reader"),
-                ));
-            }
-            let record = self.pack_record(pack).await?;
-            let reader = self
-                .pack_readers
-                .lock()
-                .map_err(|_| {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "packed reader registry poisoned",
-                    ))
-                })?
-                .iter()
-                .find_map(std::sync::Weak::upgrade)
-                .ok_or(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("packed reader unavailable"),
-                ))?;
-            let body = reader
-                .read_blob(
-                    record,
-                    oid,
-                    *size as u64,
-                    digest.as_slice().try_into().map_err(|_| {
-                        cellule_runtime::InvocationError::NotStarted(Error::Command(
-                            "invalid packed digest",
-                        ))
-                    })?,
-                )
-                .await
-                .map_err(|error| {
-                    cellule_runtime::InvocationError::NotStarted(Error::Facility {
-                        name: "packed Git body",
-                        source: Box::new(error),
-                    })
-                })?;
-            if kind != ObjectKind::Blob
-                || body.len() as i64 != *size
-                || object_id(oid.format(), kind, &body) != oid
-                || blake3::hash(&body).as_bytes() != digest.as_slice()
-            {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("corrupt packed Git body"),
-                ));
-            }
-            return Ok(Observed {
-                output: Some((kind, body)),
-                receipt: result.receipt,
-            });
-        }
-        let body = match (body, upload) {
-            (SqlValue::Blob(bytes), SqlValue::Null)
-                if usize::try_from(*size).ok() == Some(bytes.len()) =>
-            {
-                bytes.clone()
-            }
-            (SqlValue::Null, SqlValue::Blob(upload)) => {
-                let invalid = || {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "invalid object chunk reference",
-                    ))
-                };
-                self.chunked_body(
-                    oid,
-                    kind,
-                    upload.as_slice().try_into().map_err(|_| invalid())?,
-                    u64::try_from(*size).map_err(|_| invalid())?,
-                    digest.as_slice().try_into().map_err(|_| invalid())?,
-                )
-                .await?
-            }
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid stored object body"),
-                ));
-            }
-        };
-        if object_id(oid.format(), kind, &body) != oid
-            || blake3::hash(&body).as_bytes() != digest.as_slice()
-        {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("corrupt stored object"),
-            ));
-        }
-        Ok(Observed {
-            output: Some((kind, body)),
-            receipt: result.receipt,
-        })
     }
 }
 

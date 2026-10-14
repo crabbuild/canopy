@@ -1,7 +1,6 @@
 //! Disposable Git files charged to the node's shared disk budget.
 
 use std::{
-    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
@@ -14,14 +13,15 @@ use flate2::{Compression, write::ZlibEncoder};
 use std::collections::BTreeMap;
 use tokio::sync::Mutex;
 
-use crate::{
-    blob::{LargeBlobError, LargeBlobRead},
-    refs::valid_ref_name,
-};
+use crate::refs::valid_ref_name;
 
 #[cfg(test)]
+use crate::ObjectKind;
+use crate::RefExpectation;
+#[cfg(test)]
 use crate::object_id;
-use crate::{ObjectKind, RefExpectation};
+#[cfg(test)]
+use std::collections::HashSet;
 
 pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
@@ -38,8 +38,6 @@ pub enum CacheError {
     Io(#[from] io::Error),
     #[error("Git cache disk admission failed")]
     Budget(#[from] LtxError),
-    #[error("Git blob hydration failed")]
-    Blob(#[from] LargeBlobError),
     #[error("Git cache worker failed")]
     Task(#[from] tokio::task::JoinError),
 }
@@ -74,11 +72,9 @@ pub(crate) struct GitCache {
     // fetches share a completed loose object without serializing all objects.
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
     packed: RwLock<Vec<crate::git_format::pack_index::PackIndex>>,
-    durable_packs: RwLock<HashSet<[u8; 32]>>,
     pub(crate) selection: Mutex<()>,
     #[cfg(test)]
     pub(crate) loose_objects: std::sync::atomic::AtomicU64,
-    pub(crate) pack_files: std::sync::atomic::AtomicU64,
     pub(crate) write_generation: std::sync::atomic::AtomicU64,
 }
 
@@ -142,11 +138,9 @@ impl GitCache {
                 objects,
                 object_writes: OnceLock::new(),
                 packed: RwLock::new(Vec::new()),
-                durable_packs: RwLock::new(HashSet::new()),
                 selection: Mutex::new(()),
                 #[cfg(test)]
                 loose_objects: std::sync::atomic::AtomicU64::new(0),
-                pack_files: std::sync::atomic::AtomicU64::new(0),
                 write_generation: std::sync::atomic::AtomicU64::new(0),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
@@ -355,71 +349,6 @@ impl GitCache {
     }
 
     #[cfg(test)]
-    pub(crate) async fn store_blob(
-        self: &Arc<Self>,
-        reader: LargeBlobRead,
-    ) -> Result<(), CacheError> {
-        self.store_blob_reader(BlobReader::External(reader)).await
-    }
-    #[cfg(test)]
-    pub(crate) async fn store_native_blob(
-        self: &Arc<Self>,
-        reader: crate::pack_store::NativePackedRead,
-    ) -> Result<(), CacheError> {
-        self.store_blob_reader(BlobReader::Packed(reader)).await
-    }
-    #[cfg(test)]
-    async fn store_blob_reader(self: &Arc<Self>, mut reader: BlobReader) -> Result<(), CacheError> {
-        let (oid, size) = reader.metadata();
-        let write = self.object_write_lock(oid).lock_owned().await;
-        let cache = Arc::clone(self);
-        let pending = tokio::task::spawn_blocking(move || {
-            if oid.format() != cache.object_format {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Git object format mismatch",
-                )
-                .into());
-            }
-            if cache.object_present(oid)? {
-                return Ok::<_, CacheError>(None);
-            }
-            let (mut encoder, temporary, destination) = cache.object_writer(oid)?;
-            encoder.write_all(format!("blob {}\0", size).as_bytes())?;
-            Ok::<_, CacheError>(Some((encoder, temporary, destination)))
-        })
-        .await??;
-        let Some((mut encoder, temporary, destination)) = pending else {
-            return Ok(());
-        };
-        while let Some(bytes) = reader.next().await? {
-            // The writer owns the cache reservation until each compression worker
-            // exits, including when its async waiter is canceled.
-            encoder = tokio::task::spawn_blocking(move || {
-                encoder.write_all(&bytes)?;
-                Ok::<_, CacheError>(encoder)
-            })
-            .await??;
-        }
-        let cache = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let _write = write;
-            drop(encoder.finish()?);
-            temporary
-                .persist_noclobber(destination)
-                .map_err(|error| error.error)?;
-            cache
-                .loose_objects
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            cache
-                .write_generation
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok::<_, CacheError>(())
-        })
-        .await?
-    }
-
-    #[cfg(test)]
     pub(crate) async fn store_refs(
         self: &Arc<Self>,
         refs: &BTreeMap<String, RefExpectation>,
@@ -495,6 +424,7 @@ impl GitCache {
         )?)
     }
 
+    #[cfg(test)]
     fn register_checked_index(
         &self,
         index: crate::git_format::pack_index::PackIndex,
@@ -605,27 +535,3 @@ fn tree_bytes(path: &Path) -> io::Result<u64> {
 mod tests;
 
 mod maintenance;
-
-#[cfg(test)]
-enum BlobReader {
-    External(LargeBlobRead),
-    Packed(crate::pack_store::NativePackedRead),
-}
-#[cfg(test)]
-impl BlobReader {
-    fn metadata(&self) -> (crate::ObjectId, u64) {
-        match self {
-            Self::External(read) => (read.reference().oid, read.reference().size),
-            Self::Packed(read) => (read.oid, read.size),
-        }
-    }
-    async fn next(&mut self) -> Result<Option<bytes::Bytes>, CacheError> {
-        match self {
-            Self::External(read) => Ok(read.next().await?),
-            Self::Packed(read) => read
-                .next()
-                .await
-                .map_err(|error| io::Error::other(error).into()),
-        }
-    }
-}

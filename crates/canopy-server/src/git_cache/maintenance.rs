@@ -71,18 +71,6 @@ fn index_order(path: &Path, format: crate::ObjectFormat) -> io::Result<Vec<crate
 }
 
 impl GitCache {
-    pub(crate) fn has_durable_pack(&self, sha: [u8; 32]) -> bool {
-        self.durable_packs
-            .read()
-            .expect("durable inventory poisoned")
-            .contains(&sha)
-    }
-    pub(crate) fn mark_durable_pack(&self, sha: [u8; 32]) {
-        self.durable_packs
-            .write()
-            .expect("durable inventory poisoned")
-            .insert(sha);
-    }
     #[cfg(test)]
     pub(crate) async fn pack_sources(
         self: &Arc<Self>,
@@ -112,147 +100,6 @@ impl GitCache {
         })
         .await?
     }
-    pub(crate) async fn install_pack(
-        self: &Arc<Self>,
-        hash: crate::ObjectId,
-        pack: LargeBlobRead,
-        index: LargeBlobRead,
-    ) -> Result<(), CacheError> {
-        if hash.format() != self.object_format {
-            return Err(io::Error::other("pack format mismatch").into());
-        }
-        self.write_artifact(
-            format!("objects/pack/pack-{}.pack", hex::encode(hash)),
-            pack,
-        )
-        .await?;
-        self.write_artifact(
-            format!("objects/pack/pack-{}.idx", hex::encode(hash)),
-            index,
-        )
-        .await?;
-        let cache = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let path = cache
-                .git_dir()
-                .join(format!("objects/pack/pack-{}.idx", hex::encode(hash)));
-            let index = crate::git_format::pack_index::PackIndex::open(&path, cache.object_format)?;
-            if index.pack_checksum() != hash {
-                return Err(io::Error::other("index/pack binding mismatch").into());
-            }
-            cache.register_checked_index(index)?;
-            cache
-                .pack_files
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            cache
-                .write_generation
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        })
-        .await?
-    }
-    async fn write_artifact(
-        self: &Arc<Self>,
-        relative: String,
-        mut reader: LargeBlobRead,
-    ) -> Result<(), CacheError> {
-        let destination = self.git_dir().join(relative);
-        // Retry a canceled pair without downloading/charging a second full pack.
-        // File names alone (possibly SHA-1) are insufficient: verify all hashes.
-        let expected = reader.reference();
-        let existing = destination.clone();
-        if tokio::task::spawn_blocking(move || -> io::Result<bool> {
-            use sha2::Digest;
-            use std::io::Read;
-            let mut file = match File::open(existing) {
-                Ok(file) => file,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-                Err(error) => return Err(error),
-            };
-            if file.metadata()?.len() != expected.size {
-                return Err(io::Error::other("cached artifact size mismatch"));
-            }
-            let mut oid = crate::git_format::ObjectHasher::new(
-                expected.oid.format(),
-                ObjectKind::Blob,
-                expected.size,
-            );
-            let mut sha = sha2::Sha256::new();
-            let mut blake = blake3::Hasher::new();
-            let mut buffer = vec![0; 8 << 20];
-            loop {
-                let n = file.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-                oid.update(&buffer[..n]);
-                sha.update(&buffer[..n]);
-                blake.update(&buffer[..n]);
-            }
-            if oid.finalize() != expected.oid
-                || <[u8; 32]>::from(sha.finalize()) != expected.sha256
-                || *blake.finalize().as_bytes() != expected.blake3
-            {
-                return Err(io::Error::other("cached artifact digest mismatch"));
-            }
-            Ok(true)
-        })
-        .await??
-        {
-            return Ok(());
-        }
-        let (file, temporary) = tempfile::NamedTempFile::new_in(
-            destination
-                .parent()
-                .ok_or_else(|| io::Error::other("missing pack directory"))?,
-        )?
-        .into_parts();
-        let mut writer = CacheWriter {
-            file,
-            cache: Arc::clone(self),
-        };
-        while let Some(bytes) = reader.next().await? {
-            writer = tokio::task::spawn_blocking(move || {
-                writer.write_all(&bytes)?;
-                Ok::<_, io::Error>(writer)
-            })
-            .await??;
-        }
-        tokio::task::spawn_blocking(move || {
-            writer.flush()?;
-            writer.file.sync_all()?;
-            drop(writer);
-            if destination.exists() {
-                // Compare complete bytes, not merely Git's SHA-1 filename.
-                use std::io::Read;
-                let mut old = File::open(&destination)?;
-                let mut new = File::open(&temporary)?;
-                let mut a = vec![0; 1 << 20];
-                let mut b = vec![0; 1 << 20];
-                loop {
-                    let n = old.read(&mut a)?;
-                    let m = new.read(&mut b)?;
-                    if n != m || a[..n] != b[..m] {
-                        return Err(io::Error::other(
-                            "cached pack differs from authoritative bytes",
-                        ));
-                    }
-                    if n == 0 {
-                        break;
-                    }
-                }
-                return Ok(());
-            }
-            temporary
-                .persist_noclobber(destination)
-                .map_err(|error| error.error)?;
-            Ok(())
-        })
-        .await??;
-        Ok(())
-    }
-    /// Reuse only packs whose *every* object was verified and durably recorded
-    /// during this ingestion. Extra/unverified objects disable this optimization.
     #[cfg(test)]
     pub(crate) async fn retain_verified_packs(
         self: &Arc<Self>,
@@ -306,9 +153,6 @@ impl GitCache {
                 cache
                     .write_generation
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                cache
-                    .pack_files
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 cache.register_index(
                     &cache.git_dir().join("objects/pack").join(
                         path.file_name()
@@ -354,11 +198,6 @@ impl GitCache {
         next.reservation()?
             .try_grow(reserve)
             .map_err(io::Error::other)?;
-        let durable = self
-            .durable_packs
-            .read()
-            .map_err(|_| io::Error::other("durable inventory poisoned"))?
-            .clone();
         let maintenance = self
             .native
             .for_class(crate::native_resources::NativeClass::Maintenance);
@@ -502,12 +341,6 @@ impl GitCache {
             .and_then(|v| v);
         next.reconcile().await?;
         result.map_err(worker_error)?;
-        next.pack_files
-            .store(1, std::sync::atomic::Ordering::Relaxed);
-        *next
-            .durable_packs
-            .write()
-            .map_err(|_| io::Error::other("durable inventory poisoned"))? = durable;
         Ok(next)
     }
 }

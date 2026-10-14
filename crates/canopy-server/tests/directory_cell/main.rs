@@ -154,7 +154,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &registry,
                 &layout,
                 &first_target,
-                (RepositoryModule::NAME, include_str!("../../src/schema.sql")),
+                (RepositoryModule::NAME, canopy_server::REPOSITORY_SCHEMA),
                 first_session,
                 &files.path().join("first-alpha.sqlite"),
             )
@@ -174,7 +174,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &registry,
                 &layout,
                 &second_target,
-                (RepositoryModule::NAME, include_str!("../../src/schema.sql")),
+                (RepositoryModule::NAME, canopy_server::REPOSITORY_SCHEMA),
                 first_session,
                 &files.path().join("first-beta.sqlite"),
             )

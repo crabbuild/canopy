@@ -1,4 +1,4 @@
-//! Immutable, fixed-size parts for Git blob and LFS bodies.
+//! Immutable, verified parts for native artifacts and LFS bodies.
 
 use bytes::{Bytes, BytesMut};
 use object_store::{
@@ -11,7 +11,6 @@ use std::{future::Future, sync::Arc, time::Duration};
 pub const PART_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PARTS: u64 = 65_536;
 pub const MAX_ARTIFACT_BYTES: u64 = PART_BYTES as u64 * MAX_PARTS;
-const MAGIC: &[u8; 8] = b"CANOPY01";
 const HASHED_MAGIC: &[u8; 8] = b"CANOPY02";
 
 pub struct Manifest {
@@ -107,12 +106,6 @@ impl Upload {
         Ok(())
     }
 
-    pub async fn publish(&mut self, path: &Path, size: u64) -> object_store::Result<()> {
-        let mut manifest = MAGIC.to_vec();
-        manifest.extend_from_slice(&size.to_le_bytes());
-        self.publish_manifest(path, size, manifest).await
-    }
-
     pub async fn publish_hashed(
         &mut self,
         path: &Path,
@@ -159,19 +152,6 @@ impl Upload {
         }
         self.create_manifest(path, manifest).await?;
         Ok(root)
-    }
-
-    async fn publish_manifest(
-        &mut self,
-        path: &Path,
-        size: u64,
-        manifest: Vec<u8>,
-    ) -> object_store::Result<()> {
-        if self.active.is_some() || self.parts != size.div_ceil(PART_BYTES as u64).max(1) {
-            return Err(invalid());
-        }
-        copy_parts(self.store.as_ref(), &self.stage, path, size).await?;
-        self.create_manifest(path, manifest).await
     }
 
     async fn create_manifest(
@@ -269,21 +249,6 @@ async fn bounded(
         Ok((meta, bytes.freeze()))
     })
     .await
-}
-
-pub async fn open(
-    store: &dyn ObjectStore,
-    path: &Path,
-    size: u64,
-) -> object_store::Result<Manifest> {
-    let (meta, bytes) = bounded(store, path, GetOptions::default(), 16).await?;
-    if &bytes[..8] != MAGIC || bytes[8..] != size.to_le_bytes() {
-        return Err(invalid());
-    }
-    if size == 0 {
-        bounded(store, &part(path, 0), GetOptions::default(), 0).await?;
-    }
-    Ok(Manifest { meta, bytes })
 }
 
 pub async fn open_hashed(

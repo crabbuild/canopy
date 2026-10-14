@@ -5,7 +5,7 @@ use crate::ReadIdentity;
 pub(crate) mod command;
 
 use crate::{
-    PushPlan, RefUpdate, RepositoryCell,
+    RefUpdate, RepositoryCell,
     default_branch::valid_default_branch,
     directory::{TokenScope, validate_component},
 };
@@ -197,52 +197,6 @@ impl RepositoryCell {
             .collect::<cellule_runtime::Result<Vec<_>>>()
             .map_err(InvocationError::NotStarted)
     }
-
-    pub(crate) async fn prepare_branch_proofs(
-        &self,
-        plan: &PushPlan,
-    ) -> Result<(), InvocationError<bool>> {
-        if plan.updates.is_empty() || plan.updates.len() > crate::refs::MAX_UPDATES {
-            return Ok(());
-        }
-        let role = self
-            .access_level(&plan.actor, None)
-            .await
-            .map_err(|source| {
-                InvocationError::NotStarted(Error::Facility {
-                    name: "branch proof authorization",
-                    source: Box::new(source),
-                })
-            })?;
-        if !role.output.is_some_and(|role| role >= TokenScope::Write) {
-            return Ok(());
-        }
-        for updates in plan.updates.chunks(128) {
-            let policies = self.branch_policies(updates).await.map_err(|source| {
-                InvocationError::NotStarted(Error::Facility {
-                    name: "branch proof policy",
-                    source: Box::new(source),
-                })
-            })?;
-            for (update, policy) in updates.iter().zip(policies) {
-                let (Some(old), Some(new)) = (
-                    update.expected.as_ref().and_then(|old| old.oid),
-                    update.new_oid,
-                ) else {
-                    continue;
-                };
-                if policy.is_some_and(|policy| {
-                    !policy.require_pull_request
-                        && policy.fast_forward_only
-                        && policy.checks_pass
-                        && !policy.ancestry
-                }) {
-                    self.prepare_ancestry(old, new).await?;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 pub(crate) struct Policy {
@@ -271,53 +225,19 @@ impl Policy {
     }
 }
 
-pub(crate) fn policies_allow(
-    context: &cellule_runtime::registry::CommandContext<'_, '_>,
-    plan: &PushPlan,
-    merge: Option<&crate::pulls::merge::ReviewedMerge>,
-) -> cellule_runtime::Result<bool> {
-    for updates in plan.updates.chunks(128) {
-        let result = context.sql(&SqlBatch {
-            statements: updates.iter().map(policy_statement).collect(),
-        })?;
-        for (update, set) in updates.iter().zip(&result) {
-            if decode_policy(std::slice::from_ref(set))?.is_some_and(|policy| {
-                !policy.allows_ref(update, true)
-                    || (policy.require_pull_request
-                        && !merge.is_some_and(|merge| merge.authorizes(update)))
-            }) {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
-}
-
-fn policy_statement(update: &RefUpdate) -> SqlStatement {
-    policy_statement_for(update, None)
-}
 /// The final publisher supplies only MAC-verified catalog ancestry evidence.
 /// Current check-context versions/reporters and branch rules stay in this SQL.
 pub(crate) fn policy_statement_with_ancestry(update: &RefUpdate, ancestry: bool) -> SqlStatement {
-    policy_statement_for(update, Some(ancestry))
-}
-fn policy_statement_for(update: &RefUpdate, ancestry: Option<bool>) -> SqlStatement {
     let old = update.expected.as_ref().and_then(|old| old.oid);
-    let ancestry_sql = if ancestry.is_some() {
-        "?4"
-    } else {
-        "(?2 IS NULL OR coalesce(?2 = ?3, 0) OR EXISTS (SELECT 1 FROM commit_ancestry WHERE ancestor = ?2 AND descendant = ?3))"
-    };
-    let mut parameters = vec![
+    let ancestry_sql = "?4";
+    let parameters = vec![
         SqlValue::Text(update.name.clone()),
         old.map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
         update
             .new_oid
             .map_or(SqlValue::Null, |oid| SqlValue::Blob(oid.to_vec())),
+        SqlValue::Integer(i64::from(ancestry)),
     ];
-    if let Some(value) = ancestry {
-        parameters.push(SqlValue::Integer(i64::from(value)));
-    }
     SqlStatement {
         sql: format!(
             "SELECT b.deny_deletions, b.fast_forward, NOT EXISTS (SELECT 1 FROM branch_required_checks q LEFT JOIN check_contexts c ON c.name = q.context LEFT JOIN check_runs r ON r.number = (SELECT number FROM check_runs WHERE oid = ?3 AND context = q.context AND context_version = c.version ORDER BY number DESC LIMIT 1) WHERE q.reference = b.reference AND (c.enabled IS NOT 1 OR r.state IS NOT 'success' OR r.reporter IS NOT c.reporter)), {ancestry_sql}, b.require_pull_request FROM branch_rules b WHERE b.reference = ?1 AND b.enabled = 1"

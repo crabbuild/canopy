@@ -12,6 +12,32 @@ fn key(body: &[u8]) -> ArtifactKey {
 }
 
 #[tokio::test]
+async fn predecessor_manifest_is_rejected_even_with_a_matching_descriptor_digest() -> Result {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let artifacts = ArtifactStore::new(Arc::clone(&store), [1; 16]);
+    let body = b"current immutable artifact";
+    let key = key(body);
+    let mut descriptor = artifacts
+        .put(
+            key,
+            body.len() as u64,
+            key.binding_digest,
+            &mut body.as_slice(),
+        )
+        .await?;
+    let path = artifacts.path(key, descriptor.digest)?;
+    let mut manifest = store.get(&path).await?.bytes().await?.to_vec();
+    manifest[..8].copy_from_slice(b"CANOPY01");
+    descriptor.manifest_digest = *blake3::hash(&manifest).as_bytes();
+    store.put(&path, manifest.into()).await?;
+    assert!(matches!(
+        artifacts.ranges_owned(key, descriptor, Arc::new(())).await,
+        Err(ArtifactError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn selected_parts_authenticate_without_fetching_unrequested_bytes() -> Result {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let artifacts = ArtifactStore::new(store.clone(), [1; 16]);

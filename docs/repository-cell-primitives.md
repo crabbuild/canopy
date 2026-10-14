@@ -49,8 +49,8 @@ recovery lifecycle. Nodes must host thousands of these repository identities
 with bounded memory, disk, descriptors, workers and queued operations.
 
 All existing Git smart-HTTP, LFS, collaboration, ACL and recovery requirements
-remain. Ordinary Git objects stay in SQLite; large bodies stay in immutable
-object storage. A SQL-only density measurement does not qualify the complete
+remain. Git bodies stay in immutable native pack artifacts; accepted roots and business
+metadata stay in the Repository Cell. A SQL-only density measurement does not qualify the complete
 primitive-enabled repository design.
 
 ## Current contract gap
@@ -63,7 +63,7 @@ in `crates/canopy-server/src/lib.rs`. `RepositoryCell` holds `SqlCell<Repository
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Cellule revision is
+This proposal originally inspected Cellule revision
 `70bd25f142f1976fdd63ffe60e46e15ae276ffdc`. Read-only inspection of that exact
 revision confirms the following constraints still apply. The latest routing
 and provider-read improvements do not add composed repository

@@ -20,7 +20,6 @@ use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
     PushPlan, RefExpectation, RefUpdate, RepositoryCell,
-    blob::LargeBlobError,
     directory::TokenScope,
     git_cache::CacheError,
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
@@ -53,8 +52,6 @@ pub enum GatewayError {
     Input(#[from] InputError),
     #[error("repository Cell operation failed")]
     Cell(#[source] CellError),
-    #[error("large Git blob store failed")]
-    Blob(#[from] LargeBlobError),
     #[error("cache I/O failed")]
     Io(#[from] std::io::Error),
     #[error("Git cache command failed: {0}")]
@@ -88,7 +85,6 @@ pub struct GitGateway {
     repository: Arc<RepositoryCell>,
     signer_directory: Option<Arc<crate::directory::DirectoryCell>>,
     certificate_seed: Arc<OnceCell<[u8; 32]>>,
-    _pack_reader: Arc<crate::pack_store::PackReader>,
     lfs: Arc<LfsService>,
     artifacts: Arc<canopy_object_storage::artifact::ArtifactStore>,
     scratch_root: PathBuf,
@@ -110,30 +106,11 @@ impl GitGateway {
             Arc::clone(&blob_store),
             repository.repository_id(),
         ));
-        // A reader belongs to this gateway's workspace and disk admission.
-        // Another gateway may use a different root/budget for the same Cell.
-        let pack_reader = Arc::new(crate::pack_store::PackReader::new(
-            Arc::clone(&blob_store),
-            repository.repository_id(),
-            scratch_root.clone(),
-            disk_budget.clone(),
-            repository.object_format(),
-            native.clone(),
-        ));
-        {
-            let mut readers = repository
-                .pack_readers
-                .lock()
-                .expect("packed reader registry poisoned");
-            readers.retain(|reader| reader.strong_count() > 0);
-            readers.push(Arc::downgrade(&pack_reader));
-        }
         let lfs = Arc::new(LfsService::new(Arc::clone(&repository), blob_store));
         Self {
             repository,
             signer_directory: None,
             certificate_seed: Arc::new(OnceCell::new()),
-            _pack_reader: pack_reader,
             lfs,
             artifacts,
             scratch_root,

@@ -225,21 +225,17 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     )?;
     assert_eq!(objects.next().await?, Some(oid));
     let mut object = objects.read(oid).await?;
-    let store = crate::blob::LargeBlobStore::new(
-        std::sync::Arc::new(object_store::memory::InMemory::new()),
-        [1; 16],
-    );
-    let reference = store.put(oid, object.size, &mut object.reader).await?;
+    let mut buffer = vec![0; 64 << 10];
+    let mut offset = 0;
+    while offset < body.len() {
+        let length = buffer.len().min(body.len() - offset);
+        object.reader.read_exact(&mut buffer[..length]).await?;
+        assert_eq!(&buffer[..length], &body[offset..offset + length]);
+        offset += length;
+    }
     object.finish().await?;
     assert_eq!(objects.next().await?, None);
     objects.finish().await?;
-    let mut reader = store.read(&reference).await?;
-    let mut offset = 0;
-    while let Some(bytes) = reader.next().await? {
-        assert_eq!(bytes.as_ref(), &body[offset..offset + bytes.len()]);
-        offset += bytes.len();
-    }
-    assert_eq!(offset, body.len());
     struct BlobSink;
     impl EdgeSink for BlobSink {
         async fn append(
