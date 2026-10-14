@@ -70,6 +70,12 @@ policy. They still avoid the original expansion to 3.07 GiB. Cold reads fetch
 the complete referenced pair; sparse S3 range reads are not implemented.
 Selected serving objects use disposable, disk-accounted loose projections.
 
+The older process profile's `--structural-objects` flag used 1,100,000-byte
+commit/tag messages and a 32,000-entry tree. The historical references below to
+65 MiB structural coverage refer to the ordinary large-object integration test,
+not that isolated process profile. Current qualification specifies the structural
+message size explicitly; retained raw logs and source snapshots are unchanged.
+
 ## Index-warming checkpoint qualification
 
 The index-warming checkpoint is

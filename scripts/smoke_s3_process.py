@@ -493,7 +493,7 @@ def verify_many_objects(base_url, directory, count, expected):
     print(f"PASS: {count}-file clone restored both commits, annotated tag and 300 refs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
-def seed_structural_objects(base_url, directory):
+def seed_structural_objects(base_url, directory, message_bytes):
     url, _ = create_repository(base_url, "structural-objects")
     local = directory / "chunk-source"
     git("init", "--bare", str(local))
@@ -514,11 +514,11 @@ def seed_structural_objects(base_url, directory):
     commit = write("commit", (
         f"tree {tree}\nauthor Canopy <test@example.invalid> 0 +0000\n"
         "committer Canopy <test@example.invalid> 0 +0000\n\n"
-    ).encode() + b"c" * 1_100_000 + b"\n")
+    ).encode() + b"c" * message_bytes + b"\n")
     tag = write("tag", (
         f"object {commit}\ntype commit\ntag release\n"
         "tagger Canopy <test@example.invalid> 0 +0000\n\n"
-    ).encode() + b"t" * 1_100_000 + b"\n")
+    ).encode() + b"t" * message_bytes + b"\n")
     git("update-ref", "refs/heads/main", commit, cwd=local)
     git("symbolic-ref", "HEAD", "refs/heads/main", cwd=local)
     git("update-ref", "refs/tags/release", tag, cwd=local)
@@ -553,10 +553,14 @@ def main():
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
     parser.add_argument("--structural-objects", action="store_true", help="Qualify large tree, commit and tag objects stored in native packs and restored after takeover")
+    parser.add_argument("--structural-object-bytes", type=int, default=1_100_000,
+                        help="Commit/tag message bytes for --structural-objects")
     parser.add_argument("--corpus-repository", type=Path, help="Read HEAD history from an existing repository without changing it; qualify exact object bytes after takeover")
     parser.add_argument("--peers-only", action="store_true", help="Run the two-node HTTPS Git/LFS and takeover gate without the other process suites")
     parser.add_argument("--retain-work-dir", action="store_true", help="Retain the temporary workspace and server logs for diagnosis")
     args = parser.parse_args()
+    if args.structural_object_bytes < 1:
+        parser.error("--structural-object-bytes must be positive")
     if args.many_objects < 0:
         parser.error("--many-objects must be nonnegative")
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
@@ -719,7 +723,7 @@ def main():
             expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
             audit_state = smoke_s3_account_audit.seed(base_url)
-            chunks = seed_structural_objects(base_url, directory) if args.structural_objects else None
+            chunks = seed_structural_objects(base_url, directory, args.structural_object_bytes) if args.structural_objects else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             corpus = None

@@ -128,31 +128,19 @@ verified object records ──► graph certificates ──► staged ref plan
                                            Git report to client
 ```
 
-The `objects` table stores one verified kind, size and independent BLAKE3
-digest per Git OID. External objects also store SHA-256. Readers verify the
-bytes against the SQLite record and recompute the Git OID or LFS SHA-256.
-The `refs` table stores name, optional OID and version. Deletion sets the OID
-to NULL and advances the version; recreation advances it again. Never-seen
-names and deleted names have different expectations, so stale plans fail even
-after a ref returns to the same OID or to a deleted state. Deleted rows remain
-in SQLite and are excluded from Git advertisements and namespace conflicts.
-They must not be collected without a replacement mechanism for fencing stale
-ref plans. `FinalizePush` uses codec version 3 for this expectation shape.
-Before reporting accepted refs, a push persists all new objects and publishes
-the accepted ref changes and replayable response through `CompletePush`. Both
-`CompletePush` and the direct `FinalizePush` command share the same ref checks.
-HTTP plans use `push_plan_chunks`, bound to one response UUID, with 128 updates
-and at most 64 KiB per chunk. Completion carries the count and BLAKE3 digest,
-loads every ordered chunk inside its transaction, verifies actor/count/digest,
-and applies the whole plan. Ref generation advances once; the saved response
-and deletion of consumed plan chunks commit atomically with refs. Interrupted
-staging never publishes refs. Unconsumed chunks from failed attempts remain
-until a future retention policy collects them. Direct typed `FinalizePush`
-inputs retain their 1 MiB wire bound; HTTP bulk plans are not limited by it.
-This changes the development schema and completion codec; use a fresh deployment
-prefix, with no compatibility reader for the old inline completion shape.
-Rejected or interrupted pushes may leave unreferenced objects; collection is not
-implemented yet.
+Canonical object metadata and typed closure facts live in authenticated native
+catalog artifacts. Accepted immutable ref snapshots retain optional OIDs and
+monotonic versions, so deletion/recreation and return-to-the-same-OID cannot
+revive stale plans. Physical pack presence is not object membership authority.
+
+Before acknowledging accepted refs, the owner publishes the certified catalog,
+ref roots and exact recorded native outcome through `CompleteRootPush`.
+Bounded immutable request/outcome artifacts carry large plans and replies;
+the final Cell command checks their authenticated roots, current authority and
+preconditions. Interrupted preparation cannot publish a partial ref snapshot.
+Unreferenced product artifacts remain until a separate retention policy can
+prove them safe to remove. Older Git-body formats and completion APIs are not
+exposed through a compatibility reader.
 
 ### Ref snapshots and default branch
 
@@ -277,15 +265,15 @@ Authorization secrets and host addresses are not part of the digest.
 Explicit identity encoding and absent encoding have the same interpretation;
 changing to gzip under a completed request UUID produces a conflict.
 
-A reservation binds the ID before running Git. Response metadata and 512 KiB
-body chunks are durable before finalization. `CompletePush` checks the binding,
-chunk completeness, then applies the ref plan under current ACL, policy and CAS
-checks. It publishes the response pointer and a rejection decision in one Cell
-transaction. `apply_refs` returns false only before any ref writes; SQL errors
-roll back completion. A completed ID returns its existing outcome. Only a
-published pointer can expose a staged response; replay verifies the stored body
-length and BLAKE3 digest before applying the saved decision. The HTTP boundary
-checks current token scope and repository access even for completed requests.
+The current staging lifecycle binds the original request ID and exact commands
+before native execution. Immutable request and result roots retain the replay
+material. Root completion authenticates those roots and atomically records the
+accepted catalog/ref transition or terminal refusal. Its recovery registration
+retains the original command and input facts across owner loss.
+Only an accepted published pointer can expose a completed outcome. Replay checks
+its bytes and current token/repository access without reapplying an old plan to
+newer refs. Preparation, policy and publication failures remain distinguishable
+from a completed native result.
 
 No-op, rejected and non-200 Git backend responses are also terminal outcomes.
 Late ACL, policy and ref-CAS refusals are terminal rejected outcomes. Native
@@ -1587,20 +1575,12 @@ ref mutation, including deletion and recreation. Otherwise deletion depends on
 `deny_deletions`; checks and fast-forward policy govern non-deletions. Branch
 creation needs checks but has no old ancestry to prove.
 
-In the retired SQL graph contract, verified commit objects provided
-`commit_parents(child, parent)` when graph closure was certified. Native
-preparation reads verified catalog commit headers and uses MAC-bound ancestry
-evidence; it does not populate these retired tables. The historical contract
-below does not describe native production authority. Only commit-parent edges enter that table. Immutable
-`commit_ancestry(ancestor, descendant)` certificates avoid graph traversal in the
-ref transaction. Operation 7, codec 1 accepts at most 128 child/parent steps.
-Every step must exist in verified parent links and lead either to the claimed
-ancestor or to an existing certificate. Any false step rejects and rolls back
-the complete command. Preparation reads parents in pages of 128, follows all
-merge parents and publishes proof chunks from the known ancestor outward.
-Interrupted preparation may retain positive immutable facts without changing
-refs. A collector must invalidate graph and ancestry certificates before deleting
-objects or their required chunks/edges. No collector is implemented yet.
+Ancestry preparation reads verified catalog commit headers and produces
+owner-bound native evidence. It follows merge parents through the certified
+native graph and checks that evidence at final publication. It neither populates
+mutable `commit_parents` / `commit_ancestry` tables nor publishes retired graph
+commands. An interrupted preparation can retain immutable artifacts but cannot
+move refs without passing the current final authority and policy checks.
 
 Native Git receives an executable, disposable `update` hook. Git's documented
 [update-hook contract](https://git-scm.com/docs/githooks#_update) supplies exact
@@ -1645,13 +1625,12 @@ completion. A different push ID cannot reuse the same signed bytes: the final
 ref transaction records the certificate SHA-256 digest or rejects the update.
 The certificate body remains in SQLite chunks with its signer, key and Cell
 recording time. Exact request-ID retries replay the original push response.
-Completed notes are stored in the same `CompletePush` transaction as the Git
-response and refs. `GET /api/repositories/<name>/pushes/<UUID>` returns the push
+Completed notes and the native outcome are bound in the same root-completion
+transaction as the accepted refs. `GET /api/repositories/<name>/pushes/<UUID>` returns the push
 author, notes and optional certificate SHA-256, signer, key and recording time to
 the current repository owner or the author while they retain
 read access; other readers receive 404. A missing or unfinished push also returns
-404. Notes are audit metadata; they do not run hooks or alter checks. This
-unreleased schema and operation 4 codec 6 require a fresh development prefix.
+404. Notes are audit metadata; they do not run hooks or alter checks. The current compiled schema requires a fresh storage prefix.
 Policy reads use batches of at most 128 statements. An `(enabled, reference)`
 index bounds the presence probe; rule and requirement primary keys and the
 check-attempt index bound final policy lookups.

@@ -221,7 +221,7 @@ Optional flags expand the qualification:
 | --- | --- |
 | `--large-clone` | Push two 80 MiB random blobs, then clone with protocol v0 and v2 after takeover. Each pack exceeds 64 MiB; both file hashes and `git fsck` must match. This checks transfer size, not production capacity. |
 | `--many-objects 256` | Push 256 files, update one file with an annotated tag, then clone after takeover. Combined with `--large-clone`, exercise resident eviction across four repositories and Git/LFS recovery before restart. |
-| `--structural-objects` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify raw bytes and OIDs after takeover with strict `git fsck`. |
+| `--structural-objects` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify exact bytes after takeover and strict fsck. Add `--structural-object-bytes 68157440` to exercise 65 MiB messages. |
 | `--corpus-repository /path/to/existing/repository` | Read that checkout's HEAD history, bundle it into temporary fixtures under `--work-parent`, then compare every reachable object's type, size and bytes in v0/v2 clones after takeover, with strict `git fsck`. Other source branches and tags are outside this check. |
 
 For a local container store, verify that the intended data/log volume is shared
