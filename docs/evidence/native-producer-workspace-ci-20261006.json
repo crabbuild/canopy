@@ -1,0 +1,27 @@
+{
+  "base_head": "759d4778f2ae9a04d426470f5354618c1e904f62",
+  "sources": {
+    "crates/canopy-server/src/packs/publication/serving/session/workspace.rs": "b5ef94e49c7f941eb63289f47dd4f41ac8a9d3ec78413df9cb911aa50c1bd9ff"
+  },
+  "change": "Explicit producer roots install each certified complete pack/index pair once and verify selected bodies from that workspace. Ref-based transport workspaces retain selective extraction. No admission limits or test assertions changed.",
+  "validation": {
+    "workspace_tests": {
+      "passed": 11,
+      "seconds": 18.69,
+      "log": "/tmp/canopy-native-producer-workspace-fixed.log"
+    },
+    "clippy": {
+      "exit_code": 0,
+      "seconds": 43.12,
+      "log": "/tmp/canopy-native-producer-clippy.log"
+    },
+    "format_and_diff": {
+      "exit_code": 0
+    },
+    "full_workspace": {
+      "state": "pending",
+      "log": "/tmp/canopy-native-workspace-after-producer.log"
+    }
+  },
+  "prior_full_failure": "752 pass / 5 fail at759d477: three extra-file/admission assertions, wide workspace timeout, and contended ancestry lease expiry. The ancestry case passed isolated at the same source in37.85s; it still requires full-suite validation."
+}

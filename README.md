@@ -14,7 +14,10 @@ This page keeps the project overview, setup path, and first repository workflow.
 | You want to… | Start with |
 | --- | --- |
 | Understand the storage model | [How Canopy stores a repository](#how-canopy-stores-a-repository) |
+| Understand the design and control flow | [Canopy design](DESIGN.md) and [architecture gallery](diagram/canopy-architecture/index.html) |
+| Navigate the Rust crates | [Rust workspace](docs/workspace.md) |
 | Run a development node | [Run a local node](#run-a-local-node) |
+| Start an isolated local server and test a Kubernetes-sized repository | [Local evaluation and real-repository benchmark](deploy/local-evaluation.md) |
 | Create, clone, and push a repository | [Create and use a repository](#create-and-use-a-repository) |
 | Use the browser, collaboration, or Git LFS | [Use Canopy](docs/user-guide.md) |
 | Automate repository operations | [API reference](docs/api-reference.md) |
@@ -33,7 +36,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | Browser | Embedded repository, issue, pull-request and account views | [Repository browser](docs/user-guide.md#repository-browser) |
 
 These are implementation capabilities, not a production capacity guarantee.
-The [roadmap](ROADMAP.md) lists remaining work such as full fault
+The [roadmap](ROADMAP.md) lists remaining work such as migrations, full fault
 qualification, collection, provider qualification, observability and a repeatable
 deployment. The [delivery plan](docs/delivery-plan.md) records release gates;
 the [performance plan](docs/performance-plan.md) separates measured results from
@@ -46,8 +49,8 @@ before relying on a feature in a new environment.
 
 The **Directory Cell** maps an owner and repository name to a stable repository
 UUID and owns accounts. Each UUID identifies a **Repository Cell** containing
-authoritative refs, Git metadata, ACLs and collaboration records. Git
-object bodies live in immutable native Git pack/index pairs referenced by that Cell. Git LFS retains its separate immutable body store.
+authoritative refs, Git metadata, ACLs and collaboration records. Large Git
+blobs and LFS bodies are immutable external objects referenced by that Cell.
 Native Git handles wire protocols using a **disposable cache**: after local disk
 loss, Canopy restores published Cell state from the object store and rebuilds
 the cache. See the [persisted contracts](docs/contracts.md) for publication and
@@ -67,7 +70,7 @@ The existing [architecture SVG](docs/architecture.svg) provides the same model w
 
 ### A durable push in one view
 
-The gateway reports a successful push after it has authenticated the request, verified incoming objects, published and verified native packs and required LFS bodies, and committed the ref update with a replayable response.
+The gateway reports a successful push after it has authenticated the request, verified incoming objects, published required external bodies, and committed the ref update with a replayable response.
 
 ```mermaid
 sequenceDiagram
@@ -89,11 +92,7 @@ sequenceDiagram
 This is a development path for one node with an existing S3-compatible object
 store. The [bounded Linux deployment](deploy/README.md) describes the container
 profile and its resource limits. Use a **new storage prefix** for this build;
-Canopy follows the latest Cellule release without backward compatibility.
-Cellule 0.2.0 changes the persisted bundle format, and there is no migration
-from earlier preview layouts. Before retiring an older deployment, drain and
-materialize its acknowledged history with the previous binary. See the
-[storage compatibility notes](docs/implementation.md#storage-compatibility-and-graph-verification).
+there is no migration from earlier preview layouts yet.
 
 1. Install Rust 1.97 or newer and Git with `http-backend`,
    `merge-tree --write-tree` (`-z --name-only --no-messages`) and `commit-tree`.
@@ -201,7 +200,7 @@ The long-form material moved from this README is preserved in those pages. The [
 
 Keep behavior, tests, and documentation aligned when you change Canopy:
 
-1. Follow the [Cellule integration policy](AGENTS.md) and update the relevant [persisted contract](docs/contracts.md).
+1. Update the relevant [persisted contract](docs/contracts.md).
 2. Add or update a stock-client, API, or fault test.
 3. Record the revision, provider, workload, and hardware for measurements.
 4. Update the matching compatibility row or [delivery gate](docs/delivery-plan.md).
@@ -209,4 +208,4 @@ Keep behavior, tests, and documentation aligned when you change Canopy:
 
 ## License
 
-Canopy declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in `Cargo.toml`.
+Each workspace crate declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in its `Cargo.toml`.

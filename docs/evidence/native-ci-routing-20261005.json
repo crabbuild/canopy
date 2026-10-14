@@ -1,0 +1,293 @@
+{
+  "recorded_at_utc": "2026-10-06T03:57:58.668291+00:00",
+  "base_head": "68dad78c6bf125c95fdb13d289553e7a8ac9d485",
+  "host": "macOS, Rust 1.98.0",
+  "release_qualified": false,
+  "ci_run": "https://github.com/crabbuild/canopy/actions/runs/37397787531",
+  "sdk_pin": "161067f5a21703b3e257024bcb64e565fd9657b4",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML source path to its SHA256",
+  "full_workspace_source_digest": "164030e0480e3b113d323bf91c4ea4a98458f7d87d887d41487ed059bd00994e",
+  "full_workspace_source_manifest": "/tmp/canopy-routing-final-source.json",
+  "final_source_digest": "7869f6a211217221da60792d2a2283235629733ef0bfc203588c8dfaaec601ec",
+  "final_source_manifest": "/tmp/canopy-routing-corrected-source.json",
+  "source_files": 531,
+  "source_delta_after_full_workspace": [
+    "crates/canopy-server/src/packs/publication/tests/durable_recovery.rs"
+  ],
+  "delta_description": "Only the durable-recovery fixture admission assertion changed from 32 KiB to 48 KiB for the newly armed publication bundle. No production code changed after the full diagnostic. The corrected fixture was rerun and passed.",
+  "full_workspace": {
+    "source_digest": "164030e0480e3b113d323bf91c4ea4a98458f7d87d887d41487ed059bd00994e",
+    "complete": true,
+    "phases": [
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 942.45,
+        "log": "/tmp/canopy-routing-final-workspace.log",
+        "log_sha256": "7f555ec9dca349e2b62a9ecc48845126a866a1bccf1a4eb46dfde231ce7b7666",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.44s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 0.10s",
+          "test result: FAILED. 754 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 406.28s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.88s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+          "test result: FAILED. 97 passed; 10 failed; 9 ignored; 0 measured; 0 filtered out; finished in 419.99s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "packs::publication::tests::native_capture::native_receive_durable_root_recovery_restores_joint_publication_and_fences_absent_old_owner",
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "listener_handoff::mismatched_listener_is_rejected_before_workspace_and_storage_writes",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 78.45,
+        "log": "/tmp/canopy-routing-final-build.log",
+        "log_sha256": "97748165ff048af9ca6d46e7fcd3ba6594771b12e99cc7d63cdf627d79f3d91e",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.52,
+        "log": "/tmp/canopy-routing-final-fmt.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.05,
+        "log": "/tmp/canopy-routing-final-diff.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "source_unchanged": true,
+    "finished_at_utc": "2026-10-06T03:53:54.205561+00:00"
+  },
+  "final_focused": {
+    "source_digest": "7869f6a211217221da60792d2a2283235629733ef0bfc203588c8dfaaec601ec",
+    "complete": true,
+    "phases": [
+      {
+        "name": "phase",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "packs::publication::recovery::phase::"
+        ],
+        "exit_code": 0,
+        "seconds": 1.16,
+        "log": "/tmp/canopy-routing-corrected-phase.log",
+        "log_sha256": "38b72abb32e39250aedbb642143525009647416f9bce3ab4fedc20d15c0e199c",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.02s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "registry",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "production_registers_packed_and_policy_metadata_contracts"
+        ],
+        "exit_code": 0,
+        "seconds": 0.57,
+        "log": "/tmp/canopy-routing-corrected-registry.log",
+        "log_sha256": "e61fea3524a74e4c6c9b80fcb9daf643065a900b846b8ac90f943b0718280862",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 0.16s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "thread",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--locked",
+          "--lib",
+          "native_thread_receiver_binds_verified_anchor_and_rechecks_editorial_revision"
+        ],
+        "exit_code": 0,
+        "seconds": 3.1,
+        "log": "/tmp/canopy-routing-corrected-thread.log",
+        "log_sha256": "04f78821111c11b5eadf2701fdc11c69adc1ca9ff0f7efc172f5d8ed714b3842",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 2.70s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 36.13,
+        "log": "/tmp/canopy-routing-corrected-clippy.log",
+        "log_sha256": "5bbde0b9daf654bf2893c82e0ca225ecba76fdd98a85b8cae636df83b197c3c8",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.45,
+        "log": "/tmp/canopy-routing-corrected-fmt.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.04,
+        "log": "/tmp/canopy-routing-corrected-diff.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "source_unchanged": true,
+    "finished_at_utc": "2026-10-06T03:56:59.917436+00:00"
+  },
+  "additional_checks": [
+    {
+      "name": "cold-owner",
+      "log": "/tmp/canopy-armed-cold-fixed.log",
+      "exit_code": 0,
+      "log_sha256": "6d831a537071030013e200ed3379512c827f48ddfda5f87279ecfd77ee28dc96",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 5.06s"
+      ],
+      "failed_cases": []
+    },
+    {
+      "name": "discovery-focused",
+      "log": "/tmp/canopy-discovery-native-repro.log",
+      "exit_code": 0,
+      "log_sha256": "ffec81ddc1b0452bedd75465553ea3a1e2a1dd4548ac50ff59af03151334da1a",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 6.07s"
+      ],
+      "failed_cases": []
+    },
+    {
+      "name": "listener-focused",
+      "log": "/tmp/canopy-listener-repro.log",
+      "exit_code": 0,
+      "log_sha256": "a19dcea73055908eac0e766f749d7fc70e3efd94900f41538d118bd91f7c0d22",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.00s"
+      ],
+      "failed_cases": []
+    },
+    {
+      "name": "harness",
+      "log": "/tmp/canopy-routing-harness.log",
+      "exit_code": 0,
+      "log_sha256": "6e7fb525f14fde752af6b0614c73f13530f9e177082866daff05ad3cbc9b9f49",
+      "summaries": [],
+      "failed_cases": []
+    }
+  ],
+  "remaining": [
+    "native backup artifact graph (retired objects/git_packs queries)",
+    "selective native provider reads and retained object cache",
+    "read-only residency restoration root advancement",
+    "late pre-bind SSH ACL revocation needs a purpose-restricted negative staging path",
+    "standalone owner_restart/repository_cell/smart_http fixtures use detached or retired APIs",
+    "discovery latency and listener rebinding fail under full local contention; focused tests pass",
+    "three option-error failures from the referenced Linux run did not reproduce on macOS; new-head Linux qualification required"
+  ]
+}

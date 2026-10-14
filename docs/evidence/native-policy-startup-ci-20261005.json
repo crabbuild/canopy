@@ -1,0 +1,560 @@
+{
+  "recorded_at_utc": "2026-10-05T18:10:26.030001+00:00",
+  "base_head": "ef765d449ab09488af1712d72dc39aa1894dc555",
+  "host": "macOS, Rust 1.98.0; exact-head Linux qualification remains required",
+  "source_files": 510,
+  "rust_files": 492,
+  "source_hash_digest": "08ef5b30a9be622dc4ebccc592cd66d7cbf20a72e6912aeddb364e2f8ddcbd39",
+  "source_manifest": "/tmp/canopy-native-policy-final-source.json",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML path to its file SHA256",
+  "source_unchanged_during_validation": true,
+  "release_qualified": false,
+  "reproductions": [
+    {
+      "result": "Shared public startup completion seam returns error before the actual supervisor releases its held reserved listener. Regression fails before join fix.",
+      "source_manifest": "/tmp/canopy-native-policy-startup-baseline-source.json",
+      "source_digest": "c519e829fcb5e781cc75b8a91cf0eaa78407a0ae8b361e7b214fa24df72656eb",
+      "path": "/tmp/canopy-native-policy-startup-baseline.log",
+      "sha256": "9ab02b5dd3436c2cddebb9770be2b613a2be14618d99bbb79e1030f2b644eabf",
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 722 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "result": "Actual resident review-policy returns None because it joins retired SQL refs after a native fixture creates a pull. Fails before reader conversion.",
+      "source_manifest": "/tmp/canopy-native-policy-reader-baseline-source.json",
+      "source_digest": "1a5ed060f279f159e023eb4c7516a55a7d64665335cccecd0572c32f04c27d61",
+      "path": "/tmp/canopy-native-policy-reader-baseline.log",
+      "sha256": "6561575e8b5ee1f75fae6db68e546390090eedabbeea8352c917f77467066177",
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.72s"
+      ]
+    },
+    {
+      "result": "Previously compiled ef765d4 stock-Git HTTP merge family fails at its initial review-policy GET with 404. This binary reproduction is not validation of uncommitted source at execution.",
+      "compiled_source_manifest": "/tmp/canopy-native-pulls-final-source.json",
+      "path": "/tmp/canopy-native-policy-http-baseline.log",
+      "sha256": "5c38801db6586a3508862cfcb66e3fe3df4cd703551b3c398f612df10dfbfed7",
+      "summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 2.28s"
+      ]
+    }
+  ],
+  "intermediate_attempts": [
+    {
+      "result": "Initial reader conversion passes the first native-policy regression before expanded prepared-query checks. Not final-source qualification.",
+      "path": "/tmp/canopy-native-policy-reader-fixed.log",
+      "sha256": "a2c7854608136eb8f84605c2c09c5dd01bf07df43c762586a28c3c66a5432512",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 2.42s"
+      ]
+    },
+    {
+      "result": "Expanded regression incorrectly expected a comment to clear a prior request-changes decision. Production behavior matches documented non-comment review-head semantics; correct expected changes=1. Our partial workspace compiler was terminated before source correction; no foreign process stopped.",
+      "validation": {
+        "source_digest": "83c4f50c16d5927ed457fc9e35c9953b3ecf11002e5825c76331637ee50271c8",
+        "phases": [
+          {
+            "name": "clippy",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "clippy",
+              "--workspace",
+              "--all-targets",
+              "--locked",
+              "--",
+              "-D",
+              "warnings"
+            ],
+            "exit_code": 0,
+            "seconds": 33.31,
+            "log": "/tmp/canopy-native-policy-first-clippy-final.log",
+            "log_sha256": "af9d5539cad7c82e3d2d31390d2bea14957b4492dd3feed01db68eff5d74f1ca",
+            "summaries": [],
+            "failed_cases": []
+          },
+          {
+            "name": "policy",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "-p",
+              "canopy-server",
+              "--lib",
+              "native_review_policy_observes_current_rules_reviews_membership_and_ref_aba",
+              "--locked",
+              "--",
+              "--nocapture"
+            ],
+            "exit_code": 101,
+            "seconds": 77.39,
+            "log": "/tmp/canopy-native-policy-first-policy-first.log",
+            "log_sha256": "3bd733eac119f91dbc72a46ce05ec8646da157aec7d7a57b3157b318af312b14",
+            "summaries": [
+              "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.86s"
+            ],
+            "failed_cases": [
+              "server::residency::tests::serving::browser::pulls::native_review_policy_observes_current_rules_reviews_membership_and_ref_aba"
+            ]
+          },
+          {
+            "name": "startup",
+            "command": [
+              "cargo",
+              "+1.98.0",
+              "test",
+              "-p",
+              "canopy-server",
+              "--lib",
+              "failed_startup_waits_for_supervisor_completion_and_owned_listener_release",
+              "--locked",
+              "--",
+              "--nocapture"
+            ],
+            "exit_code": 0,
+            "seconds": 0.74,
+            "log": "/tmp/canopy-native-policy-first-startup-final.log",
+            "log_sha256": "26612f455fbaa6f0f78a049bf091b2227fb7c5dc9ccf49ab6f4eb7eb84fd2d8d",
+            "summaries": [
+              "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.05s"
+            ],
+            "failed_cases": []
+          }
+        ],
+        "complete": false,
+        "release_qualified": false,
+        "interrupted": true,
+        "interruption_record": "/tmp/canopy-native-policy-first-interruption.json"
+      },
+      "source_manifest": "/tmp/canopy-native-policy-first-source.json",
+      "interruption": {
+        "reason": "Stop our validation after regression exposes incorrect comment expectation; preserve all completed phases and partial workspace log before correcting test.",
+        "processes": {
+          "57223": [
+            30109,
+            "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -u /tmp/canopy_native_policy_validate.py"
+          ],
+          "57958": [
+            57223,
+            "/Users/haipingfu/.rustup/toolchains/1.98.0-aarch64-apple-darwin/bin/cargo test --workspace --locked --no-fail-fast"
+          ],
+          "58144": [
+            57958,
+            "/Users/haipingfu/.rustup/toolchains/1.98.0-aarch64-apple-darwin/bin/rustc --crate-name multi_server --edition=2024 crates/canopy-server/tests/multi_server/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=181874f3bf65c835 -C extra-filename=-3e08ee00a07d7bde --out-dir /Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps -L dependency=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps --extern async_trait=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libasync_trait-264adbdf16f2d6bb.dylib --extern axum=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libaxum-64e276c868a1333d.rlib --extern base64=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libbase64-b543fed2f0293468.rlib --extern blake3=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libblake3-ccf2879731550d36.rlib --extern bytes=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libbytes-258f462c5e906be1.rlib --extern canopy_git_format=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcanopy_git_format-47331bdc9c9e8b2d.rlib --extern canopy_object_storage=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcanopy_object_storage-b50a50d07ced2114.rlib --extern canopy_server=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcanopy_server-737729dd7418b4df.rlib --extern cellule_app=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcellule_app-37270f04fe254f2c.rlib --extern cellule_host=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcellule_host-d934a2c86b6ded1f.rlib --extern cellule_ltx=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcellule_ltx-c03e13c2108bfd42.rlib --extern cellule_runtime=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcellule_runtime-0cbcd9ec23d93de9.rlib --extern cellule_store=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libcellule_store-ff151c59722e759d.rlib --extern ed25519_dalek=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libed25519_dalek-8cb1fbe14113f307.rlib --extern flate2=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libflate2-4c659b2504bcde03.rlib --extern futures_core=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libfutures_core-eb34df332aa694e8.rlib --extern futures_util=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libfutures_util-e0a1ab9539c3c127.rlib --extern hex=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libhex-d8b113cf0abdd414.rlib --extern http_body=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libhttp_body-15944d5a62cbd2dd.rlib --extern libc=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/liblibc-1bdbc5d94638008d.rlib --extern object_store=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libobject_store-24b6fc0ca49d1c41.rlib --extern percent_encoding=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libpercent_encoding-76226f1a5c7d4040.rlib --extern rcgen=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/librcgen-e34af303a837c49c.rlib --extern reqwest=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libreqwest-1843dd4e2c5ea820.rlib --extern rusqlite=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/librusqlite-1255a978c6680481.rlib --extern russh=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/librussh-284e98d7a0ec41b7.rlib --extern serde=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libserde-718e4da2dae12fe2.rlib --extern serde_json=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libserde_json-29d6a1871be8ccb4.rlib --extern sha1=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libsha1-a587e3b4251863cb.rlib --extern sha2=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libsha2-7c643b52fee5e057.rlib --extern ssh_key=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libssh_key-3cb8b3f90f07f4cc.rlib --extern tempfile=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtempfile-2a7959d794f25bf9.rlib --extern thiserror=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libthiserror-d2acbff21d4177b1.rlib --extern tokio=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtokio-4b19c8c8af5c60af.rlib --extern tokio_rustls=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtokio_rustls-51d53d321968bcee.rlib --extern tokio_util=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtokio_util-5cfdd31275f97490.rlib --extern tower=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtower-c8013d21ed30a066.rlib --extern tracing=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtracing-a9cf8244c3c83909.rlib --extern tracing_appender=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtracing_appender-164fcb77ccb03877.rlib --extern tracing_subscriber=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libtracing_subscriber-98f6a9959a9e3652.rlib --extern url=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/liburl-269058e59acc5dd8.rlib --extern uuid=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/libuuid-f99bd28e327e2af1.rlib -L native=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/build/blake3-afb1f6c10ed84bad/out -L native=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/build/aws-lc-sys-2bdb6e07e75aa555/out -L native=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/build/ring-8ea5519ffb1e7330/out -L native=/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/build/libsqlite3-sys-c4209bb4f57153f5/out"
+          ]
+        }
+      },
+      "partial_workspace_log": {
+        "path": "/tmp/canopy-native-policy-first-workspace-final.log",
+        "sha256": "c5eb0cf3885ca7b9fd71752200e85c3d1290e5a3173eeec3a40b1dd0760860cd",
+        "summaries": []
+      }
+    }
+  ],
+  "validation": {
+    "source_digest": "08ef5b30a9be622dc4ebccc592cd66d7cbf20a72e6912aeddb364e2f8ddcbd39",
+    "phases": [
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 30.66,
+        "log": "/tmp/canopy-native-policy-final-clippy-final.log",
+        "log_sha256": "e0ab0a2ed6a1eff099473dc983c8e7b042844d340a327cf4f489494ddb206258",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "policy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "native_review_policy_observes_current_rules_reviews_membership_and_ref_aba",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 85.49,
+        "log": "/tmp/canopy-native-policy-final-policy-final.log",
+        "log_sha256": "1cc4b79822f0894caf82b980b81cabf130b91c58c57ccfa0092de09132c7578f",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 2.60s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "startup",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "failed_startup_waits_for_supervisor_completion_and_owned_listener_release",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 0.76,
+        "log": "/tmp/canopy-native-policy-final-startup-final.log",
+        "log_sha256": "d797bf59919151ea4431f9bdf585ac190a2d145315081695a6372a72d148db39",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.05s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 669.8,
+        "log": "/tmp/canopy-native-policy-final-workspace-final.log",
+        "log_sha256": "210f69b7cc2988bbd04477ad90eabb03145c6cffa5a94d98aa854fc89273ccf5",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.27s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 0.08s",
+          "test result: ok. 724 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 287.29s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.57s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+          "test result: FAILED. 82 passed; 24 failed; 9 ignored; 0 measured; 0 filtered out; finished in 352.72s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+          "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+          "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+          "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+          "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+          "leased_server_recovers_two_repositories_with_git_and_lfs",
+          "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+          "merge::merge_rechecks_revisions_authority_and_competing_publications",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+          "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+          "sha256::sha256_checks_reviews_and_merge_survive_restore",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 42.23,
+        "log": "/tmp/canopy-native-policy-final-build-final.log",
+        "log_sha256": "55b2c9b98406e7846b9bdf62055ecb1261f3028de4299ca852a0853e8ec496d1",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.24,
+        "log": "/tmp/canopy-native-policy-final-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 42.2,
+        "log": "/tmp/canopy-native-policy-final-harness-final.log",
+        "log_sha256": "788897927721b6e97f074403bc69ca4d1360d4b877e2c09089d257dfd0bf611f",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.05,
+        "log": "/tmp/canopy-native-policy-final-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "complete": true,
+    "release_qualified": false,
+    "source_unchanged": true
+  },
+  "workspace_terminal_inventory": [
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_git_format-cdf8cea2f92fe6a4)",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_object_storage-4a0661c5c4765140)",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_server-d080aca381ae9ba9)",
+      "passed": 724,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy-16a4bf977c56198e)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/directory_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/directory_cell-31a0f4eea5beeae3)",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/git_http.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/git_http-afa4d1d9a2db0179)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/multi_server/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/multi_server-3e08ee00a07d7bde)",
+      "passed": 82,
+      "failed": 24,
+      "ignored": 9
+    },
+    {
+      "binary": "tests/owner_restart.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/owner_restart-be32ecc90c554a17)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/repository_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/repository_cell-322afb5848ed5e86)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/smart_http/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/smart_http-18ac06122d3c394f)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_git_format",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_object_storage",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_server",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "workspace_unique_totals": {
+    "passed": 844,
+    "failed": 27,
+    "ignored": 9,
+    "executed": 871,
+    "total": 880
+  },
+  "counting": "Last summary per Cargo Running section; nested child summaries and focused reruns excluded. Ordinary ignored cases remain unexecuted.",
+  "parent_linux_ci": [
+    {
+      "head": "ef765d449ab09488af1712d72dc39aa1894dc555",
+      "run": 37348401382,
+      "job": 111892756665,
+      "conclusion": "failure",
+      "log": "/tmp/canopy-policy-parent-pr-full.log",
+      "sha256": "ed2700812c12e18ab37de67fe6ce663153195a534a73684d9737da197afd400d",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.87s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 721 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 721 filtered out; finished in 0.03s",
+        "test result: ok. 722 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 499.48s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: FAILED. 83 passed; 27 failed; 9 ignored; 0 measured; 0 filtered out; finished in 657.90s"
+      ],
+      "failed_cases": [
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "push_options::mismatched_signed_push_options_return_a_durable_git_rejection",
+        "push_options::stock_git_push_options_are_validated_recorded_and_recovered",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::ssh_push_options_cover_pack_and_delete_only_requests",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery"
+      ]
+    },
+    {
+      "head": "ef765d449ab09488af1712d72dc39aa1894dc555",
+      "run": 37348395260,
+      "job": 111892735724,
+      "conclusion": "failure",
+      "log": "/tmp/canopy-policy-parent-push-full.log",
+      "sha256": "69b061e52d575e3d8ea78da60ee4f649deabcc42714dd1df2b6aff88a508dbc4",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.03s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 721 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 721 filtered out; finished in 0.01s",
+        "test result: ok. 722 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 366.32s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.31s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: FAILED. 83 passed; 27 failed; 9 ignored; 0 measured; 0 filtered out; finished in 515.12s"
+      ],
+      "failed_cases": [
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "push_options::mismatched_signed_push_options_return_a_durable_git_rejection",
+        "push_options::stock_git_push_options_are_validated_recorded_and_recovered",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::ssh_push_options_cover_pack_and_delete_only_requests",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery"
+      ]
+    }
+  ],
+  "changes": [
+    "Review-policy query 52 codec 2 reuses private native ref observations, bounded metadata selection and final fresh SQL rules/heads/membership/access. Merge ancestry preflight uses this reader; final merge writer remains legacy and unqualified.",
+    "Actual-resident regression for both formats covers prepared query freshness, purpose/number substitution, delayed access revocation, membership ABA, comment-preserved decisions, tombstones and same-OID ref ABA.",
+    "Startup error completion joins its actual supervisor before returning; successful readiness and cancellation ownership stay unchanged.",
+    "Conditional-storage fixture retains caller port reservation through the probe while preserving exact domain/empty-store/rebind assertions. This does not establish the cause of every earlier AddrInUse failure."
+  ],
+  "limits": {
+    "facts": 128,
+    "total_name_bytes": 524288,
+    "single_name_bytes": 65535,
+    "input_bytes": 835584,
+    "query_output_bytes": 1048576,
+    "read_attempts": 3
+  },
+  "remaining": "Native atomic merge/rebase/candidate publication and thread revisions, default-branch joint mutation, Linux rejected-push workloads and pre-Bind durable refusal, real peers/source-independent backup, reachable-only cold/filtered fetch and standalone actual residents, physical ownership/recovery/retention/final DDL, accelerators/fair maintenance and complete large-history/10k-engineer qualification."
+}

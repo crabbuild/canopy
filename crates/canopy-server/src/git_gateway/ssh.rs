@@ -1,0 +1,341 @@
+use super::*;
+use crate::git_http::{GitProcess, read_bounded};
+use std::{pin::Pin, process::Stdio};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_util::io::ReaderStream;
+
+impl GitGateway {
+    pub(crate) async fn ssh_fetch<R, W>(
+        &self,
+        reader: R,
+        mut writer: W,
+        actor: &str,
+        protocol_v2: bool,
+        admission: Arc<AdmissionPermit>,
+    ) -> Result<(), GatewayError>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        if self.access_level(actor).await?.is_none() {
+            return Err(GatewayError::Unauthorized);
+        }
+        let snapshot = self
+            .repository
+            .serving_snapshot(ReadIdentity::Account(actor))
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        let workspace = snapshot
+            .ref_workspace(crate::packs::publication::WorkspaceLimits::default())
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        workspace
+            .prepare_advertisement()
+            .await
+            .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+        let backend = workspace.backend(self.certificate_nonce().await?);
+        let mut command = backend.certified_fetch_command()?;
+        command
+            .arg("upload-pack")
+            .arg(backend.git_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if protocol_v2 {
+            command.env("GIT_PROTOCOL", "version=2");
+        }
+        let mut process = GitProcess::spawn(
+            command,
+            (workspace.read_owner(), admission),
+            backend
+                .cache
+                .native
+                .try_admit(crate::native_resources::NativeWork::Pack)?,
+        )?;
+        let mut stdin = process
+            .child
+            .stdin
+            .take()
+            .ok_or(GitHttpError::Interrupted)?;
+        let mut stdout = process
+            .child
+            .stdout
+            .take()
+            .ok_or(GitHttpError::Interrupted)?;
+        let stderr = process
+            .child
+            .stderr
+            .take()
+            .ok_or(GitHttpError::Interrupted)?;
+        let input = async {
+            let result = async {
+                let mut reader = reader;
+                let mut remaining = MAX_FETCH_REQUEST_BYTES as usize;
+                loop {
+                    let Some(group) = packet_group(&mut reader, remaining).await? else {
+                        return Ok::<_, GatewayError>(());
+                    };
+                    remaining -= group.len();
+                    let request = fetch::FetchRequest::parse(&group)?;
+                    Self::validate_wants(&workspace, &request.wants).await?;
+                    workspace
+                        .prepare_fetch(
+                            request.wants.iter().copied().collect(),
+                            request.filter.clone(),
+                            request.needs_blob_sizes,
+                        )
+                        .await
+                        .map_err(|e| GatewayError::Cell(Box::new(e)))?;
+                    stdin.write_all(&group).await?;
+                    stdin.flush().await?;
+                    if !protocol_v2 {
+                        // v0 wants end at the first flush. Remaining packets are
+                        // negotiation haves/done; Git owns that state machine.
+                        let copied =
+                            tokio::io::copy(&mut reader.take(remaining as u64 + 1), &mut stdin)
+                                .await?;
+                        if copied > remaining as u64 {
+                            return Err(InputError::TooLarge.into());
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+            .await;
+            drop(stdin);
+            result
+        };
+        let output = async {
+            let (copied, stderr) = tokio::try_join!(
+                async {
+                    tokio::io::copy(&mut stdout, &mut writer)
+                        .await
+                        .map_err(GitHttpError::from)
+                },
+                read_bounded(stderr, 64 * 1024)
+            )?;
+            let _ = copied;
+            Ok::<_, GitHttpError>(stderr)
+        };
+        // Git can finish a fetch while the client leaves stdin open waiting for
+        // EOF. Stop input when output closes; never wait for both directions.
+        tokio::pin!(input, output);
+        let stderr = tokio::select! {
+            result = &mut output => result?,
+            result = &mut input => { result?; output.await? }
+        };
+        let status = process.wait().await?;
+        if !status.success() {
+            return Err(GitHttpError::GitExit {
+                status,
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ssh_push<R, W>(
+        &self,
+        mut reader: R,
+        mut writer: W,
+        actor: &str,
+        admission: Arc<AdmissionPermit>,
+    ) -> Result<(), GatewayError>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin,
+    {
+        if self
+            .access_level(actor)
+            .await?
+            .is_none_or(|scope| scope < TokenScope::Write)
+        {
+            return Err(GatewayError::Unauthorized);
+        }
+        let advertisement = self
+            .handle(
+                rpc("GET", Body::empty()),
+                actor,
+                None,
+                Some(Arc::clone(&admission)),
+            )
+            .await?;
+        if advertisement.status != 200 {
+            return Err(GatewayError::Unauthorized);
+        }
+        // HTTP adds one service announcement and flush before native refs.
+        // Strip only this envelope while streaming the advertisement.
+        write_body(
+            advertisement.body,
+            &mut writer,
+            b"001f# service=git-receive-pack\n0000",
+        )
+        .await?;
+        let commands = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            packet_group(&mut reader, 40 * 1024 * 1024),
+        )
+        .await
+        .map_err(|_| InputError::Timeout)??;
+        let Some(mut commands) = commands else {
+            return Ok(());
+        };
+        if commands == b"0000" {
+            return Ok(());
+        }
+        let (options_requested, needs_pack) = branch_policy::command_flags(&commands)?;
+        if options_requested {
+            let options = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                packet_group(&mut reader, 32 * 1024),
+            )
+            .await
+            .map_err(|_| InputError::Timeout)??
+            .ok_or(InputError::Commands)?;
+            commands.extend_from_slice(&options);
+        }
+        // Keep only bounded wire intent for a known pre-publication refusal.
+        // This report cannot acknowledge a push or alter durable state.
+        let refusal =
+            branch_policy::commands_in_format(&commands, Some(self.repository.object_format()))?
+                .rejection(crate::push::report::REJECTED)?;
+        // Stock send-pack closes its write fd after pack-objects. Delete-only
+        // pushes have no pack and await status without closing stdin. Preserve
+        // their negotiated options group before dispatching the completed body.
+        let body = if needs_pack {
+            Body::from_stream(ReaderStream::new(
+                std::io::Cursor::new(commands).chain(reader),
+            ))
+        } else {
+            Body::from(commands)
+        };
+        let response = match self
+            .handle(rpc("POST", body), actor, None, Some(admission))
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // Only a known fenced attempt plus a current write downgrade
+                // can use the original per-ref ng report. Uncertain mutations,
+                // storage failures and lost replies retain their error path.
+                let inactive = match &error {
+                    GatewayError::Cell(source) => source
+                        .downcast_ref::<Arc<crate::packs::publication::StagingError>>()
+                        .is_some_and(|error| {
+                            matches!(**error, crate::packs::publication::StagingError::Inactive)
+                        }),
+                    _ => false,
+                };
+                if inactive
+                    && self
+                        .access_level(actor)
+                        .await?
+                        .is_some_and(|role| role < TokenScope::Write)
+                {
+                    let response = refusal.ok_or(error)?;
+                    write_body(Body::from(response.body), &mut writer, b"").await?;
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
+        if response.status != 200 {
+            return Err(GitHttpError::Interrupted.into());
+        }
+        write_body(response.body, &mut writer, b"").await
+    }
+}
+
+async fn write_body(
+    body: Body,
+    writer: &mut (impl AsyncWrite + Unpin),
+    envelope: &[u8],
+) -> Result<(), GatewayError> {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let mut body = body.into_data_stream();
+        let mut skipped = 0;
+        while let Some(chunk) =
+            std::future::poll_fn(|cx| futures_core::Stream::poll_next(Pin::new(&mut body), cx))
+                .await
+        {
+            let chunk = chunk.map_err(InputError::Body)?;
+            let skip = (envelope.len() - skipped).min(chunk.len());
+            if chunk[..skip] != envelope[skipped..skipped + skip] {
+                return Err(GitHttpError::MalformedCgi.into());
+            }
+            skipped += skip;
+            writer.write_all(&chunk[skip..]).await?;
+        }
+        if skipped != envelope.len() {
+            return Err(GitHttpError::MalformedCgi.into());
+        }
+        writer.flush().await?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| GitHttpError::Timeout)?
+}
+
+fn rpc(method: &str, body: Body) -> GitHttpRequest<Body> {
+    let discovery = method == "GET";
+    GitHttpRequest {
+        method: method.into(),
+        path_info: if discovery {
+            "/repo.git/info/refs"
+        } else {
+            "/repo.git/git-receive-pack"
+        }
+        .into(),
+        query: if discovery {
+            "service=git-receive-pack"
+        } else {
+            ""
+        }
+        .into(),
+        content_type: (!discovery).then(|| "application/x-git-receive-pack-request".into()),
+        gzip: false,
+        protocol_v2: false,
+        body,
+        authenticated: true,
+    }
+}
+
+async fn packet_group(
+    reader: &mut (impl AsyncRead + Unpin),
+    limit: usize,
+) -> Result<Option<Vec<u8>>, GatewayError> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut header = [0; 4];
+        let read = reader.read(&mut header[..1]).await?;
+        if read == 0 && bytes.is_empty() {
+            return Ok(None);
+        }
+        if read == 0 {
+            return Err(InputError::Fetch.into());
+        }
+        reader.read_exact(&mut header[1..]).await?;
+        if !header.iter().all(u8::is_ascii_hexdigit) {
+            return Err(InputError::Fetch.into());
+        }
+        let length = std::str::from_utf8(&header)
+            .ok()
+            .and_then(|s| usize::from_str_radix(s, 16).ok())
+            .ok_or(InputError::Fetch)?;
+        if !(length <= 1 || (5..=65520).contains(&length)) {
+            return Err(InputError::Fetch.into());
+        }
+        let length = length.max(4);
+        if bytes.len() + length > limit {
+            return Err(InputError::TooLarge.into());
+        }
+        bytes.extend_from_slice(&header);
+        let start = bytes.len();
+        bytes.resize(start + length - 4, 0);
+        reader.read_exact(&mut bytes[start..]).await?;
+        if header == *b"0000" {
+            return Ok(Some(bytes));
+        }
+    }
+}

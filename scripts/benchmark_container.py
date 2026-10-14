@@ -8,6 +8,7 @@ does not qualify NVMe capacity or a remote production object store.
 import argparse
 import hashlib
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import random
@@ -20,6 +21,7 @@ import uuid
 
 from benchmark_repositories import Client, save
 from check_container import verify
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 from smoke_container import REPOSITORY, command, port, ready
 
 
@@ -89,7 +91,7 @@ def qualify(args):
                   "node_id": str(uuid.uuid4()), "fleet_digest": "11" * 32, "image_digest": "22" * 32,
                   "owner": "canopy", "listen": "0.0.0.0:8080", "public_url": url,
                   "peer_endpoint": "https://density.example.invalid", "data_dir": "/var/lib/canopy",
-                  "local_disk_limit_bytes": 1536 * 1024**2,
+                  "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 1536 * 1024**2,
                   "max_active_repositories": args.active_repositories}
         (directory / "config.json").write_text(json.dumps(config))
         profile_file = directory / "profile.json"
@@ -163,7 +165,7 @@ def qualify(args):
                 mark("kill-and-restore")
                 command("docker", "kill", "--signal", "KILL", container)
                 logs("before-kill")
-                time.sleep(11)
+                time.sleep(NODE_LEASE_WAIT_SECONDS)
                 command(*compose, "up", "-d", "--force-recreate", "canopy")
                 container = command(*compose, "ps", "-q", "canopy")
                 ready(url, compose)

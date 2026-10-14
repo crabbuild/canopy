@@ -17,7 +17,6 @@ for exact limits and failure semantics.
 | Surface | Reference section |
 | --- | --- |
 | Repository lifecycle and default branch | [Repository creation, discovery, and rename](#repository-creation-discovery-and-rename), [Default branch](#default-branch) |
-| Refs, trees, blobs, and commit history | [Repository browsing](#repository-browsing) |
 | Accounts, grants, and tokens | [Accounts and repository access](#accounts-and-repository-access), [Token lifecycle](#token-lifecycle) |
 | Issues, pull requests, reviews, and line discussions | [Issues and comments](#issues-and-comments), [Pull requests and reviews](#pull-requests-and-reviews), [Compare revisions and discuss lines](#compare-revisions-and-discuss-lines) |
 | Merge, checks, and branch rules | [Merge and rebase](#merge-and-rebase), [Checks and branch rules](#checks-and-branch-rules) |
@@ -60,38 +59,6 @@ returns 409; read current state before retrying. The target must exist unless
 there are no live branches. Stock Git discovery and clone use this durable HEAD,
 including after restart. Protocol v2 also reports an unborn target. Branch
 deletion preserves HEAD's name; recreating the branch makes it live again.
-
-### Repository browsing
-
-`POST /api/repositories/<name>/browse` accepts a repository identity and one query:
-
-```json
-{"repository_id":"<UUID>","query":{"kind":"tree","commit":"<commit-OID>","path_base64":""}}
-```
-
-The response contains `repository_id` and `view`, with a member named `refs`,
-`resolved`, `tree`, `file`, or `history`. Authenticated readers need read access;
-public repositories also permit anonymous reads. Paths and byte-valued metadata
-use URL-safe Base64 without padding. Pass an empty path for the root tree.
-
-| Query kind | Fields | Result and bounds |
-| --- | --- | --- |
-| `refs` | Optional `after`, `generation` | Up to 256 refs within the response byte limit, default branch, generation, and `next_after`. Carry the generation into subsequent pages. |
-| `resolve` | Optional fully qualified `reference` | Resolve a ref or the default branch to an immutable OID before browsing. |
-| `tree` | `commit`, `path_base64`; optional `after` | Up to 32 directory entries, the selected commit, and `next_after`. |
-| `file` | `commit`, `path_base64` | Blob identity, mode, size, and exact `content_base64` for files up to 256 KiB. Larger files return `too_large` metadata. |
-| `history` | `commit` | Up to 32 commits following first parents, with `next_commit` for continuation. |
-
-Commit records include OID, tree, parents, raw `author_base64` and
-`committer_base64` Git headers, and up to 4 KiB of message bytes. This is commit
-authorship metadata. There is no line attribution/blame query or separate
-attribution API; an unknown browse kind returns HTTP 422.
-
-`scripts/benchmark_browse.py` imports local bare repositories, verifies these
-views against stock Git, and measures authenticated reads with persistent
-connections. It requires `CANOPY_GIT_TOKEN`; use its `--help` for corpus and
-output arguments. Reports distinguish successful throughput, failed attempts,
-and successful versus all-attempt latency.
 
 ### Accounts and repository access
 
@@ -289,7 +256,7 @@ The thread author, pull author or repository writer may do so with a write-scope
 token. Stale versions return 409. Resolution is informational and does not replace
 required approvals or checks. See [line discussion contracts](contracts.md#line-discussions).
 This unreleased schema adds discussion tables and requires a fresh development
-storage prefix, as required by the current-release-only storage policy.
+storage prefix; there is no upgrade migration yet.
 
 ### Merge and rebase
 

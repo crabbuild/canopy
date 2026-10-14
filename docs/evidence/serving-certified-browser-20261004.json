@@ -1,0 +1,253 @@
+{
+  "source_files": 482,
+  "rust_files": 468,
+  "source_hash_digest": "380bd07d069a113df8abcb24464e9d0a7f16c1db86558fea9d4b3b6fc325d422",
+  "release_qualified": false,
+  "phases": [
+    {
+      "label": "clippy",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 31.581,
+      "log": "/tmp/canopy-certified-browser-clippy.log",
+      "log_sha256": "1e0f4b4db116e6eda36a25a0af0901ab6934b363ca99f9db0c0ba886bd7b0e8f"
+    },
+    {
+      "label": "focused-final",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--lib",
+        "--locked",
+        "--",
+        "serving::",
+        "server::residency::tests::serving::",
+        "server::residency::tests::recovery::",
+        "catalog::native::tests",
+        "native_git::process::tests",
+        "git_cache::tests",
+        "git_objects::tests",
+        "git_read::",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 120.624,
+      "log": "/tmp/canopy-certified-browser-focused-final.log",
+      "passed": 112,
+      "log_sha256": "cc61c30b6c2a3e49b8ccbff12c1fae43aa141c646664c306f56f355756f1cfb3"
+    },
+    {
+      "label": "library",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "--workspace",
+        "--lib",
+        "--locked",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 101,
+      "seconds": 311.84,
+      "log": "/tmp/canopy-certified-browser-library.log",
+      "passed": 690,
+      "failed": 5,
+      "nested_summaries_excluded": 2,
+      "known_failures": [
+        "git_gateway::fetch::tests::reachability_stops_at_live_refs_without_scanning_other_history",
+        "object_reads::tests::byte_limited_page_advances_only_over_the_selected_prefix",
+        "object_reads::tests::duplicate_rollback_and_deletion_do_not_hide_subsequent_inserts",
+        "object_reads::tests::insertion_cursor_finds_lower_oids_and_excludes_later_publications",
+        "object_reads::tests::small_increment_uses_bounded_sql_work_after_large_history"
+      ],
+      "publication_passed": 387,
+      "log_sha256": "bcd476cb8be246ff510b91076d41426485504571c6f31670b7ac90f76bdf0fd4"
+    },
+    {
+      "label": "workspace",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "workspace::",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 45.627,
+      "log": "/tmp/canopy-certified-browser-workspace.log",
+      "passed": 3,
+      "log_sha256": "c38692f1ad948ed734afd1c87f79e1ec31c9655fece366de402df580a8a8cc4e"
+    },
+    {
+      "label": "lifecycle",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::fork::",
+        "lifecycle::cancelled_prebound_startup",
+        "lifecycle::runtime_destruction",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.359,
+      "log": "/tmp/canopy-certified-browser-lifecycle.log",
+      "passed": 2,
+      "log_sha256": "85dcf71fbe3e23af617affd0ca9822434e0198c6ddf77e2d7c2732516e6dcf28"
+    },
+    {
+      "label": "drain",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::cancelled_startup_keeps_workspace",
+        "lifecycle::dropped_handle_and_cancelled_shutdown",
+        "lifecycle::failed_drain_retains_workspace",
+        "lifecycle::startup_rejects_ignored_conditional",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.693,
+      "log": "/tmp/canopy-certified-browser-drain.log",
+      "passed": 4,
+      "log_sha256": "5b19b8343b428cccf7772157c4c9a581b8763f828d1ee6f124ec6c03b81085d1"
+    },
+    {
+      "label": "build",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "build",
+        "--locked",
+        "--bin",
+        "canopy"
+      ],
+      "exit_code": 0,
+      "seconds": 42.322,
+      "log": "/tmp/canopy-certified-browser-build.log",
+      "log_sha256": "9f43a14a9559bb08a537ffaf92b8d16a41d9d0141e9a4142233eaf63d1895798"
+    },
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.521,
+      "log": "/tmp/canopy-certified-browser-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.058,
+      "log": "/tmp/canopy-certified-browser-diff.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "harness",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_code": 0,
+      "seconds": 42.561,
+      "log": "/tmp/canopy-certified-browser-harness.log",
+      "log_sha256": "a7176485db9a703c0bd8667e57658153b91ea6ad066df99f18ad012df27541e3"
+    }
+  ],
+  "execution_complete": true,
+  "unique_workspace_cases": 704,
+  "unique_workspace_passed": 699,
+  "unique_workspace_failed": 5,
+  "sdk_revision": "161067f5a21703b3e257024bcb64e565fd9657b4",
+  "sdk_manifest_pins": 5,
+  "sdk_lock_pins": 6,
+  "protected_hashes": {
+    "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+    "/Users/haipingfu/.codex/worktrees/packed-catalog-publication-pr/canopy/docs/archive/pr20-progress-through-8bb0ee7.md": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+  },
+  "new_families": 6,
+  "harness_cases": 96,
+  "platform": "macOS / Rust 1.98.0; Linux-only fork cases not executed locally",
+  "scope": "Certified local browser and comparison object/ancestry consumers and bounded typed edge pages. Native fixtures physically verify pack sources, then install joint catalog facts and editorial pull metadata through trusted SQL. Not live producer/publication, remote routing, cold latency, streaming or full capacity qualification.",
+  "validated_source_parent": "b1bd813a50b8b93b833d4006b20c0b90713470a2",
+  "fetched_main": "9438bb865959fb975d5349ba8b9908b461653821",
+  "draft_diagnostics": [
+    {
+      "log": "/tmp/canopy-certified-browser-check.log",
+      "exit_code": 101,
+      "reason": "Prototype compile diagnostics in constant export and test fixture OID parsing; corrected before final frozen-source qualification.",
+      "log_sha256": "c00694af162517d6d09b87b55831725694838dd0d1522d7344d6dffc7cb92e07"
+    },
+    {
+      "log": "/tmp/canopy-certified-browser-focused-draft.log",
+      "exit_code": 101,
+      "reason": "Prototype compile diagnostics in constant export and test fixture OID parsing; corrected before final frozen-source qualification.",
+      "log_sha256": "f120600673a343d08dd9aaeb61d2415c1ffd78a99a31e4df3a1a23dea3bf08b8"
+    }
+  ],
+  "prior_ci": {
+    "head": "b1bd813a50b8b93b833d4006b20c0b90713470a2",
+    "runs": [
+      37229870509,
+      37229867975
+    ],
+    "rust": "Both actual failed logs contain exactly five legacy objects reader failures; 664 server cases pass in each.",
+    "harness": "both pass",
+    "not_qualification_for_new_source": true,
+    "primary_log_sha256": "0b50b178b53e857b4a413b1bd12f1349bda30b7c1541d7f268455bada8ca914a",
+    "secondary_log_sha256": "942955d03ba3f47a316cc4ec0e33200b42f2e858dc56c0a63c31225a1f213117"
+  },
+  "checked_local_documentation_links": 96
+}

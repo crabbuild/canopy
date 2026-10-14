@@ -1,0 +1,310 @@
+{
+  "checkpoint": "node-owned resident staging lifecycle and shared admission",
+  "previous_head": "6357f4149fe7aee6df675fc1c3a50fe5bb45216e",
+  "main": "d559e5635e002ee3f885c780a418cf861a5197fc",
+  "validation": {
+    "source_files": 492,
+    "rust_files": 478,
+    "source_hash_digest": "3d83c7cb2432207af2f58a667a562e82624734c8c9c7ad58faf20f2f22ec15bd",
+    "release_qualified": false,
+    "execution_complete": true,
+    "phases": [
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 42.621,
+        "log": "/tmp/canopy-resident-staging-clippy-final.log",
+        "log_sha256": "02cd00b79c2761d7d23109cee9099682bf498300e0665b88da5a0f28495eb4a7",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked",
+          "--",
+          "server::residency::tests::staging::",
+          "shared_staging_",
+          "cold_owner_restoration_recovers_claim_and_renew_receipts_without_reviving_custody",
+          "cold_staging_keeps_all_original_receipts_after_sdk_expiry_and_actual_owner_restore",
+          "--test-threads=4"
+        ],
+        "exit_code": 0,
+        "seconds": 230.974,
+        "log": "/tmp/canopy-resident-staging-focused-final.log",
+        "log_sha256": "f43fe37b3467a8648ecb850ff53e5ad9dc778835bdaeb92a327f36cb29093a8e",
+        "summaries": [
+          [
+            8,
+            0,
+            0,
+            0,
+            696
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exit_code": 101,
+        "seconds": 453.441,
+        "log": "/tmp/canopy-resident-staging-workspace-final.log",
+        "log_sha256": "669667303e6c5330ef3c1c468b8b4ea3ca53d8113f173bd280a6ae7cd172dede",
+        "summaries": [
+          [
+            6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            15,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            703
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            703
+          ],
+          [
+            704,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            12,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": [
+          "directory_reservations_recover_two_distinct_repository_cells"
+        ]
+      },
+      {
+        "label": "binary",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--bin",
+          "canopy",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 0.916,
+        "log": "/tmp/canopy-resident-staging-binary-final.log",
+        "log_sha256": "cae37e49f262f366983ce63e0d06965fa91627b732eb813ae6f09909ac3f08f4",
+        "summaries": [
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 52.197,
+        "log": "/tmp/canopy-resident-staging-build-final.log",
+        "log_sha256": "7b7596109c3ec3a52853199a057533dd544995fcdff0f102f4610abcb8df6e57",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.274,
+        "log": "/tmp/canopy-resident-staging-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.064,
+        "log": "/tmp/canopy-resident-staging-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 40.786,
+        "log": "/tmp/canopy-resident-staging-harness-final.log",
+        "log_sha256": "02044d964939bf02c29c246653dcbd0ecbc66410efbb35185fc91735ed8c985a",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ]
+  },
+  "rust_unique_executed": 740,
+  "rust_unique_passed": 739,
+  "rust_unique_failed": 1,
+  "library_unique_passed": 725,
+  "server_library_passed": 704,
+  "publication_unique_passed": 403,
+  "focused_passed": 8,
+  "binary_passed": 2,
+  "directory_passed": 12,
+  "directory_failed": 1,
+  "python_passed": 96,
+  "counts_exclude": "focused and binary reruns, and two nested subprocess summaries; interleaved child stdout is parsed without losing the parent case",
+  "limits": {
+    "node_operations": 32,
+    "node_physical_workers": 64,
+    "node_operations_per_account": 16,
+    "node_physical_workers_per_account": 32,
+    "repository_operations": 32,
+    "repository_operations_per_actor": 8,
+    "repository_workers": 64,
+    "repository_workers_per_actor": 8
+  },
+  "scope": [
+    "Actual resident constructor/registration barrier owns one StagingCoordinator, with a weak RepositoryCell capability.",
+    "Node and account quotas reuse existing AccountAdmission and bounded weak maps. Exact uncertainty retains operation admission; terminal removal releases it despite retained observers.",
+    "Physical activity owns shared node worker capacity through async result transfer, abort and observer cancellation.",
+    "Reversible idle staging pause before serving quiescence. Busy staging blocks eviction. Successful eviction closes admission; retry is idempotent.",
+    "Shutdown closes all staging owners and drains repositories concurrently before serving/publication closure, preserving Cell authority, heartbeat and workspace.",
+    "Drain waits for the independent read-only retirement owner after exact job settlement.",
+    "Production mixed shutdown recovers absent, lost-reply and panicked original staging commands in both formats while another repository holds detached physical work.",
+    "Accepted-history fixture windows permit initial commit under load; tests still wait for actual SDK expiry and preserve original receipts after genuine owner restoration."
+  ],
+  "source_hashes_file": {
+    "path": "/tmp/canopy-resident-staging-source-hashes.json",
+    "sha256": "2293b2f59c8843e46781cea2b1fd5b1c6d10864c07aeefcf974b41e9bbb24518"
+  },
+  "protected": [
+    {
+      "path": "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index",
+      "sha256": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798"
+    },
+    {
+      "path": "/Users/haipingfu/.codex/worktrees/packed-catalog-publication-pr/canopy/docs/archive/pr20-progress-through-8bb0ee7.md",
+      "sha256": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+    }
+  ],
+  "preceding_remote_ci": {
+    "head": "6357f4149fe7aee6df675fc1c3a50fe5bb45216e",
+    "run": 37247847774,
+    "job": 111569198375,
+    "library_passed": 719,
+    "server_library_passed": 698,
+    "failure": "retired ingestion operation descriptor unavailable in directory integration",
+    "log": {
+      "path": "/tmp/canopy-pr36-6357f414-failed.log",
+      "sha256": "b7e0b6fc2673708e4b6180fb95813d1cd79c76a0a53f5c75fed9e6ba6b6eb855"
+    }
+  },
+  "preserved_initial_validation": {
+    "path": "/tmp/canopy-resident-staging-before-final-drain/validation.json",
+    "sha256": "420532880b059928276a6cdd719ff637178d69e29b67c7aeb94a7e873a76b451"
+  },
+  "initial_diagnostics": {
+    "path": "/tmp/canopy-resident-staging-clippy.log",
+    "sha256": "d625f63446be4896b12a577a270f1a42a4763c4202e7e1451d8108bd1a0da504"
+  },
+  "initial_failures": "The first full run passed 701/703 server tests and exposed two one-second accepted-history command windows expiring under parallel load. Its source/log hashes remain attributed to that run. Final source also joins the retirement scanner and adds a production mixed-drain regression.",
+  "release_qualified": false,
+  "remaining_failure": "Actual HTTP/SSH/generated writers and directory integration still invoke retired ingestion. Convert actual writers and callers without restoring the removed table/command or skipping failing cases.",
+  "unrun": [
+    "later integration binaries and doctests beyond failed directory integration",
+    "complete new-source Linux/RustFS workflow",
+    "full native histories and 10000-engineer mixed-load/recovery capacity",
+    "adopted earlier-owner physical input selection and remaining production hard-cutover scope"
+  ],
+  "next_priorities": [
+    "owned HTTP/SSH/generated writer pipeline on resident staging and registered root policy/completion",
+    "actual integration caller conversion, then complete workspace/Linux/provider CI",
+    "remaining read/policy authority, authenticated old-owner input verification, custody history/rollover and final schema cutover",
+    "GC/backup/restore, OS containment, fair maintenance/shared hot workspaces, full-history/team capacity and attribution"
+  ]
+}

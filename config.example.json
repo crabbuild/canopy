@@ -11,5 +11,31 @@
   "listen": "127.0.0.1:8080",
   "data_dir": "/var/lib/canopy",
   "local_disk_limit_bytes": 10737418240,
-  "max_active_repositories": 100
+  "max_active_repositories": 100,
+  "native_limits": {
+    "total": {
+      "processes": 32,
+      "cpu_units": 48,
+      "memory_bytes": 17179869184,
+      "descriptors": 2048
+    },
+    "maintenance_reserved": {
+      "processes": 2,
+      "cpu_units": 8,
+      "memory_bytes": 2147483648,
+      "descriptors": 128
+    },
+    "read": {
+      "processes": 1,
+      "cpu_units": 1,
+      "memory_bytes": 268435456,
+      "descriptors": 32
+    },
+    "pack": {
+      "processes": 1,
+      "cpu_units": 4,
+      "memory_bytes": 1073741824,
+      "descriptors": 64
+    }
+  }
 }

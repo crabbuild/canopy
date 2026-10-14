@@ -7,6 +7,7 @@ the qualification volume. Provider data is retained for caller-owned cleanup.
 """
 import argparse
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import re
@@ -31,7 +32,7 @@ def qualify(args):
         "owner": "canopy", "listen": address, "public_url": "http://" + address,
         "peer_endpoint": "https://logging.example.invalid",
         "data_dir": str(args.work_dir / "node"),
-        "local_disk_limit_bytes": 256 * 1024**2, "max_active_repositories": 3,
+        "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 256 * 1024**2, "max_active_repositories": 3,
     }
     config_path = args.work_dir / "config.json"
     config_path.write_text(json.dumps(config))

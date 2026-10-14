@@ -5,6 +5,19 @@ import re
 import tomllib
 
 
+def workspace_manifests(root):
+    """Read the virtual/root manifest and every explicitly declared member."""
+    manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    manifests = [manifest]
+    members = set()
+    for pattern in manifest.get("workspace", {}).get("members", []):
+        members.update(path / "Cargo.toml" for path in root.glob(pattern))
+    for path in sorted(members):
+        if path != root / "Cargo.toml":
+            manifests.append(tomllib.loads(path.read_text()))
+    return manifests
+
+
 def check(manifest, lock):
     pins = {}
 
@@ -24,7 +37,8 @@ def check(manifest, lock):
             elif isinstance(value, dict):
                 dependencies(value)
 
-    dependencies(manifest)
+    for item in manifest if isinstance(manifest, list) else [manifest]:
+        dependencies(item)
     versions = {version for values in pins.values() for version in values}
     if len(versions) != 1:
         raise ValueError("all direct Cellule dependencies must pin the same release")
@@ -47,8 +61,8 @@ def check(manifest, lock):
 if __name__ == "__main__":
     root = Path(__file__).resolve().parents[1]
     try:
-        with (root / "Cargo.toml").open("rb") as manifest, (root / "Cargo.lock").open("rb") as lock:
-            version, count = check(tomllib.load(manifest), tomllib.load(lock))
+        with (root / "Cargo.lock").open("rb") as lock:
+            version, count = check(workspace_manifests(root), tomllib.load(lock))
     except ValueError as error:
         raise SystemExit(f"Cellule dependency policy: {error}") from error
     print(f"Cellule {version}: {count} crates locked to one exact registry release")

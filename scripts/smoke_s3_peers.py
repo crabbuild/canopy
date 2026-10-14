@@ -9,7 +9,10 @@ import signal
 import ssl
 import subprocess
 import threading
+import time
 import uuid
+
+from lease_contract import NODE_LEASE_WAIT_SECONDS
 
 
 @contextmanager
@@ -51,9 +54,7 @@ def proxy(upstream, certificate, key):
         worker.join()
 
 
-def qualify(binary, directory, settings, processes):
-    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status, api_get, verify_discovery, wait_for_lease_expiry
-
+def peer_certificate(directory):
     ca, ca_key = directory / "peer-ca.pem", directory / "peer-ca-key.pem"
     certificate, key = directory / "peer-server.pem", directory / "peer-key.pem"
     csr, extensions = directory / "peer.csr", directory / "peer.ext"
@@ -74,6 +75,13 @@ def qualify(binary, directory, settings, processes):
         subprocess.run(["openssl", *command], check=True, capture_output=True)
     for private_key in (key, ca_key):
         private_key.chmod(0o600)
+    return ca, certificate, key
+
+
+def qualify(binary, directory, settings, processes):
+    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status, api_get, verify_discovery
+
+    ca, certificate, key = peer_certificate(directory)
     a, b = f"127.0.0.1:{port()}", f"127.0.0.1:{port()}"
     settings = {**settings, "storage_url": settings["storage_url"] + "/peers",
                 "peer_ca_certificate": str(ca)}
@@ -118,7 +126,7 @@ def qualify(binary, directory, settings, processes):
         first.kill()
         first.wait(timeout=10)
         assert api_status(base_b, "/api/repositories", "local-test-token") == 503
-        wait_for_lease_expiry()
+        time.sleep(NODE_LEASE_WAIT_SECONDS)
         for name, oid, readme, lfs in expected:
             clone_and_verify(f"{base_b}/canopy/{name}.git", directory / f"{name}-takeover",
                              oid, readme, lfs)
@@ -171,7 +179,7 @@ def qualify(binary, directory, settings, processes):
             pass
         else:
             raise AssertionError("maintenance resumed before crashed-owner recovery")
-        wait_for_lease_expiry()
+        time.sleep(NODE_LEASE_WAIT_SECONDS)  # Expiry still requires a fencing CAS.
         recovered = maintenance("recover", interrupted_operation)
         assert recovered["drained"] and recovered["release"]["state"] == "maintenance"
         assert maintenance("end", interrupted_operation)["release"]["state"] == "ready"

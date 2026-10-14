@@ -1,0 +1,21 @@
+{
+  "counts": {
+    "commit": 162267,
+    "tree": 1066880,
+    "blob": 582504,
+    "tag": 1247
+  },
+  "expanded_bytes": {
+    "commit": 100149074,
+    "tree": 870535081,
+    "blob": 34105250811,
+    "tag": 233534
+  },
+  "above_inline_limit_counts": {
+    "blob": 6124
+  },
+  "above_inline_limit_bytes": {
+    "blob": 18588908612
+  },
+  "seconds": 17.579
+}

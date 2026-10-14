@@ -13,13 +13,14 @@ Canopy's Git-hosting core works, but the service is not yet ready for an unatten
 
 This is the first intended production-use milestone. The existing bounded Compose profile is a starting point, not a completed install or capacity claim.
 
-### R01. Current Cellule release and fresh-prefix deployment
+### R01. Safe upgrades and schema migration
 
-- [ ] Keep all Cellule crates pinned to the latest published release together and qualify its current APIs, storage format, and recovery behavior.
-- [ ] Verify that mismatched releases and unrecognized storage formats are rejected without adopting or rewriting them.
-- [ ] Drill fresh-prefix deployment and same-release backup/restore with the intended production provider.
+- [ ] Version persistent Canopy and runtime formats; add a fenced, repeatable upgrade command and migration path for a populated deployment.
+- [ ] Require a verified backup and compatible release/configuration before migration; document failed-upgrade recovery and rollback limits.
+- [ ] Upgrade a prior release containing Git objects, LFS, ACLs, issues, checks, and pull requests; interrupt and retry each migration phase, then clone and inspect the restored state.
+- [ ] Define whether mixed-version nodes are supported. Until proven, enforce a fully drained, single-version upgrade.
 
-**Policy:** incompatible runtime or Canopy schema changes require a fresh storage prefix. Old-format readers, retained code, in-place migrations, and mixed-version operation are out of scope. Same-release crash recovery and backup/restore remain required. See the [Cellule integration policy](AGENTS.md).
+**Current state:** schema changes still require a fresh storage prefix; maintenance admission and drain exist, but there is no upgrade path.
 
 ### R02. Backup, restore, and owner-recovery fault qualification
 
@@ -36,10 +37,7 @@ This is the first intended production-use milestone. The existing bounded Compos
 - [ ] Add a fenced collector for abandoned uploads, old outcomes/candidates, and unreachable Git/LFS objects, with an inspectable dry run and bounded work.
 - [ ] Prove with concurrent reads, backup, publication, owner loss, and injected collector failures that required bytes are never removed; collect abandoned bytes only after their grace period.
 
-**Current state:** the maintenance CLI runs Cellule's retention-aware collector for
-obsolete immutable database objects, with a grace window, bounded deletes and a
-persistent worker claim. External Git/LFS orphan collection, staging/outcome
-retention and the full injected-failure matrix remain open.
+**Current state:** no production collector; abandoned staging and outcomes can accumulate. Collection must remain conservative until its root proof passes.
 
 ### R04. Trustworthy CI and release artifacts
 
@@ -48,7 +46,7 @@ retention and the full injected-failure matrix remain open.
 - [ ] Add required failure-path and provider gates to branch protection, then publish versioned, digest-identified images and a repeatable release checklist.
 - [ ] Record toolchain, Git, Git LFS, Cellule revision, image digest, provider, and test outcomes for each release candidate.
 
-**Current state:** `.github/workflows/verify.yml` runs ordinary tests, eight smaller provider probes, and full process recovery. The separate >5 GiB gate still needs a runner with sufficient space.
+**Current state:** `.github/workflows/verify.yml` invokes the full size gate on `ubuntu-latest`; a previous hosted run exhausted disk.
 
 ### R05. Production object-store qualification
 
@@ -62,13 +60,13 @@ retention and the full injected-failure matrix remain open.
 
 - [ ] Expose low-cardinality request/transfer latency and error metrics, active and pending Cells, lease and renewal health, queues, object-store calls, local disk, and admission failures.
 - [ ] Set alert thresholds from measured limits and test that alerts fire during injected faults.
-- [ ] Write and drill runbooks for 503/507, exhausted resources, lost ownership/fencing, rejected release admission, backup verification, and restore.
+- [ ] Write and drill runbooks for 503/507, exhausted resources, lost ownership/fencing, failed upgrades, backup verification, and restore.
 
 **Current state:** health endpoints and tracing logs exist; metrics, alerting, and a complete operator contract do not.
 
 ### R07. Repeatable single-node deployment
 
-- [ ] Turn [`deploy/README.md`](deploy/README.md) and the bounded Compose profile into a documented install with TLS ingress, SSH host-key handling, secret rotation, bootstrap, health checks, backup schedule, fresh-prefix cutover, and restore drill.
+- [ ] Turn [`deploy/README.md`](deploy/README.md) and the bounded Compose profile into a documented install with TLS ingress, SSH host-key handling, secret rotation, bootstrap, health checks, backup schedule, upgrade, and restore drill.
 - [ ] Verify the actual cgroup, descriptor, scratch, and Git-worker limits in the install; publish a measured resource envelope and operator checklist.
 - [ ] Add a two-node recipe after R02 and R05 establish failover behavior on the selected provider.
 
@@ -101,7 +99,7 @@ retention and the full injected-failure matrix remain open.
 ### Private team release exit checks
 
 - [ ] R01–R10 acceptance proof is recorded for the exact release candidate and selected object store.
-- [ ] A fresh-prefix install, rejection of incompatible existing state, same-release backup, source-prefix loss, and restore all pass the operator runbook.
+- [ ] A clean install, upgrade of a populated prior release, backup, source-prefix loss, and restore all pass the operator runbook.
 - [ ] Stock Git and Git LFS work after recovery; permissions, issues, reviews, checks, and pull requests retain their state.
 - [ ] The release notes state measured limits for active repositories, concurrent transfers, local disk, memory, restore time, and object-store cost. Unmeasured capacity is not advertised.
 

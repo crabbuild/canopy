@@ -1,6 +1,13 @@
 # RustFS storage optimization qualification — 2026-10-14
 
-The storage changes keep Git bodies in verified, immutable native pack/index
+The current integration uses the native catalog/publication implementation from
+`main` at `aa18585`, published Cellule 0.2.0, repository schema 4 and storage
+format `canopy-pack-v2`. It retains same-release recovery and requires fresh
+storage prefixes. Current integrated gates and RustFS measurements are pending.
+All measurements below belong to the earlier, separate implementation and its
+recorded binary; they do not qualify this integration.
+
+The earlier storage changes keep Git bodies in verified, immutable native pack/index
 pairs, batch metadata publication, and expose Cellule's retention collector
 through drained deployment maintenance. Repository schema 3 requires a fresh
 storage prefix. Schema-2 measurements below remain historical evidence. The current product contains no reader or migration path for

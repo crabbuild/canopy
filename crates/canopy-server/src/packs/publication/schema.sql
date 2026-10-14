@@ -1,0 +1,628 @@
+-- Fresh canopy-pack-v2 repository schema. No legacy Git bodies or per-object placement.
+-- Product OID membership and ancestry decisions require certified catalog facts.
+CREATE TABLE refs (
+    name TEXT PRIMARY KEY,
+    oid BLOB CHECK(oid IS NULL OR length(oid) IN (20, 32)),
+    version INTEGER NOT NULL CHECK(version > 0)
+) WITHOUT ROWID;
+
+CREATE INDEX refs_by_oid ON refs(oid) WHERE oid IS NOT NULL;
+
+CREATE TABLE ref_generation (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation >= 0),
+    default_branch TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('private', 'public'))
+) WITHOUT ROWID;
+INSERT INTO ref_generation (singleton, generation, default_branch) VALUES (1, 0, 'refs/heads/main');
+
+CREATE TABLE lfs_objects (
+    sha256 BLOB PRIMARY KEY CHECK(length(sha256) = 32),
+    size INTEGER NOT NULL CHECK(size >= 0),
+    digest BLOB NOT NULL CHECK(length(digest) = 32)
+) WITHOUT ROWID;
+
+CREATE TABLE lfs_locks (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL UNIQUE,
+    locked_at TEXT NOT NULL,
+    owner TEXT NOT NULL
+);
+
+CREATE TABLE repository_identity (
+    object_format TEXT NOT NULL CHECK(object_format IN ('sha1', 'sha256')),
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    repository_id BLOB NOT NULL CHECK(length(repository_id) = 16),
+    owner TEXT NOT NULL,
+    push_cert_seed BLOB NOT NULL CHECK(length(push_cert_seed) = 32),
+    artifact_sequence INTEGER NOT NULL DEFAULT 0 CHECK(typeof(artifact_sequence) = 'integer' AND artifact_sequence >= 0)
+) WITHOUT ROWID;
+-- One bounded watermark, not an ever-growing namespace tombstone table.
+CREATE TRIGGER repository_artifact_sequence_monotonic BEFORE UPDATE OF artifact_sequence ON repository_identity
+WHEN NEW.artifact_sequence != OLD.artifact_sequence + 1
+BEGIN SELECT RAISE(ABORT, 'artifact allocation must advance once'); END;
+CREATE TRIGGER repository_artifact_sequence_retained BEFORE DELETE ON repository_identity
+WHEN OLD.artifact_sequence > 0
+BEGIN SELECT RAISE(ABORT, 'artifact allocation watermark must be retained'); END;
+-- SQLite REPLACE can bypass DELETE triggers with recursive_triggers disabled.
+CREATE TRIGGER repository_artifact_sequence_not_replaced BEFORE INSERT ON repository_identity
+WHEN EXISTS(SELECT 1 FROM repository_identity WHERE singleton=NEW.singleton AND artifact_sequence>0)
+BEGIN SELECT RAISE(ABORT, 'artifact allocation watermark cannot be replaced'); END;
+
+CREATE TABLE repository_members (
+    account TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK(role IN ('read', 'write'))
+) WITHOUT ROWID;
+
+CREATE TABLE membership_versions (
+    account TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0)
+) WITHOUT ROWID;
+
+CREATE TABLE pushes (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest) = 32),
+    initial_staging BLOB CHECK(initial_staging IS NULL OR (typeof(initial_staging)='blob' AND length(initial_staging) BETWEEN 1 AND 1024)),
+    initial_preparation BLOB CHECK(initial_preparation IS NULL OR (typeof(initial_preparation)='blob' AND length(initial_preparation) BETWEEN 1 AND 1024)),
+    options TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(options AS BLOB)) <= 65536),
+    response_id BLOB CHECK(response_id IS NULL OR length(response_id) = 16),
+    completion_digest BLOB CHECK(completion_digest IS NULL OR length(completion_digest) = 32),
+    response_root BLOB CHECK(response_root IS NULL OR (typeof(response_root)='blob' AND length(response_root) BETWEEN 1 AND 128)),
+    rejected INTEGER CHECK(rejected IN (0, 1)),
+    rejection_reason TEXT,
+    -- Bounded exact logical publication outcome. HTTP completion additionally
+    -- records its response in this same transaction; no per-object outcome rows.
+    publication BLOB CHECK(publication IS NULL OR length(publication) BETWEEN 1 AND 128),
+    publication_plan_digest BLOB CHECK(publication_plan_digest IS NULL OR length(publication_plan_digest) = 32),
+    CHECK((publication IS NULL) = (publication_plan_digest IS NULL)),
+    CHECK((response_id IS NULL) = (rejected IS NULL)),
+    CHECK((response_id IS NULL) = (completion_digest IS NULL)),
+    CHECK(response_root IS NULL OR response_id IS NOT NULL),
+    CHECK(rejected IS NOT 1 OR publication IS NULL)
+) WITHOUT ROWID;
+CREATE TRIGGER push_publication_immutable BEFORE UPDATE OF publication,publication_plan_digest ON pushes
+WHEN OLD.publication IS NOT NULL AND (NEW.publication IS NOT OLD.publication OR NEW.publication_plan_digest IS NOT OLD.publication_plan_digest)
+BEGIN SELECT RAISE(ABORT, 'push publication outcome is immutable'); END;
+CREATE TRIGGER push_completion_immutable BEFORE UPDATE OF response_id,completion_digest,rejected,rejection_reason,options ON pushes
+WHEN OLD.response_id IS NOT NULL AND (NEW.response_id IS NOT OLD.response_id OR NEW.completion_digest IS NOT OLD.completion_digest OR NEW.rejected IS NOT OLD.rejected OR NEW.rejection_reason IS NOT OLD.rejection_reason OR NEW.options IS NOT OLD.options)
+BEGIN SELECT RAISE(ABORT, 'push completion is immutable'); END;
+CREATE TRIGGER push_identity_immutable BEFORE UPDATE OF id,actor,request_digest ON pushes
+WHEN NEW.id IS NOT OLD.id OR NEW.actor IS NOT OLD.actor OR NEW.request_digest IS NOT OLD.request_digest
+BEGIN SELECT RAISE(ABORT, 'push identity is immutable'); END;
+CREATE TRIGGER push_identity_not_replaced BEFORE INSERT ON pushes
+WHEN EXISTS(SELECT 1 FROM pushes WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'push identity cannot be replaced'); END;
+CREATE TRIGGER push_root_completion_immutable BEFORE UPDATE ON pushes
+WHEN OLD.response_root IS NOT NULL AND (
+    NEW.response_root IS NOT OLD.response_root OR NEW.publication IS NOT OLD.publication
+    OR NEW.publication_plan_digest IS NOT OLD.publication_plan_digest)
+BEGIN SELECT RAISE(ABORT, 'root completion is immutable'); END;
+CREATE TRIGGER push_root_completion_retained BEFORE DELETE ON pushes
+WHEN OLD.response_root IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'root completion must be retained'); END;
+
+CREATE TRIGGER push_initial_staging_immutable BEFORE UPDATE OF initial_staging ON pushes
+WHEN OLD.initial_staging IS NOT NULL AND NEW.initial_staging IS NOT OLD.initial_staging
+BEGIN SELECT RAISE(ABORT, 'initial staging receipt is immutable'); END;
+CREATE TRIGGER push_initial_staging_retained BEFORE DELETE ON pushes
+WHEN OLD.initial_staging IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'initial staging receipt must be retained'); END;
+
+CREATE TRIGGER push_initial_preparation_immutable BEFORE UPDATE OF initial_preparation ON pushes
+WHEN OLD.initial_preparation IS NOT NULL AND NEW.initial_preparation IS NOT OLD.initial_preparation
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt is immutable'); END;
+CREATE TRIGGER push_initial_preparation_retained BEFORE DELETE ON pushes
+WHEN OLD.initial_preparation IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'initial preparation receipt must be retained'); END;
+
+CREATE TABLE push_certificates (
+    digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
+    push_id BLOB NOT NULL UNIQUE REFERENCES pushes(id),
+    actor TEXT NOT NULL,
+    signer TEXT NOT NULL,
+    key TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK(size > 0),
+    recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms >= 0)
+) WITHOUT ROWID;
+
+CREATE TABLE push_certificate_chunks (
+    push_id BLOB NOT NULL REFERENCES pushes(id),
+    part INTEGER NOT NULL CHECK(part >= 0),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
+    PRIMARY KEY(push_id, part)
+) WITHOUT ROWID;
+
+CREATE TABLE push_responses (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    push_id BLOB NOT NULL REFERENCES pushes(id),
+    status INTEGER NOT NULL CHECK(status BETWEEN 100 AND 599),
+    headers TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK(size BETWEEN 0 AND 67108864),
+    digest BLOB NOT NULL CHECK(length(digest) = 32)
+) WITHOUT ROWID;
+
+CREATE TABLE push_response_chunks (
+    response_id BLOB NOT NULL REFERENCES push_responses(id),
+    part INTEGER NOT NULL CHECK(part >= 0),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
+    PRIMARY KEY(response_id, part)
+) WITHOUT ROWID;
+
+CREATE TABLE push_plan_chunks (
+    response_id BLOB NOT NULL REFERENCES push_responses(id),
+    part INTEGER NOT NULL CHECK(part >= 0),
+    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 65536),
+    PRIMARY KEY(response_id, part)
+) WITHOUT ROWID;
+
+CREATE TABLE issues (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 256),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    state TEXT NOT NULL CHECK(state IN ('open', 'closed')),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX issues_by_state ON issues(state, number);
+
+CREATE TABLE issue_comments (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_number INTEGER NOT NULL REFERENCES issues(number),
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX comments_by_issue ON issue_comments(issue_number, number);
+
+CREATE TABLE check_contexts (
+    name TEXT PRIMARY KEY,
+    reporter TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0)
+) WITHOUT ROWID;
+
+CREATE INDEX check_contexts_by_enabled ON check_contexts(enabled, name);
+
+CREATE TABLE check_runs (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    oid BLOB NOT NULL CHECK(length(oid) IN (20, 32)),
+    context TEXT NOT NULL REFERENCES check_contexts(name),
+    context_version INTEGER NOT NULL CHECK(context_version > 0),
+    reporter TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued', 'in_progress', 'success', 'failure', 'cancelled')),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    summary TEXT NOT NULL CHECK(length(CAST(summary AS BLOB)) <= 4096),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX check_runs_by_commit ON check_runs(oid, context, context_version, number);
+
+
+
+
+
+CREATE TABLE branch_rules (
+    reference TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    deny_deletions INTEGER NOT NULL CHECK(deny_deletions IN (0, 1)),
+    fast_forward INTEGER NOT NULL CHECK(fast_forward IN (0, 1)),
+    require_pull_request INTEGER NOT NULL CHECK(require_pull_request IN (0, 1)),
+    required_approvals INTEGER NOT NULL CHECK(required_approvals BETWEEN 0 AND 16 AND (require_pull_request = 1 OR required_approvals = 0))
+) WITHOUT ROWID;
+CREATE TABLE branch_required_checks (
+    reference TEXT NOT NULL REFERENCES branch_rules(reference),
+    context TEXT NOT NULL,
+    PRIMARY KEY(reference, context)
+) WITHOUT ROWID;
+CREATE INDEX branch_rules_by_enabled ON branch_rules(enabled, reference);
+
+CREATE TABLE pull_requests (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    author TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 256),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    state TEXT NOT NULL CHECK(state IN ('open', 'closed', 'merged')),
+    draft INTEGER NOT NULL CHECK(draft IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    source_ref TEXT NOT NULL,
+    base_ref TEXT NOT NULL CHECK(source_ref != base_ref),
+    initial_source_oid BLOB NOT NULL CHECK(length(initial_source_oid) IN (20, 32)),
+    initial_base_oid BLOB NOT NULL CHECK(length(initial_base_oid) IN (20, 32)),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX pulls_by_state ON pull_requests(state, number);
+
+CREATE TABLE pull_reviews (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    reviewer TEXT NOT NULL,
+    membership_version INTEGER NOT NULL CHECK(membership_version >= 0),
+    kind TEXT NOT NULL CHECK(kind IN ('comment', 'approve', 'request_changes')),
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) <= 16384),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
+);
+CREATE INDEX reviews_by_pull ON pull_reviews(pull_number, number);
+
+CREATE TABLE pull_review_heads (
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    reviewer TEXT NOT NULL,
+    review_number INTEGER NOT NULL REFERENCES pull_reviews(number),
+    PRIMARY KEY(pull_number, reviewer)
+) WITHOUT ROWID;
+
+CREATE TABLE pull_merges (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    binding BLOB NOT NULL CHECK(length(binding) = 32),
+    pull_number INTEGER NOT NULL UNIQUE REFERENCES pull_requests(number),
+    oid BLOB NOT NULL CHECK(length(oid) IN (20, 32)),
+    merged_ms INTEGER NOT NULL CHECK(merged_ms >= 0),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    publication BLOB NOT NULL CHECK(length(publication) BETWEEN 1 AND 128),
+    strategy TEXT NOT NULL DEFAULT 'fast_forward' CHECK(strategy IN ('fast_forward','merge_commit','squash','rebase')),
+    candidate_id BLOB REFERENCES merge_candidates(id) CHECK(candidate_id IS NULL OR length(candidate_id)=16),
+    CHECK((strategy='fast_forward' AND candidate_id IS NULL) OR (strategy!='fast_forward' AND candidate_id IS NOT NULL))
+) WITHOUT ROWID;
+CREATE TRIGGER pull_merge_immutable BEFORE UPDATE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_not_replaced BEFORE INSERT ON pull_merges
+WHEN EXISTS(SELECT 1 FROM pull_merges WHERE id=NEW.id OR pull_number=NEW.pull_number)
+BEGIN SELECT RAISE(ABORT,'merge result immutable'); END;
+CREATE TRIGGER pull_merge_retained BEFORE DELETE ON pull_merges
+BEGIN SELECT RAISE(ABORT,'merge audit retained'); END;
+
+CREATE TABLE merge_candidates (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    binding BLOB NOT NULL CHECK(length(binding) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    actor TEXT NOT NULL,
+    request TEXT NOT NULL CHECK(length(CAST(request AS BLOB)) <= 131072),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    result TEXT NOT NULL CHECK(length(CAST(result AS BLOB)) <= 262144),
+    source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
+    base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
+    oid BLOB CHECK(oid IS NULL OR length(oid) IN (20, 32)),
+    native_publication BLOB CHECK(native_publication IS NULL OR (typeof(native_publication)='blob' AND length(native_publication) BETWEEN 1 AND 512))
+) WITHOUT ROWID;
+CREATE TRIGGER candidate_intent_immutable BEFORE UPDATE ON merge_candidates
+WHEN NEW.id IS NOT OLD.id OR NEW.binding IS NOT OLD.binding OR NEW.pull_number IS NOT OLD.pull_number OR NEW.actor IS NOT OLD.actor OR NEW.request IS NOT OLD.request OR NEW.created_ms IS NOT OLD.created_ms OR NEW.source_oid IS NOT OLD.source_oid OR NEW.base_oid IS NOT OLD.base_oid
+BEGIN SELECT RAISE(ABORT,'candidate intent immutable'); END;
+CREATE TRIGGER candidate_completed_immutable BEFORE UPDATE ON merge_candidates
+WHEN json_extract(OLD.result,'$.state') IS NOT 'pending' AND (NEW.result IS NOT OLD.result OR NEW.oid IS NOT OLD.oid OR NEW.native_publication IS NOT OLD.native_publication)
+BEGIN SELECT RAISE(ABORT,'candidate result immutable'); END;
+CREATE TRIGGER candidate_intent_not_replaced BEFORE INSERT ON merge_candidates
+WHEN EXISTS(SELECT 1 FROM merge_candidates WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT,'candidate intent retained'); END;
+CREATE TRIGGER candidate_intent_retained BEFORE DELETE ON merge_candidates
+BEGIN SELECT RAISE(ABORT,'candidate intent retained'); END;
+
+CREATE TABLE pull_threads (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    pull_number INTEGER NOT NULL REFERENCES pull_requests(number),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    resolved INTEGER NOT NULL CHECK(resolved IN (0, 1)),
+    version INTEGER NOT NULL CHECK(typeof(version) = 'integer' AND version > 0),
+    pull_version INTEGER NOT NULL CHECK(pull_version > 0),
+    source_oid BLOB NOT NULL CHECK(length(source_oid) IN (20, 32)),
+    source_version INTEGER NOT NULL CHECK(source_version > 0),
+    base_oid BLOB NOT NULL CHECK(length(base_oid) IN (20, 32)),
+    base_version INTEGER NOT NULL CHECK(base_version > 0),
+    merge_base BLOB NOT NULL CHECK(length(merge_base) IN (20, 32)),
+    path BLOB NOT NULL CHECK(length(path) BETWEEN 1 AND 4096),
+    side TEXT NOT NULL CHECK(side IN ('before', 'after')),
+    line INTEGER NOT NULL CHECK(line BETWEEN 1 AND 20000),
+    blob_oid BLOB NOT NULL CHECK(length(blob_oid) IN (20, 32)),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0),
+    updated_ms INTEGER NOT NULL CHECK(updated_ms >= created_ms)
+);
+CREATE INDEX threads_by_pull ON pull_threads(pull_number, number);
+
+CREATE TABLE pull_thread_comments (
+    number INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BLOB NOT NULL UNIQUE CHECK(length(id) = 16),
+    creation_digest BLOB NOT NULL CHECK(length(creation_digest) = 32),
+    thread_number INTEGER NOT NULL REFERENCES pull_threads(number),
+    author TEXT NOT NULL,
+    body TEXT NOT NULL CHECK(length(CAST(body AS BLOB)) BETWEEN 1 AND 16384),
+    created_ms INTEGER NOT NULL CHECK(created_ms >= 0)
+);
+CREATE INDEX comments_by_thread ON pull_thread_comments(thread_number, number);
+
+
+CREATE TABLE catalog_generations (
+    generation INTEGER PRIMARY KEY CHECK(typeof(generation) = 'integer' AND generation >= 0),
+    catalog BLOB,
+    certificate BLOB,
+    refs BLOB CHECK(refs IS NULL OR (typeof(refs) = 'blob' AND length(refs) BETWEEN 1 AND 128)),
+    CHECK((generation = 0 AND catalog IS NULL AND certificate IS NULL AND refs IS NULL)
+       OR (generation > 0 AND catalog IS NOT NULL AND certificate IS NOT NULL AND length(catalog) BETWEEN 1 AND 256 AND length(certificate) = 32))
+) WITHOUT ROWID;
+INSERT INTO catalog_generations VALUES(0, NULL, NULL, NULL);
+CREATE TRIGGER catalog_generations_immutable BEFORE UPDATE ON catalog_generations
+BEGIN SELECT RAISE(ABORT, 'catalog generations are immutable'); END;
+CREATE TRIGGER catalog_generations_not_replaced BEFORE INSERT ON catalog_generations
+WHEN EXISTS(SELECT 1 FROM catalog_generations WHERE generation=NEW.generation)
+BEGIN SELECT RAISE(ABORT, 'catalog generations cannot be replaced'); END;
+CREATE TRIGGER catalog_generations_bounded BEFORE INSERT ON catalog_generations
+WHEN (SELECT count(*) FROM (SELECT generation FROM catalog_generations LIMIT 8192)) >= 8192
+BEGIN SELECT RAISE(ABORT, 'catalog generation quota exceeded'); END;
+CREATE TABLE catalog_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    generation INTEGER NOT NULL REFERENCES catalog_generations(generation)
+) WITHOUT ROWID;
+INSERT INTO catalog_state VALUES(1, 0);
+
+-- One immutable initialization outcome per repository. Its shared generation
+-- fact retains the small empty catalog/ref metadata for exact logical recovery.
+CREATE TABLE catalog_initialization (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence)='integer' AND admission_sequence>0),
+    id BLOB NOT NULL UNIQUE CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    verification_digest BLOB NOT NULL CHECK(length(verification_digest)=32),
+    result BLOB NOT NULL CHECK(length(result) BETWEEN 1 AND 512)
+) WITHOUT ROWID;
+CREATE TRIGGER catalog_initialization_immutable BEFORE UPDATE ON catalog_initialization
+BEGIN SELECT RAISE(ABORT, 'initialization outcome is immutable'); END;
+CREATE TRIGGER catalog_initialization_not_replaced BEFORE INSERT ON catalog_initialization
+WHEN EXISTS(SELECT 1 FROM catalog_initialization WHERE singleton=NEW.singleton)
+BEGIN SELECT RAISE(ABORT, 'initialization outcome cannot be replaced'); END;
+CREATE TRIGGER catalog_initialization_retained BEFORE DELETE ON catalog_initialization
+BEGIN SELECT RAISE(ABORT, 'initialization outcome must be retained'); END;
+
+-- Exact logical outcomes for catalog-only maintenance. Kept separately from
+-- network push response/product facts; no per-object outcome rows are created.
+CREATE TABLE catalog_compactions (
+    id BLOB PRIMARY KEY CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    verification_digest BLOB NOT NULL CHECK(length(verification_digest)=32),
+    result BLOB NOT NULL CHECK(length(result) BETWEEN 1 AND 128)
+) WITHOUT ROWID;
+CREATE TRIGGER catalog_compactions_immutable BEFORE UPDATE ON catalog_compactions
+BEGIN SELECT RAISE(ABORT, 'compaction outcomes are immutable'); END;
+CREATE TRIGGER catalog_compactions_not_replaced BEFORE INSERT ON catalog_compactions
+WHEN EXISTS(SELECT 1 FROM catalog_compactions WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'compaction outcomes cannot be replaced'); END;
+
+-- Closed attempts retain the same bounded authenticated header, phase and
+-- original release receipt, independent of generation floors and pin quota.
+-- Multiple attempts of one logical initialization have independent identities.
+CREATE TABLE catalog_recovery_receipts (
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence)='integer' AND admission_sequence>0),
+    operation BLOB NOT NULL CHECK(typeof(operation)='blob' AND length(operation)=16),
+    recovery BLOB NOT NULL CHECK(typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024),
+    recovery_phase BLOB NOT NULL CHECK(typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048),
+    recovery_release BLOB NOT NULL CHECK(typeof(recovery_release)='blob' AND length(recovery_release) BETWEEN 1 AND 1024),
+    PRIMARY KEY(incarnation,admission_sequence)
+) WITHOUT ROWID;
+CREATE INDEX catalog_recovery_receipts_by_operation ON catalog_recovery_receipts(operation,incarnation,admission_sequence);
+CREATE TRIGGER catalog_recovery_receipt_immutable BEFORE UPDATE ON catalog_recovery_receipts
+BEGIN SELECT RAISE(ABORT, 'closed recovery is immutable'); END;
+CREATE TRIGGER catalog_recovery_receipt_not_replaced BEFORE INSERT ON catalog_recovery_receipts
+WHEN EXISTS(SELECT 1 FROM catalog_recovery_receipts WHERE incarnation=NEW.incarnation AND admission_sequence=NEW.admission_sequence)
+BEGIN SELECT RAISE(ABORT, 'closed recovery cannot be replaced'); END;
+CREATE TRIGGER catalog_recovery_receipt_retained BEFORE DELETE ON catalog_recovery_receipts
+BEGIN SELECT RAISE(ABORT, 'closed recovery must be retained'); END;
+
+-- Staging attempts retain their creating namespace with a NULL generation.
+-- A one-way late bind pins a generation floor and every later generation. This permits
+-- read-only frontier refresh without a new durable pin/Claim per publication.
+-- Replacement/abort preserves the old floor until its independent pin is reaped.
+CREATE TABLE catalog_leases (
+    incarnation BLOB NOT NULL CHECK(length(incarnation) = 16),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence) = 'integer' AND admission_sequence > 0),
+    operation BLOB NOT NULL CHECK(length(operation) = 16),
+    owner_epoch BLOB NOT NULL CHECK(length(owner_epoch) = 8 AND owner_epoch != zeroblob(8)),
+    artifact_operation BLOB NOT NULL CHECK(length(artifact_operation) = 16),
+    generation INTEGER REFERENCES catalog_generations(generation),
+    -- Normalize the unbound staging phase for the deferred exact binding. A
+    -- nullable FK alone would skip validation of every other identity field.
+    binding_generation INTEGER GENERATED ALWAYS AS (coalesce(generation, -1)) STORED,
+    expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
+    attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
+    attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
+    recovery BLOB CHECK(recovery IS NULL OR (typeof(recovery)='blob' AND length(recovery) BETWEEN 1 AND 1024)),
+    recovery_phase BLOB CHECK(recovery_phase IS NULL OR (typeof(recovery_phase)='blob' AND length(recovery_phase) BETWEEN 1 AND 2048)),
+    recovery_phase_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(recovery_phase_revision)='integer' AND recovery_phase_revision BETWEEN 0 AND 2),
+    input_checkpoint BLOB CHECK(input_checkpoint IS NULL OR length(input_checkpoint) BETWEEN 1 AND 1024),
+    input_checkpoint_digest BLOB CHECK(input_checkpoint_digest IS NULL OR length(input_checkpoint_digest) = 32),
+    input_checkpoint_previous_digest BLOB CHECK(input_checkpoint_previous_digest IS NULL OR length(input_checkpoint_previous_digest) = 32),
+    input_checkpoint_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(input_checkpoint_revision)='integer' AND input_checkpoint_revision BETWEEN 0 AND 256),
+    CHECK((recovery_phase IS NULL) = (recovery_phase_revision=0)),
+    CHECK(recovery IS NOT NULL OR recovery_phase IS NULL),
+    CHECK((input_checkpoint IS NULL) = (input_checkpoint_digest IS NULL)),
+    CHECK(input_checkpoint IS NOT NULL OR (input_checkpoint_revision=0 AND input_checkpoint_previous_digest IS NULL)),
+    CHECK((input_checkpoint_revision=0) = (input_checkpoint_previous_digest IS NULL)),
+    CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
+    CHECK(generation IS NOT NULL OR attestation IS NULL),
+    PRIMARY KEY(incarnation, admission_sequence)
+) WITHOUT ROWID;
+-- Restart discovery seeks only retained command pins, independent of expiry.
+CREATE INDEX catalog_leases_recovery_scan ON catalog_leases(incarnation, admission_sequence)
+WHERE recovery IS NOT NULL;
+CREATE INDEX catalog_leases_by_expiry ON catalog_leases(expires_at_ms, incarnation, admission_sequence);
+CREATE INDEX catalog_leases_by_generation ON catalog_leases(generation, expires_at_ms);
+CREATE TRIGGER catalog_generations_retained BEFORE DELETE ON catalog_generations
+WHEN OLD.generation=0 OR OLD.generation >= (SELECT min(generation) FROM catalog_leases)
+  OR EXISTS(SELECT 1 FROM catalog_serving_pins WHERE generation=OLD.generation)
+BEGIN SELECT RAISE(ABORT, 'catalog generation is retained'); END;
+CREATE UNIQUE INDEX catalog_leases_by_artifact ON catalog_leases(artifact_operation);
+CREATE TRIGGER catalog_lease_not_replaced BEFORE INSERT ON catalog_leases
+WHEN EXISTS(SELECT 1 FROM catalog_leases WHERE incarnation=NEW.incarnation AND admission_sequence=NEW.admission_sequence)
+  OR EXISTS(SELECT 1 FROM catalog_leases WHERE artifact_operation=NEW.artifact_operation)
+BEGIN SELECT RAISE(ABORT, 'catalog attempt pin cannot be replaced'); END;
+CREATE UNIQUE INDEX catalog_leases_binding ON catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, binding_generation, expires_at_ms);
+CREATE TRIGGER catalog_lease_identity_immutable BEFORE UPDATE OF incarnation, admission_sequence, operation, owner_epoch, artifact_operation, generation ON catalog_leases
+WHEN NEW.incarnation != OLD.incarnation OR NEW.admission_sequence != OLD.admission_sequence
+  OR NEW.operation != OLD.operation OR NEW.owner_epoch != OLD.owner_epoch
+  OR NEW.artifact_operation != OLD.artifact_operation
+  OR (NEW.generation IS NOT OLD.generation AND NOT
+      (OLD.generation IS NULL AND NEW.generation IS NOT NULL AND OLD.attestation IS NULL))
+BEGIN SELECT RAISE(ABORT, 'catalog attempt identity is immutable'); END;
+CREATE TRIGGER catalog_lease_attestation_immutable BEFORE UPDATE OF attestation, attestation_digest ON catalog_leases
+WHEN OLD.attestation IS NOT NULL AND (NEW.attestation IS NOT OLD.attestation OR NEW.attestation_digest IS NOT OLD.attestation_digest)
+BEGIN SELECT RAISE(ABORT, 'catalog attempt attestation is immutable'); END;
+CREATE TRIGGER catalog_lease_inputs_immutable BEFORE UPDATE OF input_checkpoint, input_checkpoint_digest, input_checkpoint_revision, input_checkpoint_previous_digest ON catalog_leases
+WHEN (OLD.input_checkpoint IS NULL AND (NEW.input_checkpoint_revision!=0 OR NEW.input_checkpoint_previous_digest IS NOT NULL))
+  OR (OLD.input_checkpoint IS NOT NULL AND NOT (
+    (NEW.input_checkpoint IS OLD.input_checkpoint AND NEW.input_checkpoint_digest IS OLD.input_checkpoint_digest AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_previous_digest)
+    OR (OLD.generation IS NULL AND NEW.generation IS NULL AND NEW.input_checkpoint IS NOT NULL AND NEW.input_checkpoint_digest IS NOT NULL
+      AND NEW.input_checkpoint IS NOT OLD.input_checkpoint AND NEW.input_checkpoint_digest IS NOT OLD.input_checkpoint_digest
+      AND NEW.input_checkpoint_revision=OLD.input_checkpoint_revision+1 AND NEW.input_checkpoint_previous_digest IS OLD.input_checkpoint_digest)))
+BEGIN SELECT RAISE(ABORT, 'creating input checkpoint requires exact append'); END;
+
+CREATE TRIGGER catalog_lease_recovery_immutable BEFORE UPDATE OF recovery,recovery_phase,recovery_phase_revision ON catalog_leases
+WHEN (OLD.recovery IS NOT NULL AND NEW.recovery IS NOT OLD.recovery AND NOT
+    (NEW.recovery IS NOT NULL AND OLD.recovery_phase_revision=1 AND NEW.recovery_phase IS NULL AND NEW.recovery_phase_revision=0))
+  OR (NEW.recovery IS OLD.recovery AND NOT
+    ((NEW.recovery_phase IS OLD.recovery_phase AND NEW.recovery_phase_revision=OLD.recovery_phase_revision)
+    OR (NEW.recovery_phase IS NOT NULL AND NEW.recovery_phase IS NOT OLD.recovery_phase AND NEW.recovery_phase_revision=OLD.recovery_phase_revision+1)))
+BEGIN SELECT RAISE(ABORT, 'publication recovery requires exact phase append'); END;
+-- Unknown commands retain metadata and exact bodies after custody expiry.
+-- Typed recovery/backup traversal must authorize releasing these pins.
+CREATE TRIGGER catalog_lease_recovery_retained BEFORE DELETE ON catalog_leases
+WHEN OLD.recovery IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM catalog_recovery_receipts p WHERE p.incarnation=OLD.incarnation
+        AND p.admission_sequence=OLD.admission_sequence AND p.operation=OLD.operation
+        AND p.recovery IS OLD.recovery AND p.recovery_phase IS OLD.recovery_phase)
+BEGIN SELECT RAISE(ABORT, 'root recovery command is retained'); END;
+
+CREATE TABLE catalog_operations (
+    id BLOB PRIMARY KEY CHECK(length(id) = 16),
+    actor TEXT NOT NULL CHECK(length(CAST(actor AS BLOB)) BETWEEN 1 AND 64),
+    request_digest BLOB NOT NULL CHECK(length(request_digest) = 32),
+    incarnation BLOB NOT NULL CHECK(length(incarnation) = 16),
+    owner_epoch BLOB NOT NULL CHECK(length(owner_epoch) = 8 AND owner_epoch != zeroblob(8)),
+    admission_sequence INTEGER NOT NULL CHECK(typeof(admission_sequence) = 'integer' AND admission_sequence > 0),
+    artifact_operation BLOB NOT NULL CHECK(length(artifact_operation) = 16),
+    generation INTEGER REFERENCES catalog_generations(generation),
+    -- Normalize the unbound staging phase for the deferred exact binding. A
+    -- nullable FK alone would skip validation of every other identity field.
+    binding_generation INTEGER GENERATED ALWAYS AS (coalesce(generation, -1)) STORED,
+    expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms) = 'integer' AND expires_at_ms >= 0),
+    attestation BLOB CHECK(attestation IS NULL OR length(attestation) BETWEEN 1 AND 1024),
+    attestation_digest BLOB CHECK(attestation_digest IS NULL OR length(attestation_digest) = 32),
+    CHECK((attestation IS NULL) = (attestation_digest IS NULL)),
+    CHECK(generation IS NOT NULL OR attestation IS NULL),
+    FOREIGN KEY(incarnation, admission_sequence, id, owner_epoch, artifact_operation, binding_generation, expires_at_ms)
+        REFERENCES catalog_leases(incarnation, admission_sequence, operation, owner_epoch, artifact_operation, binding_generation, expires_at_ms)
+        DEFERRABLE INITIALLY DEFERRED
+) WITHOUT ROWID;
+CREATE INDEX catalog_operations_by_expiry ON catalog_operations(expires_at_ms, id);
+CREATE UNIQUE INDEX catalog_operations_by_lease ON catalog_operations(incarnation, admission_sequence);
+CREATE INDEX catalog_operations_by_generation ON catalog_operations(generation);
+
+CREATE TRIGGER push_responses_immutable BEFORE UPDATE ON push_responses
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
+CREATE TRIGGER push_responses_not_replaced BEFORE INSERT ON push_responses
+WHEN EXISTS(SELECT 1 FROM push_responses WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+CREATE TRIGGER push_response_chunks_immutable BEFORE UPDATE ON push_response_chunks
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
+CREATE TRIGGER push_response_chunks_not_replaced BEFORE INSERT ON push_response_chunks
+WHEN EXISTS(SELECT 1 FROM push_response_chunks WHERE response_id=NEW.response_id AND part=NEW.part)
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+CREATE TRIGGER push_certificates_immutable BEFORE UPDATE ON push_certificates
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
+CREATE TRIGGER push_certificates_retained BEFORE DELETE ON push_certificates
+BEGIN SELECT RAISE(ABORT, 'signed push ownership must be retained'); END;
+CREATE TRIGGER push_certificates_not_replaced BEFORE INSERT ON push_certificates
+WHEN EXISTS(SELECT 1 FROM push_certificates WHERE digest=NEW.digest OR push_id=NEW.push_id)
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+CREATE TRIGGER push_certificate_chunks_immutable BEFORE UPDATE ON push_certificate_chunks
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes are immutable'); END;
+CREATE TRIGGER push_certificate_chunks_not_replaced BEFORE INSERT ON push_certificate_chunks
+WHEN EXISTS(SELECT 1 FROM push_certificate_chunks WHERE push_id=NEW.push_id AND part=NEW.part)
+BEGIN SELECT RAISE(ABORT, 'push outcome bytes cannot be replaced'); END;
+
+-- Bounded exact-command metadata exists before any upload namespace is granted.
+-- One unresolved head per logical request. Rows represent custody transitions,
+-- never Git objects, and historical grants are not generation retention roots.
+CREATE TABLE catalog_custody_commands (
+    purpose INTEGER NOT NULL CHECK(typeof(purpose)='integer' AND purpose IN (0,1)),
+    operation BLOB NOT NULL CHECK(typeof(operation)='blob' AND length(operation)=16),
+    step INTEGER NOT NULL CHECK(typeof(step)='integer' AND step BETWEEN 0 AND 65535),
+    incarnation BLOB NOT NULL CHECK(typeof(incarnation)='blob' AND length(incarnation)=16),
+    request_id BLOB NOT NULL CHECK(typeof(request_id)='blob' AND length(request_id)=16),
+    intent BLOB NOT NULL CHECK(typeof(intent)='blob' AND length(intent) BETWEEN 1 AND 4096),
+    phase BLOB CHECK(phase IS NULL OR (typeof(phase)='blob' AND length(phase) BETWEEN 1 AND 1024)),
+    stopped BLOB CHECK(stopped IS NULL OR (typeof(stopped)='blob' AND length(stopped) BETWEEN 1 AND 1024)),
+    granted_incarnation BLOB CHECK(granted_incarnation IS NULL OR (typeof(granted_incarnation)='blob' AND length(granted_incarnation)=16)),
+    granted_attempt INTEGER CHECK(granted_attempt IS NULL OR (typeof(granted_attempt)='integer' AND granted_attempt>0)),
+    CHECK(phase IS NULL OR stopped IS NULL),
+    CHECK(stopped IS NULL OR granted_attempt IS NULL),
+    CHECK((granted_incarnation IS NULL)=(granted_attempt IS NULL)),
+    CHECK(phase IS NOT NULL OR granted_attempt IS NULL),
+    PRIMARY KEY(purpose,operation,step),
+    UNIQUE(incarnation,request_id)
+) WITHOUT ROWID;
+CREATE INDEX catalog_custody_grants ON catalog_custody_commands(purpose,operation,granted_incarnation,granted_attempt,step DESC) WHERE granted_attempt IS NOT NULL;
+CREATE UNIQUE INDEX catalog_custody_pending ON catalog_custody_commands(purpose,operation) WHERE phase IS NULL AND stopped IS NULL;
+CREATE TRIGGER catalog_custody_identity_immutable BEFORE UPDATE OF purpose,operation,step,incarnation,request_id,intent ON catalog_custody_commands
+WHEN NEW.purpose IS NOT OLD.purpose OR NEW.operation IS NOT OLD.operation OR NEW.step IS NOT OLD.step
+  OR NEW.incarnation IS NOT OLD.incarnation OR NEW.request_id IS NOT OLD.request_id OR NEW.intent IS NOT OLD.intent
+BEGIN SELECT RAISE(ABORT, 'custody command identity is immutable'); END;
+CREATE TRIGGER catalog_custody_phase_immutable BEFORE UPDATE OF phase,granted_incarnation,granted_attempt ON catalog_custody_commands
+WHEN OLD.phase IS NOT NULL AND (NEW.phase IS NOT OLD.phase OR NEW.granted_incarnation IS NOT OLD.granted_incarnation OR NEW.granted_attempt IS NOT OLD.granted_attempt)
+BEGIN SELECT RAISE(ABORT, 'custody command result is immutable'); END;
+CREATE TRIGGER catalog_custody_not_replaced BEFORE INSERT ON catalog_custody_commands
+WHEN EXISTS(SELECT 1 FROM catalog_custody_commands WHERE purpose=NEW.purpose AND operation=NEW.operation AND step=NEW.step)
+  OR EXISTS(SELECT 1 FROM catalog_custody_commands WHERE incarnation=NEW.incarnation AND request_id=NEW.request_id)
+BEGIN SELECT RAISE(ABORT, 'custody command cannot be replaced'); END;
+CREATE TRIGGER catalog_custody_retained BEFORE DELETE ON catalog_custody_commands
+BEGIN SELECT RAISE(ABORT, 'custody command must be retained'); END;
+
+CREATE TRIGGER catalog_custody_stop_immutable BEFORE UPDATE OF stopped ON catalog_custody_commands
+WHEN OLD.stopped IS NOT NULL AND NEW.stopped IS NOT OLD.stopped
+BEGIN SELECT RAISE(ABORT, 'custody retirement is immutable'); END;
+
+-- Symbolic HEAD outcomes retain the original joint roots for exact retirement.
+CREATE TABLE catalog_head_updates (
+    id BLOB PRIMARY KEY CHECK(length(id)=16),
+    actor TEXT NOT NULL,
+    request_digest BLOB NOT NULL CHECK(length(request_digest)=32),
+    request BLOB NOT NULL CHECK(length(request)<=131072),
+    result BLOB NOT NULL CHECK(length(result)<=512),
+    fact BLOB NOT NULL CHECK(length(fact)<=512)
+) STRICT;
+CREATE TRIGGER catalog_head_updates_immutable BEFORE UPDATE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is immutable');
+END;
+CREATE TRIGGER catalog_head_updates_retained BEFORE DELETE ON catalog_head_updates BEGIN
+    SELECT RAISE(ABORT, 'symbolic HEAD outcome is retained');
+END;

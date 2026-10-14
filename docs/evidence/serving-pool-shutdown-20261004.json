@@ -1,0 +1,247 @@
+{
+  "source_files": 471,
+  "rust_files": 457,
+  "source_hash_digest": "c88bdd413d5308745295cffa77ef035e6f8b1b777a61e368561a4ef0cf32931b",
+  "phases": [
+    {
+      "label": "clippy",
+      "exit_code": 0,
+      "log": "/tmp/canopy-serving-pool-shutdown-clippy.log",
+      "preceding_unchanged_source": true,
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log_sha256": "5ef8cbb8034e3f6032c9161794579ed19d5c168b42c47fc41fb7758a3032fe44"
+    },
+    {
+      "label": "focused",
+      "exit_code": 0,
+      "log": "/tmp/canopy-serving-pool-shutdown-focused.log",
+      "preceding_unchanged_source": true,
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--lib",
+        "--locked",
+        "--",
+        "packs::publication::tests::serving",
+        "server::residency::tests::serving",
+        "server::residency::tests::recovery",
+        "--test-threads=4"
+      ],
+      "log_sha256": "6f7daac8dec2014df2651039a338031bb58a91ffd91e6ce012cdbb30732de744"
+    },
+    {
+      "label": "library",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "--workspace",
+        "--lib",
+        "--locked",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 101,
+      "seconds": 297.396,
+      "log": "/tmp/canopy-serving-pool-shutdown-library.log",
+      "passed": 668,
+      "failed": 5,
+      "ignored": 0,
+      "publication_passed": 376,
+      "known_failures": [
+        "git_gateway::fetch::tests::reachability_stops_at_live_refs_without_scanning_other_history",
+        "object_reads::tests::byte_limited_page_advances_only_over_the_selected_prefix",
+        "object_reads::tests::duplicate_rollback_and_deletion_do_not_hide_subsequent_inserts",
+        "object_reads::tests::insertion_cursor_finds_lower_oids_and_excludes_later_publications",
+        "object_reads::tests::small_increment_uses_bounded_sql_work_after_large_history"
+      ],
+      "nested_summaries_excluded": 2,
+      "log_sha256": "f2b4e260647098a519396f512e5188864625a7e120bcbd95351bd5e69c4afebe"
+    },
+    {
+      "label": "workspace",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "workspace::",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 50.397,
+      "log": "/tmp/canopy-serving-pool-shutdown-workspace.log",
+      "passed": 3,
+      "log_sha256": "eb093ab093b3b29be1522aaf19f3ac0e782e5cc70fef1407ef994fa08edf27f9"
+    },
+    {
+      "label": "lifecycle",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::fork::",
+        "lifecycle::cancelled_prebound_startup",
+        "lifecycle::runtime_destruction",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.486,
+      "log": "/tmp/canopy-serving-pool-shutdown-lifecycle.log",
+      "passed": 2,
+      "log_sha256": "7eb081b7ba4a3aeb5f29be975711c815618b811c3b84a4ac8979047470284924"
+    },
+    {
+      "label": "drain",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "test",
+        "-p",
+        "canopy-server",
+        "--test",
+        "multi_server",
+        "--locked",
+        "--",
+        "lifecycle::cancelled_startup_keeps_workspace",
+        "lifecycle::dropped_handle_and_cancelled_shutdown",
+        "lifecycle::failed_drain_retains_workspace",
+        "lifecycle::startup_rejects_ignored_conditional",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 1.962,
+      "log": "/tmp/canopy-serving-pool-shutdown-drain.log",
+      "passed": 4,
+      "log_sha256": "0a78c2c31b80bdefe5b53fdbb15cfda7a888169b87df5a4964874dfd666d5883"
+    },
+    {
+      "label": "build",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "build",
+        "--locked",
+        "--bin",
+        "canopy"
+      ],
+      "exit_code": 0,
+      "seconds": 34.583,
+      "log": "/tmp/canopy-serving-pool-shutdown-build.log",
+      "log_sha256": "57745bcaf7d13b8145fc270525fdf83599e83b9a56b39ac82cab281f54829a32"
+    },
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.164,
+      "log": "/tmp/canopy-serving-pool-shutdown-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.049,
+      "log": "/tmp/canopy-serving-pool-shutdown-diff.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "harness",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_code": 0,
+      "seconds": 40.636,
+      "log": "/tmp/canopy-serving-pool-shutdown-harness.log",
+      "log_sha256": "0d7c467046352f9152f9998f1140b9221739e6a684843665020c2e8ea3081ef8"
+    }
+  ],
+  "release_qualified": false,
+  "unique_workspace_cases": 682,
+  "unique_workspace_passed": 677,
+  "unique_workspace_failed": 5,
+  "execution_complete": true,
+  "clippy_seconds": 31.41,
+  "harness_cases": 96,
+  "focused_cases": 56,
+  "focused_seconds": 19.4,
+  "pool_families": 6,
+  "production_manager_families": 3,
+  "new_production_manager_families": 1,
+  "regression_before_fix": {
+    "log": "/tmp/canopy-serving-pool-shutdown-regression-red.log",
+    "log_sha256": "4cf72fdd260bd4f4db57e9fa2e87063fe0d59648c5c7ea4066fafb019c736788",
+    "exit_code": 101,
+    "reason": "An unpublished resident constructor exposed the serving capability before its lifecycle owner was registered in shutdown inventory."
+  },
+  "scope": "Workspace library plus nine selected portable multi_server cases; focused lifecycle cases are included in the library total. This is not full production or capacity qualification.",
+  "platform": "macOS / Rust 1.98.0; Linux-only fork cases not executed locally",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "shared ignored build directory; no deployment/demo restart"
+  },
+  "sdk_revision": "161067f5a21703b3e257024bcb64e565fd9657b4",
+  "sdk_manifest_pins": 5,
+  "sdk_lock_pins": 6,
+  "protected_hashes": {
+    "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+    "/Users/haipingfu/.codex/worktrees/packed-catalog-publication-pr/canopy/docs/archive/pr20-progress-through-8bb0ee7.md": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+  },
+  "validated_source_parent": "02307fd3b7de774ed47943548d460ddaa329911b",
+  "fetched_main": "9438bb865959fb975d5349ba8b9908b461653821",
+  "prior_ci": {
+    "head": "02307fd3b7de774ed47943548d460ddaa329911b",
+    "rust": "failed: five legacy objects readers",
+    "harness": "passed",
+    "runs": [
+      37222526207,
+      37222523633
+    ],
+    "not_qualification_for_new_source": true
+  },
+  "checked_local_documentation_links": 87
+}

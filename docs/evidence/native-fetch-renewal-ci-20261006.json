@@ -1,0 +1,28 @@
+{
+  "base_commit": "772c6d00aee5ee6201a2175a35d41d3b0e65e891",
+  "problem": "Preparation refreshed the same serving pin but read_owned rejected completion after its original deadline. Full local run: 756 server unit tests passed, one certified HTTP clone returned HTTP 500; isolated clone passed.",
+  "reproduction": {
+    "log": "/tmp/canopy-fetch-renewal-before.log",
+    "result": "FAIL: Inactive after the gated provider spans the original lease and the exact owner renews twice"
+  },
+  "fix": "Fetch and advertisement preparation use existing renewable read_session and fresh final authority observation; no lease duration or resource/test limits changed.",
+  "qualification": {
+    "workspace_tests": {
+      "passed": 12,
+      "seconds": 30.5,
+      "log": "/tmp/canopy-fetch-renewal-after.log"
+    },
+    "clippy": {
+      "result": "PASS: workspace, all targets, locked, warnings denied",
+      "seconds": 49.27
+    },
+    "format": "PASS",
+    "diff_check": "PASS",
+    "full_workspace": "pending",
+    "linux_provider": "pending"
+  },
+  "sources": {
+    "crates/canopy-server/src/packs/publication/serving/session/workspace/prepare.rs": "6f77f31a111737c4ed87490889a5d0f66ab317266c7cc75a18531bd55b709fe8",
+    "crates/canopy-server/src/packs/publication/tests/serving/workspace.rs": "009a0c43a035e5c309641b04a4ea44b52ddd6e71cf9baecf0ca8d43c6f54bde5"
+  }
+}

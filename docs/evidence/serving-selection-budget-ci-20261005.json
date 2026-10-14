@@ -1,0 +1,403 @@
+{
+  "recorded_at_utc": "2026-10-05T16:06:50.539325+00:00",
+  "base_head": "c86057c441ca86e856bc5be0fdeef01a6782b142",
+  "host": "macOS, Rust 1.98.0; Linux qualification required",
+  "source_files": 502,
+  "rust_files": 484,
+  "source_hash_digest": "57004d2198c0001dfed9c02c60d4e979f1905a2e887607b48f3d52d7f28138d0",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML path to its file SHA256; source manifest /tmp/canopy-lifecycle-source.json",
+  "source_unchanged_during_validation": true,
+  "release_qualified": false,
+  "reproduction": {
+    "exit_code": 101,
+    "path": "/tmp/canopy-rollover-selection-repro3.log",
+    "sha256": "08d8305ce91adbee8540f55ed994a866a5f04aecd7f514df18b91a94d7fae176",
+    "summaries": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 717 filtered out; finished in 2.87s"
+    ],
+    "baseline_source_hash_digest": "e77e101432456257c5228137ed7b872032a8e9635e35ec5e643bd07e1417e626",
+    "baseline_manifest_reconstructed": true,
+    "result": "After queuing initial selection on the actual Cell worker for 2.1 seconds, the unmodified timer returns repository serving generations Capacity before idle release can use its observation budget. This proves one trigger; it does not attribute every historical Capacity failure."
+  },
+  "discarded_fixture_attempts": [
+    {
+      "log": "/tmp/canopy-rollover-selection-repro1.log",
+      "result": "Compiler borrow error; not a bug reproduction."
+    },
+    {
+      "log": "/tmp/canopy-rollover-selection-repro2.log",
+      "result": "Zero-byte SDK mailbox reservation rejected test setup before its callback; RecvError is not the bug reproduction."
+    }
+  ],
+  "publication_family": {
+    "exit_code": 0,
+    "path": "/tmp/canopy-lifecycle-publication-tests.log",
+    "sha256": "44fb1ac6e0ad872e6f36c4636107a906d7a018e449603d93cfd1ab9109d59dde",
+    "summaries": [
+      "test result: ok. 376 passed; 0 failed; 0 ignored; 0 measured; 342 filtered out; finished in 282.02s"
+    ]
+  },
+  "validation": {
+    "source_digest": "57004d2198c0001dfed9c02c60d4e979f1905a2e887607b48f3d52d7f28138d0",
+    "phases": [
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 689.92,
+        "log": "/tmp/canopy-lifecycle-workspace-final.log",
+        "log_sha256": "09a9b2dce024cb9982885d3239be7c987827e0b2181b8fdac3917b5e06caf607",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.17s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 717 filtered out; finished in 0.00s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 717 filtered out; finished in 0.06s",
+          "test result: ok. 718 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 293.38s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+          "test result: FAILED. 77 passed; 29 failed; 9 ignored; 0 measured; 0 filtered out; finished in 337.03s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+          "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+          "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+          "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+          "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+          "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+          "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+          "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+          "leased_server_recovers_two_repositories_with_git_and_lfs",
+          "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+          "merge::merge_rechecks_revisions_authority_and_competing_publications",
+          "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+          "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+          "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+          "sha256::sha256_checks_reviews_and_merge_survive_restore",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 31.04,
+        "log": "/tmp/canopy-lifecycle-clippy-final.log",
+        "log_sha256": "a32ee79f7dec1470a9cd949d0b11b083e6bc7803bc864b9763c092de04bd8cb1",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 36.43,
+        "log": "/tmp/canopy-lifecycle-build-final.log",
+        "log_sha256": "9ba3258f8b439288f542274aef9a4259625fa1660318406cacac82642d6bdcf1",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.19,
+        "log": "/tmp/canopy-lifecycle-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 41.18,
+        "log": "/tmp/canopy-lifecycle-harness-final.log",
+        "log_sha256": "3e6bc8df29a2990de483f893523bdf539da691ca691465268045a9eb63916449",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.04,
+        "log": "/tmp/canopy-lifecycle-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "complete": true,
+    "release_qualified": false,
+    "source_unchanged": true
+  },
+  "workspace_terminal_inventory": [
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_git_format-cdf8cea2f92fe6a4)",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_object_storage-4a0661c5c4765140)",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_server-d080aca381ae9ba9)",
+      "passed": 718,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy-16a4bf977c56198e)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/directory_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/directory_cell-31a0f4eea5beeae3)",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/git_http.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/git_http-afa4d1d9a2db0179)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/multi_server/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/multi_server-3e08ee00a07d7bde)",
+      "passed": 77,
+      "failed": 29,
+      "ignored": 9
+    },
+    {
+      "binary": "tests/owner_restart.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/owner_restart-be32ecc90c554a17)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/repository_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/repository_cell-322afb5848ed5e86)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/smart_http/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/smart_http-18ac06122d3c394f)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_git_format",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_object_storage",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_server",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "workspace_unique_totals": {
+    "passed": 833,
+    "failed": 32,
+    "ignored": 9,
+    "executed": 865,
+    "total": 874
+  },
+  "counting": "Uses the last summary for each Cargo Running section; nested subprocess case summaries and focused reruns are excluded. Ordinary ignored cases remain unexecuted.",
+  "parent_linux_ci": [
+    {
+      "head": "c86057c441ca86e856bc5be0fdeef01a6782b142",
+      "run": 37277708867,
+      "job": 111658341938,
+      "conclusion": "failure",
+      "log": "/tmp/canopy-lifecycle-parent-push-full.log",
+      "sha256": "11ca55f6f9794664043b00c911162344609997fa218bd539663d1cb258166c78",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.46s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 716 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 716 filtered out; finished in 0.01s",
+        "test result: ok. 717 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 410.28s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.01s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: FAILED. 78 passed; 32 failed; 9 ignored; 0 measured; 0 filtered out; finished in 512.38s"
+      ],
+      "failed_cases": [
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+        "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+        "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "push_options::mismatched_signed_push_options_return_a_durable_git_rejection",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+        "push_options::stock_git_push_options_are_validated_recorded_and_recovered",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "ssh::ssh_push_options_cover_pack_and_delete_only_requests",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery"
+      ]
+    },
+    {
+      "head": "c86057c441ca86e856bc5be0fdeef01a6782b142",
+      "run": 37277713775,
+      "job": 111658357649,
+      "conclusion": "failure",
+      "log": "/tmp/canopy-lifecycle-parent-pr-full.log",
+      "sha256": "b266e10b7e6288bac66e64cea43665181374b6b4106b4ce3c2c9effcaaabc3c8",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.83s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 716 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 716 filtered out; finished in 0.01s",
+        "test result: ok. 717 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 456.85s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: FAILED. 78 passed; 32 failed; 9 ignored; 0 measured; 0 filtered out; finished in 543.29s"
+      ],
+      "failed_cases": [
+        "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+        "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+        "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+        "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+        "comparison::comparison_matches_git_and_preserves_exact_views_across_recovery",
+        "comparison::comparison_rejects_oversized_change_sets_without_partial_results",
+        "comparison::comparison_merge_bases_match_git_for_wide_unrelated_and_crisscross_histories",
+        "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+        "comparison::patches::patches_apply_with_stock_git_and_reject_excess_work_without_truncation",
+        "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+        "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+        "leased_server_recovers_two_repositories_with_git_and_lfs",
+        "merge::merge_rechecks_revisions_authority_and_competing_publications",
+        "merge::reviewed_merge_is_atomic_replayable_and_visible_to_git_after_recovery",
+        "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+        "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+        "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+        "push_options::mismatched_signed_push_options_return_a_durable_git_rejection",
+        "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+        "pulls::pull_reviews_follow_exact_revisions_and_membership_across_recovery",
+        "push_options::stock_git_push_options_are_validated_recorded_and_recovered",
+        "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+        "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+        "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+        "sha256::sha256_checks_reviews_and_merge_survive_restore",
+        "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+        "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+        "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+        "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+        "ssh::ssh_push_options_cover_pack_and_delete_only_requests",
+        "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+        "visibility::public_reads_and_private_revocation_survive_cell_recovery"
+      ]
+    }
+  ],
+  "changes": [
+    "Start the unchanged two-second rollover observation deadline only at the first retirement; share it across later retries and preserve charged slots until actual physical drain.",
+    "Observe bound expiry via wait_completion rather than intermediate staging Bound; retain Fenced, zero-admission and no-execution assertions."
+  ],
+  "remaining": "Linux rejected-push workload failures; native pull/ref product receivers and default-branch mutation; generated merge/rebase/candidate writers; peers/recovery/backup; reachability and cache evidence; standalone real-resident fixtures; full physical custody/owner adoption/final DDL and large-history/team capacity qualification."
+}

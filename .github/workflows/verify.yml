@@ -5,6 +5,12 @@ on:
   pull_request:
 
 jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python qualification harness
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -17,16 +23,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git-lfs openssh-client openssl
           git lfs install
+      - name: Report tool versions
+        run: |
+          rustc --version --verbose
+          cargo --version
+          rustup show active-toolchain
+          git --version
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check lints
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        # Bound fixture load; individual tests still run concurrent nodes and workers.
-        run: cargo test --locked -- --test-threads=1
+        run: cargo test --workspace --locked -- --test-threads=1
       - name: Build server
         run: cargo build --locked --bin canopy
-      - name: Test qualification harnesses
-        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - name: Qualify Git compatibility and process recovery against RustFS
         run: python3 scripts/qualify_size.py --provider-only --process-binary target/debug/canopy

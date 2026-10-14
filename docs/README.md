@@ -9,14 +9,28 @@ Use this page to choose a document by task. Canopy's hosting core supports stock
 | If you need to… | Read | What you will find |
 | --- | --- | --- |
 | Understand the server and try a local deployment | [Project README](../README.md) and [bounded deployment](../deploy/README.md) | Configuration, runtime commands, resource boundary and recovery procedures |
+| Understand the system design | [Canopy design](../DESIGN.md) | Goals, invariants, Cellule integration, control flows, failures, resource ownership and tradeoffs |
 | Decide which Git operations work | [Git compatibility](git-compatibility.md) | Stock-client evidence, restrictions and provider qualification commands |
 | Implement an API or storage change | [Persisted contracts](contracts.md) | Identity, authorization, protocol, durability and HTTP behavior |
+| Find the right Rust crate | [Rust workspace](workspace.md) | Crate ownership, dependencies and build commands |
 | Decide whether a release gate is closed | [Delivery plan](delivery-plan.md) | Required proof, current state and chronological implementation evidence |
 | Plan or evaluate capacity | [Repository density and latency](performance-plan.md) | Workloads, targets, measured results and limits of each result |
+| Recover an explicitly supported predecessor Cell contract | [Retained-contract maintenance recovery](performance/2026-10-02-retained-maintenance-recovery.md) | Recovery admission fix, regression scope and incomplete rebuild status |
+| Implement large-repository storage for a large team | [Packed storage design](large-repository-storage-design.md), [implementation plan](large-repository-implementation-plan.md) and [large-team amendment](large-team-scalability.md) | Hard-cutover design, required scalability changes and single-hot-repository release gates; capacity remains unqualified |
+| Inspect certified browser and native transport reads | [Serving contract](design/certified-serving-pins.md), [implementation status](large-repository-implementation-status.md) and [workspace evidence](evidence/serving-certified-workspaces-20261004.json) | Owned local readers and native fetch workspaces, bounded bodies/edges, actual HTTP clones and remaining producer/remote/capacity gates |
+| Inspect the original RustFS corpus upgrade | [Full-corpus activation and remote verification](performance/2026-10-01-original-corpus-activation.md) | Admission of 10,003 Cells, full Git/LFS verification, failed diagnostic load windows and open owner-loss gates |
+| Track three nodes behind a proxy and the latest dependency candidate | [Three-node proxy qualification](performance/2026-09-30-three-node-proxy.md) | Baseline/candidate pins, complete-corpus recovery, failing load windows and open gates |
+| Inspect the merged workspace and RustFS verification | [Workspace and RustFS verification](performance/2026-09-30-workspace-rustfs.md) | The `70bd25f` revision, conflict resolution and end-to-end gates |
+| Inspect the earlier Cellule dependency update | [Initial September 30 requalification](performance/2026-09-30-cellule-main.md) | Earlier revision, passing checks, failed suites and storage-blocked performance gates |
+| Understand the large-object deadline fix | [Count chunks once per transaction](performance/2026-09-30-chunk-count.md) | Snapshot safety, query-work regression, phase timings and remaining verification |
+| Inspect earlier full-corpus load and recovery results | [Complete-corpus diagnostics](performance/2026-09-30-full-corpus.md) | All-identity verification on `30671d5`, dropped arrivals, latency windows and acknowledged-write recovery |
+| Understand concurrent cold-request routing | [Cold-owner race follow-up](performance/2026-09-30-cold-owner-race.md) | Synchronized failure, live-owner routing fix and candidate verification |
 | Extend a repository Cell beyond SQL | [Full repository Cell capabilities](repository-cell-primitives.md) | Cellule dependency changes and acceptance gates for composed primitives |
 | Track production-readiness work | [Roadmap](../ROADMAP.md) | Milestones and checklists across operations, product features and scale |
 
 ## Understand where data lives
+
+Read the root [Canopy design document](../DESIGN.md) for authority boundaries and request, push, read and recovery flows. Its [architecture gallery](../diagram/canopy-architecture/index.html) includes nine diagrams with standalone SVG/PNG exports and separates the active serving architecture from incomplete packed-storage integration.
 
 The Directory Cell resolves names and accounts. Each repository has its own Repository Cell, which owns the durable Git and collaboration state. Native Git uses a disposable cache for wire protocols. Large Git blobs and Git LFS bodies live in immutable object-store objects referenced by the repository's SQLite state.
 

@@ -1,0 +1,381 @@
+{
+  "checkpoint": "bounded owned native metadata replay",
+  "previous_head": "d86f3152e450eb97b1b8db6d5968322f49703b0d",
+  "main": "d559e5635e002ee3f885c780a418cf861a5197fc",
+  "main_merge_before_publication": "d0aaaae940651670a6e553e4e8b37ba9379a1135",
+  "pr34_merged_at": "2026-10-04T23:57:49Z",
+  "rust_source_unchanged_across_main_merge": true,
+  "validation": {
+    "source_files": 490,
+    "rust_files": 476,
+    "source_hash_digest": "0c3751fde6bcf8ed1c20a4edde45cf829de54090bcf95caa4abdfebe3ed6c800",
+    "release_qualified": false,
+    "execution_complete": true,
+    "phases": [
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 41.475,
+        "log": "/tmp/canopy-metadata-replay-clippy-final.log",
+        "log_sha256": "8f331ada4aa4c0c4403de8b0232cdae96cf197c294dec01c8d9c6bcd821a829a",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked",
+          "--",
+          "physical::staged::tests::",
+          "native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss",
+          "native_receive_prepares_bounded_immutable_root_completion_from_registered_custody",
+          "native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_shards_without_publication",
+          "canceled_queued_read_keeps_file_and_admission_until_the_worker_finishes",
+          "--test-threads=4"
+        ],
+        "exit_code": 0,
+        "seconds": 89.785,
+        "log": "/tmp/canopy-metadata-replay-focused-final.log",
+        "log_sha256": "1fedfdcf9474fa6248d30e175d313b02a0e399e05fe45e2588e8d8837b326fe7",
+        "summaries": [
+          [
+            6,
+            0,
+            0,
+            0,
+            692
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "artifact-owner",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-object-storage",
+          "--lib",
+          "--locked",
+          "canceled_queued_artifact_hashes_retain_physical_owner_until_actual_drain"
+        ],
+        "exit_code": 0,
+        "seconds": 6.884,
+        "log": "/tmp/canopy-metadata-replay-artifact-owner-final.log",
+        "log_sha256": "1acc1a0a9b167682b0d55c0d2c55c519442bf18a3d7c6645b1e265486231782f",
+        "summaries": [
+          [
+            1,
+            0,
+            0,
+            0,
+            14
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exit_code": 101,
+        "seconds": 280.965,
+        "log": "/tmp/canopy-metadata-replay-workspace-final.log",
+        "log_sha256": "dd0956ce61eb9dc11c5325611c46e63c935d95058b64600a911b6352976f8173",
+        "summaries": [
+          [
+            6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            15,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            697
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            697
+          ],
+          [
+            698,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            12,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": [
+          "directory_reservations_recover_two_distinct_repository_cells"
+        ]
+      },
+      {
+        "label": "binary",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--bin",
+          "canopy",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 0.734,
+        "log": "/tmp/canopy-metadata-replay-binary-final.log",
+        "log_sha256": "40b603a2b0e2e1134e228a8a2ae0abc6171efa1a9a1ddd0385f5c2bd56083b6a",
+        "summaries": [
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 51.439,
+        "log": "/tmp/canopy-metadata-replay-build-final.log",
+        "log_sha256": "19683af99cd6f5c236c26b491f657169681ec380c18339fdc6a40d62671fe7c5",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.268,
+        "log": "/tmp/canopy-metadata-replay-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.062,
+        "log": "/tmp/canopy-metadata-replay-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 41.884,
+        "log": "/tmp/canopy-metadata-replay-harness-final.log",
+        "log_sha256": "ac71d80010338328a551c19b3481da7555337d0d445822fd34e2c48e098fc4fe",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ]
+  },
+  "rust_unique_executed": 734,
+  "rust_unique_passed": 733,
+  "rust_unique_failed": 1,
+  "library_unique_passed": 719,
+  "server_library_passed": 698,
+  "publication_unique_passed": 401,
+  "focused_server_passed": 6,
+  "focused_artifact_owner_passed": 1,
+  "binary_passed": 2,
+  "directory_passed": 12,
+  "directory_failed": 1,
+  "python_passed": 96,
+  "counts_exclude": "focused and binary reruns, and two nested subprocess summaries; interleaved child stdout is parsed without losing the parent case",
+  "limits": {
+    "default_max_shard_objects": 8192,
+    "default_max_descriptor_bytes": 67108864,
+    "descriptor_record_bytes": 512,
+    "frame_prefix_bytes": 4,
+    "physical_inspection_page_objects": 512,
+    "local_resident_metadata_shards": 1
+  },
+  "qualification_scope": [
+    "SHA-1/SHA-256 actual native receive, retained checkpoint registration, multi-shard physical inspection/upload, Creating drain before Bind, bound replay/closure/catalog preparation, joint-root completion and cold clone composition",
+    "denied descriptor growth, malformed/truncated bounded frames and mismatched native bindings",
+    "descriptor-capacity refusal, truncated replay and missing authenticated metadata parts poison preparation and leave catalog/ref generations and completed responses unchanged in both formats",
+    "canceled confirmed queued metadata reads and all three artifact hash phases retain physical ownership until actual drain"
+  ],
+  "source_hashes_file": {
+    "path": "/tmp/canopy-metadata-replay-source-hashes.json",
+    "sha256": "249b16c28bc2426c3ba2cefeec3e63907bb7e1ab39b13cfd547320e802612844"
+  },
+  "static_audit": {
+    "source_unchanged": true,
+    "source_files": 490,
+    "source_digest": "0c3751fde6bcf8ed1c20a4edde45cf829de54090bcf95caa4abdfebe3ed6c800",
+    "manifest_pins": 5,
+    "lock_pins": 6,
+    "sdk_clean": true,
+    "doc_links": 66,
+    "protected": [
+      {
+        "path": "/Users/haipingfu/Github/canopy/.git/worktrees/canopy5/index",
+        "sha256": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798"
+      },
+      {
+        "path": "docs/archive/pr20-progress-through-8bb0ee7.md",
+        "sha256": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e"
+      }
+    ],
+    "main": "d559e5635e002ee3f885c780a418cf861a5197fc"
+  },
+  "remote_previous_head_ci": [
+    {
+      "head": "d86f3152e450eb97b1b8db6d5968322f49703b0d",
+      "run": 37244954415,
+      "rust_job": 111560885573,
+      "server_library_passed": 695,
+      "binary_passed": 2,
+      "directory_passed": 12,
+      "directory_failed": 1,
+      "failure": "retired ingestion operation descriptor is unavailable",
+      "log": {
+        "path": "/tmp/canopy-pr34-d86f315-failed.log",
+        "sha256": "7ae471264b95a73ecd98f40162a3afcba00b00125db001583580e106175a82b8"
+      }
+    },
+    {
+      "head": "d86f3152e450eb97b1b8db6d5968322f49703b0d",
+      "run": 37244950312,
+      "rust_job": 111560875098,
+      "server_library_passed": 695,
+      "binary_passed": 2,
+      "directory_passed": 12,
+      "directory_failed": 1,
+      "failure": "retired ingestion operation descriptor is unavailable",
+      "log": {
+        "path": "/tmp/canopy-pr34-d86f315-secondary-failed.log",
+        "sha256": "8bd0ae82dc8399f09145c48bb0699bee33cc87ef82daa1b6974261c5b04f3a7e"
+      }
+    }
+  ],
+  "pre_qualification_diagnostics": [
+    {
+      "path": "/tmp/canopy-metadata-replay-clippy-draft.log",
+      "sha256": "604fb1a07782e4f012951432c96c549b3585d4c25daa3776ac69a06d6a8721ca"
+    },
+    {
+      "path": "/tmp/canopy-metadata-replay-before-artifact-owner-clippy-final.log",
+      "sha256": "53d1fae2ac76ea9f4ab8a7c9a93d4b6e3194bf58d825875e01457747d957e80e"
+    },
+    {
+      "path": "/tmp/canopy-metadata-replay-before-reader-release-clippy-final.log",
+      "sha256": "d748adbb4a98c983f5cb30d16f18d225a19456a83cb4345e9834d2a2b3b9a0e4"
+    }
+  ],
+  "diagnostic_scope": "moved fixture value, missing ObjectStoreExt import and temporary path lifetime; no final-source passing qualification is attributed to drafts",
+  "draft_validation_files": [
+    {
+      "path": "/tmp/canopy-metadata-replay-before-artifact-owner-validation.json",
+      "sha256": "48d082047ec5aa954da613590df52b0244d84120ed58d0fd6abe5180d1a07d44"
+    },
+    {
+      "path": "/tmp/canopy-metadata-replay-before-reader-release-validation.json",
+      "sha256": "39cd2bd368b361df71e8a8c83327b59f69334a406c908d02321225a6a37c92c1"
+    }
+  ],
+  "release_qualified": false,
+  "remaining_failure": "Actual writers and the directory integration caller still invoke retired ingestion. Convert those callers; do not restore the command/schema or skip the case.",
+  "unrun": [
+    "remaining integration binaries/doctests beyond the first failed integration binary",
+    "complete new-source Linux/RustFS workflow",
+    "full native histories, OS containment, fair maintenance/hot-root progress and 10000-engineer mixed-load/recovery capacity",
+    "adopted earlier-owner input physical verification via authenticated retained selection"
+  ],
+  "next_priorities": [
+    "resident staging ownership and real owned HTTP/SSH/generated producers",
+    "remaining request/policy physical ownership and authenticated old-owner physical input selection",
+    "mandatory joint-root completion and real integration caller conversion, then complete Linux/provider CI",
+    "remaining authority consumers, custody history/rollover and final schema removal",
+    "typed GC/backup/restore, OS containment, fair native maintenance/shared hot workspaces, full-history/team capacity and file attribution"
+  ]
+}

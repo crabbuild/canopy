@@ -1,0 +1,1403 @@
+use super::root_completion::CompletionMode;
+use super::*;
+use super::{
+    completion::packet,
+    prepare::{cleaned, opened},
+    publishing::{plan, update},
+};
+use crate::{
+    git_http::{GitHttpBackend, GitHttpRequest, NativeCaptureError},
+    git_input::GitInput,
+    native_resources::{NativeClass, NativeResources},
+    packs::{
+        catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes, CatalogReader},
+        metadata::tests::{fixture as input_fixture, limits},
+        verification::{
+            NativeMetadataLimits, PhysicalVerifier,
+            physical::tests::{independence::git_input, physical_limits},
+        },
+    },
+};
+use canopy_object_storage::artifact::ArtifactStore;
+use cellule_ltx::DiskBudget;
+use tokio::time::{Duration, timeout};
+
+#[tokio::test]
+async fn native_receive_stages_verifies_and_publishes_then_clones_after_cache_loss() -> Result {
+    native_receive(false, CompletionMode::Success).await
+}
+#[tokio::test]
+async fn native_receive_prepares_bounded_immutable_root_completion_from_registered_custody()
+-> Result {
+    native_receive(true, CompletionMode::Success).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_records_policy_refusal_atomically() -> Result {
+    native_receive(true, CompletionMode::PolicyRefusal).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_records_watched_check_refusal_atomically() -> Result {
+    native_receive(true, CompletionMode::CheckRefusal).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_consumes_signed_ownership_atomically() -> Result {
+    native_receive(true, CompletionMode::SignedAccepted).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_retains_original_signed_replay_ownership() -> Result {
+    native_receive(true, CompletionMode::SignedReplay).await
+}
+#[tokio::test]
+async fn native_receive_root_completion_records_write_revocation_without_root_changes() -> Result {
+    native_receive(true, CompletionMode::WriteRevoked).await
+}
+#[tokio::test]
+async fn native_receive_root_dispatch_retains_exact_commands_after_cancel_absence_lost_reply_and_panic()
+-> Result {
+    for fault in 0..=3 {
+        native_receive(
+            true,
+            CompletionMode::Dispatch {
+                fault,
+                loss: super::root_dispatch::Loss::None,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_dispatch_records_write_refusal_and_requires_current_replay_read_access()
+-> Result {
+    for fault in 1..=3 {
+        native_receive(
+            true,
+            CompletionMode::Dispatch {
+                fault,
+                loss: super::root_dispatch::Loss::Write,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[test]
+fn native_receive_root_dispatch_preserves_known_commits_and_refuses_absence_after_custody_expiry()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in 1..=3 {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(Box::pin(native_receive_case(
+                    format,
+                    true,
+                    CompletionMode::Dispatch {
+                        fault,
+                        loss: super::root_dispatch::Loss::Expiry,
+                    },
+                )))?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_outcome_preserves_failed_and_empty_results_without_catalog_work()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        native_receive(
+            false,
+            CompletionMode::RefFree {
+                kind,
+                fault: 0,
+                revoked: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_outcome_recovers_exact_commands_after_absence_lost_reply_and_panic()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        for fault in 1..=3 {
+            native_receive(
+                false,
+                CompletionMode::RefFree {
+                    kind,
+                    fault,
+                    revoked: false,
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_root_outcome_records_write_refusal_and_requires_current_replay_read_access()
+-> Result {
+    for kind in [
+        super::root_outcome::Kind::HookRefusal,
+        super::root_outcome::Kind::Empty,
+    ] {
+        for fault in 1..=3 {
+            native_receive(
+                false,
+                CompletionMode::RefFree {
+                    kind,
+                    fault,
+                    revoked: true,
+                },
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_dispatch_orders_held_pages_and_refuses_stopped_handoff() -> Result {
+    for loss in [
+        super::policy_dispatch::Loss::None,
+        super::policy_dispatch::Loss::HeldStop,
+    ] {
+        native_receive(true, CompletionMode::PolicyDispatch { fault: 0, loss }).await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_dispatch_recovers_exact_pages_and_resumes_joint_completion() -> Result
+{
+    for fault in 1..=3 {
+        native_receive(
+            true,
+            CompletionMode::PolicyDispatch {
+                fault,
+                loss: super::policy_dispatch::Loss::None,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_dispatch_preserves_known_receipts_and_refuses_changed_authority()
+-> Result {
+    for loss in [
+        super::policy_dispatch::Loss::Write,
+        super::policy_dispatch::Loss::Epoch,
+        super::policy_dispatch::Loss::Check,
+        super::policy_dispatch::Loss::Expiry,
+        super::policy_dispatch::Loss::Close,
+    ] {
+        for fault in 1..=3 {
+            native_receive(true, CompletionMode::PolicyDispatch { fault, loss }).await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_shares_one_frozen_command_across_successful_pages() -> Result
+{
+    native_receive(
+        true,
+        CompletionMode::PolicyRefusalDispatch {
+            fault: 0,
+            loss: super::policy_refusal::Loss::Live,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_durable_policy_preserves_page_history_and_original_receipts_after_expiry()
+-> Result {
+    native_receive(
+        true,
+        CompletionMode::DurablePolicy {
+            refusal: false,
+            late_write: false,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_durable_policy_refusal_recovers_recorded_results_after_owner_loss() -> Result
+{
+    native_receive(
+        true,
+        CompletionMode::DurablePolicy {
+            refusal: true,
+            late_write: false,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_durable_refusal_after_completed_pages_and_write_revocation() -> Result {
+    native_receive(
+        true,
+        CompletionMode::DurablePolicy {
+            refusal: false,
+            late_write: true,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_staged_durable_absence_keeps_original_session_fence() -> Result {
+    native_receive(true, CompletionMode::StagedDurableFence).await
+}
+#[tokio::test]
+async fn native_receive_staged_durable_absence_reaches_terminal_refusal_after_write_revocation()
+-> Result {
+    native_receive(true, CompletionMode::StagedDurableRevoked { root: false }).await
+}
+#[tokio::test]
+async fn native_receive_staged_durable_root_absence_reaches_terminal_refusal_after_write_revocation()
+-> Result {
+    native_receive(true, CompletionMode::StagedDurableRevoked { root: true }).await
+}
+#[tokio::test]
+async fn native_receive_staged_durable_pages_and_root_keep_original_authority() -> Result {
+    for fault in [0, 1, 2, 3] {
+        native_receive(
+            true,
+            CompletionMode::StagedDurable {
+                fault,
+                refusal: false,
+                late_write: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_staged_durable_page_refusal_is_terminal_through_uncertainty() -> Result {
+    for fault in [0, 1, 2, 3] {
+        native_receive(
+            true,
+            CompletionMode::StagedDurable {
+                fault,
+                refusal: true,
+                late_write: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_staged_durable_frozen_refusal_after_late_write_revocation() -> Result {
+    for fault in [0, 2, 3] {
+        native_receive(
+            true,
+            CompletionMode::StagedDurable {
+                fault,
+                refusal: false,
+                late_write: true,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_reuses_exact_command_after_completed_pages_and_revocation()
+-> Result {
+    for loss in [
+        super::policy_refusal::Loss::LatePolicy,
+        super::policy_refusal::Loss::LateWrite,
+    ] {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch { fault: 0, loss },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_saves_all_ref_rejection_without_publishing() -> Result {
+    for loss in [
+        super::policy_refusal::Loss::Policy,
+        super::policy_refusal::Loss::Write,
+    ] {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch { fault: 0, loss },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_recovers_original_terminal_phase_after_lost_reply_and_panic()
+-> Result {
+    for loss in [
+        super::policy_refusal::Loss::Policy,
+        super::policy_refusal::Loss::Write,
+    ] {
+        for fault in 1..=3 {
+            native_receive(true, CompletionMode::PolicyRefusalDispatch { fault, loss }).await?;
+        }
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_policy_refusal_preserves_known_results_but_refuses_absence_after_expiry()
+-> Result {
+    for fault in 1..=3 {
+        native_receive(
+            true,
+            CompletionMode::PolicyRefusalDispatch {
+                fault,
+                loss: super::policy_refusal::Loss::Expiry,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_durable_root_recovery_reconstructs_exact_commands_after_owner_loss()
+-> Result {
+    for fault in 0..=2 {
+        native_receive(
+            false,
+            CompletionMode::Durable {
+                fault,
+                revoked: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_durable_root_recovery_resolves_known_results_before_revoked_custody()
+-> Result {
+    native_receive(
+        false,
+        CompletionMode::Durable {
+            fault: 2,
+            revoked: true,
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn native_receive_durable_root_recovery_restores_joint_publication_and_fences_absent_old_owner()
+-> Result {
+    for fault in 0..=2 {
+        native_receive(true, CompletionMode::DurablePublish { fault }).await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn native_receive_restart_discovery_owns_original_commands_and_automatic_uncertain_recovery()
+-> Result {
+    for fault in [1, 2, 3] {
+        native_receive(false, CompletionMode::Discovery { fault }).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_receive_terminal_retention_releases_only_closed_pins_and_recovers_original_receipts()
+-> Result {
+    for fault in [1, 2, 3] {
+        native_receive(false, CompletionMode::TerminalRetention { fault }).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_receive_automatic_terminal_retirement_preserves_original_release_after_pin_loss()
+-> Result {
+    native_receive(false, CompletionMode::TerminalRetention { fault: 4 }).await
+}
+
+#[tokio::test]
+async fn native_publication_requires_registered_original_policy_root_and_refusal_commands() -> Result
+{
+    native_receive(true, CompletionMode::MandatoryRegistration).await
+}
+
+async fn native_receive(rooted: bool, mode: CompletionMode) -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        Box::pin(native_receive_case(format, rooted, mode)).await?;
+    }
+    Ok(())
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetadataFault {
+    DescriptorLimit,
+    TruncatedReplay,
+    MissingArtifact,
+}
+
+#[tokio::test]
+async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_shards_without_publication()
+-> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        for fault in [
+            MetadataFault::DescriptorLimit,
+            MetadataFault::TruncatedReplay,
+            MetadataFault::MissingArtifact,
+        ] {
+            Box::pin(native_receive_metadata_case(
+                format,
+                true,
+                CompletionMode::Success,
+                Some(fault),
+            ))
+            .await?;
+        }
+    }
+    Ok(())
+}
+async fn publication_state(fixture: &Fixture) -> Result<Vec<u8>> {
+    Ok(fixture.handle.query(0, 24, |db| {
+        let state = db.query_row("SELECT (SELECT generation FROM catalog_state WHERE singleton=1),(SELECT generation FROM ref_generation WHERE singleton=1),(SELECT count(*) FROM pushes WHERE response_id IS NOT NULL)", [], |row| {
+            Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?))
+        })?;
+        Ok([state.0.to_be_bytes(), state.1.to_be_bytes(), state.2.to_be_bytes()].concat())
+    }).await?)
+}
+async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
+    Box::pin(native_receive_metadata_case(format, rooted, mode, None)).await
+}
+async fn native_receive_metadata_case(
+    format: ObjectFormat,
+    rooted: bool,
+    mode: CompletionMode,
+    metadata_fault: Option<MetadataFault>,
+) -> Result {
+    let ref_free = match mode {
+        CompletionMode::RefFree { kind, .. } => Some(kind),
+        CompletionMode::Durable { .. }
+        | CompletionMode::Discovery { .. }
+        | CompletionMode::TerminalRetention { .. } => Some(super::root_outcome::Kind::Empty),
+        _ => None,
+    };
+    let fixture = Fixture::new(format).await?;
+    let provider = Arc::new(InMemory::new());
+    let store = Arc::new(ArtifactStore::new(provider.clone(), fixture.repository));
+    if rooted {
+        let (base, _, _) = opened(&fixture, [159; 16], store.clone()).await?;
+        let root = tempfile::TempDir::new()?;
+        let budget = DiskBudget::new(64 << 20);
+        let empty = CatalogPreparation::new(root.path(), budget.clone(), base, limits())
+            .await?
+            .finish()
+            .await?;
+        let (command, registered) = super::initialization::registered(
+            &fixture,
+            &empty,
+            empty.empty_ref_initialization().await?,
+            identity()?,
+        )
+        .await?;
+        command.execute().await?;
+        // Match actual startup before building later native policy work.
+        registered
+            .ready_terminal_release(
+                fixture.client(),
+                &store,
+                super::terminal_retention::maintenance(&fixture.handle, fixture.repository).await?,
+                identity()?,
+            )
+            .await?
+            .complete()
+            .await?;
+        drop(empty);
+        cleaned(root.path(), &budget).await?;
+    }
+    let source = input_fixture(format, 4).await?;
+    let tip = source
+        .objects
+        .values()
+        .find(|(object, _)| object.kind == crate::ObjectKind::Commit)
+        .ok_or("tip")?
+        .0
+        .oid;
+    let pack_path = std::fs::read_dir(source.root.path().join("objects/pack"))?
+        .find_map(|entry| {
+            entry
+                .ok()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "pack"))
+        })
+        .ok_or("pack")?;
+    let work_root = Arc::new(tempfile::TempDir::new()?);
+    let disk = DiskBudget::new(256 << 20);
+    let native = NativeResources::default();
+    let backend = GitHttpBackend::initialize(
+        work_root.path().into(),
+        disk.clone(),
+        "refs/heads/main",
+        format,
+        native.scope(NativeClass::Foreground),
+    )
+    .await?;
+    let cache_weak = Arc::downgrade(&backend.cache);
+    let mut body = Vec::new();
+    packet(
+        &mut body,
+        format!(
+            "{} {} refs/heads/main\0report-status ofs-delta object-format={}\n",
+            "0".repeat(format.bytes() * 2),
+            hex::encode(tip),
+            format.as_str()
+        )
+        .as_bytes(),
+    );
+    let mut changes = vec![update("refs/heads/main", None, Some(tip))];
+    if rooted {
+        for i in 1..257 {
+            let name = format!("refs/heads/topic/{i:06}");
+            packet(
+                &mut body,
+                format!(
+                    "{} {} {name}\n",
+                    "0".repeat(format.bytes() * 2),
+                    hex::encode(tip)
+                )
+                .as_bytes(),
+            );
+            changes.push(update(&name, None, Some(tip)));
+        }
+    }
+    if ref_free == Some(super::root_outcome::Kind::Empty) {
+        body.clear();
+    }
+    let command_bytes = body.len() + 4;
+    body.extend_from_slice(b"0000");
+    if ref_free != Some(super::root_outcome::Kind::Empty) {
+        body.extend_from_slice(&std::fs::read(pack_path)?);
+    }
+    if ref_free == Some(super::root_outcome::Kind::HookRefusal) {
+        let hook = backend.git_dir().join("hooks/pre-receive");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    let encoded = crate::git_gateway::preflight::EncodedPush::new(
+        GitHttpRequest {
+            method: "POST".into(),
+            path_info: "/repo.git/git-receive-pack".into(),
+            query: String::new(),
+            content_type: Some("application/x-git-receive-pack-request".into()),
+            gzip: false,
+            protocol_v2: false,
+            body: GitInput::receive(
+                axum::body::Body::from(body),
+                work_root.path(),
+                &disk,
+                Some(4 << 20),
+                None,
+            )
+            .await?,
+            authenticated: true,
+        },
+        &fixture.target,
+        fixture.repository,
+        format,
+        "owner",
+        [160; 16],
+    )
+    .await?;
+    let request_digest = encoded.identity().request_digest;
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
+    let ready = ReadyStaging::new(
+        fixture.client(),
+        fixture.target.clone(),
+        encoded.identity().clone(),
+        identity()?,
+    )
+    .await?;
+    let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+    let StagingState::Active(initial) = timeout(Duration::from_secs(10), ticket.wait()).await?
+    else {
+        return Err("staging not active".into());
+    };
+    assert_eq!(initial.token.request_digest, request_digest);
+    let upload_store = Arc::clone(&store);
+    let retained = ticket.spawn(move |context| async move {
+        let (encoded, saved) = encoded
+            .retain(&context, &upload_store)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let request = context
+            .seal_push_inputs(upload_store, std::iter::empty(), saved)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        Ok((encoded, request))
+    })?;
+    let (encoded, request_checkpoint) = retained
+        .wait()
+        .await
+        .map_err(|error| format!("native receive stage: {error:?}"))?;
+    ticket
+        .register_inputs(request_checkpoint.clone(), identity()?)
+        .map_err(|(error, _)| error)?
+        .wait()
+        .await
+        .map_err(|error| format!("native receive stage: {error:?}"))?;
+    assert!(request_checkpoint.root()?.is_none());
+    assert!(request_checkpoint.wire_request()?.is_some());
+    let producer = backend.clone();
+    let upload_store = Arc::clone(&store);
+    let request_root = work_root.path().to_owned();
+    let request_disk = disk.clone();
+    let task = ticket.spawn(move |context| async move {
+        let preflight = encoded
+            .decode(&request_root, &request_disk, None)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let response = producer
+            .run_native_receive(&context, preflight.into_native_request())
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let inputs = producer
+            .stage_native_packs(&context, &upload_store, physical_limits())
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let expected = response.clone();
+        let result = context
+            .retain_native_result(
+                &upload_store,
+                &request_checkpoint,
+                PushCompletionRequest {
+                    plan: ref_free.is_none().then(|| plan(changes)),
+                    response,
+                    options: Vec::new(),
+                    certificate: None,
+                },
+                &request_root,
+                &request_disk,
+            )
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        let certificate = context
+            .append_native_result(
+                upload_store,
+                &request_checkpoint,
+                inputs.iter().copied(),
+                result,
+            )
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        Ok((inputs, certificate, expected))
+    })?;
+    let (inputs, input_certificate, response) = task
+        .wait()
+        .await
+        .map_err(|error| format!("capture: {error:?}"))?;
+    assert_eq!(response.status, 200);
+    if ref_free == Some(super::root_outcome::Kind::HookRefusal) {
+        assert!(
+            response
+                .body
+                .windows(b"ng refs/heads/main".len())
+                .any(|bytes| bytes == b"ng refs/heads/main")
+        );
+    } else if ref_free.is_none() {
+        assert!(
+            response
+                .body
+                .windows(b"ok refs/heads/main".len())
+                .any(|bytes| bytes == b"ok refs/heads/main")
+        );
+    }
+    // Small native receives must remain pack/index pairs, not loose bodies.
+    assert_eq!(
+        std::fs::read_dir(backend.git_dir().join("objects"))?.count(),
+        2
+    );
+    assert!(input_certificate.wire_request()?.is_some());
+    assert!(input_certificate.native_result()?.is_some());
+    if ref_free.is_some() {
+        assert!(inputs.is_empty());
+    } else {
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].operation, initial.token.artifact_operation);
+        assert_ne!(inputs[0].pack.manifest_digest, [0; 32]);
+        assert_ne!(inputs[0].index.manifest_digest, [0; 32]);
+    }
+    let checkpoint = ticket
+        .register_inputs(input_certificate.clone(), identity()?)
+        .map_err(|(error, _)| error)?;
+    let checkpoint_receipt = checkpoint
+        .wait()
+        .await
+        .map_err(|error| format!("native receive stage: {error:?}"))?;
+    assert_eq!(
+        fixture
+            .client()
+            .query::<CheckStagedInputs>(
+                &fixture.target,
+                Some(checkpoint_receipt),
+                LeaseCheck {
+                    token: initial.token,
+                    actor: "owner".into()
+                }
+            )
+            .await?
+            .output,
+        Some(input_certificate)
+    );
+    drop((backend, source));
+    assert!(cache_weak.upgrade().is_none());
+    cleaned(work_root.path(), &disk).await?;
+    let recover_store = store.clone();
+    let recover_root = work_root.path().to_owned();
+    let recover_disk = disk.clone();
+    let recovered = ticket.spawn(move |context| async move {
+        let encoded = context
+            .reopen_push_request(&recover_store, &recover_root, &recover_disk, None, None)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?;
+        assert_eq!(encoded.identity().request_digest, request_digest);
+        let request = encoded
+            .decode(&recover_root, &recover_disk, None)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))?
+            .into_native_request();
+        if rooted {
+            assert!(command_bytes > 4096);
+            assert!(request.body.packet_prefix(4096).await.is_err());
+        }
+        if ref_free != Some(super::root_outcome::Kind::Empty) {
+            assert!(
+                request
+                    .body
+                    .packet_prefix(command_bytes)
+                    .await
+                    .map_err(|error| StagingError::Input(Box::new(error)))?
+                    .windows(b"refs/heads/main".len())
+                    .any(|part| part == b"refs/heads/main")
+            );
+        }
+        context
+            .reopen_native_result(&recover_store, &recover_root, &recover_disk, None)
+            .await
+            .map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let recovered = recovered
+        .wait()
+        .await
+        .map_err(|error| format!("native receive stage: {error:?}"))?;
+    assert_eq!(recovered.response, response);
+    drop(response);
+    cleaned(work_root.path(), &disk).await?;
+    if matches!(
+        mode,
+        CompletionMode::Discovery { .. }
+            | CompletionMode::Durable { .. }
+            | CompletionMode::TerminalRetention { .. }
+    ) {
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        if let CompletionMode::TerminalRetention { fault } = mode {
+            super::terminal_retention::spawn_qualify(
+                fixture,
+                Arc::clone(&store),
+                coordinator.clone(),
+                ticket.clone(),
+                (Arc::clone(&work_root), disk.clone()),
+                recovered,
+                (fault, provider),
+            )
+            .await?
+            .map_err(|error| format!("terminal retention composition: {error}"))?;
+        } else {
+            super::recovery_discovery::qualify_native(
+                super::root_outcome::Context {
+                    fixture: &fixture,
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: work_root.path(),
+                    budget: disk.clone(),
+                    request: recovered,
+                },
+                mode,
+                provider,
+            )
+            .await?;
+        }
+        cleaned(work_root.path(), &disk).await?;
+        return Ok(());
+    }
+    if let CompletionMode::RefFree {
+        kind,
+        fault,
+        revoked,
+    } = mode
+    {
+        ticket.seal()?;
+        assert!(matches!(
+            timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+            StagingState::Bound(_)
+        ));
+        Box::pin(super::root_outcome::qualify(
+            super::root_outcome::Context {
+                fixture: &fixture,
+                store: &store,
+                staging: &coordinator,
+                ticket: &ticket,
+                root: work_root.path(),
+                budget: disk.clone(),
+                request: recovered,
+            },
+            kind,
+            fault,
+            revoked,
+        ))
+        .await?;
+        cleaned(work_root.path(), &disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
+    let before_publication = publication_state(&fixture).await?;
+    let physical_root = Arc::new(tempfile::TempDir::new()?);
+    let physical_disk = DiskBudget::new(256 << 20);
+    let verify_root = physical_root.clone();
+    let verify_disk = physical_disk.clone();
+    let verify_store = store.clone();
+    let verify_native = native.clone();
+    let input = inputs[0];
+    let work = ticket.spawn(move |context| async move {
+        let result = async {
+            let verifier = PhysicalVerifier::download_staged(
+                &context,
+                verify_root.path(),
+                verify_disk,
+                &verify_store,
+                input,
+                physical_limits(),
+                verify_native.scope(NativeClass::Foreground),
+            )
+            .await?;
+            verifier
+                .stage_metadata(NativeMetadataLimits {
+                    max_shard_objects: 1,
+                    max_descriptor_bytes: if metadata_fault == Some(MetadataFault::DescriptorLimit)
+                    {
+                        1
+                    } else {
+                        NativeMetadataLimits::default().max_descriptor_bytes
+                    },
+                })
+                .await
+        }
+        .await;
+        result.map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let staged = work.wait().await;
+    if metadata_fault == Some(MetadataFault::DescriptorLimit) {
+        let error = match staged {
+            Err(error) => error,
+            Ok(_) => return Err("descriptor admission unexpectedly succeeded".into()),
+        };
+        let StagingError::Input(source) = &*error else {
+            return Err("wrong descriptor refusal".into());
+        };
+        assert!(matches!(
+            source.downcast_ref::<crate::packs::verification::PhysicalError>(),
+            Some(crate::packs::verification::PhysicalError::Limit)
+        ));
+        assert!(coordinator.close_and_drain().await.is_empty());
+        assert_eq!(coordinator.stats().workers, 0);
+        assert_eq!(publication_state(&fixture).await?, before_publication);
+        cleaned(physical_root.path(), &physical_disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
+    let staged = staged.map_err(|error| error.to_string())?;
+    assert_eq!(staged.shard_count(), input.object_count);
+    assert!(staged.descriptor_bytes() <= u64::from(staged.shard_count()) * 516);
+    timeout(Duration::from_secs(10), async {
+        while physical_disk.used() != staged.descriptor_bytes() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    ticket.seal()?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+        StagingState::Bound(_)
+    ));
+    let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), format));
+    let files = Arc::new(CatalogFiles::new(
+        fixture.root.path(),
+        DiskBudget::new(64 << 20),
+        Arc::clone(&store),
+        format,
+        CatalogFileLimits::default(),
+    )?);
+    let base = Arc::new(ticket.open_base(indexes, files).await?);
+    match metadata_fault {
+        Some(MetadataFault::TruncatedReplay) => staged.truncate_replay_for_test()?,
+        Some(MetadataFault::MissingArtifact) => {
+            use object_store::ObjectStoreExt;
+            let stored = staged.first_metadata_for_test()?;
+            let path = store.path(
+                canopy_object_storage::artifact::ArtifactKey {
+                    operation: input.operation,
+                    binding_digest: input.pack.digest,
+                    kind: canopy_object_storage::artifact::ArtifactKind::Metadata,
+                },
+                stored.artifact.digest,
+            )?;
+            provider
+                .delete(&canopy_object_storage::external::part(&path, 0))
+                .await?;
+        }
+        _ => {}
+    }
+    let producer_root = Arc::clone(&physical_root);
+    let producer_disk = physical_disk.clone();
+    let work = ticket.spawn_bound(move |_, context| async move {
+        let result = async {
+            let mut builder = CatalogPreparation::new_staged(
+                &context,
+                producer_root.path(),
+                producer_disk,
+                base,
+                limits(),
+            )
+            .await?;
+            let added = builder.add_staged_pack(staged).await;
+            if metadata_fault.is_some() {
+                let error = added.expect_err("invalid staged metadata accepted");
+                assert!(
+                    builder.finish().await.is_err(),
+                    "failed builder escaped poison"
+                );
+                return Err(error);
+            }
+            added?;
+            builder.finish().await
+        }
+        .await;
+        result.map_err(|error| StagingError::Input(Box::new(error)))
+    })?;
+    let prepared = work.wait().await;
+    if metadata_fault.is_some() {
+        assert!(prepared.is_err());
+        assert!(coordinator.close_and_drain().await.is_empty());
+        assert_eq!(coordinator.stats().workers, 0);
+        assert_eq!(publication_state(&fixture).await?, before_publication);
+        cleaned(physical_root.path(), &physical_disk).await?;
+        fixture.runtime.shutdown().await?;
+        return Ok(());
+    }
+    let prepared = prepared.map_err(|error| error.to_string())?;
+    if rooted {
+        if matches!(
+            mode,
+            CompletionMode::MandatoryRegistration
+                | CompletionMode::StagedDurableRevoked { .. }
+                | CompletionMode::StagedDurableFence
+                | CompletionMode::StagedDurable { .. }
+                | CompletionMode::DurablePolicy { .. }
+                | CompletionMode::DurablePublish { .. }
+                | CompletionMode::PolicyRefusalDispatch { .. }
+                | CompletionMode::PolicyDispatch { .. }
+                | CompletionMode::Dispatch { .. }
+        ) {
+            let result = qualify_rooted(
+                super::root_dispatch::Context {
+                    fixture: &fixture,
+                    prepared: Arc::new(prepared),
+                    store: &store,
+                    staging: &coordinator,
+                    ticket: &ticket,
+                    root: physical_root.path(),
+                    budget: physical_disk.clone(),
+                    request: recovered,
+                },
+                mode,
+            )
+            .await;
+            if mode == CompletionMode::MandatoryRegistration {
+                assert!(coordinator.close_and_drain().await.is_empty());
+                fixture.runtime.shutdown().await?;
+            }
+            result?;
+            if matches!(
+                mode,
+                CompletionMode::PolicyRefusalDispatch { .. }
+                    | CompletionMode::PolicyDispatch { .. }
+                    | CompletionMode::Dispatch { .. }
+            ) {
+                cleaned(physical_root.path(), &physical_disk).await?;
+                fixture.runtime.shutdown().await?;
+            } else {
+                cleaned(work_root.path(), &disk).await?;
+                cleaned(physical_root.path(), &physical_disk).await?;
+            }
+            return Ok(());
+        }
+        let (fixture, replay) = super::root_completion::spawn_qualify(
+            fixture,
+            prepared,
+            Arc::clone(&store),
+            recovered,
+            Arc::clone(&physical_root),
+            physical_disk.clone(),
+            mode,
+        )
+        .await?
+        .map_err(|error| format!("root composition: {error:?}"))?;
+        cleaned(physical_root.path(), &physical_disk).await?;
+        assert!(coordinator.close_and_drain().await.is_empty());
+        super::root_completion::restored(&fixture, &store, replay).await?;
+        return Ok(());
+    }
+    let expected = recovered.response.clone();
+    let producer_root = Arc::clone(&physical_root);
+    let producer_disk = physical_disk.clone();
+    let publication_identity = identity()?;
+    let work = ticket.spawn_bound(move |_, _context| async move {
+        let result = async {
+            let prepared = Arc::new(prepared);
+            let ready = Box::pin(prepared.ready_push(
+                publication_identity,
+                recovered,
+                producer_root.path(),
+                producer_disk.clone(),
+                limits(),
+            ))
+            .await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((prepared, ready))
+        }
+        .await;
+        result.map_err(StagingError::Input)
+    })?;
+    let (prepared, ready) = work
+        .wait()
+        .await
+        .map_err(|error| format!("native receive stage: {error:?}"))?;
+    let publications = PublicationCoordinator::new(
+        fixture.target.clone(),
+        PublicationLimits::default(),
+        fixture.publication_budget.clone(),
+    )?;
+    let observer = ticket.publish(&publications, ready)?;
+    let completed =
+        super::coordinator::finished(timeout(Duration::from_secs(10), observer.wait()).await?)?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+        StagingState::Published(Ok(_))
+    ));
+    assert!(matches!(
+        completed.output,
+        CatalogCompletionReply::Completed(CompletedCatalogPush {
+            rejected: false,
+            publication: Some(PublishedRefs {
+                generation: 1,
+                ref_generation: 1,
+                ..
+            }),
+            ..
+        })
+    ));
+    assert_eq!(observer.response().await?, expected);
+    let sql = cellule_runtime::primitives::sql::SqlCell::<RepositoryModule>::new(
+        fixture.client(),
+        fixture.target.clone(),
+    )?;
+    let observed = sql
+        .query(
+            Some(completed.receipt),
+            super::super::sql::statement(super::super::sql::CURRENT, vec![]),
+        )
+        .await?;
+    let published = super::super::sql::generation(&observed.output, fixture.repository, format)?
+        .catalog
+        .ok_or("published root")?;
+    assert_eq!(published, prepared.catalog());
+    drop(prepared);
+    cleaned(physical_root.path(), &physical_disk).await?;
+    assert!(coordinator.close_and_drain().await.is_empty());
+    assert!(publications.close_and_drain().await.is_empty());
+    // A new admitted workspace reconstructs from the committed catalog's
+    // source, with no producer descriptors/cache or SQL Git object records.
+    let cold_root = tempfile::TempDir::new()?;
+    let cold_disk = DiskBudget::new(64 << 20);
+    let indexes = Arc::new(CatalogIndexes::new(Arc::clone(&store), format));
+    let files = CatalogFiles::new(
+        cold_root.path(),
+        cold_disk.clone(),
+        Arc::clone(&store),
+        format,
+        CatalogFileLimits::default(),
+    )?;
+    let reader = CatalogReader::open(indexes, published).await?;
+    let selected = reader
+        .lookup(tip, &files, &files)
+        .await?
+        .ok_or("canonical tip")?;
+    let cold = GitHttpBackend::initialize(
+        cold_root.path().into(),
+        cold_disk.clone(),
+        "refs/heads/main",
+        format,
+        native.scope(NativeClass::Foreground),
+    )
+    .await?;
+    cold.cache
+        .download_native(&store, selected.source.record.native())
+        .await?;
+    cold.cache
+        .store_refs(&std::collections::BTreeMap::from([(
+            "refs/heads/main".into(),
+            crate::RefExpectation {
+                oid: Some(tip),
+                version: 1,
+            },
+        )]))
+        .await?;
+    let client = tempfile::TempDir::new()?;
+    let clone_path = client.path().join("clone");
+    git_input(
+        client.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "clone",
+            "--no-local",
+            cold.git_dir().to_str().ok_or("cache path")?,
+            clone_path.to_str().ok_or("clone path")?,
+        ],
+        &[],
+    )
+    .await?;
+    git_input(&clone_path, &["fsck", "--full"], &[]).await?;
+    let cloned = git_input(&clone_path, &["rev-parse", "HEAD"], &[]).await?;
+    assert_eq!(String::from_utf8(cloned)?.trim(), hex::encode(tip));
+    fixture.handle.query(0,1024,|db| {
+        assert_eq!(db.query_row("SELECT count(*) FROM sqlite_schema WHERE name IN ('objects','object_edges','object_closure','git_packs')",[],|r|r.get::<_,u64>(0))?,0);
+        Ok(Vec::new())
+    }).await?;
+    fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_capture_rejects_scope_limits_mutation_and_active_native_workers() -> Result {
+    let fixture = Fixture::new(ObjectFormat::Sha1).await?;
+    let source = input_fixture(ObjectFormat::Sha1, 4).await?;
+    let root = tempfile::TempDir::new()?;
+    let disk = DiskBudget::new(16 << 20);
+    let native = NativeResources::default();
+    let backend = GitHttpBackend::initialize(
+        root.path().into(),
+        disk.clone(),
+        "refs/heads/main",
+        ObjectFormat::Sha1,
+        native.scope(NativeClass::Foreground),
+    )
+    .await?;
+    for entry in std::fs::read_dir(source.root.path().join("objects/pack"))? {
+        let entry = entry?;
+        std::fs::copy(
+            entry.path(),
+            backend
+                .git_dir()
+                .join("objects/pack")
+                .join(entry.file_name()),
+        )?;
+    }
+    backend.cache.reconcile().await?;
+    let store = Arc::new(ArtifactStore::new(
+        Arc::new(InMemory::new()),
+        fixture.repository,
+    ));
+    let coordinator = StagingCoordinator::new(
+        fixture.target.clone(),
+        StagingLimits::default(),
+        fixture.authority(),
+    )?;
+    let ready = ReadyStaging::new(
+        fixture.client(),
+        fixture.target.clone(),
+        fixture.begin([161; 16]),
+        identity()?,
+    )
+    .await?;
+    let ticket = coordinator.submit(ready).map_err(|(error, _)| error)?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait()).await?,
+        StagingState::Active(_)
+    ));
+    let task = ticket.spawn(move |context| async move {
+        rejection_checks(context, backend, store)
+            .await
+            .map_err(StagingError::Input)
+    })?;
+    task.wait()
+        .await
+        .map_err(|error| format!("capture checks: {error:?}"))?;
+    ticket.seal()?;
+    assert!(matches!(
+        timeout(Duration::from_secs(10), ticket.wait_terminal()).await?,
+        StagingState::Bound(_)
+    ));
+    assert!(coordinator.close_and_drain().await.is_empty());
+    fixture.runtime.shutdown().await?;
+    Ok(())
+}
+
+async fn rejection_checks(
+    context: StagingContext,
+    backend: GitHttpBackend,
+    store: Arc<ArtifactStore>,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let other = ArtifactStore::new(Arc::new(InMemory::new()), [99; 16]);
+    assert!(matches!(
+        backend
+            .stage_native_packs(&context, &other, physical_limits())
+            .await,
+        Err(NativeCaptureError::Context)
+    ));
+    let small = crate::packs::verification::PhysicalLimits {
+        max_pack_bytes: 1,
+        ..physical_limits()
+    };
+    assert!(matches!(
+        backend.stage_native_packs(&context, &store, small).await,
+        Err(NativeCaptureError::Limit)
+    ));
+    let path = std::fs::read_dir(backend.git_dir().join("objects/pack"))?
+        .find_map(|entry| {
+            entry
+                .ok()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "pack"))
+        })
+        .ok_or("pack")?;
+    let loose = backend.git_dir().join("objects/aa");
+    std::fs::create_dir(&loose)?;
+    assert!(matches!(
+        backend
+            .stage_native_packs(&context, &store, physical_limits())
+            .await,
+        Err(NativeCaptureError::Context)
+    ));
+    std::fs::remove_dir(&loose)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions)?;
+    }
+    let original = std::fs::read(&path)?;
+    let mut corrupted = original.clone();
+    corrupted[12] ^= 1;
+    std::fs::write(&path, &corrupted)?;
+    assert!(matches!(
+        backend
+            .stage_native_packs(&context, &store, physical_limits())
+            .await,
+        Err(NativeCaptureError::Binding(_))
+    ));
+    std::fs::write(&path, original)?;
+    let mut command = crate::native_git::command(&backend.git_dir())?;
+    command
+        .args(["hash-object", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut worker = crate::native_git::process::GitProcess::spawn(
+        command,
+        Arc::clone(&backend.cache),
+        backend
+            .cache
+            .native
+            .try_admit(crate::native_resources::NativeWork::Read)?,
+    )?;
+    let blocked = matches!(backend.stage_native_packs(&context,&store,physical_limits()).await,Err(NativeCaptureError::Io(error)) if error.kind()==std::io::ErrorKind::WouldBlock);
+    drop(worker.child.stdin.take());
+    let status = timeout(Duration::from_secs(5), worker.wait()).await??;
+    drop(worker);
+    assert!(blocked && status.success());
+    let first = backend
+        .stage_native_packs(&context, &store, physical_limits())
+        .await?;
+    let replay = backend
+        .stage_native_packs(&context, &store, physical_limits())
+        .await?;
+    assert_eq!(first, replay);
+    assert_eq!(first.len(), 1);
+    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+}
+
+// Construct each large qualifier outside the shared native setup poll frame.
+// This only moves future construction; every role retains its original inputs.
+fn qualify_rooted<'a>(
+    context: super::root_dispatch::Context<'a>,
+    mode: CompletionMode,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result> + 'a>> {
+    match mode {
+        CompletionMode::MandatoryRegistration => {
+            Box::pin(super::mandatory_registration::qualify(context))
+        }
+        CompletionMode::StagedDurableRevoked { root } => {
+            Box::pin(super::staged_durable::qualify_revoked(context, root))
+        }
+        CompletionMode::StagedDurableFence => {
+            Box::pin(super::staged_durable::qualify_fence(context))
+        }
+        CompletionMode::StagedDurable {
+            fault,
+            refusal,
+            late_write,
+        } => Box::pin(super::staged_durable::qualify(
+            context, fault, refusal, late_write,
+        )),
+        CompletionMode::DurablePolicy {
+            refusal,
+            late_write,
+        } => Box::pin(super::durable_policy::qualify(context, refusal, late_write)),
+        CompletionMode::DurablePublish { fault } => {
+            Box::pin(super::durable_recovery::qualify_publish(context, fault))
+        }
+        CompletionMode::PolicyRefusalDispatch { fault, loss } => {
+            Box::pin(super::policy_refusal::qualify(context, fault, loss))
+        }
+        CompletionMode::PolicyDispatch { fault, loss } => {
+            Box::pin(super::policy_dispatch::qualify(context, fault, loss))
+        }
+        CompletionMode::Dispatch { fault, loss } => {
+            Box::pin(super::root_dispatch::qualify(context, fault, loss))
+        }
+        _ => unreachable!("rooted qualifier role"),
+    }
+}

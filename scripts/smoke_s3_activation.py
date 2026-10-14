@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.client
 import json
+from native_limits import fixture_native_limits
 import os
 from pathlib import Path
 import signal
@@ -12,7 +13,8 @@ import time
 import uuid
 
 from benchmark_repositories import Client, corpus, percentiles, seed, verify
-from smoke_s3_process import start, wait_for_lease_expiry
+from lease_contract import NODE_LEASE_WAIT_SECONDS
+from smoke_s3_process import start
 
 
 def qualify(args):
@@ -21,7 +23,7 @@ def qualify(args):
                 "tenant_id": str(uuid.uuid4()), "application_id": str(uuid.uuid4()),
                 "node_id": str(uuid.uuid4()), "fleet_digest": "11" * 32, "image_digest": "22" * 32,
                 "owner": "canopy", "peer_endpoint": "https://activation.example.invalid",
-                "local_disk_limit_bytes": 512 * 1024**2, "max_active_repositories": 64}
+                "native_limits": fixture_native_limits(), "local_disk_limit_bytes": 512 * 1024**2, "max_active_repositories": 64}
     report = {"binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "repositories": 64, "concurrency": args.concurrency, "cold_recovery_passed": False,
               "git_recovery_passed": False, "shutdown_passed": False}
@@ -38,11 +40,12 @@ def qualify(args):
         manifest = args.work_dir / "corpus.json"
         report["phase"] = "seed"
         report["seed"] = seed(argparse.Namespace(base_url=base, manifest=manifest,
-            work_dir=args.work_dir / "seed", repositories=64, populated=3, seed=20260927), client, token)
+            work_dir=args.work_dir / "seed", repositories=64, populated=3, seed=20260927,
+            incremental_fixture=False, lfs_fixture_bytes=0), client, token)
         client.close()
         process.kill()
         process.wait(timeout=10)
-        wait_for_lease_expiry()
+        time.sleep(NODE_LEASE_WAIT_SECONDS)
         report["phase"] = "recovery_startup"
         started = time.monotonic()
         process, base = start(args.binary, args.work_dir, settings, "restored")
@@ -74,7 +77,7 @@ def qualify(args):
         print(f"PASS: 64 cold repository identities restored with {args.concurrency} clients and no retries", flush=True)
         report["phase"] = "git_verification"
         report["verify"] = verify(argparse.Namespace(base_url=base, manifest=manifest,
-            work_dir=args.work_dir / "verify"), client, token)
+            work_dir=args.work_dir / "verify", concurrency=args.concurrency), client, token)
         report["git_recovery_passed"] = True
         report["phase"] = "shutdown"
         process.send_signal(signal.SIGTERM)

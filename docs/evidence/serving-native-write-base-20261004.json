@@ -1,0 +1,357 @@
+{
+  "checkpoint": "immutable source cursor and native write-base conversion",
+  "parent": "6ab78d679839fa8e5fc80002fa529ca61e799874",
+  "validation": {
+    "source_files": 487,
+    "rust_files": 473,
+    "source_hash_digest": "5be32a60d63d87754e87f1b2fd0112ad5c2223d85da480b74446f22733c0511e",
+    "release_qualified": false,
+    "execution_complete": true,
+    "phases": [
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 36.465,
+        "log": "/tmp/canopy-source-cursor-clippy-final.log",
+        "log_sha256": "a3e34c494a21d34d1eef4ea02466734e69238fe85b33491412b29da6b03805db",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked",
+          "--",
+          "sources::tests::changes::",
+          "native_write_base",
+          "native_refs_tests",
+          "--test-threads=4"
+        ],
+        "exit_code": 0,
+        "seconds": 114.256,
+        "log": "/tmp/canopy-source-cursor-focused-final.log",
+        "log_sha256": "2da7defefb14a3d7c43569684ab19689da2d175f0e604d30e76a1058554070d5",
+        "summaries": [
+          [
+            9,
+            0,
+            0,
+            0,
+            684
+          ]
+        ],
+        "failed_cases": []
+      },
+      {
+        "label": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exit_code": 101,
+        "seconds": 326.624,
+        "log": "/tmp/canopy-source-cursor-workspace-final.log",
+        "log_sha256": "538d0ddf6ccb4121a02fd4050d5861f2bf6967f57281c04805eefbab8158ab3b",
+        "summaries": [
+          [
+            6,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            14,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            692
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            692
+          ],
+          [
+            693,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            12,
+            1,
+            0,
+            0,
+            0
+          ]
+        ],
+        "failed_cases": [
+          "directory_reservations_recover_two_distinct_repository_cells"
+        ]
+      },
+      {
+        "label": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 45.072,
+        "log": "/tmp/canopy-source-cursor-build-final.log",
+        "log_sha256": "07d38a1434fc1584b81ac2432db3cf79c5f089b92432961cfbb7ac57f5421f98",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.262,
+        "log": "/tmp/canopy-source-cursor-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.063,
+        "log": "/tmp/canopy-source-cursor-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 50.538,
+        "log": "/tmp/canopy-source-cursor-harness-final.log",
+        "log_sha256": "df4c5131cbc670755c8370851cdc37d11d296cf66378163bdb944d790dda7bdd",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "label": "selected_lifecycle",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--test",
+          "multi_server",
+          "--locked",
+          "--",
+          "workspace::",
+          "lifecycle::fork::",
+          "lifecycle::cancelled_prebound_startup",
+          "lifecycle::runtime_destruction",
+          "lifecycle::cancelled_startup_keeps_workspace",
+          "lifecycle::dropped_handle_and_cancelled_shutdown",
+          "lifecycle::failed_drain_retains_workspace",
+          "lifecycle::startup_rejects_ignored_conditional",
+          "--test-threads=4"
+        ],
+        "exit_code": 0,
+        "log": "/tmp/canopy-source-cursor-lifecycle-final.log",
+        "log_sha256": "db9c91ccc85d41f0c15282b6f66309c68ec6f5e0540a303f5ce87e7158b28bfd",
+        "passed": 9,
+        "test_seconds": 6.64
+      }
+    ],
+    "unique_library_cases": 713,
+    "library_passed": 713,
+    "library_failed": 0,
+    "server_library_passed": 693,
+    "publication_library_passed": 398,
+    "binary_passed": 2,
+    "directory_passed": 12,
+    "directory_failed": 1,
+    "selected_lifecycle_passed": 9,
+    "unique_executed_rust_cases": 737,
+    "unique_executed_rust_passed": 736,
+    "unique_executed_rust_failed": 1,
+    "nested_and_focused_runs_excluded": true,
+    "full_workspace_halted_at": "directory_cell",
+    "unrun_after_halt": [
+      "multi_server full suite",
+      "owner_restart",
+      "repository_cell",
+      "smart_http",
+      "doc tests"
+    ],
+    "provider_qualification_run": false,
+    "linux_only_cases_run": false,
+    "source_unchanged": true
+  },
+  "static": {
+    "source_digest": "5be32a60d63d87754e87f1b2fd0112ad5c2223d85da480b74446f22733c0511e",
+    "source_unchanged": true,
+    "original_index_sha256": "bef77b0a83f80518f232060828e83797174b1863b8ed9147bffa65850af59798",
+    "archive_sha256": "c7494d679abed5e1e55a5b2d605d80e786cb4de86406d77f0c7a37c71c79437e",
+    "sdk_revision": "161067f5a21703b3e257024bcb64e565fd9657b4",
+    "dependency_declarations": 5,
+    "locked_sources": 6
+  },
+  "preceding_actual_ci": [
+    {
+      "head": "6ab78d679839fa8e5fc80002fa529ca61e799874",
+      "run": 37238249979,
+      "job": 111541595278,
+      "conclusion": "FAILURE",
+      "server_passed": 684,
+      "server_failed": 4,
+      "log": "/tmp/canopy-pr34-6ab-failed.log",
+      "sha256": "15297c8d83aef2f27c756463d628fb67a80c3450ae8a2e51fb8783ea8ce2b048"
+    },
+    {
+      "head": "6ab78d679839fa8e5fc80002fa529ca61e799874",
+      "run": 37238247841,
+      "job": 111541588793,
+      "conclusion": "FAILURE",
+      "server_passed": 684,
+      "server_failed": 4,
+      "log": "/tmp/canopy-pr34-6ab-secondary-failed.log",
+      "sha256": "704efd84fb15b9ce9ab15dfa1c910dc3a6f233aaad3088227e67751e509506af"
+    }
+  ],
+  "failed_draft_diagnostics": {
+    "source_files": 487,
+    "rust_files": 473,
+    "source_hash_digest": "ccc988e21dfdb7a4b00a49fcd661afa5a26efab74228b0c0ed9b99881a37ef9c",
+    "release_qualified": false,
+    "execution_complete": false,
+    "phases": [
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 48.598,
+        "log": "/tmp/canopy-source-cursor-clippy-final.log",
+        "log_sha256": "f9d77bb384c10451e2713eb5be727738229fd24499c1cba23ffe234ccc090fc8",
+        "summaries": [],
+        "failed_cases": [],
+        "historical_log_path_reused": true,
+        "digest_only_retained": true
+      },
+      {
+        "label": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "--locked",
+          "--",
+          "sources::tests::changes::",
+          "native_write_base",
+          "native_refs_tests",
+          "--test-threads=4"
+        ],
+        "exit_code": 101,
+        "seconds": 89.736,
+        "log": "/tmp/canopy-source-cursor-focused-before-ref-warm.log",
+        "log_sha256": "6a513f8d80ab1d590e513dca0b8ed2c74a8bc94b19ddd1323e000ce395a4e4a7",
+        "summaries": [
+          [
+            8,
+            1,
+            0,
+            0,
+            684
+          ]
+        ],
+        "failed_cases": [
+          "packs::publication::tests::serving::workspace::native_write_base_cancellation_and_revocation_retain_real_provider_work_until_drain"
+        ]
+      }
+    ],
+    "log_note": "failed focused log is preserved at /tmp/canopy-source-cursor-focused-before-ref-warm.log; original final-log path was reused only after source repair",
+    "preserved_focused_log_sha256": "6a513f8d80ab1d590e513dca0b8ed2c74a8bc94b19ddd1323e000ce395a4e4a7"
+  },
+  "scope_limits": [
+    "Owned HTTP/SSH/generated write publication remains unconverted",
+    "Cold native baseline still downloads and verifies the selected catalog per request",
+    "Difference cursor supports root-pair increments but production cold constructor starts at None",
+    "Physical native fixtures qualify consumers, not live producer publication",
+    "Full integration/provider and capacity gates remain open",
+    "No compatibility table, command fallback or skipped test added"
+  ]
+}

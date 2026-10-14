@@ -1,0 +1,141 @@
+{
+  "mode": "snapshot",
+  "name": "kubernetes-tree-packed",
+  "status": "passed",
+  "stages": [
+    {
+      "name": "copy-source",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 70.012
+    },
+    {
+      "name": "reachable-objects",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 5.894
+    },
+    {
+      "name": "push",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 127.567
+    },
+    {
+      "name": "warm-clone-v0",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 9.799
+    },
+    {
+      "name": "warm-fsck-v0",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 1.512
+    },
+    {
+      "name": "warm-clone-v2",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 8.292
+    },
+    {
+      "name": "warm-fsck-v2",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 1.71
+    },
+    {
+      "name": "prepare-pull-client",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 34.278
+    },
+    {
+      "name": "configure-pull-client",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 0.04
+    },
+    {
+      "name": "incremental-prepare",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 0.042
+    },
+    {
+      "name": "advance-default-branch",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 0.132
+    },
+    {
+      "name": "incremental-push",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 1.272
+    },
+    {
+      "name": "incremental-fetch",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 0.709
+    },
+    {
+      "name": "incremental-pull",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 0.749
+    },
+    {
+      "name": "incremental-fsck",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 1.728
+    },
+    {
+      "name": "fresh-workspace-restart",
+      "status": "passed",
+      "seconds": 7.269
+    },
+    {
+      "name": "cold-clone",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 7.293
+    },
+    {
+      "name": "cold-fsck",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 2.152
+    }
+  ],
+  "canopy_binary_sha256": "e67bd56807df3fde4b8cd2dc1f034216ee38ff920fa8dd3ee9ad908c75779d8f",
+  "canopy_revision": "9c5f1d1bf837fdc2e38ee229aa409712b9579f69",
+  "canopy_source_tree_sha256": "69231818c4e082fb35e5655fd3274b2058aef720dfd9580de95569395dd34945",
+  "canopy_working_tree_dirty": true,
+  "provider_image": "ghcr.io/rustfs/rustfs@sha256:0c3c7030ffb93afde8d359fb1db957b85033ede05115518bd0dede51f4353f6a",
+  "git_version": "git version 2.50.1 (Apple Git-155)",
+  "host_platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "host_cpu_count": 12,
+  "disk_limit_bytes": 51539607552,
+  "active_repository_limit": 3,
+  "node_process_tree_peak_rss_bytes": 125992960,
+  "started_at_utc": "2026-10-01T06:48:17Z",
+  "source_head": "6d805ebe018f428d503fdc01bb6d57bd9574f598",
+  "source_tree": "bea8806e82f4af68e950de7c32665381a7add5d7",
+  "default_branch": "refs/heads/master",
+  "ref_count": 1,
+  "reachable_commits": 1,
+  "reachable_objects": 29839,
+  "repository_id": "f8accc8a-d405-4a8c-95c5-ec1d74224a73",
+  "clone_url": "http://127.0.0.1:18082/canopy/kubernetes-tree-packed.git",
+  "peak_repository_sqlite_and_wal_bytes": 16854496,
+  "evaluation_branch": "refs/heads/canopy-evaluation-f8accc8a-d405-4a8c-95c5-ec1d74224a73",
+  "incremental_commit": "8ef8cb7d7a7c3eb5d6db26a57c3572e4cd4f70a5",
+  "restored_ref_count": 2,
+  "restored_tree": "bea8806e82f4af68e950de7c32665381a7add5d7",
+  "finished_at_utc": "2026-10-01T06:53:02Z",
+  "source_repository": "https://github.com/kubernetes/kubernetes"
+}

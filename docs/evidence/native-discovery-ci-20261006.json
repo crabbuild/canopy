@@ -1,0 +1,30 @@
+{
+  "base_commit": "8ec0aefdea0b99910cdcd755001648e1c5ddd941",
+  "problem": "Both Linux runs at 772c6d0 passed all 757 server unit tests and 110 multi-server cases, failing only ref discovery while a large native pack part was deliberately paused. Advertised commit or tag bodies can share that physical part.",
+  "fix": "Stream fully peeled packed refs from certified ref and catalog metadata in bounded pages. Native Git owns v0/v2 discovery and capability formatting; discovery does not fetch native pack bodies. Validate tag-edge kinds and retain depth bound and fresh authority checks. The admitted replacement uses packed-refs.lock then atomic rename, with conservative disk charging.",
+  "qualification": {
+    "paused_pack_discovery": {
+      "result": "PASS with unchanged two-second requests",
+      "seconds": 10.99
+    },
+    "stock_git_tags_history_shallow_and_cold_clone": {
+      "result": "PASS",
+      "seconds": 20.64
+    },
+    "default_branch_fresh_restore_discovery": {
+      "result": "PASS",
+      "seconds": 9.01
+    },
+    "clippy": "PASS: workspace, all targets, locked, warnings denied",
+    "format": "PASS",
+    "diff_check": "PASS",
+    "full_workspace": "pending",
+    "linux_provider": "pending"
+  },
+  "sources": {
+    "crates/canopy-server/src/git_cache/serving_refs.rs": "d080e0e19a179ca2bd3fa668c54145499e6fdc29d38f7932643cb4e828e3b626",
+    "crates/canopy-server/src/packs/publication/serving/session/native_base.rs": "96c9358ac1b2e1255bd9b97840eac1b00d464605a2248d91c41c7e1a20a6655a",
+    "crates/canopy-server/src/packs/publication/serving/session/workspace.rs": "4d17485a9155d6c0e90d92fdad2ca08d28f699a52d5f326720958e139514caf8",
+    "crates/canopy-server/src/packs/publication/serving/session/workspace/prepare.rs": "af01cc2468948f4a6d9fc3442d19c782908de67103da56b1259efe0d4b08550a"
+  }
+}

@@ -1,0 +1,757 @@
+{
+  "recorded_at_utc": "2026-10-05T22:24:38.331143+00:00",
+  "base_head": "823092222fd043c2a0e3ce7deab8cdab40cd097c",
+  "host": "macOS, Rust 1.98.0; exact new-head Linux qualification required",
+  "release_qualified": false,
+  "source_files": 519,
+  "rust_files": 501,
+  "source_hash_digest": "e06fe0f8168246e9e9bf731b16d720bb97ad49c4bebb627db10ffe5a84d1eb7a",
+  "source_manifest": "/tmp/canopy-native-candidate-verification-final-source.json",
+  "source_digest_algorithm": "SHA256 of compact sorted-key JSON mapping each Rust/SQL/TOML/lock/YAML path to its file SHA256",
+  "source_unchanged_during_validation": true,
+  "public_baseline": {
+    "source_digest": "67608ddeea86178381fdc9cc3521f6c4362cd9648c0734fc8453c079a28c4926",
+    "reason": "Actual production stock-Git candidate endpoint fails at 503 instead of 200 on the parent. This private semantic increment does not claim to resolve that public failure; complete joint generated publication is next.",
+    "path": "/tmp/canopy-native-candidate-verification-public-baseline.log",
+    "sha256": "745cee89934b6426810fa32d8128b3f476d944e00be8e95508507ac2a6798c90",
+    "summaries": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 2.16s"
+    ]
+  },
+  "intermediate_failed_runs": [
+    {
+      "reason": "Compile failure: used the wrong location for the shared OID parser and treated the native fixture typed-edge inventory as raw body bytes. No tests executed and no qualification claimed.",
+      "path": "/tmp/canopy-native-candidate-verification-focused-first.log",
+      "sha256": "419e2596ef483a6a50ee347424fdd5e66e472197dd4f172df4d93f78f5af05a4",
+      "summaries": []
+    },
+    {
+      "reason": "Compile failure: shared pull parser returns bytes; switched to existing typed merge OID parser. No tests executed and no qualification claimed.",
+      "path": "/tmp/canopy-native-candidate-verification-focused-second.log",
+      "sha256": "e8ba5d7c26bc1618350a25c1dd0f93e8d7525e38558669fbc7188ffe55e82c33",
+      "summaries": []
+    },
+    {
+      "reason": "Two both-format rebase families pass, merge/squash fixture hits absent legacy objects table. The packed schema has removed objects/commit_ancestry; final assertion proves table absence rather than counting nonexistent rows. Final verifier also matches canonical BLAKE3 body digest beside Git OID.",
+      "path": "/tmp/canopy-native-candidate-verification-focused-third.log",
+      "sha256": "e802c4cca5fdbca597a6063f662e70b8fbfd71d09c2f5f3e481ab47a8232e313",
+      "summaries": [
+        "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 743 filtered out; finished in 16.05s"
+      ]
+    }
+  ],
+  "validation": {
+    "source_digest": "e06fe0f8168246e9e9bf731b16d720bb97ad49c4bebb627db10ffe5a84d1eb7a",
+    "phases": [
+      {
+        "name": "focused",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::tests::native_candidate::",
+          "--locked",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "seconds": 148.68,
+        "log": "/tmp/canopy-native-candidate-verification-final-focused-final.log",
+        "log_sha256": "6e6bdd6242aaeaaea5b79883d1847e8085d938228a10f041e8a879517c2566fc",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 743 filtered out; finished in 12.71s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "merge",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::tests::native_merge::",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "seconds": 10.35,
+        "log": "/tmp/canopy-native-candidate-verification-final-merge-final.log",
+        "log_sha256": "2a4fe6a30fa702d639f156995873143c30c71fec1bd044aaf3abd133bd47c70f",
+        "summaries": [
+          "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 732 filtered out; finished in 5.75s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "registry",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "-p",
+          "canopy-server",
+          "--lib",
+          "packs::publication::registry::tests::production_registers_packed_and_policy_metadata_contracts",
+          "--locked",
+          "--",
+          "--exact"
+        ],
+        "exit_code": 0,
+        "seconds": 1.06,
+        "log": "/tmp/canopy-native-candidate-verification-final-registry-final.log",
+        "log_sha256": "743852031baea3d9a1cbaff5b31019a53ffd48067e9011f8d7e6c712447a2077",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 745 filtered out; finished in 0.10s"
+        ],
+        "failed_cases": []
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 52.0,
+        "log": "/tmp/canopy-native-candidate-verification-final-clippy-final.log",
+        "log_sha256": "cf63691c426f069d6d0bb771e09d5520aca5de9892d837a2bd28980e51a68352",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "workspace",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "test",
+          "--workspace",
+          "--locked",
+          "--no-fail-fast"
+        ],
+        "exit_code": 101,
+        "seconds": 815.55,
+        "log": "/tmp/canopy-native-candidate-verification-final-workspace-final.log",
+        "log_sha256": "215a5e42f4a1fdc8f928033cc3a4c91e27813c23d6be9430e32c3e18826ce8d1",
+        "summaries": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s",
+          "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.86s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 745 filtered out; finished in 0.01s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 745 filtered out; finished in 0.08s",
+          "test result: ok. 746 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 341.05s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.71s",
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+          "test result: FAILED. 87 passed; 20 failed; 9 ignored; 0 measured; 0 filtered out; finished in 369.62s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ],
+        "failed_cases": [
+          "candidates::conflicts_and_unrelated_histories_never_publish_and_stale_candidates_cannot_merge",
+          "candidates::candidate_native_graph_and_paths_preserve_git_semantics",
+          "backup::backup_restores_git_lfs_and_collaboration_without_original_storage",
+          "candidates::native_candidates_are_fetchable_checked_and_recover_before_atomic_merge",
+          "default_branch::default_branch_controls_discovery_and_clone_after_fresh_owner_restore",
+          "comparison::threads::line_threads_bind_verified_hunks_and_survive_ref_loss_with_authorized_retries",
+          "leased_server_recovers_two_repositories_with_git_and_lfs",
+          "partial_clone::cold_single_branch_fetch_skips_unrelated_commit_and_tree_history",
+          "peers::moving_repositories_preserve_history_and_serialize_cross_gateway_pushes",
+          "peers::two_live_nodes_route_git_to_distinct_cell_owners_and_recover_the_directory",
+          "partial_clone::filtered_clones_lazy_fetch_reachable_objects_without_hydrating_other_blobs",
+          "rebase::rebase_conflicts_limits_and_stale_publication_keep_branches_unchanged",
+          "residency::faults::git_discovery::ref_discovery_does_not_wait_for_a_full_history_restore",
+          "sha256::sha256_native_merge_candidates_survive_restore_and_publish",
+          "ssh::fetch::cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips",
+          "ssh::fetch::cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants",
+          "ssh::filtered_preparation::cold_filters_keep_omitted_blobs_out_of_server_cache",
+          "residency::repositories_beyond_resident_capacity_restore_git_and_lfs_on_the_same_node",
+          "ssh::publication::late_ssh_push_refusals_report_both_refs_and_survive_restore",
+          "visibility::public_reads_and_private_revocation_survive_cell_recovery",
+          "a_second_node_clones_from_the_published_root_after_local_disk_loss",
+          "repository_cell_publishes_objects_and_refs_atomically",
+          "stock_git_push_and_clone_are_backed_by_one_repository_cell"
+        ]
+      },
+      {
+        "name": "build",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "build",
+          "--locked",
+          "--bin",
+          "canopy"
+        ],
+        "exit_code": 0,
+        "seconds": 61.27,
+        "log": "/tmp/canopy-native-candidate-verification-final-build-final.log",
+        "log_sha256": "a9c739d365564f2d759cb47f51f3db6f1201f1f069f63d4ff3d40de9c66e412f",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "+1.98.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 1.59,
+        "log": "/tmp/canopy-native-candidate-verification-final-fmt-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "harness",
+        "command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_*.py"
+        ],
+        "exit_code": 0,
+        "seconds": 43.39,
+        "log": "/tmp/canopy-native-candidate-verification-final-harness-final.log",
+        "log_sha256": "6f5949b48bd3a8896ed98da4b39bce1f6ec5b8b87825c5dca9e13c455a725c28",
+        "summaries": [],
+        "failed_cases": []
+      },
+      {
+        "name": "diff",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.05,
+        "log": "/tmp/canopy-native-candidate-verification-final-diff-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "summaries": [],
+        "failed_cases": []
+      }
+    ],
+    "complete": true,
+    "release_qualified": false,
+    "source_unchanged": true
+  },
+  "workspace_terminal_inventory": [
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_git_format-cdf8cea2f92fe6a4)",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_object_storage-4a0661c5c4765140)",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/lib.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy_server-d080aca381ae9ba9)",
+      "passed": 746,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "unittests src/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/canopy-16a4bf977c56198e)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/directory_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/directory_cell-31a0f4eea5beeae3)",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/git_http.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/git_http-afa4d1d9a2db0179)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/multi_server/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/multi_server-3e08ee00a07d7bde)",
+      "passed": 87,
+      "failed": 20,
+      "ignored": 9
+    },
+    {
+      "binary": "tests/owner_restart.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/owner_restart-be32ecc90c554a17)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/repository_cell/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/repository_cell-322afb5848ed5e86)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "tests/smart_http/main.rs (/Users/haipingfu/.codex/tmp/canopy-driver-native-target-zedhqen9/debug/deps/smart_http-18ac06122d3c394f)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_git_format",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_object_storage",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "binary": "canopy_server",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "workspace_unique_totals": {
+    "passed": 871,
+    "failed": 23,
+    "ignored": 9,
+    "executed": 894,
+    "total": 903
+  },
+  "counting": "Last summary per Cargo Running/Doc-tests section; focused runs and nested child summaries excluded. Ignored cases remain unexecuted.",
+  "workspace_failure_delta": {
+    "added": [],
+    "removed": []
+  },
+  "parent_ci": {
+    "headRefOid": "823092222fd043c2a0e3ce7deab8cdab40cd097c",
+    "mergeable": "MERGEABLE",
+    "statusCheckRollup": [
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-10-05T21:47:34Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/crabbuild/canopy/actions/runs/37378141563/job/111992656152",
+        "name": "harness",
+        "startedAt": "2026-10-05T21:46:50Z",
+        "status": "COMPLETED",
+        "workflowName": "Verify"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-10-05T21:47:28Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/crabbuild/canopy/actions/runs/37378136899/job/111992639205",
+        "name": "harness",
+        "startedAt": "2026-10-05T21:46:47Z",
+        "status": "COMPLETED",
+        "workflowName": "Verify"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-10-05T22:12:57Z",
+        "conclusion": "FAILURE",
+        "detailsUrl": "https://github.com/crabbuild/canopy/actions/runs/37378141563/job/111992655728",
+        "name": "rust",
+        "startedAt": "2026-10-05T21:46:49Z",
+        "status": "COMPLETED",
+        "workflowName": "Verify"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-10-05T22:10:29Z",
+        "conclusion": "FAILURE",
+        "detailsUrl": "https://github.com/crabbuild/canopy/actions/runs/37378136899/job/111992639458",
+        "name": "rust",
+        "startedAt": "2026-10-05T21:46:49Z",
+        "status": "COMPLETED",
+        "workflowName": "Verify"
+      }
+    ]
+  },
+  "parent_linux_runs": [
+    {
+      "run_id": 37378141563,
+      "metadata": {
+        "conclusion": "failure",
+        "headSha": "823092222fd043c2a0e3ce7deab8cdab40cd097c",
+        "jobs": [
+          {
+            "completedAt": "2026-10-05T22:12:57Z",
+            "conclusion": "failure",
+            "databaseId": 111992655728,
+            "name": "rust",
+            "startedAt": "2026-10-05T21:46:49Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-10-05T21:46:51Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-10-05T21:46:50Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:46:52Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@v4",
+                "number": 2,
+                "startedAt": "2026-10-05T21:46:51Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:01Z",
+                "conclusion": "success",
+                "name": "Install tools",
+                "number": 3,
+                "startedAt": "2026-10-05T21:46:52Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:05Z",
+                "conclusion": "success",
+                "name": "Report tool versions",
+                "number": 4,
+                "startedAt": "2026-10-05T21:47:01Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:13Z",
+                "conclusion": "success",
+                "name": "Check formatting",
+                "number": 5,
+                "startedAt": "2026-10-05T21:47:05Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:49:47Z",
+                "conclusion": "success",
+                "name": "Check lints",
+                "number": 6,
+                "startedAt": "2026-10-05T21:47:13Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:12:55Z",
+                "conclusion": "failure",
+                "name": "Test",
+                "number": 7,
+                "startedAt": "2026-10-05T21:49:47Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:12:55Z",
+                "conclusion": "skipped",
+                "name": "Qualify Git compatibility against RustFS",
+                "number": 8,
+                "startedAt": "2026-10-05T22:12:55Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:12:55Z",
+                "conclusion": "skipped",
+                "name": "Build server",
+                "number": 9,
+                "startedAt": "2026-10-05T22:12:55Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:12:55Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@v4",
+                "number": 18,
+                "startedAt": "2026-10-05T22:12:55Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:12:56Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "startedAt": "2026-10-05T22:12:55Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/crabbuild/canopy/actions/runs/37378141563/job/111992655728"
+          },
+          {
+            "completedAt": "2026-10-05T21:47:34Z",
+            "conclusion": "success",
+            "databaseId": 111992656152,
+            "name": "harness",
+            "startedAt": "2026-10-05T21:46:50Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-10-05T21:46:52Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-10-05T21:46:51Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:46:53Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@v4",
+                "number": 2,
+                "startedAt": "2026-10-05T21:46:52Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:31Z",
+                "conclusion": "success",
+                "name": "Check Python qualification harness",
+                "number": 3,
+                "startedAt": "2026-10-05T21:46:53Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:31Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@v4",
+                "number": 6,
+                "startedAt": "2026-10-05T21:47:31Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:31Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 7,
+                "startedAt": "2026-10-05T21:47:31Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/crabbuild/canopy/actions/runs/37378141563/job/111992656152"
+          }
+        ],
+        "status": "completed"
+      },
+      "rust_log": {
+        "path": "/tmp/canopy-native-candidate-verification-parent-pr-full.log",
+        "sha256": "67cace992f4b6eff56848b2641764ec5443730fc711176d14bb80ee4415b812b",
+        "summaries": []
+      }
+    },
+    {
+      "run_id": 37378136899,
+      "metadata": {
+        "conclusion": "failure",
+        "headSha": "823092222fd043c2a0e3ce7deab8cdab40cd097c",
+        "jobs": [
+          {
+            "completedAt": "2026-10-05T21:47:28Z",
+            "conclusion": "success",
+            "databaseId": 111992639205,
+            "name": "harness",
+            "startedAt": "2026-10-05T21:46:47Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-10-05T21:46:48Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-10-05T21:46:47Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:46:49Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@v4",
+                "number": 2,
+                "startedAt": "2026-10-05T21:46:48Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:26Z",
+                "conclusion": "success",
+                "name": "Check Python qualification harness",
+                "number": 3,
+                "startedAt": "2026-10-05T21:46:49Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:27Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@v4",
+                "number": 6,
+                "startedAt": "2026-10-05T21:47:26Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:27Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 7,
+                "startedAt": "2026-10-05T21:47:27Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/crabbuild/canopy/actions/runs/37378136899/job/111992639205"
+          },
+          {
+            "completedAt": "2026-10-05T22:10:29Z",
+            "conclusion": "failure",
+            "databaseId": 111992639458,
+            "name": "rust",
+            "startedAt": "2026-10-05T21:46:49Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-10-05T21:46:50Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-10-05T21:46:50Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:46:52Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@v4",
+                "number": 2,
+                "startedAt": "2026-10-05T21:46:50Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:05Z",
+                "conclusion": "success",
+                "name": "Install tools",
+                "number": 3,
+                "startedAt": "2026-10-05T21:46:52Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:05Z",
+                "conclusion": "success",
+                "name": "Report tool versions",
+                "number": 4,
+                "startedAt": "2026-10-05T21:47:05Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:47:08Z",
+                "conclusion": "success",
+                "name": "Check formatting",
+                "number": 5,
+                "startedAt": "2026-10-05T21:47:05Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T21:49:10Z",
+                "conclusion": "success",
+                "name": "Check lints",
+                "number": 6,
+                "startedAt": "2026-10-05T21:47:08Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:10:27Z",
+                "conclusion": "failure",
+                "name": "Test",
+                "number": 7,
+                "startedAt": "2026-10-05T21:49:10Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:10:27Z",
+                "conclusion": "skipped",
+                "name": "Qualify Git compatibility against RustFS",
+                "number": 8,
+                "startedAt": "2026-10-05T22:10:27Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:10:27Z",
+                "conclusion": "skipped",
+                "name": "Build server",
+                "number": 9,
+                "startedAt": "2026-10-05T22:10:27Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:10:28Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@v4",
+                "number": 18,
+                "startedAt": "2026-10-05T22:10:27Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-10-05T22:10:28Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 19,
+                "startedAt": "2026-10-05T22:10:28Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/crabbuild/canopy/actions/runs/37378136899/job/111992639458"
+          }
+        ],
+        "status": "completed"
+      },
+      "rust_log": {
+        "path": "/tmp/canopy-native-candidate-verification-parent-push-full.log",
+        "sha256": "725c4a8cba2e4e77e4a2297710c8da558f1b34c9a500256fcea820a889321f0b",
+        "summaries": []
+      }
+    }
+  ],
+  "changes": [
+    "PreparedCatalog.verify_candidate_commit reuses existing candidate model, closed physically verified native catalog, canonical headers, typed edges and shared native file custody. No SQL object/ancestry/ref mirror, schema, registry change, backward decoder or physical deletion is added.",
+    "Merge/squash exact parent order, author/committer, original reserved time, message and verified tree/source/base kind are matched using canonical Git OID, size and BLAKE3 body digest. No native pack/body download is needed for these strategies.",
+    "Rebase advances source and rewritten linear chains together; it reads one bounded original body at a time and verifies exact rewritten bytes from verified header/tree/parent metadata. Original author/encoding/message are preserved and obsolete signatures stripped. At most 128 commits are accepted.",
+    "A shared bounded, admitted disk ancestry queue checks all original targets with one base-history traversal; only final source anchor may already be reachable. Skipped commits and replayed base history are refused, without rebuilding authoritative SQL ancestry.",
+    "Three physically verified stock-Git families exercise both object formats: valid merge/squash with exact intent/actor/time/parent/kind/member/fence refusal and zero native downloads; valid rebase, skipped/tampered/extra-base history refusal and one shared pack download; 128-commit acceptance and 129 refusal. Existing 14 native merge cases remain passing."
+  ],
+  "qualification_limits": [
+    "This is semantic preparation, not generated Ready publication, a write capability or current editorial authorization. The public generated endpoint still calls retired ingestion; its failure remains open.",
+    "Tests construct a private closed catalog from real physical stock-Git pack witnesses with actual preparation capability. They do not qualify public candidate preparation/fetch/merge, generated producer cancellation, exact final command/recovery, initial-root production, lost acknowledgement, startup adoption or retirement.",
+    "Shared pack cache counts prove bounded native download reuse for these fixtures, not large-history selective fetch or real object-store byte throughput. At most 128 original bodies are read, but base ancestry traversal can still cover full base history on admitted disk. Acceleration, shared/selected workspaces and workload capacity remain required.",
+    "Fresh policy/access/actual owner/pin/current generation/input checkpoint and immutable UUID/audit selection must be verified by the forthcoming joint publisher. Existing 512-byte phase result cap must be preserved using a compact acknowledgement rather than CandidateOutcome with potentially large messages/conflict paths.",
+    "Remaining full CI, generated reviewed merge/squash/rebase, default-branch/thread writers, peer/backup recovery, selective fetch, physical retention/GC/final DDL, fair maintenance/accelerators, asynchronous file attribution and 10,000-engineer capacity remain incomplete.",
+    "macOS lib-test linker retains oversized __eh_frame compact-unwind warning. All-target Clippy, production build and Linux CI are independent checks."
+  ],
+  "parent_linux_discrepancy": {
+    "newly_observed_case": "comparison::history::historical_comparisons_survive_branch_deletion_and_recheck_current_access",
+    "observation": "Both parent 8230922 Linux jobs fail the delete push with HTTP500 and a directly adjacent logical-publication-already-admitted driver failure. Current macOS full run passes that family. Pending creating custody/inputs and final work share JobKind::Publication; reproduce the actual collision before changing guards. Not classified as a flake or attributed to this semantic increment.",
+    "logs": [
+      "/tmp/canopy-native-candidate-verification-parent-pr-full.log",
+      "/tmp/canopy-native-candidate-verification-parent-push-full.log"
+    ]
+  },
+  "next_executable_plan": "/tmp/canopy-native-generated-publisher-plan.md"
+}

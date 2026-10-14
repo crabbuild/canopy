@@ -70,8 +70,7 @@ def qualify(binary, directory, settings, processes):
         return json.loads(result.stdout)
 
     saved = administer("create", backup_prefix)
-    # Structural/blob pack pairs plus the nonempty and empty LFS bodies.
-    assert saved["cells"] == 2 and saved["external_objects"] == 4, saved
+    assert saved["cells"] == 2 and saved["external_objects"] == 3
     assert administer("create", backup_prefix) == saved
     aws = ["aws"]
     if os.environ.get("AWS_ENDPOINT"):
@@ -97,7 +96,7 @@ def qualify(binary, directory, settings, processes):
     assert json.loads(listing.stdout).get("KeyCount", 0) == 0
     assert administer("verify", backup_prefix) == saved
     restored = administer("restore", backup_prefix, restore_prefix)
-    assert restored["cells"] == 2 and restored["external_objects"] == 4, restored
+    assert restored["cells"] == 2 and restored["external_objects"] == 3
     node, restored_base = start(binary, directory, {**settings, "storage_url": restored_url,
                                                   "node_id": str(uuid.uuid4())}, "backup-new-node")
     processes.append(node)

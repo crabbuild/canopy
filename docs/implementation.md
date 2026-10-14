@@ -45,8 +45,7 @@ These are current admission limits, not measured production throughput:
 | Concurrent Git/LFS transfers | Eight per node; excess requests return `503` and `Retry-After: 1`. |
 | Fetch request body | Up to 64 MiB; clone/fetch response packs stream with backpressure. |
 | Push report | Buffered up to 64 MiB; push bodies have no fixed byte quota. |
-| Git content | Immutable self-contained native pack/index pairs; blob ingestion streams with no fixed logical blob-size quota. |
-| LFS body | Immutable 8 MiB parts, with no fixed logical file-size quota. |
+| Git blob and LFS body | Immutable 8 MiB parts, with no fixed logical file-size quota. |
 | Active repository gateways | `max_active_repositories` per node (1–9,999); stored repositories may exceed this. |
 | Local admitted disk | Set by `local_disk_limit_bytes`; exhaustion returns `507`. |
 
@@ -54,16 +53,14 @@ The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
 as the node's SQLite files. Push bodies have no fixed byte quota; fetch requests
 remain bounded at 64 MiB. Push reports are buffered up to 64 MiB, while clone/fetch
-packs stream with backpressure. Git bodies remain compressed in native pack/index pairs. Blob verification streams
-through a persistent native Git reader. Structural graph projection streams with bounded buffers. Direct whole-object
-reads retain a 64 MiB allocation limit. LFS objects use
-immutable 8 MiB parts without a fixed logical file-size quota.
+packs stream with backpressure. Git blobs and LFS objects use immutable 8 MiB
+parts without a fixed logical file-size quota. Trees, commits and tags above
+768 KiB use SQLite chunks without a fixed individual object-size quota.
 Git LFS basic downloads resume with a tail `Range` request and a verified
 `206` response. The server reads only the requested parts and verifies each
 against a manifest digest pinned in SQLite.
-Publication hashes structural bodies through bounded buffers and retains their
-typed graph edges, rather than complete messages or tree path names. Memory for
-the graph projection grows with the number of dependencies.
+Publication and graph parsing still materialize non-blob bodies, so very large
+structural objects depend on available worker memory.
 Partial uploads stay invisible to Git.
 Each node admits eight Git/LFS transfers across all repositories. Overload
 returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
@@ -92,7 +89,7 @@ See [native pack policy](contracts.md#native-pack-resource-policy) and
 
 ### Local workspace and shutdown
 
-The node locks its `data_dir` and owns `runtime-v1/` beneath it. On Unix,
+The node locks its `data_dir` and owns `canopy-pack-v2/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
 stop startup. Keep the lock files in place; files outside the managed runtime
@@ -139,32 +136,17 @@ A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
-`Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to the exact
-crates.io version `=0.2.0` (release source
-`aaacf311622a2fea009067d1f5f217751ee1a2cf`). Canopy remains a separate
-product crate and builds without a local Cellule checkout. There are no Crab
-product/server or Xet dependencies.
+The server manifest pins Cellule's runtime, app, host, LTX and store crates to
+published `=0.2.0`; `Cargo.lock` binds all six Cellule crates to that registry
+release. `scripts/check_cellule.py` checks every workspace member and the lockfile.
+Only the compiled module code and current storage formats are supported. Directory
+has no retained predecessor allowlist. Repository schema 4 has one fresh-cell
+initialization descriptor and uses the native catalog/publication path from the
+modular workspace. Storage format `canopy-pack-v2` rejects older deployments.
 
 ### Storage compatibility and graph verification
 
-Canopy adopts current Cellule APIs directly and supports one compiled release.
-There are no old-format readers, retained module implementations, or upgrade
-migrations. The single `MigrationDescriptor` in each module creates the fresh
-SQLite schema required by Cellule; it does not migrate previous deployments.
-Format, identity, release and fencing checks remain mandatory.
-
-`python3 scripts/check_cellule.py` verifies that direct dependencies use one exact
-stable crates.io version and that every locked Cellule crate uses that release.
-CI runs this check before building. The checked-in Dependabot configuration
-requests grouped Cellule updates on its daily schedule once it is on the default
-branch; those updates must pass the same provider/process qualification as any
-other dependency change. The check itself is offline and does not establish
-whether a newer upstream release exists.
-
-Use a **fresh storage prefix** for this build. Cellule 0.2.0 uses Node Bundle v1
-and rejects older bundle encodings and paths; there is no automatic migration.
-Before retiring an older deployment, drain and materialize its acknowledged
-history with the previous binary. Cellule derives a 33-byte entity
+Use a **fresh storage prefix** for this build. Cellule derives a 33-byte entity
 partition from the repository UUID; the UUID is also persisted in repository
 SQLite for backup recovery. This is a hard cutover: previous runtime
 prefixes/backups are unsupported. Startup rejects unmarked application roots,
@@ -174,33 +156,29 @@ and release admission rejects a different compiled release. See the
 Before ref publication, bounded certificate batches verify the durable Git
 graph: commit trees and parents, tree entries and tag targets must exist with
 the correct object type. Each batch covers at most 128 objects, targeting 64 MiB of
-structural object bytes. One oversized structural object is handled alone.
-Bounded read-only seeks warm both existing graph indexes before certification
-so cold page retrieval does not consume the write transaction's SQL budget. Ref publication checks certified tips atomically with
+SQLite object bytes. Ref publication checks certified tips atomically with
 permissions and ref versions; branch tips must be commits. Submodule gitlinks may name commits in another repository.
 SQLite certificates let later pushes reuse validated history. Push ingestion streams
 candidates from accepted ref tips, excludes previously published history, and
 reads missing objects through one persistent Git batch process. Object sizes
 are checked before allocation and canonical OIDs before storage. SQLite lookups
-group up to 512 candidate IDs; object publication groups up to 512 metadata
-records in one Cell transaction. Typed dependency rows are staged in bounded
-multi-row pages before publication. Canonical OIDs and raw-body BLAKE3 hashes
-are verified before recording a pack reference; no Git body enters SQLite. A conflicting record rejects
+group up to 128 candidate IDs; object publication groups up to 128 records and
+3 MiB of inline bytes in one Cell transaction, targeting 64 MiB of SQLite
+object bytes verified per batch. A conflicting record rejects
 the whole batch. Recovery tests include annotated tags, submodules and
 `git fsck` on the restored clone.
 
 ### Cache hydration and partial clone
 
-Cold cache hydration reads insertion-ordered pages of at most 512 metadata records.
-Each referenced pack/index pair verifies its exact size, BLAKE3 identity, native
-checksums and pair binding before installation. Native Git reads disposable projections of selected objects. Small objects are
-decoded under a memory bound; larger objects stream through native Git into
-disk-accounted loose files. Durable Git content remains in native packs. Filtered clone and fetch retain
-native Git's wire filtering and authorization rules. A cold read currently
-fetches a complete referenced pack, so provider traffic can include objects
-omitted from a filtered wire response. Sparse range loading remains open.
-Advertised ref/tag targets are prepared from their immutable packs.
-Supported filters and remaining gaps are listed in
+Cold cache hydration reads insertion-ordered pages of at most 128 records and 768 KiB
+of inline bodies. It verifies inline identities on a blocking worker; chunked
+and external bodies retain their own verification before cache writes. Pages
+reduce SQLite query overhead. Blobless fetch (`--filter=blob:none`) skips ordinary
+blob bodies until explicitly requested. Other fetches enumerate missing blobs
+reachable from requested tips, applying the native filter before hydration.
+Tree and object-type constraints, including those in combined filters, skip
+omitted bodies; size filters still need missing blob bodies. Advertised ref/tag targets are always prepared.
+Non-blob history is still prepared across the repository. Supported filters and remaining gaps are listed in
 [Git compatibility](git-compatibility.md).
 While a gateway remains resident, verified object files are shared across private
 ref snapshots, pushes and merge candidates. An indexed insertion cursor limits
@@ -217,27 +195,10 @@ tests. The repository's `target/` directory is ignored by Git:
 
 ```bash
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
-python3 scripts/check_cellule.py
-cargo test --locked -- --test-threads=1
-cargo clippy --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
 ```
-
-CI serializes independent test fixtures; individual tests still exercise
-concurrent requests, Git workers and multi-node ownership.
-
-To run the same isolated provider and process checks as CI, install Docker,
-the AWS CLI and OpenSSL, then run:
-
-```bash
-cargo build --locked --bin canopy
-python3 scripts/qualify_size.py --provider-only \
-  --process-binary "$CARGO_TARGET_DIR/debug/canopy"
-```
-
-The harness creates its own RustFS volume and bucket with test credentials,
-runs the eight Git/SSH/LFS provider probes and the process smoke below, then
-removes the container and volume, including on failure.
 
 The integration tests need `git` and `git-lfs` on `PATH`. See
 [delivery plan](delivery-plan.md) for the remaining release gates and
@@ -274,7 +235,7 @@ Optional flags expand the qualification:
 | --- | --- |
 | `--large-clone` | Push two 80 MiB random blobs, then clone with protocol v0 and v2 after takeover. Each pack exceeds 64 MiB; both file hashes and `git fsck` must match. This checks transfer size, not production capacity. |
 | `--many-objects 256` | Push 256 files, update one file with an annotated tag, then clone after takeover. Combined with `--large-clone`, exercise resident eviction across four repositories and Git/LFS recovery before restart. |
-| `--structural-objects` | Structural-object gate; push a 32,000-entry tree and commit/tag messages above 1 MiB; verify raw bytes and OIDs after takeover with strict `git fsck`. |
+| `--sqlite-chunks` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify raw bytes and OIDs after takeover with strict `git fsck`. |
 | `--corpus-repository /path/to/existing/repository` | Read that checkout's HEAD history, bundle it into temporary fixtures under `--work-parent`, then compare every reachable object's type, size and bytes in v0/v2 clones after takeover, with strict `git fsck`. Other source branches and tags are outside this check. |
 
 For a local container store, verify that the intended data/log volume is shared
@@ -289,20 +250,20 @@ To measure cold recovery, set
 `RUST_LOG=warn,canopy_server::git_gateway=debug,canopy_server::server::residency=debug`.
 The node reports Cell acquisition time and cache hydration time, with object
 count, raw/cache bytes and time spent in page reads, body retrieval and cache
-writes. Page time includes metadata decoding; body time includes verified pair
-retrieval, and cache time includes native pair installation and admitted writes.
+writes. Page time includes inline integrity verification; cache time includes
+worker scheduling, OID verification, compression and admitted disk writes.
 Use release builds for performance measurements.
 
 The chunk, default-branch, repository-discovery, token-metadata, collaboration,
 visibility and object insertion-sequence layouts change the unreleased schema; use a fresh development storage prefix when moving
-from older builds. Upgrade migrations and mixed-build rolling upgrades are out of scope.
+from older builds. No upgrade migration or mixed-build rolling upgrade is supported yet.
 Do not reuse an existing development prefix with this changed initialization schema.
 
 ## Contributing
 
 Keep behavior, tests, and documentation aligned when you change Canopy:
 
-1. Follow the [Cellule integration policy](../AGENTS.md) and update the relevant [persisted contract](contracts.md).
+1. Update the relevant [persisted contract](contracts.md).
 2. Add or update a stock-client, API, or fault test.
 3. Record the revision, provider, workload, and hardware for measurements.
 4. Update the matching compatibility row or [delivery gate](delivery-plan.md).
@@ -312,17 +273,14 @@ Keep behavior, tests, and documentation aligned when you change Canopy:
 
 Canopy declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in `Cargo.toml`.
 
-### Bounded graph reads and covering types
 
-Repository schema 3 adds `objects_by_oid_kind` for immutable kind lookups without
-reading wide object rows. Certification checks dependency kind and closure through
-that covering index, retaining its 128-object / 64 MiB publication batches. The
-metadata write batch remains 512 objects and dependency writes remain 8,192 rows.
+The `gc` administration command wraps Cellule's retention-aware collector in a
+verified maintenance drain. A persistent operation/worker/workspace claim
+serializes collection, recovery and maintenance completion. The sweep keeps
+verified live roots and backup pins, enforces its grace and deletion bounds, and
+joins work before releasing the claim. Product pack/catalog/LFS retention is a
+separate policy. The operational sequence is in [operations](operations.md#cellule-retention-collection).
 
-Fetch graph traversal selects at most 64 parents and 128 edge rows per query. It
-seeks the current parent's child key directly, excludes completed parents, and
-limits edges before the kind lookup. Blob filtering happens after that bounded
-read, so a tree containing mostly blobs does not require an unbounded SQL scan to
-fill a structural page. Both Git hash formats have dense-parent pagination and
-covering-query regression checks. This schema initializes a fresh prefix only;
-there is no index upgrade or old-schema reader.
+The integrated source has preliminary type-check and Python harness results;
+full Rust, isolated provider/process and fresh medium-corpus qualification remain
+pending. Historical measurements retain their original binaries and formats.

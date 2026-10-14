@@ -1,9 +1,11 @@
 """Guard against partial Cellule upgrades and alternate dependency sources."""
 
 import copy
+from pathlib import Path
+import tempfile
 import unittest
 
-from check_cellule import check
+from check_cellule import check, workspace_manifests
 
 
 class CelluleReleaseTests(unittest.TestCase):
@@ -35,6 +37,18 @@ class CelluleReleaseTests(unittest.TestCase):
         self.manifest["dependencies"]["cellule-app"]["version"] = "=0.3.0"
         with self.assertRaisesRegex(ValueError, "same release"):
             check(self.manifest, self.lock)
+
+    def test_workspace_members_cannot_hide_another_cellule_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n')
+            for name, version in (("server", "0.2.0"), ("storage", "0.1.0")):
+                member = root / "crates" / name
+                member.mkdir(parents=True)
+                (member / "Cargo.toml").write_text(
+                    f'[dependencies]\ncellule-runtime = "={version}"\n')
+            with self.assertRaisesRegex(ValueError, "same release"):
+                check(workspace_manifests(root), self.lock)
 
     def test_rejects_hidden_target_alias_on_another_release(self):
         self.manifest["target"] = {"cfg(unix)": {"dependencies": {

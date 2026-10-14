@@ -1,0 +1,523 @@
+{
+  "version": 1,
+  "corpus_repositories": 10000,
+  "node_active_limit": 100,
+  "windows": [
+    {
+      "id": "metadata-uniform-100",
+      "operation": "metadata",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "metadata-skewed-100",
+      "operation": "metadata",
+      "active_repositories": 100,
+      "distribution": "skewed",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "metadata-uniform-500",
+      "operation": "metadata",
+      "active_repositories": 500,
+      "distribution": "uniform",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "metadata-skewed-500",
+      "operation": "metadata",
+      "active_repositories": 500,
+      "distribution": "skewed",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "metadata-uniform-1000",
+      "operation": "metadata",
+      "active_repositories": 1000,
+      "distribution": "uniform",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "metadata-skewed-1000",
+      "operation": "metadata",
+      "active_repositories": 1000,
+      "distribution": "skewed",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "create-r1",
+      "operation": "create",
+      "active_repositories": null,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "create-r5",
+      "operation": "create",
+      "active_repositories": null,
+      "distribution": "uniform",
+      "rate": 5,
+      "concurrency": 16,
+      "duration": 120,
+      "repetitions": 3
+    },
+    {
+      "id": "refs-uniform-r20",
+      "operation": "refs",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "refs-uniform-r100",
+      "operation": "refs",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 100,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "refs-skewed-r20",
+      "operation": "refs",
+      "active_repositories": 100,
+      "distribution": "skewed",
+      "rate": 20,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "refs-skewed-r100",
+      "operation": "refs",
+      "active_repositories": 100,
+      "distribution": "skewed",
+      "rate": 100,
+      "concurrency": 32,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "ls-remote-c1-r1",
+      "operation": "ls_remote",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "ls-remote-c1-r4",
+      "operation": "ls_remote",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "ls-remote-c16-r1",
+      "operation": "ls_remote",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "ls-remote-c16-r4",
+      "operation": "ls_remote",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "clone-c1-r1",
+      "operation": "clone",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "clone-c1-r4",
+      "operation": "clone",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "clone-c16-r1",
+      "operation": "clone",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "clone-c16-r4",
+      "operation": "clone",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "cold-fetch-c1-r1",
+      "operation": "cold_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "cold-fetch-c1-r4",
+      "operation": "cold_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "cold-fetch-c16-r1",
+      "operation": "cold_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "cold-fetch-c16-r4",
+      "operation": "cold_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-fetch-c1-r1",
+      "operation": "incremental_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-fetch-c1-r4",
+      "operation": "incremental_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-fetch-c16-r1",
+      "operation": "incremental_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-fetch-c16-r4",
+      "operation": "incremental_fetch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-pull-c1-r1",
+      "operation": "incremental_pull",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-pull-c1-r4",
+      "operation": "incremental_pull",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-pull-c16-r1",
+      "operation": "incremental_pull",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "incremental-pull-c16-r4",
+      "operation": "incremental_pull",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2
+    },
+    {
+      "id": "ref-push-r1",
+      "operation": "push_branch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "ref-push-r4",
+      "operation": "push_branch",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 120,
+      "repetitions": 2
+    },
+    {
+      "id": "new-push-b262144-c1-r1",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 262144
+    },
+    {
+      "id": "new-push-b262144-c1-r4",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 262144
+    },
+    {
+      "id": "new-push-b262144-c16-r1",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 262144
+    },
+    {
+      "id": "new-push-b262144-c16-r4",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 262144
+    },
+    {
+      "id": "new-push-b1048576-c1-r1",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 1048576
+    },
+    {
+      "id": "new-push-b1048576-c1-r4",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 1048576
+    },
+    {
+      "id": "new-push-b1048576-c16-r1",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 1048576
+    },
+    {
+      "id": "new-push-b1048576-c16-r4",
+      "operation": "push_commit",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "git_payload_bytes": 1048576
+    },
+    {
+      "id": "lfs-download-c1-r1",
+      "operation": "lfs_download",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-download-c1-r4",
+      "operation": "lfs_download",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-download-c16-r1",
+      "operation": "lfs_download",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-download-c16-r4",
+      "operation": "lfs_download",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-upload-c1-r1",
+      "operation": "lfs_upload",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-upload-c1-r4",
+      "operation": "lfs_upload",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 1,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-upload-c16-r1",
+      "operation": "lfs_upload",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 1,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    },
+    {
+      "id": "lfs-upload-c16-r4",
+      "operation": "lfs_upload",
+      "active_repositories": 100,
+      "distribution": "uniform",
+      "rate": 4,
+      "concurrency": 16,
+      "duration": 60,
+      "repetitions": 2,
+      "lfs_bytes": 1048576
+    }
+  ]
+}

@@ -1,0 +1,2143 @@
+{
+  "source_parent": "aa86f944907b64816c366a55bdca2f465e25e00e",
+  "source_manifest_sha256": "4aa711e91ae7830335432a5a8c954014b5a5531964cb2c8a025bffb20173d215",
+  "sources": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "ea876788c7c48d013f588730c28c719d3b88283921be3f42418f186421fb954d"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "577b251e8bb21314d338c7dccfb42429de3cfdb2191be3b854786bb394de507c"
+    },
+    {
+      "path": "crates/canopy-git-format/Cargo.toml",
+      "sha256": "60b0e162738fb11e55a1eb7e02b21add376b0f19c6e5119171c2b7d11359738d"
+    },
+    {
+      "path": "crates/canopy-git-format/src/lib.rs",
+      "sha256": "5b5a8674b1804564e1195ba6b79231b3024b00f202fb087c9012214dd67d5b73"
+    },
+    {
+      "path": "crates/canopy-git-format/src/pack_index/mod.rs",
+      "sha256": "c3d086276a6d64d0f79afd1feef2f0a65e172ae5865f11f1d9a6c63154aeea44"
+    },
+    {
+      "path": "crates/canopy-git-format/src/pack_index/tests.rs",
+      "sha256": "c5930d97ecb1923a0364b54fef733dcd3001c84af54a79090c94a49e34a2ed4f"
+    },
+    {
+      "path": "crates/canopy-object-storage/Cargo.toml",
+      "sha256": "f7b22c443cfc6beb1abe41542d22af6002442f4a43b9c651e34e95aed717c826"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/artifact.rs",
+      "sha256": "767506bf5d48ccd1d454139538361d99e76952bafb8bb0c761f89e97958a0d4a"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/artifact/tests.rs",
+      "sha256": "75b3ce3def1b32f29b0ede0e86a6f5ea6dcd0b164a57920874a08e9abb311829"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/blob/mod.rs",
+      "sha256": "fa2a21fd07cb56bc314de7b134ab669c1caa0b8b59dedcf3049ca3cd882cc99a"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/blob/read.rs",
+      "sha256": "e2994c3398fdf41fcf43acab00a0ccbf26606ce401183c5a9e9f691c1f5726b3"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/blob/tests.rs",
+      "sha256": "d49b9ea9bd9e017adae3bebc773d5fe4b52ce83757dd7b13bd126af68a6dc0a7"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/external.rs",
+      "sha256": "28b5178ef81d72489db7201d81ba3c21e42a25c030262dae733f86664a75339c"
+    },
+    {
+      "path": "crates/canopy-object-storage/src/lib.rs",
+      "sha256": "377b85fd4124e42d177f290b8ac7c8149f9223c2bec0b07c7dd5fbca936571db"
+    },
+    {
+      "path": "crates/canopy-server/Cargo.toml",
+      "sha256": "cbfe82768a262d1e49c5442534dfa0811cf31cba886992068e480ce92a14ad0f"
+    },
+    {
+      "path": "crates/canopy-server/examples/benchmark.rs",
+      "sha256": "2a1ae5437fec4a402e74fea55643c265a85bfc153ea7f03df76a5b8863a62c9b"
+    },
+    {
+      "path": "crates/canopy-server/examples/support/mod.rs",
+      "sha256": "e2d78a6c801bd113bcdd0214a91712455b58e620f85f3f2a3ba32fe7368eb24a"
+    },
+    {
+      "path": "crates/canopy-server/src/access.rs",
+      "sha256": "cd9378763fea7f81c87b201a506dd3d9f9c235a061158e6cbeae434390ec9570"
+    },
+    {
+      "path": "crates/canopy-server/src/admission.rs",
+      "sha256": "5d0ef8cde0c4d31b3da9b301d37529b8c38d24cb4bf4a156510fe8ba9ea132c0"
+    },
+    {
+      "path": "crates/canopy-server/src/ancestry.rs",
+      "sha256": "61342aa4d982de2fbfae1591fe994be77482bcdce2aa75c511d879457b5861ef"
+    },
+    {
+      "path": "crates/canopy-server/src/branch_rules/command.rs",
+      "sha256": "abd39aae1d4400b678c23b4a0cfb21691affef3f6803a6d721e90d53541464ec"
+    },
+    {
+      "path": "crates/canopy-server/src/branch_rules/mod.rs",
+      "sha256": "26f588ccffde24b83cf42c0e34f3ea2f2d1ba87af64c4631ea1126d9975f320f"
+    },
+    {
+      "path": "crates/canopy-server/src/checks/mod.rs",
+      "sha256": "f7550d692056fb0046a296778e22e7f9152acfef646bfd359cd654d423d0e0ba"
+    },
+    {
+      "path": "crates/canopy-server/src/checks/mutations.rs",
+      "sha256": "c4522f0ada18a414b3da8de99ae8813c58a28350a4659765d674c57394fa0e9a"
+    },
+    {
+      "path": "crates/canopy-server/src/checks/native.rs",
+      "sha256": "7f4c12d84f322dc4dc38478eee2f3d34e29e6ee0537b2e832c41253efc18c591"
+    },
+    {
+      "path": "crates/canopy-server/src/checks/native/codec.rs",
+      "sha256": "1df0d06bfe77a3d62d713f666e9ceb27b0981810567d97ddb80e6f0530d535de"
+    },
+    {
+      "path": "crates/canopy-server/src/default_branch.rs",
+      "sha256": "32d424a454f791a9b42c48e72a252ebaf9f3eea332d25265c366cb4ee7070c14"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/backup/bodies.rs",
+      "sha256": "2e53f959411301c36a774f1e3fb652a576f2264318c0f5f0380df02120a8fd58"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/backup/enrollment.rs",
+      "sha256": "a3cf53c74a8c101d61c443154aeec8eb3610aabb860c43ffd46144eca17302e7"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/backup/mod.rs",
+      "sha256": "7172ee744beb899f898cefad0d8aea75a8f30dbd6bab61010206b1a3caefd9a0"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/backup/native.rs",
+      "sha256": "4ba572997a014d3837058b16a7b1e73beca90bb81e307c74e2221292597b1668"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/mod.rs",
+      "sha256": "253de4f08871587fb456a54c51da7305f186cbc16dd6b06ddf7e26e59349199c"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/recovery.rs",
+      "sha256": "6e9922b30c01ef6dff61358aab565921285feca1fa67388dc07a8d0029b8e07c"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/root.rs",
+      "sha256": "109308ed8013362532179505dfb7cb7e2941a7e8deb7fd2879a66aede58d8b22"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/tests.rs",
+      "sha256": "d5379b84c34bfe460ece1a5a18c8ca338882ebb3a1397c0697d9ded46c8270cf"
+    },
+    {
+      "path": "crates/canopy-server/src/deployment/tests/retained_maintenance.rs",
+      "sha256": "7d349038bccc8918775750ba8e098049f5aa0132d1bca5e47705457871400c79"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/accounts.rs",
+      "sha256": "baa4b36abede25ef4c68b67fe953c90eee6057879a9445429169e9b56607cc7d"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/audit.rs",
+      "sha256": "a34dd0649778a8bd1f56b5320c9c41d73efc5f45813c0f24723cb79d691532dc"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/lfs_auth.rs",
+      "sha256": "b26f7845cfff1a8265331ece9bbfbdba8c26d17fbbfc2198cb7b444d18855b41"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/mod.rs",
+      "sha256": "050579edfc80a6558089ae2cfb52a061a54b798e3c93c006a96dbef4cc8be6d3"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/ssh_keys.rs",
+      "sha256": "28ce2c0f6d6111d88968684ee8049792341d5064fb4e15a0d25224bea6fec246"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/timed_sql.rs",
+      "sha256": "6bef4ea0c8c22e6f26ebd2369a071108489959382388399dc9879822f0c2a0f6"
+    },
+    {
+      "path": "crates/canopy-server/src/directory/tokens.rs",
+      "sha256": "5c4521a715cc1be01e2cab811f78a26ba55eb12a62bc288f8c1a6a20da801415"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/artifacts.rs",
+      "sha256": "0f6c5de936ed8ad3b15e3a86030b845d7e90e0d9baebdf66cb0250ce308bc091"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/cleanup.rs",
+      "sha256": "8b693536daa4585d8f93b49f97ed1d0edb9ff4a3433ff665af18999332ce9260"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/maintenance.rs",
+      "sha256": "b2d9a6fac5c27a201ed1c3845505ed19be70ba0c86b59ee7c6d291aec0def2f8"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/mod.rs",
+      "sha256": "e8a75eebd96174a248de4919f0f5c59ac12d2c613f50d6ed697aa617a3521297"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/serving_refs.rs",
+      "sha256": "3089ce8b3b3e45ee4bc6db54affd2755f3b66b7ab3f082d9d13a2c1fa4db5b57"
+    },
+    {
+      "path": "crates/canopy-server/src/git_cache/tests.rs",
+      "sha256": "f3120de4cacea738497895c38921693f1c5190714e32e7b7208d494e21e3ca12"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/branch_policy.rs",
+      "sha256": "59054d18711f292bd1175d4007ba0fbf36f55d5b08945b2304e0970973fb0b00"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/candidates/mod.rs",
+      "sha256": "17ec718c07bade59eabfe1b1a36edb891e7b17b1ad0f516bcdf1f2c6c7f0e2b2"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/candidates/produce.rs",
+      "sha256": "d9832a5717df96c58d9f9559dccecd8ce9ed23abeb0c7e428c974d4dbc5fbeb9"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/candidates/rebase.rs",
+      "sha256": "84f83e62c70f3608a8f53c59e2bc62964be4021439d9ae70538276ea8f46d550"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/discovery.rs",
+      "sha256": "8666944df14e09482837d959297049fd28474ce692a24c837f3f9eb2ea4511f5"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/fetch.rs",
+      "sha256": "2513866510850a4ac95cb123429664f0332bdd81c86528a136679b2a4dee04e8"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/head.rs",
+      "sha256": "f5b95ee17bacf9bbaf62b33ec02543b894afb7ddda2348d8541b3fa5bf03daf2"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/merge.rs",
+      "sha256": "bee44b53b02eadfae5a6beb5bbdaae63677534344697b14bea65f1d58cbccf32"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/mod.rs",
+      "sha256": "2126cdd9216e56a16420ff6d20de7d8c66d4b55a8f33bb7dd8e96225895c3a3e"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/preflight.rs",
+      "sha256": "336c40e3ac3e9aefa37a1dd238dd5810b810726898730e7075b5d6da05ecc322"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/preflight/retention.rs",
+      "sha256": "c66d79c5fae991827ee8314ef78a4e0f208cc8be64672ddca268dea66bebef53"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/preflight/tests.rs",
+      "sha256": "07edb88ab4c7e2dc149306f8281211ec9e5bc658402683849ee8585780385699"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/push.rs",
+      "sha256": "f89a94a262eecd72b8f97b3b81611f57225638212ee8228860148c00edaa135c"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/push/native.rs",
+      "sha256": "7a82d4ec5480241dc98aacf0eece4bb7dcbb8a09dcc63e76f7c19105dd215b13"
+    },
+    {
+      "path": "crates/canopy-server/src/git_gateway/ssh.rs",
+      "sha256": "171679a84f1efcbc7bda16343c096175e4b281312fb9267f6b601de608786f4c"
+    },
+    {
+      "path": "crates/canopy-server/src/git_http/capture.rs",
+      "sha256": "f6cc7e63f61d02b9416f376d1a90080cbeac97cf5c2dec1673f88fe6b3cd1b1d"
+    },
+    {
+      "path": "crates/canopy-server/src/git_http/mod.rs",
+      "sha256": "7a925f1621606e8e94c7a0384f2d8dffacabfa5f357d7343dc860aef9eef3129"
+    },
+    {
+      "path": "crates/canopy-server/src/git_http/stream_tests.rs",
+      "sha256": "8f9ee6a67b996840b9f4f4f6ca9300645033698c8860f6ae3fc8c0f3836ebe63"
+    },
+    {
+      "path": "crates/canopy-server/src/git_input/mod.rs",
+      "sha256": "7923a390a20f22630d71c53ff5ec785e97e380cc4d86c10e532b866bf98b18c0"
+    },
+    {
+      "path": "crates/canopy-server/src/git_input/tests.rs",
+      "sha256": "39edbe9765186bca88162a6dfa6f0520964a896d6265f956449dcd14e1f5daf4"
+    },
+    {
+      "path": "crates/canopy-server/src/git_objects/mod.rs",
+      "sha256": "2f6def3f82b1797aec9792381f043557a35f623e20e685eddd77ce5878c2cc64"
+    },
+    {
+      "path": "crates/canopy-server/src/git_objects/tests.rs",
+      "sha256": "1ef594ea8c8751138a2946558d802c849e0783ea44da0a1cd57350c0d37fd2b2"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/browse.rs",
+      "sha256": "eb95b3f65b86511062e42e0731ae98a0bc949ba696ef2e0339219f8fa75d485d"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/graph.rs",
+      "sha256": "472bd76c8d61f85e425b05deed2bf14f0506342311948fabeaf50404e7efde70"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/mod.rs",
+      "sha256": "7f10eda407af801aa82c1c0fdf2941ba3aa5c586b40eae0bd879020fdb947832"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/patch/mod.rs",
+      "sha256": "9eebb7e66e678680fbdc80dfe5edd60318b4fbd766f57e127a14f429fbb134bb"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/patch/tests.rs",
+      "sha256": "228be85ffd003755a3a061c452f3ecfc20392cf72155a084f723d5db2caa5e6b"
+    },
+    {
+      "path": "crates/canopy-server/src/git_read/trees.rs",
+      "sha256": "38b78d05e44fa792831e548e75fa81651bc7f56d9d5bed17c3fda4c0ca0b276e"
+    },
+    {
+      "path": "crates/canopy-server/src/graph/mod.rs",
+      "sha256": "cb6cb2ea01a8262d0df04b7a33620b1f053918b376375d860760e81c7be66862"
+    },
+    {
+      "path": "crates/canopy-server/src/graph/preparation.rs",
+      "sha256": "56a3c91d6857942ce927895c3c74dd7715ae674d998c0c86bfc1db6e0c487d81"
+    },
+    {
+      "path": "crates/canopy-server/src/graph/stream.rs",
+      "sha256": "1d6dd023572d606134a084f16b929c509e611c2fb4901830f91e9d0f40a3e8f7"
+    },
+    {
+      "path": "crates/canopy-server/src/graph/stream/tests.rs",
+      "sha256": "5c847aab9a0e3b79038f8cf7958ab7ed40e97c0a227382f7b4d5d157051b4a37"
+    },
+    {
+      "path": "crates/canopy-server/src/graph/tests.rs",
+      "sha256": "685ef8995614d7f4e67e08670907ea4ff1a94860ab9869ee7aece141f0fb569c"
+    },
+    {
+      "path": "crates/canopy-server/src/http/lfs_locks.rs",
+      "sha256": "73f82df87b221795e6531ea968ab8630ce5e5fe769d69ea0d3c7a2f8c5c80d82"
+    },
+    {
+      "path": "crates/canopy-server/src/http/mod.rs",
+      "sha256": "b200ac8fe6a62d22946e95491e72f2f731ed766238b2d355b8fc841f5353416c"
+    },
+    {
+      "path": "crates/canopy-server/src/issues/mod.rs",
+      "sha256": "0bb4c4e5cae85be3714e485fb4bbd93052e1902fbc4c140d972c059ba36004ac"
+    },
+    {
+      "path": "crates/canopy-server/src/issues/mutations.rs",
+      "sha256": "725f0936b2f8622c6cefe9c52ea6349b61631ead7d49fbd453ee558085609014"
+    },
+    {
+      "path": "crates/canopy-server/src/lfs/locks.rs",
+      "sha256": "710844a9f4edeec5a83bc22e4200827b9288d29ff0263ef5c904822e00e7b1e8"
+    },
+    {
+      "path": "crates/canopy-server/src/lfs/mod.rs",
+      "sha256": "8ca41399d63aba98020b317bcd96ed965cf70d5328d953f1280d7abde3de6be2"
+    },
+    {
+      "path": "crates/canopy-server/src/lfs/read.rs",
+      "sha256": "6286b9e235ff6435db778854f131602823261404bfc9fc7642e9a7f471251d36"
+    },
+    {
+      "path": "crates/canopy-server/src/lfs/tests.rs",
+      "sha256": "4aa4b2dd43cb742df80b83407cf1cbfa4c8637c671bf2b1b7271ea5297a910f1"
+    },
+    {
+      "path": "crates/canopy-server/src/lfs/upload.rs",
+      "sha256": "5018ea81930c481ceaa2bf8829af1709d56821086ff2aba1e172c368990074a3"
+    },
+    {
+      "path": "crates/canopy-server/src/lib.rs",
+      "sha256": "bf650db6f31b945b43e1aa70159b83d3c17173622ac340161944525e02ac4890"
+    },
+    {
+      "path": "crates/canopy-server/src/main.rs",
+      "sha256": "1e6954a8d42e8c45dc26d216684773c72758fd962191d38140cda3814be6a10f"
+    },
+    {
+      "path": "crates/canopy-server/src/native_git.rs",
+      "sha256": "3c2cc2520e1da5bc14191835624ea1b794cf385b3c2154065da29bbb09802c29"
+    },
+    {
+      "path": "crates/canopy-server/src/native_git/process.rs",
+      "sha256": "58abb05aa26e31f679a5a17378f4847b8ad08f1c77e0d8e554d4bcc00c925734"
+    },
+    {
+      "path": "crates/canopy-server/src/native_git/process/fence.rs",
+      "sha256": "b62b004c41a5c2610ea50d77bb7dccb420d0ac92f9b085bdec866de5d22d5da9"
+    },
+    {
+      "path": "crates/canopy-server/src/native_git/process/tests.rs",
+      "sha256": "98df7fb19f03448b37d24cb705ba6ee351aafc303b418cb99b1aecb375ba4e55"
+    },
+    {
+      "path": "crates/canopy-server/src/native_resources.rs",
+      "sha256": "488d2c527d61a73dd2698e3a4b5be7a7e922ad7c449ea2a22b58d67a59121113"
+    },
+    {
+      "path": "crates/canopy-server/src/native_resources/tests.rs",
+      "sha256": "075e86dadc5f517a9f22aa1c26eb5445b1f74beed031eba5f8b279e4874778d7"
+    },
+    {
+      "path": "crates/canopy-server/src/object_batch/mod.rs",
+      "sha256": "13d00cae66d61c3eeee9b287973ad16d5b52341a8c7d422f48bc45131ac8c557"
+    },
+    {
+      "path": "crates/canopy-server/src/object_batch/tests.rs",
+      "sha256": "f37acb996c1ce8dd1cdcb90049244de714585fa5f2781e602fcd49b94d4b94f5"
+    },
+    {
+      "path": "crates/canopy-server/src/object_chunks/mod.rs",
+      "sha256": "71961b2bf93518169f12eadfe5d927a9ba193a36406400d03a8fb0c89c5c8abb"
+    },
+    {
+      "path": "crates/canopy-server/src/object_chunks/tests.rs",
+      "sha256": "8fd4431cac7079485e0e0d514a1074e925f5b58c8f985cb6f8d6b940698a89dc"
+    },
+    {
+      "path": "crates/canopy-server/src/object_reads/mod.rs",
+      "sha256": "6559a5077717e876892ff33ed5551c9b5a9397fe488beb65a73daaa18b1cfa38"
+    },
+    {
+      "path": "crates/canopy-server/src/pack_store.rs",
+      "sha256": "3e1ff0991afbc57e0ebb6b0da2fc8d17e8d116f3a595822c37d511525738773d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/backup.rs",
+      "sha256": "061bc8a3fd847de54b5d186e551c82d803889b303c52d4cb58c86c595572f25d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/codec.rs",
+      "sha256": "fb7d384cef71f7be93bc586a0e79badd915dcc89b2f9853a9c034ca40587b62f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/files.rs",
+      "sha256": "faf185a7aed6bc85deaf17abe5152bb06850f05f9b28843e5a3f9dc2be09b14e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/graph_spool.rs",
+      "sha256": "f1cf72be8a36d6adc94e11a1c3a5d57be1fa9c3ed813bb531055ba1cc2c69d97"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/graph_spool/tests.rs",
+      "sha256": "7bcc7eb29daef7a9385fb15d674f612a16e43bc1a444bd061da93ebbb5141053"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/mod.rs",
+      "sha256": "2d762f30991a826aedd2e4796800258520e953d1fc2f8cd0e07a8a63ff851477"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/native.rs",
+      "sha256": "a6f50f40a9599b04214187b50ddac9a6df0cd9dbeb3c0eb1667c0becf64895af"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/native/tests.rs",
+      "sha256": "159ae4101c65b0d3a6a2eb040af9b71c12329af6e0ea9f0c460c6140d0b34816"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/reader.rs",
+      "sha256": "8f1774ef6840f73e37da188899dabdce6ae31b656475f5e8ee6b8dc87464f73b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/serving_fixture.rs",
+      "sha256": "9f32d456083fea3895a8f96ff62c3df670635c636988b484b9e74267c07ea448"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/tests.rs",
+      "sha256": "322652548da8be5a472214b9d571300913e031851d3db244d1d99107f4082750"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/catalog/tests/files.rs",
+      "sha256": "d88fe635fec473c6788c5a01a4059472881a4444507ac7a16a69333e2db4eeb0"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/copy.rs",
+      "sha256": "83e2cdfca589d2f9ebaa32d9120ef8d8f893cbd01ad3c6458fa035e5a44ac9fb"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/graph.rs",
+      "sha256": "a0e270769bd0b3f7d2c33c933197928ecb84368e5531b2861b08f0de66c0300d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/mod.rs",
+      "sha256": "622eb0dd3358ffdaa097b45f10c03dd252306453e65284da696446c641af4391"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/retained.rs",
+      "sha256": "07b8da1838af56db5b418e28cc2516ca60c54c95e5ad58411f37515181940bcd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/spool.rs",
+      "sha256": "32a102501cc02a20d1be6ce4a8f26182f809a5204b8890e6964dc3ba692c3e69"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/tests.rs",
+      "sha256": "61087054d068316cc398173a7fcd3fba8e2c9220cc501575cafc56a0cd73140e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/tests/graph.rs",
+      "sha256": "c6df580a117db5731cb7d9b74556f3770e8e100781bc1d8f394bab60db4168c9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/tests/resources.rs",
+      "sha256": "c285d66f9ef8be7dd80411c6dad239c1f88e8c0ff31c3da6f8153d134b5ce795"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/verifier.rs",
+      "sha256": "021788bf15327410a67b1f4ea29af6ff99d015171fd53c3707fad37131b5e3b8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/closure/witness.rs",
+      "sha256": "e62f1c0a02d7c11008290b814bb416971bfddab49ca52e464050a7c8a6463572"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/coverage.rs",
+      "sha256": "d9912fdb2d6d47714e1e428c718cc841ef54d369a9f502731078eca93bb3e546"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/bulk.rs",
+      "sha256": "5ca4f597f8ed66ea335ed9b05376736e21d683c4e023f6ff37ecd281cec60346"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/changes.rs",
+      "sha256": "d707f098a9361b63d384b80dbf9341f14abadfacf3018f4fdb025d1d402c8929"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/codec.rs",
+      "sha256": "1449ebf119023aa6760dd9a2608f7090f35dd0f16c6d2d0e5bc00e04c2ad4e3a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/cursor.rs",
+      "sha256": "b0f46cda70163ed19313f0d6d8dcc7bf6fed1706b81c8986aa25ac1bd324e20d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/mod.rs",
+      "sha256": "aaaa8c49b35818f058a3cd88aabb57e429841a3d4160497f7c57b62bc53d3488"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/record.rs",
+      "sha256": "a50df6a8b76bc30d935bd8d7bc380a54840efdcc7d0ee05848e8b19f3f61b482"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/rewrite.rs",
+      "sha256": "0abed8b2621d92bba8431514ad77c009cca210d08da5964aa16952ea1f19b7bf"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/tests.rs",
+      "sha256": "14e82703358df5b69c0e7d1b857d6d853e37787d56fb7f6c2a39619872352abd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/update.rs",
+      "sha256": "a3a0d8d2bbc87d49f314d29fedbd14afbb66fd322f94b61f54b8aef5b5916e77"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/index/visit.rs",
+      "sha256": "249cddbef4a4f541e19c7af35f828e119b66d003e70c757c15273caa6087df33"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/mod.rs",
+      "sha256": "cbb8bea03ca7578da4b1902b5aa57ddc2b1a0d0c12c18352a86743bb82082108"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/partition.rs",
+      "sha256": "b66fde6b96e4aff4a215b5a8be66311987dfc918323cbd65e426cf402956b178"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/snapshot.rs",
+      "sha256": "31effd077751267730844b55a2a0c09f104212523975392f332094efd566b896"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/snapshot/codec.rs",
+      "sha256": "c4bf30e83f912f4c69f44113495869b0abc08b00ce63c301c547de5b42ea3500"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/tests.rs",
+      "sha256": "109dcada74b316a14727f40a738ff280d378050765082da65ab0ec21513e1e69"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/tests/compaction_inventory.rs",
+      "sha256": "61f21c445cbe3aa66a78c74f808515aadce97943d1841d706f803f0b629a392a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/tests/coverage.rs",
+      "sha256": "821ff1b16bd0434cd49bd8c0f75e319ae690df72e13e1ae79f7d6ae64c6b8f06"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/tests/partition.rs",
+      "sha256": "b439cac8a8d0cda00920eff596a8be29883d406d3510c10121a864edc7ae783b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/tests/partition_lifetime.rs",
+      "sha256": "ac6a9ab5635ee16bc9b8bb0309861f41c65e4ec178c824874cbff981d8866d0e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/directory/writer.rs",
+      "sha256": "ef0260442eb0d9cd397a8f7735077d99e03940489815b1ad143004bb183f2ab8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/input_artifact.rs",
+      "sha256": "028c8cee3f92a897836c62a8fa362465e924bdec52c2ae5cb48aa2db6103b5ea"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/metadata/growth.rs",
+      "sha256": "adf24b9a2833ac5ba8fd7ba75a484b3b3687f1a6005f0f8788e0ffb4115868af"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/metadata/mod.rs",
+      "sha256": "fd5f7d946155a2fb6ca2d2175b2bc58ef11ffaf621bb155a06bf459667a660e1"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/metadata/tests.rs",
+      "sha256": "234b77dc39eecc3bc6b7715b73e1b7ab8456a60e04753bfd71e559176ae41d05"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/metadata/transport.rs",
+      "sha256": "594b33d6ec656cb3701461fa6ac0e7b37f2497048ea48383d109386bdd34d062"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/metadata/writer.rs",
+      "sha256": "34b1bc202818d310694d103ecfd437824f9e6f97e90e84b06e9f870e8dde793b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/mod.rs",
+      "sha256": "62796e522c496ae2c962822872aa0183370e7c29abf2eb091955c8054e66b6e9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/admission_receipt.rs",
+      "sha256": "853a2f275b382cbfe4a8c14fd6e1d1fadbd98e86e829442e3e6522a64c45f00b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/attestation.rs",
+      "sha256": "2f542b7076a6aaabdedd1da3a93e60eff64040b83061f92cddddb98313d47c71"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/backup.rs",
+      "sha256": "43591258f92d0abaecb201c4b8968d5752d6df30f7350195b9e59bee916d9ced"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/base.rs",
+      "sha256": "d363f6ce5ea211ab26aca6b98ec869f61e2f875b5110c247085496520a0d64fb"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/candidate_publication/audit.rs",
+      "sha256": "1de82267ac55f9c21b8f7bbe7ae01725f2f120ebe8d0d3cc3c0592b8f40953bb"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/candidate_publication/mod.rs",
+      "sha256": "6db2a153228bad4a772c7ce125923eff33cc2bc496d9f45b8c640bc3f118add4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/candidate_publication/publish.rs",
+      "sha256": "121c6bab8bd4f4eec01939af0ae3786ddf4f1abdd771e22664ac1e17faae2ade"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/certificate.rs",
+      "sha256": "4fddfc005a6c0434054a69619d9605a79ae59813698e3482af76ccb57968382e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/codec.rs",
+      "sha256": "edb6f140e9a18047ee7c6f7e11849a7cad2620dcaa479b53ab04bf0b30fa8453"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/commands.rs",
+      "sha256": "5873ec8a53dfa0952636f3c7516769e678e69742b794db5a93b804f933b98bc0"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/commit_membership.rs",
+      "sha256": "0e45acfcd01d071fb23b88daa5e332a798130a6eaf6f3562f9df75018d2056c4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction.rs",
+      "sha256": "002cbf8d7982cf781e9d9774c19d7813405f7eeb7690ecfdcd5c968b119f6e99"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction/prepare.rs",
+      "sha256": "e5d28aa35dfad62ea54601e97e6f0b893efc710aa93f129a2de7855405b092cb"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction/publish.rs",
+      "sha256": "03d588e5706462c05fdbda81fee79d257cfbd7a67708d9cc738ec599f42962d3"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction/range.rs",
+      "sha256": "7897baf94150939daa0edbe5c1ebb711e6d1c236c80560071c238fe1e3bea8da"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction/schedule.rs",
+      "sha256": "897a16e193135c4984802b3b63d67cbab4b3d6a24ac6fe1debbbaa9cf68e4669"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/compaction/schedule/tests.rs",
+      "sha256": "14d839203d6b1e4cedb968b4e3b7ea3323338e9020d000653b74602dd995a197"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/completion.rs",
+      "sha256": "cfd215d215b695ba07f63b9fa3050442dc1761e7e18804f2586734aea8016ff3"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator.rs",
+      "sha256": "fcac106eec0eb655a8e6188d154f5e98b342477dfe10e3eed2437fea436b2551"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/budget.rs",
+      "sha256": "182a7035e72c12d80b157f05a7390bd6534c28f5230a5112daf7dc6a130ffff5"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/budget/tests.rs",
+      "sha256": "7994b1ff59478dc13215c1dc92316c8d1a07e840d595e063bd8ff876ddad4a33"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/initialization.rs",
+      "sha256": "e08beb2e36f94203e648c47e3cb3bdf847a669e700d1681dd2c0d83cf66c6e36"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/inputs.rs",
+      "sha256": "871d23d2a227dd6e84971c6115a2e24fc80e1a43a332b8aba6b673cf953c5d85"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/native_candidate.rs",
+      "sha256": "f46a442a2dfc4107dc872f86e040e9e56ec8caeea3a5d84431ab79d45ddfdd76"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/native_head.rs",
+      "sha256": "086b82da54699264e763ea21c13368fbb3cecbc33452e2a10c5a196cd2d04e51"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/native_merge.rs",
+      "sha256": "4c0eedf1275f193499006041bcf7c8f91d3a8c05398b32ce9686a4251ecd6948"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/policy.rs",
+      "sha256": "0aa684ed7a784f4cf6c0e69eeb19be318eed66d1ced803595553aaef267c8cf3"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/preparation.rs",
+      "sha256": "20e6e33970eb1c069a25cf5121ec5efe29ede36cae2b39090d14d82f2687257a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/recovery.rs",
+      "sha256": "21a2445d9749ab4f9c6cf157dc8b4221ae5e20208cadd2b09b1999e1a5716427"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/roots.rs",
+      "sha256": "df2cd3bc3627c9ee718f2dd54072c911a62358d97fb6e6eb210fed186d30ec56"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/serving_drain.rs",
+      "sha256": "1c9c5d800932fd6dac1c0ec03d05a919c406f1cc8236cc1a301846e562f4a544"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/coordinator/work.rs",
+      "sha256": "a1beaa1d190b157e2b6e9c916953494eec706aeb5550d3f2455f97c54efbbb36"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/codec.rs",
+      "sha256": "9fa386277a41473d32100d6156e2a21fba071180ca838d8da055400d59a0c79e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/commands.rs",
+      "sha256": "f3900da141bd1b7ff93beb97f8e596dc2105ac6870d4bfaf7631e2cf012efd03"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/dispatch.rs",
+      "sha256": "02952eab2f46096f8306ff0924255d6aee5f4aaa48bb235f5f198937baba5b66"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/mod.rs",
+      "sha256": "a7eb484936670b58e99371a55c2ef931ed889e23ed2efc8ee58249bd664c73f2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/scan.rs",
+      "sha256": "c5e39c9ae07a31523a66c905e94135d8afbdc4513b1c480d86a1ab28e7f64f04"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/custody/stop.rs",
+      "sha256": "0725424880cfeb285489f0958a85f2b41b07417a1ed4baa0a5fb80906040e8e4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/exact.rs",
+      "sha256": "e486a4b7878323492bf4a5bf017a4f0d6398fab75859354525bb6376062d6b68"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/initialization.rs",
+      "sha256": "2612099bb024ab078f7c65e939334578ca59208df3ef189b791e766f7bb4e595"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/initialization/publish.rs",
+      "sha256": "072663cbbbac08b4b537a463da2901b7f1473fadea90d462491b5b78cd36025c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/inputs.rs",
+      "sha256": "d170786ad21555f5e2692825b23b543f38f1e33dfa26f37c6af3c196db50ab14"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/inputs/custody.rs",
+      "sha256": "a7330cbe522f13dc4687d9a400e131742993033611992b5adf1b0e81f11d8d81"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/inputs/limits_tests.rs",
+      "sha256": "1e1ddc8c5a514e7184054b77a47ebdbbcf7ccaa3d5616637f198cff7eb5b0064"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/mod.rs",
+      "sha256": "d96142365f9b3aa276af5637b8407d540f4d557217027d0667c30b829dadef37"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_candidate.rs",
+      "sha256": "3c5a52ed9cbb4d83fb24453ce1d36a3b64cefb0ef4f3d0ae8d1b08ca708ef07d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_head.rs",
+      "sha256": "ac1a8e33d737964854b9f57d22ec5495aaa42ed33733851e1438d264e1082308"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_head/publish.rs",
+      "sha256": "a624b7bc3969b9b88f31f6515e8d7fe9cb4a7d3d8261c2112d5d870cd062f9d8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_merge.rs",
+      "sha256": "41753bbd0f9d61f959c9dd0c338ec88143a110965ed1321792be5518bd1a9c97"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_merge/audit.rs",
+      "sha256": "817568743fb85fa2cc6b1dfc9b3b96f3f44c824cbc1385c942324e0bb35ffae1"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_result.rs",
+      "sha256": "e922b3dcdbf7d23fbbf9f73e359b1bc207df7e7fe1fc040ffbeaa1407b4e613c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_result/codec.rs",
+      "sha256": "1feafe06d85ed11bb9fe5b9a82c3baf436bd6d8d9a868c766fd50456104615fd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_result/plan.rs",
+      "sha256": "2ae3202244a62d9db96a6c0a0b0e5fbcaa8cc641f3139b675eb29ca4b983bad6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/native_result/plan/tests.rs",
+      "sha256": "0f715c006257db00402a24e59310f360d0fac5aaae0b30a0c16a080e23e50e91"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/outcome.rs",
+      "sha256": "b043a053a93d7f7c74c3c6469c66b4770cf79bcd33b2df5ef6b1edd039d28327"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/owner.rs",
+      "sha256": "78a98de316e19bcaffe10439b7cd9edf187af2c55e00bef12db9a4cf5ed9a878"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/preparation_receipt.rs",
+      "sha256": "a7df0fb19ef0107dc4da8f0719975ee53d04eaf8c1fff1d3a93230960843067e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/prepare.rs",
+      "sha256": "4d11017e2f5ce092ba7d63827740ad761fc0913fb806cd0f1ab5895e4355c153"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/publish.rs",
+      "sha256": "02438ea8b529a69915897c55a93dce68a3e479801f9d04a7fba38af69d6844d1"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/archive.rs",
+      "sha256": "6acd4cf545934f7e4f136042d4cc7cf3c71e26a2b3c2ccdb82abc406bb7e3bd0"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/backup.rs",
+      "sha256": "01a21e8aa99dd1f2abd396d4b24cc086bf6316621f5813e70cb75576b16da01d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/codec.rs",
+      "sha256": "d201599b14e5102fa2ea6ddce27c5116c1eb6f4b178c6c47d38742746012a03d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/initialization.rs",
+      "sha256": "902d875e49573c0f024516ce4a411302d0e53875517f340120f759d7565e059a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/mod.rs",
+      "sha256": "6c7c4d5716773e2a6d3002212e217a331942ff898510aa66e2b018180d889322"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/phase.rs",
+      "sha256": "6eb95cb63c96002c9d0f80cf13eef0b54bce20ad91e7e1b1129a74b08c827559"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/ready.rs",
+      "sha256": "dcc010dc3096b8db881535846f6fc3715848d8b6936a8ed85803b7f5e6b3285f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/registration.rs",
+      "sha256": "9365df807689d02a841e1d9bee8d0a187c1c6c81a6b29c750133f0a2ff9c74fe"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/supervisor.rs",
+      "sha256": "cd19249f899e7ffa21a60c1a3189f249f30933af7a67db939b153dcd43548645"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/recovery/tests.rs",
+      "sha256": "fb5e4cf523fe385a32ba962b40cbd89a6c2e9edeef71c566572b9b495c9c04d8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_observation.rs",
+      "sha256": "e669d1cb0562003a796c47be824108d4a80a8d57234d293f5e310e4ac5d29789"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_observation/selection.rs",
+      "sha256": "20702f14f9b9458e9ea83131f2f22114a5612e7dfa357a7a2129d545d6e1d66f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_policy/codec.rs",
+      "sha256": "0c37d1d8ccd3ab74c253e08d4d86a5c8f3230a7e128ed0a11718ee5e666209d4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_policy/commands.rs",
+      "sha256": "f7e0f63db8c51f8c7fde9bbc14b108caea2d35a6305547b756cc36fb2375e897"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_policy/mod.rs",
+      "sha256": "5554daaaee47984d51cebe20ad5037970fa61cc4e09663c3d4358581864adf9f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_policy/prepare.rs",
+      "sha256": "195de5ece8888b4457a56fdfe8b1f1dabc30f8684f90e8a4f019b5d1c59743c4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_proof.rs",
+      "sha256": "8bd48176fd2f5e42673c5fcdcf1e2d4eb0f95d6db8fce4a6dd251cb7b5bb2458"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_proof/ancestry.rs",
+      "sha256": "a9653535785221d35f667a73f9072b608e60f2ac44daaf04d7f0809937305665"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_proof/ancestry/tests.rs",
+      "sha256": "cc67e987b1a73c732dc157e4fbb23f966894eb027b296e7c895dc908cd262786"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_proof/tests.rs",
+      "sha256": "180fb28b58f8a0874bb8a6703b78754950d5ade6caf94e3449d9c8cf102a7100"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/ref_snapshot.rs",
+      "sha256": "9e866e2523cfeebe7f56b88377a52e3f3ed41a2bac2931ec47a7f0080611091c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/registry.rs",
+      "sha256": "7bd735a021c3c8bcbb7d614aa6323a8f56ef1580d7edc613905a261bb90cbb98"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/codec.rs",
+      "sha256": "2957177a85ccaccf04d1344e81be696ca55d9a0f5fb4d5ba620c4daccf80e629"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/mod.rs",
+      "sha256": "0639981a833493a515b0bb53fdc2c501529f53a3433a58dd32e2eb3b6ae4797c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/outcome.rs",
+      "sha256": "3d0a4c7acb6ac5ee06d1c99ec0e394118ea1d875ff82ffa2804a1445bb6189d4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/prepare.rs",
+      "sha256": "7dbd745790166926f3274d99c856af25b996ecbd6bc6d9f3c815091f27b4a5a8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/publish.rs",
+      "sha256": "e450c466521ef0c6ba38d8d7465197aeadb259c703ecd56575366ce5e32997e6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/read.rs",
+      "sha256": "db5a23dd942eb39b87b750fbf4115d49d60fbb082eb34a8cf1eb74dfdf89b076"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/ref_free.rs",
+      "sha256": "c0e13d9453941ef8cc112bf48039f4ada115fab55d21a53dff3409c5b46da7ba"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/result.rs",
+      "sha256": "219ca8b4443c65cdf16c62a1bacd4e7c2b7555417977ee11941ae6ec551b19fe"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/retention.rs",
+      "sha256": "42db60cf1db5956a3a10417f7096a58719affbda1a42cddc4336cb4fa3bd7346"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/root_completion/tests.rs",
+      "sha256": "069a39e4009d0b700803f158bbaedff2172de0c77e21eb3c62b52a0e3371bd0a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/scan.rs",
+      "sha256": "0ec626f85bc8fb8aea33cdd3ecb935afe8b34428a6b1f48587b8a2d9f80d54f6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/scan/tests.rs",
+      "sha256": "3cc3ee92ba5436652f4024bd5edeff7400fd7c199260857e5886e96a417ad840"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving.rs",
+      "sha256": "af6e2d42f1d192a30f3aa1853eeeafdc3a0f12ed6365490c9c763b6e55623ffd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/codec.rs",
+      "sha256": "ad49731468721723a5733dee5d1288c5351b328ef179e470988eb6f18c30d64b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/command_owner.rs",
+      "sha256": "edf8a7c5c98df0054b27bb2af2890bb84d55f6921f57f058677962674014f96d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/commands.rs",
+      "sha256": "925a8fafa2a80f81bc8bf897006bba5ec959eabfc47e2796539af6972cbd01dd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/lifecycle.rs",
+      "sha256": "819f4360fddc64e746cef0c0167337519798324f01b4d8e610c4184bc34292a6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/ownership.rs",
+      "sha256": "49332ddd4b616293a1195a8a2284eede89f9e2d3a74c19715053cf5875bb6653"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/pool.rs",
+      "sha256": "1ab9411bcc7e55f75c0098ac549bf1ee378082ec68925d1c75a36edb3bd67d23"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session.rs",
+      "sha256": "8d98101d6da7a9e137c7caeb46f33103df6bc53348a2b72cfe5a8a7e77357bb0"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/body.rs",
+      "sha256": "2eec6c39ca50cfb7827b20a003cb45c98c1e81cf99c19c1d8f729e5b810748e6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/edges.rs",
+      "sha256": "5cf07e6fa1c02b829295195d7e9c76f39c006d1d6aae0e877594c37621c7bb10"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/handoff.rs",
+      "sha256": "7635151d254fb4fa5b344630cda3604a57eb409967bd2f372cd03f0ccae7ed0c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/membership.rs",
+      "sha256": "6ea3c5d3344f0f7fdf8d4feeded9ac879469d16a8f548fbcc1c3879af640e821"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/native_base.rs",
+      "sha256": "b5c02892acec7bfac119cb027e3fb7ad518978e46d551b83d2b5e6bfe380f2a9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/reads.rs",
+      "sha256": "34e7d1bd70fb99da1699abc4d4fc286de8e70be3b5f1ee4d07100c1c0d4ec179"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/ref_observation.rs",
+      "sha256": "e25d0e5b52db5f9a3d9fe6c603f9bf00f631d90b41b7d6e64c50a2961af34094"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/refs.rs",
+      "sha256": "4a3323df513ee8043de070435623d492afc10dab45851c26ba87185a5398b029"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/serving/session/workspace.rs",
+      "sha256": "9e2529f7fad4ca6227d5f6416669cd254a23e60e5b5b8418ae9f648cae4ec7ab"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/session.rs",
+      "sha256": "8e78d9b77cd9ea3fb83bdd9413df237cbecd73c71bde8d66c64dd9393f934d5a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/sql.rs",
+      "sha256": "550b74680fd9321bbc87eead9fd7a97fd1aac5f871bfe20daa0fd76c5bd76691"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging.rs",
+      "sha256": "4a1adee4036816c35eaf3c47aeef87ad1fa5219d7fcf2925e486c55603742896"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_receipt.rs",
+      "sha256": "e81841b2d6279887475284cdc05878ee57b85cc9c98fbb3a77dbf4693a900d79"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service.rs",
+      "sha256": "31784da153daa126c6b6b1bae1d7ec63ec05079dc3d9781c46cf19ee03e2cfb2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service/bound.rs",
+      "sha256": "34252e371e893ece236ee467ce4beda4fe67b66fe41280f1949dd41876cfdee4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service/driver.rs",
+      "sha256": "689cf2dda06d75c4dbf83bd52f7ad3fe08b8026e27953d3ff8fc461cb589845b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service/publication.rs",
+      "sha256": "f27b93ffc26d947c911a5878ba91daca836e0afe451b1fbeeb1182d3f1b18051"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service/restore.rs",
+      "sha256": "64557e0c96871042cbb189fbc7f6d8d10fdbd25f0926b05cb706dc512cf1c28b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/staging_service/retirement.rs",
+      "sha256": "9bcf81192841b4e18af815057d1ff78f504fc33e91a29fc0eabb5eb2c3094e09"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests.rs",
+      "sha256": "c9bcbb356e83cb32e3c2b44aa3af038b45daf0b5f79c868bf4b2c9907fc212f2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/attestation.rs",
+      "sha256": "5abaefe62a42ccacd1e7eb8a5fba5878b89c07ed5e829cf69f0b189656a63e04"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/candidate_publication.rs",
+      "sha256": "497f149e734c9aeae3321c1452d1775e701188abcbd9839abfb58aa8ea1fed02"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/compaction.rs",
+      "sha256": "af38c1ca3b9d1e2a4e9aca806a14cbd247149ced9a95e185ffdf0ceeabb00d41"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/compaction/coordinator.rs",
+      "sha256": "7f0991a6f5402a23f6c15036a3c0f1247c33eff3718de4cb49bd98314aee071f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/compaction/range.rs",
+      "sha256": "53d350883acda875ea5f627d5e0c87d375e52b3c98cea5d33df05cf570ad1226"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/compaction/recovery.rs",
+      "sha256": "00bd4d3fd1e10c86bd42853e22da77cc714538931d34eb822d69bcf5ef7ed004"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/compaction/schedule.rs",
+      "sha256": "e0b325ed57ed59ee0160d65ad5d6a3f624dd2557f1316f7e252fb0c9dc29444c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/completion.rs",
+      "sha256": "6bdfa78c607b8bbe917c72c4eec4039500cbcb739a996581588adfbe00c9043c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/completion/outcome.rs",
+      "sha256": "c791f27aa1ca8998a0a0edefb9392f678a363bb836fb4b5288e4ffbea1131e13"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/coordinator.rs",
+      "sha256": "dcde91ab16f212fec306990d544e699a0987077122faba5c59192c47f0e1db8f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/coordinator/budget.rs",
+      "sha256": "f8d9107a7bbd0c42c700b27055ef0362dfc9b642172f388d7670db63dcaa0c8a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/coordinator/held.rs",
+      "sha256": "8d5361446c88fc189d4c9b1f97348cdb1d66e364b298482b30798ac0ac8ce2bc"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/coordinator/preparation.rs",
+      "sha256": "d11e296ffd59d61cba3b7aa7f912e4d8f90a7eb70e67f85d828ea50749499641"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/custody.rs",
+      "sha256": "b92d931dc3af0be158d3ae7fd6fc98fb9efde1b726f2cbeb8b9d9ead887c56a9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/custody_stop.rs",
+      "sha256": "d0a9f91817b2bf3304e5788ee3ff619097306819d01a462263426751e081c91f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/durable_policy.rs",
+      "sha256": "278120a30e9922f493b5766d00cde4c60f6ac81ac23b545fe709e44f8a9badc8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/durable_recovery.rs",
+      "sha256": "6a1c4aacb7c04c0c6c999a08174eef468455dec5d18375a0f1eef8f91051ff22"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/frontier.rs",
+      "sha256": "bde9906e106a600781e43114a3ed2a52f2cc9596eddaceb40f4a8d2421d7cb25"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/initialization.rs",
+      "sha256": "a8990c949e117c398c5f48bff66b7cfa1a595dac94c4a3df45284a499b8a2df6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/initialization_recovery.rs",
+      "sha256": "6282169f15f22a5d329c3cac507b7b98f7aeb20244e7da7071fcbe09a0cda091"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/initialization_retirement.rs",
+      "sha256": "419df2e898cc04826597a660bc101eb1f88f0d60994beae23ee3b37584b1e5c3"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs.rs",
+      "sha256": "4d525d99be4815e8bc194157d0d6005b52ebe3f46d34e974ce53ecaba178a669"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs/bound.rs",
+      "sha256": "06aedc222fba530bd443299648ab7d6da44d73101698482f9ed3460d22abd8a2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs/custody.rs",
+      "sha256": "b0240837a59f6713f1db428ac82eeece47fa906428244aa4e5acd67b246b5389"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs/requests.rs",
+      "sha256": "30676fde880087809efe5e96dc71afcabc356d08b359b4169562d3da0d0d6250"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs/requests/results.rs",
+      "sha256": "9499fce0dbf7836c170d4265e0e1fe24cf6e09d8663791481b0f1cbb4f9d9bc6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/inputs/requests/results/signed.rs",
+      "sha256": "89ce2f7bd6343df03def6a2f9991b4f9a017e007572b7df3af03a452d559b428"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/mandatory_registration.rs",
+      "sha256": "1134588791dcf2b89781b532c1b13aa362e28416696d1bf7776eebe0cf29e2f6"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/namespaces.rs",
+      "sha256": "305ea1ebbc813441780e37e097b4bc4bc2f602225379200e9e87ec6f6c455cad"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/native_candidate.rs",
+      "sha256": "6cf33f32770d23ee2a7bf4e571bf0795b42b62f5f5b8e42d7927bfbae2ce8fc9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/native_capture.rs",
+      "sha256": "794b63e6bcb11b6447b21caff491007f2e33f0a81c5045c1fab89d163d784364"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/native_head.rs",
+      "sha256": "f19cfe5e9bc32ecebdb7eb0951ea0acfa126a1e7b3d0d22fc89d17c0a11044f2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/native_merge.rs",
+      "sha256": "b99c0b6da67a33107f191674a22fcc7885481ccc3cb32240d5499514f5ac3284"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/native_merge/retirement.rs",
+      "sha256": "71e2b969aa7c7b3778290961bd39d852a8d4d61d962d127b4c2e29561a51bbac"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/policy_dispatch.rs",
+      "sha256": "0ac49afd97502d167d965aa5da2fe569b778d4391d695cbf018470a457cae869"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/policy_refusal.rs",
+      "sha256": "4bc84b7fe7c3d801bebb8f11d763c7d14b0960fd0b458def55b900367b1b7238"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/preparation_receipt.rs",
+      "sha256": "a9173028cbb75a77792b6b81f94fd94c59d3f553346c44a6b4673253a8ef6bd0"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/prepare.rs",
+      "sha256": "07e92a7180f2e91eadcad16bec6706d2f2dc52cc83887be60eacaeaa705eeb61"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/publishing.rs",
+      "sha256": "e6381a6b08b687f8c551984df12673c98d9576525ebc3df4a23489abb5a66183"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/reconcile.rs",
+      "sha256": "5a98610905fad39777c6d1f28259e257b7c65836cf77284685f588d65c135446"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/recovery_discovery.rs",
+      "sha256": "84ba4e59589ddf48f01f235e88e1675d059c05021def9e6801e37c7df34338e4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_policy.rs",
+      "sha256": "4c1b1c43b5c53ff80c69175ca011de7f70fd4d49413cc97ec2e4676441c2da74"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_policy/cleanup.rs",
+      "sha256": "ad85a9468d6a2b32627a0697b6080701d3cefc7e43491623815ea7ce991ca728"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_policy/fixture.rs",
+      "sha256": "36124def6b4919bc35102997364566645d4a05aaf3b4ecb261d852ae6139005b"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_policy/freshness.rs",
+      "sha256": "0fc05e45d2cda9455ce5e4e8991c65d9eb04bfddeb9839a46efca84ba250a50a"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_policy/pages.rs",
+      "sha256": "65a2f8abd9801777c2e5064b2d8c852f73919d2cf55f44062b0a8825090643e1"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/ref_snapshot.rs",
+      "sha256": "30dc48306354c340a827b3d77547e0a98d2b837c27d07ab79dab7e14de35218d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/refs.rs",
+      "sha256": "6aa86153f3d5e9ffeb7a555c263eafd34679e4c2db738d2ea591e9b220afa5cf"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/root_completion.rs",
+      "sha256": "d08626c6a4d43438c2ea3ebe8a98f8913727d6488259e8abcbdb328fef654ba8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/root_dispatch.rs",
+      "sha256": "2d76a771dcd441024465d3b5a9bb96a79d84b7863ef4c5fb5fe4f9c1b7fc20de"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/root_outcome.rs",
+      "sha256": "f332bb90e407c09b130c068216dfb734fdedee79b06f7a9b646c0afc8d04c23c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving.rs",
+      "sha256": "7c994b993f92417c58516e9c4332b35cc6b9cc98450694a89d73c52850e3bc42"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/blocked.rs",
+      "sha256": "729ee569bbc1b11343946033a8aaf0dd326f2ca54c8986df17c9c6191d3c7e24"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/body.rs",
+      "sha256": "08a21be58e1b7cd14829422c8fec2e9f6b006592d0f849aeadb7de51646df160"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/custody.rs",
+      "sha256": "f3539f3a063fa141edbb9533d3c5b3582f2c2d0821ed880b44d123b85c18f139"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/edges.rs",
+      "sha256": "df0141d94987d6f2c3a8f88d11e58b7409874e0140ffc006d1e867da3213f46e"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/lifecycle.rs",
+      "sha256": "c502b7ee59f0fd2eb6aaf950ae896d77a44f2addd9f17b048c0accf82aab3395"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/lifecycle/restarts.rs",
+      "sha256": "3b6432badcfebbfb5d9f24b67962f97719475dd301b56e252a9114650e35f036"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/pool.rs",
+      "sha256": "32ca15fe71a43474599da7dd59acef17450c332cfdb71df9595c8f5724956c86"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/refs.rs",
+      "sha256": "d20b42f78a26b3be3c08547a4652f8ed14acc5b31d32b8f8fb8018dbc8de55b5"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/selection_drain.rs",
+      "sha256": "eb1fc5049aacf6eaa49f33f4791ddd4be6fea1bc31a51b4213c5c78541d3eea2"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/serving/workspace.rs",
+      "sha256": "0e92817ac8df5a48152352396ae63912def7439ab0a919fcd5fdbaf7a4fdf21c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staged_durable.rs",
+      "sha256": "af865b638c57e18136d01554aea81378418b36f9334d2a7cdd01a87ab37d0db3"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging.rs",
+      "sha256": "7ae5a651ee0b8208a4cfa540713b9bb8e5e505479900112819403ba269314fcd"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_receipt.rs",
+      "sha256": "0068520761bf0de573cb6c440cdbfe68748c6e5d067c09c9ba553e44b8bfe765"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service.rs",
+      "sha256": "f6f6e39a4457f4d6f658b0cef37687e4defa7f965848cdbe019e446eeb36df1c"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/bound.rs",
+      "sha256": "e96afc48ef6db71e2ebcf23b3c3ab8c9cc646d7c97383c1ede80db0fdfcd7997"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/budget.rs",
+      "sha256": "9744dc0ec00111b8a7838914a894357893e2f84e697c3baaa9435ea377618ec8"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/physical.rs",
+      "sha256": "d8799cef5f5c92ac0798a517fb60d15d910dc4f4ed84bd8cd43280063e65d9ab"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/publication.rs",
+      "sha256": "3cbbeae4a2dd4e6515c114996028429ca7966e70fcdd1b405cb4638dea48faff"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/restore.rs",
+      "sha256": "01194fe2d728d5768215304f2ff971526bfebb5eb286bb60cf24fbf32b5afe85"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/staging_service/retirement.rs",
+      "sha256": "60fc3ddd18458730d8867655492bafc0689f395eb0c15628fa882a15f2a08a00"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/publication/tests/terminal_retention.rs",
+      "sha256": "d9ecbeb70ea470e50508e27b158a62c5fa904c8743a21d6b8a84a9ec0ef6aa4d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/ref_state/mod.rs",
+      "sha256": "b19c1b77637ceb49c268878165ee9f782f118d23374daefa415d2e45d9705c94"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/ref_state/record.rs",
+      "sha256": "ad4df7d06930b0e0455763532465fcf6a63e0eb96efdbea0ebc373115c90c348"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/ref_state/snapshot.rs",
+      "sha256": "3a8c117feeb5bab67bba0183e299cdf61c9794b8d154dbae50f6d44c8254e710"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/ref_state/tests.rs",
+      "sha256": "94cd171a6f9d82d00239d2cb5c3c814553d93bd2bb12b34a9c990630903b3387"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/ref_state/transition.rs",
+      "sha256": "dd2e05a762943bb77c92b636e0a3026058cdd286c4dae08407d6ecdc72ec1c30"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/codec.rs",
+      "sha256": "9c4cc37f78743adbd89a70d8cde27139e1447524f44a56b7e746e40b95b69fd4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/inputs.rs",
+      "sha256": "24bc235354aec1cdf9828ed44214e9378cecddbb5e6f9060424da89849464a5d"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/mod.rs",
+      "sha256": "616a99f5e0a989ef35cf0cc4305756171026727904b15a71e69a2b17b919eca9"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/native.rs",
+      "sha256": "006362684fffa7ce2560374bc360b73b361f01866da510db92f8284ce96d1387"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/resolve.rs",
+      "sha256": "987d0875307a4df8cb8936b5372a91ce820daa7ed31303ac093e2921c5fc81cb"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/tests.rs",
+      "sha256": "88bc9ce33a50900498d67303280f90ce8325c91e51e7e56a91c72564f7ecbcd1"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/tests/changes.rs",
+      "sha256": "ab60c729a4b33b6031fcd84e7ef0ddec30bf0c62aacad7d300fdde77751b4692"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/sources/verification.rs",
+      "sha256": "7899af543f21c0e2fda126883bd4b8d69a70e4116ea819ae5de4d1efe1388b64"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/mod.rs",
+      "sha256": "901e0f3d216bd443009361636eac0ccf43f0b3350c84557c9a06178025d8e275"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical.rs",
+      "sha256": "6ea01d9253170daf3ee9b6cc575214417a4d480f8f4df51f28a304b3391be56f"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical/partition.rs",
+      "sha256": "99314756f75cf01e50742b31a704c4b6020818ad2b90175b572345d50b8ffe22"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical/staged.rs",
+      "sha256": "e778841ec760f8651c6c58f4a86b305da3848f4a29dd9efca95afe953be37419"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical/staged/tests.rs",
+      "sha256": "f95bda28402334586884d227c20ac55f4b379e4811c3691fafd95d04b4dba112"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical/tests.rs",
+      "sha256": "59d191aebbf36d1178252d3b94145283c4b0d9b5305f5bb34b0ce3cc13976d73"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/physical/tests/independence.rs",
+      "sha256": "4d7012c1b5c783fa199ffc03ce7956d2b6eb083ca6b290ff97faac16b6c08618"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/spool.rs",
+      "sha256": "ef78b2ff1f57ee40f7fab5863c0113f730fb6516d3aeb3a48c5d0411fb8d5524"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/spool/tests.rs",
+      "sha256": "bd68135bbdc74dab25e074a9e23c71424d9da0f306dad979853a268ae9bfe4db"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/verification/tests.rs",
+      "sha256": "887f09d2f9d5fddacbca1e6d74aac2e893768d45f2dad4375d008d9d0fe37fc4"
+    },
+    {
+      "path": "crates/canopy-server/src/packs/wire_request.rs",
+      "sha256": "d37771c383d9ae171cdfb469e3c7c63aff597fde2f698ae0c5ceadba1122d172"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/candidates/command.rs",
+      "sha256": "ecb8a985eb7433743d8094bdc7978554515ca52f4c234e9348fa2139cfc3642c"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/candidates/mod.rs",
+      "sha256": "05a40bd4b4e473fcd10b67361bbb95567545ea63832f99ec2ad990407e5e92bc"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/candidates/rebase.rs",
+      "sha256": "e01080d2dd6c06f311329cc91aa34d369eda959799b7ce92119ea0b89057bbaf"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/merge/command.rs",
+      "sha256": "5f640f3627222189281842605e3edd1f1287cc8a5426c787c184f5dacd0c0b36"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/merge/mod.rs",
+      "sha256": "cb3128d2bdcd06fd248f114db6038fd5890e85c07a2b1818956dde941a722889"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/mod.rs",
+      "sha256": "c361d2550b0dbc35b83f4ba334469bbbb2811f43e06e32a7ab9954f7e12e1122"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/mutations.rs",
+      "sha256": "e2842cbeb241ef6a4d1616cc7d2f36e915b0dad7605d0a7988be34a2672a36b6"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/native/client.rs",
+      "sha256": "f726dee079725e0df74211d268e7cfffdfb152852121910703d7a46133af05fe"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/native/codec.rs",
+      "sha256": "38b3462d08077b15d2090547b8982668349e3fac50a8c1ded893b96dad693154"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/native/mod.rs",
+      "sha256": "ebe3cc02ffee4de5cfb25ed7fb36efa2533cd7c982e193c33b126b9d91044fb8"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/native/reads.rs",
+      "sha256": "71ce40bdb9d2b18edf87d9bdeed086ec6e70f5c9d3ced4d0b02e64041c29b427"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/native/threads.rs",
+      "sha256": "30e9baf91149ad28ac9e8d5eac6cc79fa2b6c160c8f73399c3547f393ad5f5a1"
+    },
+    {
+      "path": "crates/canopy-server/src/pulls/threads.rs",
+      "sha256": "b4a59e2d1d77f82fead62b540de60612466fe45eb48520e41f0d8d6b791b5793"
+    },
+    {
+      "path": "crates/canopy-server/src/push/certificate.rs",
+      "sha256": "01c0d3634fcec05d7832d23a7b42256b3a9425417ccdedb8ac7d1384122e47a8"
+    },
+    {
+      "path": "crates/canopy-server/src/push/mod.rs",
+      "sha256": "bb126cd9c0d78c4d5147b5f22aa0a1df4b93af05ecabbe3906910a9670b7fff9"
+    },
+    {
+      "path": "crates/canopy-server/src/push/report.rs",
+      "sha256": "0a26f9407710126e38321b91bfe8eda808d9f30b7d8cd20cbb8af10d30f591d1"
+    },
+    {
+      "path": "crates/canopy-server/src/refs.rs",
+      "sha256": "d0307212fad83f43f4fc00156f9382ef9f6ea915227e4e50b892a39d82b71537"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/accounts.rs",
+      "sha256": "87af39ed1c7ec1b0d0e77153848d52d62f7637542838df2db7e5e2c7d10aa2e6"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/authorization.rs",
+      "sha256": "6e1c0c6878336a7026641c5782ae4dcf7a0433542a414c5157a4be8111e3d407"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/branch_rules.rs",
+      "sha256": "66a591d88d779d100e9a3862e96372df1b6132b3643f3d118bc784059f26c829"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/browse.rs",
+      "sha256": "fa411fc2f31bc2b8efe1015be970d36dc1a78c8fc7928a5e1f6ef6e74a82632e"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/candidates.rs",
+      "sha256": "f8731c09c6554e6ff7cfc0c31d1fadab0561a07ed4085af4bc10bb842345d02e"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/checks.rs",
+      "sha256": "d606ca47ef429f9fc15e0b47c2a35e38970f7c5a43636cb1450db45fd91034cb"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/collaborators.rs",
+      "sha256": "f1a40c9211d6698a4df699a576d21bd6c0d8b7e7ee938534946022709e20ccba"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/comparison.rs",
+      "sha256": "ee16dc2d6012e985206d18228e0826fe7a078ebfadc143ada3d9fe087e1cf2c2"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/default_branch.rs",
+      "sha256": "2278ae157b16975f0180377cd1f3a727a57af165d1e0b8dcaa99887f97628c7d"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/issues.rs",
+      "sha256": "267b9620d4acc43740aea18282e7e9c387968fbf1f673a2b1d04c3f853527b10"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/merge.rs",
+      "sha256": "2a23852beb3ee4af078006a73a10c3671b583a92c1c267bd2c91a9aa8f5205ee"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/mod.rs",
+      "sha256": "1a6bffd1203ef780c80513cdfdd76d617e980d0ee7c3ac8e1d1a096437084e62"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/pulls.rs",
+      "sha256": "391974ba50b813e6043b61fa2d289986406aa29f1bd52609793c77f6512ee52f"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/pushes.rs",
+      "sha256": "da2efe9bf8141aa897227c9132d4e4400ddac73822dac62775e0f88339c509cc"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/ssh_keys.rs",
+      "sha256": "44f1df9e9f46cef9aa832f1d7208a2afb6938cd5f90d3b7cb483af2b25f9695e"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/threads.rs",
+      "sha256": "8c48158c2bb545b6fb10b684b8fcf1bf514d0fd759e7b99fe797882cf2dc76a4"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/tokens.rs",
+      "sha256": "5a7b5a3307e035b5bc820a566f8b54bca68fa02e9376315023db84ec313c9561"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/transport.rs",
+      "sha256": "b4d5398919d1456287d6905903312b404c64a0d4688a693335414ffb03b71366"
+    },
+    {
+      "path": "crates/canopy-server/src/repository_http/visibility.rs",
+      "sha256": "78c70641e85aa869f16d7efa6c4fc45a57e0d84fe5797b878871084dcda94f07"
+    },
+    {
+      "path": "crates/canopy-server/src/server/catalog_admission.rs",
+      "sha256": "d0ccfd3a6663c0d7be1de113a287d76530007e9ec0b7f22d1a1e2761347b1f08"
+    },
+    {
+      "path": "crates/canopy-server/src/server/catalog_admission/tests.rs",
+      "sha256": "f8c55dd0da6f2fe85a7303843687dfa97476927e1cff426efa2c28d0570b6f39"
+    },
+    {
+      "path": "crates/canopy-server/src/server/catalog_initialization.rs",
+      "sha256": "b9b2ed27d87e437dcfc81ef68c7f5bc9aaecf831f9ef947fd58f90ec68cfe86b"
+    },
+    {
+      "path": "crates/canopy-server/src/server/catalog_initialization/tests.rs",
+      "sha256": "19b48f3e57e7a0cab2e1a70604e2590918667a930787e736f82fa38b0418d5a5"
+    },
+    {
+      "path": "crates/canopy-server/src/server/discovery.rs",
+      "sha256": "76a68f28b052d7e76e338f50cea877a07bec9ac60fcc4ff78b7d8e7a8007c320"
+    },
+    {
+      "path": "crates/canopy-server/src/server/lifecycle.rs",
+      "sha256": "0c8a908e772c2747c732463cb0a942557569108df1217a380e33b721b056cbe5"
+    },
+    {
+      "path": "crates/canopy-server/src/server/lifecycle/tests.rs",
+      "sha256": "adde3500c84d4e17fb5bd98e8a59618c3cbfa8287c7210c8ec919cb689a52489"
+    },
+    {
+      "path": "crates/canopy-server/src/server/listeners.rs",
+      "sha256": "01abcaef27d49a009ed4df5e1a2843637da8ee057725123f92409abb7c82f534"
+    },
+    {
+      "path": "crates/canopy-server/src/server/mod.rs",
+      "sha256": "f6cc7a3a30e8572d84f75f1255a2f5705240d8e9c22ad552eb79a76070c16fce"
+    },
+    {
+      "path": "crates/canopy-server/src/server/peer.rs",
+      "sha256": "d3388a448809680a383310d5f26687049b02a2b65d2c319e50bb8590672a2175"
+    },
+    {
+      "path": "crates/canopy-server/src/server/request_trace.rs",
+      "sha256": "126cb6f7ddc313b2e1e3eab7b07bc7190730b6c18aaa5f57b105ee7e3f7c2bda"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/mod.rs",
+      "sha256": "11474f670ce1b12fab28faffe36ced6438c119fe2035fe449f6a8bf2886569f2"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/recovery.rs",
+      "sha256": "9cd845589293808869831ef68429a52a5230be182abc9f70f1cb071788740853"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests.rs",
+      "sha256": "8f6ad39a1aafa28e1f2f674252472e3ee0b9da4604b25cdcfb708d65458ef570"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/recovery.rs",
+      "sha256": "23f781b71762ff0d648bfb3a783af5a9b96b89718ce008380a54e555d9f7cbf9"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/serving.rs",
+      "sha256": "bf7bc70914aba49e5372c230f69419250c23d8d3a153b0edb384fb05199ef78a"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/serving/browser.rs",
+      "sha256": "52d5e68fa321f951050c8224beec774291d2a0530f71d664f0da9b5b619fc286"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/serving/browser/checks.rs",
+      "sha256": "755bcd70e0f5f6af5b58e45566073f44e6a4a41fea361a2def5997492c6428d5"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/serving/browser/pulls.rs",
+      "sha256": "8288d13567d908720815ae46e4e60f085ef003ef100ee6c28543464d178d3232"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/serving/browser/pulls/candidates.rs",
+      "sha256": "1cd851040c126a904cc7d1571c30f8f7a7979d2a84ba575bf94f752e321baf5d"
+    },
+    {
+      "path": "crates/canopy-server/src/server/residency/tests/staging.rs",
+      "sha256": "cf61fbfd579744eafdb4f64533cd047b8f7081db5317d59b1bb4d038bea64a07"
+    },
+    {
+      "path": "crates/canopy-server/src/server/storage.rs",
+      "sha256": "780a50bcc9676b6a4a85bf2d97213da182e7ab940e0de89b83b06456b0e46100"
+    },
+    {
+      "path": "crates/canopy-server/src/server/tokens.rs",
+      "sha256": "2d853e04134d6354dc322a1d1e8293c933d9185d2603f9534c90c9d601d7656a"
+    },
+    {
+      "path": "crates/canopy-server/src/server/workspace/mod.rs",
+      "sha256": "2ce836de9402b3518a95320d1099f71cefea4febecb5d952382173d180f5adda"
+    },
+    {
+      "path": "crates/canopy-server/src/server/workspace/tests.rs",
+      "sha256": "a256a4e91a9262e32b950d3b0cd4fda885a032fe8b0d17095aacc69a04fc212d"
+    },
+    {
+      "path": "crates/canopy-server/src/ssh.rs",
+      "sha256": "2381428f1cdfed2d384c4a80910e89a7032ecacc086d3a8b2d14754774692aff"
+    },
+    {
+      "path": "crates/canopy-server/src/transfer.rs",
+      "sha256": "059140411b105ef66db14412f959d2411c47674d2b3ce404049e6820fbade526"
+    },
+    {
+      "path": "crates/canopy-server/src/visibility.rs",
+      "sha256": "33da635eb46483ed01f54363a3e3f1edcd16c401e1069ac672d13a79467aaec5"
+    },
+    {
+      "path": "crates/canopy-server/src/web.rs",
+      "sha256": "4612e8505c58bedf37a76f87d249163c028625e429b65968870a6105c2773ec7"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/accounts.rs",
+      "sha256": "b58dc29e8a643258b1420389e1ccaccc8371ac48276db904c7ec148691ba30d9"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/capacity.rs",
+      "sha256": "7e84df7b6ac84dff5a10dbdc30f67e629df59a557b9e38e7445faacc0f98b081"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/compatibility.rs",
+      "sha256": "ec6ce5fa0b65f96a52613077dd660e06b93ac703f7dfd7f0bc9aa822e698fcce"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/expiry.rs",
+      "sha256": "fb0df4bfbfd808af0fcf4afb5a99196c156779a592594bb3e5802580b5384404"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/main.rs",
+      "sha256": "fdf62f903fdebd0588f0076607b225e7e53ed5bc1bbde569ec9b23fa3b6bff02"
+    },
+    {
+      "path": "crates/canopy-server/tests/directory_cell/ssh_keys.rs",
+      "sha256": "80b24299e5d0f8e3841c194c87b721cbab90262af0b0714d85764c65197be274"
+    },
+    {
+      "path": "crates/canopy-server/tests/git_http.rs",
+      "sha256": "0aac63148f766387ead058dd3e786b90db3639e83b6ae27dd39623fd7e70a2c4"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/account_admin.rs",
+      "sha256": "1077a611e4c0f1daa90f3941ca1c972696a93f6cedba1a8b89a299a0d9792560"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/account_audit.rs",
+      "sha256": "421c8cac840561db25fd8759e980fd76631d363999c497a7823937ae61d8d7be"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/accounts.rs",
+      "sha256": "042fb25082907112c9bc0a4d83463f02c97e6b365b5f07c8a2a1605a093469a8"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/backup.rs",
+      "sha256": "cbc3b6a87516f8484860953655b975bb395f789d313f546fb0662bfa7bbabd1e"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/branch_rules.rs",
+      "sha256": "4d02419340248dc585a2dad0b9250e590b89636f89a9c5cd801b36b30f3c98e2"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/browse.rs",
+      "sha256": "3d8294dc3a12ebf661ab87bf2615e9da9a2f3c6c80c180ed7c89e8bf777f6f76"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/bulk_refs.rs",
+      "sha256": "d50f7c66ff69b2ac8e11c5e771219776256c22a2d598ca15bf3bd11f74c20f9e"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/candidates.rs",
+      "sha256": "b2a385f2dc132f8f1d47eda3cac1e247a63e601ad72f7f2554ca39d40c789c9c"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/checks.rs",
+      "sha256": "3ea687fd2b6d93b9989ad243703bf3ce402eafaa62fe85a9c7229880fdc928f2"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/collaborators.rs",
+      "sha256": "2e4f16d446de002db4bef4aee887947ec5e9e22f7517dca42e71df50b09ed4e0"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/comparison/history.rs",
+      "sha256": "5db6d2c8b6b4dd2e4d63486854895e993c89e075778663cb60cf557654a510d6"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/comparison/mod.rs",
+      "sha256": "bee76ba171fd7f5a1b0e093fad8862552648cbffc74e6d8967761f07bee09793"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/comparison/patches.rs",
+      "sha256": "9943cd8b2cd26c6400856416b1f9a8db0b91a8e9a90a8a426a64656e24725354"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/comparison/threads.rs",
+      "sha256": "348a76fdc0eaa7427fd1ed0f7f450952fb7219cb5b8786cac0c285bd43c81a42"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/compatibility.rs",
+      "sha256": "c2aa24acc5361aa3d4656078fb6bc4e05598416fae39643a0feddc7c722dc9b7"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/default_branch.rs",
+      "sha256": "8c089f74cf9aec71f179b986f63ffd87c893d7cc42958fd6919da73cb6c4bc10"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/deployment.rs",
+      "sha256": "79fde24ff8809a3ad509f583a926c722dcdb196a1f4269dcf571db2546a0a7ef"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/discovery.rs",
+      "sha256": "791936ceaf3475772111002c421ffa82b340a68e44b9d8a2fbc2f2e8f156dae5"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/issues.rs",
+      "sha256": "4ab2fc8ee471296bb4e5e226f2641aaf475f182b3847accbeba58877a2366850"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/large_objects.rs",
+      "sha256": "7aaae9075a61365b01d31a337f5f87b6748c0a805d44cc0af33cf18d7c302743"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/lfs_locks.rs",
+      "sha256": "862bb8a6b1b9e0b0fc29017b4d7f47c488458e81e7fa4fbdc8abdb39f3deaa07"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/lifecycle/fork.rs",
+      "sha256": "3d64e4155771d4b9e72a8f93ac5a750e651036737048a254d9bc8159c9901992"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/lifecycle/lease.rs",
+      "sha256": "ee825b88b88f9231321255ff2afede6f13cbf2ae1e9ea503a48f0c0a0e82a768"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/lifecycle/mod.rs",
+      "sha256": "63d54dc7f5ecbf48c102d0dd83519f0dbb857b2cae35cce5fb50652795e77cd3"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/listener_handoff.rs",
+      "sha256": "bc0a56596a0f1910b94e04639d6aa7a23589028bf5b05cb12dc443b5248c21ec"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/main.rs",
+      "sha256": "c991ddc98a1e2f5aa597252e084a332581a07e3fff9b4e9a487935e3c9fdbdda"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/merge.rs",
+      "sha256": "f3d0d7f9bb8e45a304eb30d166488babfb61157b16bbfa69d0934b58f1ccb449"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/partial_clone.rs",
+      "sha256": "5ad3c870f546c341be0e2e529ab7058a4c04768fb3068fd4fb4c02308cf275fd"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/peers/cold_activation.rs",
+      "sha256": "6fa5fc02db45476b5cf453bf2e398a3283cfe105f978ce9dfa4e5f5bb3a31be8"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/peers/mod.rs",
+      "sha256": "2ac306aabdbd23b0adb5e9dcf873a0673775d74b6d6ef5a755f3fce2242966c4"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/pulls.rs",
+      "sha256": "b8641ad44851ea3dc2a0777d7f43d652f354289272100da30564953053d861ce"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/push_options.rs",
+      "sha256": "56015e1a5844de23ae940d6ac958f5577b7c13b45c72f2e18672c665302d48b0"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/rebase.rs",
+      "sha256": "4cda05f2118f5fe014dddee33bb1789aaa81ccc866c03c9ade40173a4c095cae"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/residency/faults/admission.rs",
+      "sha256": "de463c985f74630546b60f9cb6d64dd9e71494dcfa6aba90dfe77ad4e613681a"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/residency/faults/git_discovery.rs",
+      "sha256": "bf366e30ede6ccb090d0c8ff595e8ae0731f6d0b59cd32753ba37d5f69751ead"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/residency/faults/mod.rs",
+      "sha256": "58c0e7ad096d923ad9e83e3b81ccc268a493bc9119c2d519811f8b5239fb835a"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/residency/mod.rs",
+      "sha256": "5385e48807e47ea29bd62a5fc21c9733c0f70c16503563f7680c171a99b7d322"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/retained_catalog.rs",
+      "sha256": "0d3050a1377dae4e539862527931a8d778615f0126e9f2b422e706a78dfb447e"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/sha256.rs",
+      "sha256": "8475d53b4abb1aac8aeab951cd2232681aac81869bf058ffe08664d39ae9ceb3"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/size.rs",
+      "sha256": "36dd44784bfbba1b5bf98015d0c68afa8d75384d2819524e187aef5c2458f64d"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh/fetch.rs",
+      "sha256": "7b71ff5132228409e5c2bdc8e97cb243cff69e51f8a10b7ee952abd701e618d3"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh/filtered_preparation.rs",
+      "sha256": "ea2bf58aac22046f09709d69e0da9bd9f0f517ecf57c8d5ee916d0f91991aa98"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh/lfs.rs",
+      "sha256": "3a45615da9d498d167ca4d14b7efeef81b5650309e5e99dc7300536aea9c151b"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh/mod.rs",
+      "sha256": "05e32ec5efc1d85e9b993bc51f5cbc243a994292483f0f69fa5a386b9b7a8441"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh/publication.rs",
+      "sha256": "a43bb4563bc7d06a28cd9ce1717c69dc297a22ed41b062602dc2ce435d34cf88"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/ssh_keys.rs",
+      "sha256": "dee0f7d857ce06a27e4a6188543ddb23f293be642ee3ecdc2292d2020e81158d"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/tokens/mod.rs",
+      "sha256": "12906439734dfee69727f3f8741638182c5467b39c997bdd38312c63390884a5"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/tokens/token_quotas.rs",
+      "sha256": "867adc7c3dea35fefb79e176f774a027ad4825720cac6acf5f5275bffdb9ad34"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/transfers.rs",
+      "sha256": "71cde977cb4cd861b6cf1d4bf9c3e47f4c2a452b101efe2bd0e0da18d7fef3a6"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/visibility.rs",
+      "sha256": "03722d5df40e7bb069d25a648d1b52cb0dee06bab8c6d71ef39df84e764b50bd"
+    },
+    {
+      "path": "crates/canopy-server/tests/multi_server/workspace.rs",
+      "sha256": "6045d31be02106df17b41d317dc2ec625662061b3aabf055b0085b769b9f86ea"
+    },
+    {
+      "path": "crates/canopy-server/tests/owner_restart.rs",
+      "sha256": "a48eb12f4d8b3246bf3eb67bbd6b680f34396b619d5105682122b639913c03a0"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/batches.rs",
+      "sha256": "33073182ca181eaa859bb7745fcd2791f31c7f02b44fd57206943dc8400bd6af"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/branch_rules.rs",
+      "sha256": "2f8bf6eaf1d4dd6851442c5e8eef91d84d7d4cb681645d2f9819ffc7884407c0"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/bulk_refs.rs",
+      "sha256": "9223c138a0f94a52d709e00c4db53d407a3f03b37ee07eefd08a83ed02371407"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/checks.rs",
+      "sha256": "e736205b3f6b5da05c3ef9c2fcf1edc38c9743d9fcf3decc5d492090b8af3b22"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/chunks.rs",
+      "sha256": "4d0ba1b064b3ba0da7187ce22a54926b8c50fe4965325c6f33f53904705d713a"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/default_branch.rs",
+      "sha256": "6f901bb2f07e9a83ae6033ec8c633b53db9dc865bf8f387a08c78a964f83148c"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/graph.rs",
+      "sha256": "e9a9c00ec4aa3c0ea8c445ea08af801d3e51eee93198798f185d4e6f31d1f404"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/issues.rs",
+      "sha256": "d5b3367b6e62327b61b1b689c4712cfc1be1f87fb4d0e613855ec34692bb2fa1"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/main.rs",
+      "sha256": "6595a32386e7077d86c3a2d458996c24251f78cfbf0258e714bfcd2ec4087c62"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/merge.rs",
+      "sha256": "b154dce0f308ddbb3661de3ef2b577458f079a4fdf432df5ad8cc88b1db738e2"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/pages.rs",
+      "sha256": "782f8058103b1b621d2a4145761250fd527cdf5b7998ef7640ba866fec424847"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/pulls.rs",
+      "sha256": "d5fc6426c4a9caac0b57caac56f9378bb7ea6b0b34b3ceca673acf26d3a33e2f"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/rebase.rs",
+      "sha256": "288f51d8876620385473e3428adb28d672ef45b8135e73b25b0e0431d7d35124"
+    },
+    {
+      "path": "crates/canopy-server/tests/repository_cell/visibility.rs",
+      "sha256": "4a7f1f1e7b1a97064a6b31dac2d14bc6dbc41f8c3bad47a277a7564a0fa5060f"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/cache_admission.rs",
+      "sha256": "721c05836efc6ee6db3424c41118b6e380097a202e404bfb04b939217ce47e1d"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/cache_reuse.rs",
+      "sha256": "001f1fc9a67c48b54ab7d999b26da58696df25d843148fc05fd531ef4538d1f6"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/encoded_input.rs",
+      "sha256": "5a47511b31c8a6753fc2c43cdde6189e1216819e3bb5b6e583c36b7ac67c3e37"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/main.rs",
+      "sha256": "949aa477e98c604bd5a5ba2b4cf83e4c28184859c016cd9cfd352fd86c857145"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/native_resources.rs",
+      "sha256": "fa4299bca19049a8038b96b31e978f6b0ce95841a600b24f229359470ee5fa22"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/publication.rs",
+      "sha256": "900e1f8acd082541b327d084da139702581f4cdf86a6bddc48a011b6b336ef05"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/push_uploads.rs",
+      "sha256": "d64ecd6480177d4c40271866382f540b58245809bbb5e23817fcef5bed8e85d9"
+    },
+    {
+      "path": "crates/canopy-server/tests/smart_http/ref_snapshots.rs",
+      "sha256": "9d46ae59c25f646cb5ec57cd72868c42e13082330154d66a684e6e17506c694c"
+    },
+    {
+      "path": "crates/canopy-server/tests/support/mod.rs",
+      "sha256": "04d62438601197007ba0b813813e1326a6c820bb214c23c4778cf61cc13a1f6a"
+    },
+    {
+      "path": "crates/canopy-server/tests/support/objects.rs",
+      "sha256": "85b142a97480bfe46e9c7331ffdca6b6d137c109dced696ed29f191160c2c1ae"
+    },
+    {
+      "path": "crates/canopy-server/tests/support/paused_blobs.rs",
+      "sha256": "14d8954c785737eb4776ca9234aabf6224adf1e29fdbb98210514c4ad5007b59"
+    },
+    {
+      "path": "crates/canopy-server/tests/support/retained_directory.rs",
+      "sha256": "499db26adc781b702c770badf7f87d4941b604f41c3db51d0252b1e84ca6411d"
+    }
+  ],
+  "validation": {
+    "backup": {
+      "result": "passed",
+      "seconds": 100.81,
+      "log": "/tmp/canopy-native-backup-final2.log"
+    },
+    "checkpoint_race": {
+      "before": "failed deterministically: receipt observed in RegisteringInputs",
+      "after": "passed both SHA-1 and SHA-256",
+      "log": "/tmp/canopy-checkpoint-race-after.log"
+    },
+    "push_options": {
+      "passed": 4,
+      "ignored": 1,
+      "failed": 0,
+      "seconds": 3.51,
+      "log": "/tmp/canopy-checkpoint-push-options.log"
+    },
+    "clippy": {
+      "result": "passed",
+      "command": "cargo +1.98.0 clippy --workspace --all-targets --locked -- -D warnings",
+      "log": "/tmp/canopy-native-backup-clippy2.log"
+    },
+    "qualification_note": "Tests preceded moving one decoder helper above its test module; no behavior changed. Clippy checks the final placement. Full workspace and new-head Linux remain required."
+  },
+  "preceding_linux": {
+    "head": "aa86f944907b64816c366a55bdca2f465e25e00e",
+    "runs": [
+      37411479759,
+      37411617637
+    ],
+    "multi_server": {
+      "passed": 100,
+      "failed": 11,
+      "ignored": 9
+    }
+  },
+  "remaining": [
+    "selective native fetch/cache preparation",
+    "late pre-bind SSH rejection",
+    "read-only residency restoration assertion",
+    "detached standalone fixtures",
+    "full workspace and new-head Linux qualification"
+  ],
+  "full_ci_green": false
+}
