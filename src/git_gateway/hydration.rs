@@ -1,5 +1,4 @@
 use super::*;
-use crate::large_blob::LargeBlobReference;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -77,50 +76,61 @@ impl GitGateway {
         stats: &mut Hydration,
     ) -> Result<Option<crate::ObjectId>, GatewayError> {
         let read = Instant::now();
-        let body = match object.storage {
-            ObjectStorage::Inline(body) => body,
-            ObjectStorage::Chunked {
-                upload,
-                size,
-                blake3,
-            } => self
+        let ObjectStorage::Packed(reference) = object.storage else {
+            return Err(GatewayError::MalformedCache);
+        };
+        let pack = self.repository.packs.load(&reference.pack).await?;
+        let header = pack
+            .data()?
+            .header(object.oid)?
+            .ok_or(GatewayError::MalformedCache)?;
+        if header.kind != object.kind || header.size != reference.size {
+            return Err(GatewayError::MalformedCache);
+        }
+        let target = if object.kind == ObjectKind::Tag {
+            let edges = self
                 .repository
-                .chunked_body(object.oid, object.kind, upload, size, blake3)
+                .dependencies(object.oid)
                 .await
-                .map_err(|error| GatewayError::Cell(Box::new(error)))?,
-            ObjectStorage::External {
-                size,
-                blake3,
-                sha256,
-            } => {
-                let reference = LargeBlobReference {
-                    oid: object.oid,
-                    size,
-                    blake3,
-                    sha256,
-                };
-                let reader = self.large_blobs.read(&reference).await?;
-                stats.body_time += read.elapsed();
-                let written = Instant::now();
-                cache.store_blob(reader).await?;
-                stats.cache_time += written.elapsed();
-                stats.objects += 1;
-                stats.bytes += reference.size;
-                return Ok(None);
+                .map_err(|error| GatewayError::Cell(Box::new(error)))?
+                .ok_or(GatewayError::MalformedCache)?;
+            match edges.as_slice() {
+                [(target, _)] => Some(*target),
+                _ => return Err(GatewayError::MalformedCache),
             }
+        } else {
+            None
         };
         stats.body_time += read.elapsed();
         stats.objects += 1;
-        stats.bytes += body.len() as u64;
-        let target = (object.kind == ObjectKind::Tag)
-            .then(|| {
-                crate::graph::tag_edge(&body)
-                    .map(|(oid, _)| oid)
-                    .filter(|target| target.format() == object.oid.format())
-            })
-            .flatten();
+        stats.bytes += header.size;
         let written = Instant::now();
-        cache.store_object(object.oid, object.kind, body).await?;
+        if header.size <= 4 * 1024 * 1024 {
+            let oid = object.oid;
+            let expected = reference.digest;
+            let kind = object.kind;
+            let body = tokio::task::spawn_blocking(move || {
+                let (found, body) = pack
+                    .data()?
+                    .object(oid, 4 * 1024 * 1024)?
+                    .ok_or(crate::git_pack::PackError::Integrity)?;
+                if found != kind || blake3::hash(&body).as_bytes() != &expected {
+                    return Err(crate::git_pack::PackError::Integrity);
+                }
+                Ok::<_, crate::git_pack::PackError>(body)
+            })
+            .await??;
+            cache.store_object(object.oid, object.kind, body).await?;
+        } else {
+            cache
+                .store_native_object(
+                    pack,
+                    *reference,
+                    self.scratch_root.clone(),
+                    self.disk_budget.clone(),
+                )
+                .await?;
+        }
         stats.cache_time += written.elapsed();
         Ok(target)
     }

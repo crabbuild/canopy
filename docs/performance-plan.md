@@ -1,6 +1,6 @@
 # Measure repository density and latency
 
-Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is `a3fbfb0115a1ae2519ee8f8e0cf6b8e72fdaa303`; earlier runs below retain their original pins and do not establish this build's density or latency.
+Use this plan to design capacity work and interpret Canopy benchmark results. It separates demonstrated behavior from proposed targets. The current Cellule dependency is exact crates.io version `=0.2.0` (release source `aaacf311622a2fea009067d1f5f217751ee1a2cf`); earlier runs below retain their original pins and do not establish this build's density or latency.
 
 > **Document type:** How-to and evidence reference. **Goal:** design a repeatable workload, record its resource envelope, and avoid turning one measurement into a general capacity claim.
 
@@ -34,8 +34,8 @@ update rate. The local SQL-only RustFS gate now covers 1,000 active Cells, but
 repeat it on the reference Linux node under foreground load before raising the
 active Cell limit or claiming 1,000- or 10,000-Cell production residency. This
 dependency and lockfile change also changes Canopy's compiled release digest;
-test against a fresh store prefix or use the documented maintenance upgrade
-path for an existing deployment.
+test against a fresh store prefix. Maintenance does not upgrade an existing
+deployment to a different compiled release.
 
 ## Recorded large-transfer qualification
 
@@ -1943,3 +1943,244 @@ Focused smart-HTTP, default-branch recovery, visibility/revocation, paused-histo
 discovery and fetchable merge-candidate tests passed, along with all-target
 Clippy, formatting and the release build. Full-primitive density, renewal
 fairness and production latency gates remain open.
+
+## RustFS API benchmark — 2026-10-13
+
+An optimized Canopy build using Cellule `=0.2.0` imported three public repositories into a fresh RustFS-backed deployment. Full clone-back, `git fsck --full`, equality of every reachable object ID, and API comparisons against stock Git passed. All 12 first reads from fresh local workspaces also returned exact expected responses. No runtime code was changed or tuned for this benchmark.
+
+[Machine-readable results](benchmarks/2026-10-13-rustfs-browse.json) retain revisions, binary and harness hashes, workload details, both latency populations, errors, and all per-repository/concurrency results. The local raw samples, executed harness snapshot, logs, and private operating instructions are under `~/.local/share/canopy-benchmark-20261013/`.
+
+### Environment and method
+
+- Apple M2 Max, 12 logical CPUs, 32 GiB RAM, macOS arm64; shared workstation rather than a dedicated capacity runner. Canopy and its local workspace ran on the internal disk. Rust 1.97.0, Git 2.50.1, release build.
+- RustFS `1.0.0-beta.8-glibc` in a dedicated Docker volume, limited to 4 CPUs and 8 GiB RAM. The Docker VM had 8 CPUs and about 15.6 GiB RAM.
+- Authenticated HTTP/1.1 over loopback, persistent per-client connections, one account, no TLS or reverse proxy. Canopy allowed eight resident repositories.
+- Two eight-second passes per repository/API/concurrency combination, plus a mixed workload. Concurrency levels were 1, 4, and 16; 78 timed groups ran in a fixed shuffled order. The mixed workload rotates equally over each repository/API pair.
+- Latency runs from request start through receipt of the complete response; response checksum validation follows that timer. Throughput counts only validated successful responses over actual elapsed time, including the final in-flight requests. Warmup requests are excluded. Combined percentiles are recalculated from individual samples, not averaged from per-pass percentiles.
+- This is a closed-loop workload over a small, verified working set. It measures achieved throughput and latency under that workload, not open-loop arrival capacity, arbitrary-path cold-cache performance, or an internet-facing SLO.
+
+### Initial imports and clone-back
+
+All branch and tag histories were imported with one atomic stock-Git push per repository. GitHub pull-request refs were excluded. Downloading the source repositories from GitHub is outside these timings. Import time ends only when the push client receives successful durable publication; clone time excludes the subsequent fsck.
+
+| Repository | Packed source MiB | Commits | Objects | Import seconds | Objects/sec | First clone-back seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bat | 34.56 | 4,068 | 20,952 | 28.92 | 724.5 | 19.77 |
+| starship | 46.27 | 4,556 | 38,333 | 80.00 | 479.2 | 48.21 |
+| libgit2 | 72.12 | 19,565 | 134,967 | 813.62 | 165.9 | 214.88 |
+
+The packed-source-size/import-time ratios were 1.19, 0.58, and 0.089 MiB/sec respectively. These are effective source-pack rates, not measured network wire rates. During the slow libgit2 import, all 134,967 objects were already staged while graph certification continued and refs remained unpublished. Read-only progress probes recorded that phase; this does not isolate its CPU, SQLite, or storage costs.
+
+### Warm API reads
+
+All 462,198 requests at concurrency 1 and 4 succeeded and matched verified response hashes. The table reports four-client throughput and successful-response p50/p95/p99, combining both passes. Each row is a separate workload; the rates should not be added together.
+
+| Repository | API view | Successful req/sec | p50 ms | p95 ms | p99 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| bat | refs | 2190.1 | 1.80 | 2.12 | 2.24 |
+| bat | tree | 2332.3 | 1.64 | 2.45 | 3.06 |
+| bat | blob | 1777.5 | 2.16 | 2.74 | 3.01 |
+| bat | commits | 339.2 | 10.90 | 15.36 | 15.85 |
+| starship | refs | 1665.9 | 2.36 | 2.67 | 2.86 |
+| starship | tree | 1971.0 | 1.61 | 3.27 | 10.25 |
+| starship | blob | 1656.8 | 2.24 | 3.36 | 4.29 |
+| starship | commits | 363.3 | 10.69 | 12.92 | 16.02 |
+| libgit2 | refs | 1169.4 | 3.33 | 4.09 | 4.76 |
+| libgit2 | tree | 2224.0 | 1.77 | 2.48 | 2.88 |
+| libgit2 | blob | 1745.0 | 2.23 | 2.84 | 3.28 |
+| libgit2 | commits | 293.5 | 11.09 | 20.29 | 55.96 |
+
+At one client, p95 ranges across the repositories were 0.99–1.80 ms for refs, 0.99–1.19 ms for trees, 1.16–1.44 ms for blob previews, and 5.10–5.83 ms for commit-history pages.
+
+API views are `POST /api/repositories/<name>/browse` queries, with these measured units:
+
+- `refs`: the first page, containing 66, 164, or 256 refs. Correctness verification paginated every ref, including all 271 libgit2 refs.
+- `tree`: a root or sampled parent directory, up to 32 entries per page.
+- `blob`: `kind: file`, cycling over three exact-byte previews per repository, approximately 1 KiB, 16 KiB, and 126–150 KiB before Base64 encoding. This is not an unrestricted raw-blob endpoint. Separate probes confirmed that files above 256 KiB return `too_large` metadata without content.
+- `commits`: `kind: history`, a page of 32 first-parent commits at offsets 0, 32, 128, or 512. Git author/committer headers, parents, trees, and message bytes were checked against the source.
+- There is no attribution/blame API. `kind: attribution` was rejected with HTTP 422 for all three repositories. Commit author/committer metadata is available through history, but no line-attribution performance is claimed.
+
+### Mixed traffic and overload
+
+| Concurrent clients | Successful req/sec | Successful p95 ms | Successful p99 ms | Error rate |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 549.0 | 4.82 | 6.40 | 0.00% |
+| 4 | 918.8 | 11.54 | 15.04 | 0.00% |
+| 16 | 659.1 | 27.17 | 32.02 | 92.76% |
+
+Canopy admits eight active transfers per node and four per account, with four account waiters and a one-second wait limit. The 16-client single-account driver kept issuing work without honoring `Retry-After`; across those stress groups, 90.41% of attempts failed: 1,303,498 HTTP 503 responses (66.41%) and 471,230 transport failures (24.01%, broken pipes, resets, or disconnected connections). There were no mismatched successful bodies. These failures include connection instability during the overload run; its cause was not isolated. This is overload evidence; fast rejections are excluded from successful-read percentiles and successful throughput. Raw results also retain latency for all attempts.
+
+### First reads after recovery
+
+Each cell below is one observation after a graceful stop and restart with a new empty Canopy data directory. Timing begins after server readiness and includes on-demand repository activation plus the API read. RustFS and host/VM caches remained running; these are not provider-cold measurements or percentile estimates. Observed startup readiness was 0.53–1.07 seconds with 500 ms polling, separately from these read timings.
+
+| Repository | Refs ms | Tree ms | Blob preview ms | Commit history ms |
+| --- | ---: | ---: | ---: | ---: |
+| bat | 474.42 | 745.71 | 381.36 | 236.29 |
+| starship | 352.64 | 409.12 | 396.08 | 499.10 |
+| libgit2 | 975.22 | 991.52 | 859.99 | 1275.71 |
+
+### Storage and retained deployment
+
+The three packed sources total 152.94 MiB. Their SQLite files had apparent sizes of 181.80 MiB, 654.19 MiB, and 1,996.55 MiB after import. The RustFS `/data` tree occupied 20.98 GiB of apparent file bytes, including storage history and provider files; this is not a logical live-object size or a GC-compacted size. The Docker VM had only 2.55 GiB free afterward. No runtime history was manually removed.
+
+Two-second `ps` samples observed up to 40.4 MiB RSS for the Canopy parent during the warm tests. That excludes SQLite/Git child processes, RustFS, and OS page caches and is not a service-wide memory bound. Parent CPU reached 424.5% and the Python driver reached 201.1% (100% denotes one CPU); neither run was a dedicated-host capacity proof.
+
+At the time of this historical run, Canopy served `http://127.0.0.1:60523` with RustFS at `http://127.0.0.1:32793` and three ready private repositories. That original provider became unavailable after a later Docker runtime change; these addresses do not describe the current fixture. Credentials and start/stop instructions are stored locally in `~/.local/share/canopy-benchmark-20261013/OPERATING.txt` and `client.env`; credentials are not included in this report or checked into the repository. Inactive caches created by the recovery checks were removed, while the active workspace, source mirrors, verification clones, raw results, and durable RustFS volume were retained.
+
+For another read-only warm run against this exact imported corpus:
+
+```bash
+CANOPY_BENCH_ROOT="$HOME/.local/share/canopy-benchmark-20261013"
+source "$CANOPY_BENCH_ROOT/client.env"
+mkdir "$CANOPY_BENCH_ROOT/results-repeat"
+cp "$CANOPY_BENCH_ROOT/results/queries.json" "$CANOPY_BENCH_ROOT/results-repeat/"
+python3 -B scripts/benchmark_browse.py measure \
+  --base-url "$CANOPY_BASE_URL" \
+  --corpus "$CANOPY_BENCH_ROOT/corpus.json" \
+  --output "$CANOPY_BENCH_ROOT/results-repeat"
+```
+
+The release build, 19 Python harness tests, formatting, and diff checks passed. The harness regression exercises HTTP 503 and corrupt HTTP 200 responses and proves they are counted without retries. Rust runtime source and dependencies were unchanged by this benchmarking work; the preceding dependency qualification remains its functional test record.
+
+### Follow-up: why the provider retained 20.98 GiB
+
+A read-only scan of RustFS backing files measured this breakdown. Values include
+RustFS metadata and part framing, use apparent bytes, and do not classify objects
+as safe to delete.
+
+| Stored category | GiB | Immutable object keys |
+| --- | ---: | ---: |
+| Cellule LTX database page segments | 12.468 | 3,362 |
+| Cellule page-directory objects | 7.357 | 351,653 |
+| External Git blobs | 0.768 | — |
+| Segment indexes | 0.320 | 3,362 |
+| Published root records | 0.036 | 3,256 |
+| Packed Cellule captures | 0.027 | 2,298 |
+| Other bucket files | 0.002 | — |
+
+Two sources of amplification are visible:
+
+1. Canopy ingests expanded Git objects rather than preserving Git packfile delta
+   compression. The source packs total 152.94 MiB, but the object sizes recorded
+   in SQLite total 3.07 GiB. The current three SQLite databases plus external
+   blob payloads total 3.53 GiB. This includes object graph tables and indexes;
+   it is a current-state baseline, not a prediction of compacted remote size.
+2. Cellule retains immutable page segments, directory revisions and root records
+   produced by publication and compaction. Compaction writes new representations;
+   its examined code does not delete replaced remote inputs. The deployed path
+   has no identified remote garbage-collection pass. The accumulated directory
+   objects alone occupy 7.36 GiB. Live-root reachability was not traversed, so the
+   exact reclaimable amount is not established.
+
+Each of the four Cells (three repositories and the directory) has only one
+incarnation in the bucket. The fresh-local-workspace recovery checks reused that
+remote data; the inventory is not twelve independent repository copies. The
+RustFS system directory was below 1 MiB during the scan.
+
+This is approximately 140 times the packed source size and six times the current
+SQLite-plus-blob baseline. It exposes a storage-efficiency gap in the combined
+Canopy/Cellule implementation. The next engineering work should measure live-root
+reachability, provide retention-aware reclamation in Cellule, reduce directory
+rewrite amplification, and evaluate compressed Git-object storage in Canopy.
+Recovery and fencing references must be accounted for before reclaiming objects.
+
+Raw evidence is retained in the local benchmark results directory as
+`storage-files.txt` and `storage-breakdown.json`. This investigation changed no
+runtime data or configuration.
+
+### Storage optimization implementation — 2026-10-13
+
+The follow-up implementation found that the published Cellule 0.2.0 already
+includes `recovery::retention::CellGarbageCollector`. The earlier investigation
+had not identified that API. Canopy now exposes it through the maintenance CLI;
+the original benchmark had never invoked it. Retained space therefore does not
+establish that Cellule lacks a collector.
+
+The CLI refuses unsettled owners or node advertisements, retains backup pins,
+honors a grace boundary, and bounds deletions per pass. A durable administrative
+claim serializes collection, owner recovery, and reopening the release. A killed
+collector can resume only through its original worker identity and locked local
+workspace; there is no lease-timeout bypass for deletion in flight. The release
+remains in maintenance after collection.
+
+Thirteen focused deployment tests pass, including grace preservation, collection
+of an unreachable directory, rejection of expired advertisements, and recovery
+of an interrupted collector claim. A dedicated RustFS process qualification
+removed 177 obsolete immutable objects across bounded passes, then verified the
+retained backup and an exact cold stock-Git clone with `git fsck --full`.
+Raw receipts and logs are under `~/.local/share/canopy-storage-optimization/`.
+
+The original corpus required same-release recovery of four unsettled Cells
+before collection. Its first bounded sweep removed obsolete objects before a
+RustFS paginated listing failed with HTTP 500 (`Io error: timeout`). That first collection
+was incomplete. After all collector work returned, maintenance was ended and the
+exact original binary was restarted. The service-prefix backing files measured
+17,349,826,791 apparent bytes (16.16 GiB), about 4.82 GiB below the original
+provider measurement. All three repositories then passed new full clone/fsck,
+object-ID equality and API comparisons. This verifies the partial collection;
+it does not quantify the remaining reclaimable bytes.
+
+A separate Cellule worktree now completes disk-backed inventory before any
+deletion and joins up to sixteen concurrent deletes within the existing bound.
+Seven focused tests, the isolated RustFS retention test, Clippy and ownership/
+boundary checks passed. The serial baseline fails the new concurrency regression
+with 1.7 seconds versus the required 200 milliseconds for seventeen delayed
+deletes. This framework patch is not yet consumed by Canopy's published pins.
+
+The native-pack reader verified all 194,252 source object IDs directly from the
+152.94 MiB corpus packs. Repository schema 2 now stores only metadata and pack
+references; the old inline, chunked and external Git-body formats are removed.
+Native packs are self-contained across incremental pushes. Structural and
+blob pairs are disjoint, so discovery does not wait for blob downloads.
+Selected objects use disposable, disk-accounted cache projections. Object and dependency metadata use bounded
+multi-row writes; verified blob certificates are published in the same batch.
+Merge/rebase checks use immutable typed edges and normalized commit fingerprints.
+Backup/restore copies and verifies both native files.
+
+The repository scenario, owner-loss cold clone and Directory Cell tests passed
+at intermediate checkpoints. The pack primitives pass SHA-1/SHA-256, delta
+compression, immutable provider round-trip and cancellation ownership tests.
+A new process-fence regression checks both private output and cache ancestors.
+The completed clean native trial measured 16,313,052,025 apparent provider bytes
+before GC and 1,062,134,213 bytes (0.989 GiB) afterward. Its original binary and
+receipts are retained. The original schema-1 fixture's remaining collection also
+completed on its archived release; it measured 2,937,040,978 bytes afterward,
+and all three original repositories passed full clone/fsck, object-ID equality
+and browse comparisons. GC accounts for most of the original 20.98 GiB; the
+native representation is about 64% smaller than the collected original.
+
+The final build additionally bounds many-ref SQL checks and uses bounded
+read-only seeks to warm both existing graph indexes before certification.
+An exploratory smaller-write-batch fix prevented cold SQL timeouts but generated
+too much immutable history during crash trials; it is not the final policy.
+Current formatting, Clippy, dependency checks, ordinary tests across retained
+broad/focused runs, all real-provider probes and the extended process profile
+passed. Two parallel workspace-lock unit failures passed unchanged isolated
+rechecks; the failure logs remain. The final medium crash/cold-retry and API
+measurements are recorded in the [storage qualification](benchmarks/2026-10-14-storage-optimization.md).
+The earlier index-warming checkpoint did not run the full 5 GiB qualification
+because free capacity was unavailable. The subsequent transport-budget build
+(`7b16ef3133c39ad84290459e0c256765bcd0acb0fd3e4ac04eb85e2ebd1a0ec3`) passed the
+complete isolated size/provider/process qualification, including Git/LFS objects
+larger than 5 GiB, over 512 MiB incompressible pack data, fresh-server clone/fsck,
+source-deleted backup/restore and retained-pin GC. Its ordinary tests passed in
+one clean serial run. Its fresh-prefix medium run retained a libgit2 certificate
+SQL deadline failure; recovery/retry and final serving measurements remain
+pending in the linked qualification.
+A cold read currently downloads its referenced complete pack. Structural graph projection streams with bounded buffers. Direct whole-object
+reads retain a 64 MiB allocation limit. The
+historical measurements above retain their original storage representation.
+
+The transport-budget checkpoint's final collection deleted 276,750 obsolete
+objects and retained 824 reachable objects. It measured 1,259,651,402 apparent
+bytes (1.173 GiB) after 3,373.37 seconds of bounded collection. Bat and Starship
+passed fresh full mirror/API checks; Libgit2 still hit the five-second Cellule
+read deadline during graph hydration. Its serving qualification is incomplete.
+
+The subsequent schema-3 source adds a covering kind index for graph reads and
+dependency certification, plus bounded keyset pages before blob filtering. It
+retains the larger publication batches rather than multiplying immutable
+publication history to avoid a read deadline. Dense-parent SHA-1/SHA-256 query
+regressions, certificate-kind checks and Clippy passed. Ordinary tests and a
+fresh-prefix size/provider/process and medium-corpus qualification are pending.

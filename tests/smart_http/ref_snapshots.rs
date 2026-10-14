@@ -60,7 +60,7 @@ pub async fn verify(
             .try_push(StoredObject {
                 oid,
                 kind: ObjectKind::Blob,
-                storage: ObjectStorage::Inline(body.to_vec()),
+                storage: ObjectStorage::Input(body.to_vec()),
             })
             .map_err(|_| "fixture object exceeds batch limit")?;
     }

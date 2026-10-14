@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    large_blob::{LargeBlobReference, LargeBlobStore, blob_path},
+    git_pack::{PackIdentity, PackStore},
     lfs::{LfsObject, lfs_path, verify_lfs_object},
 };
 use cellule_ltx::rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -13,7 +13,7 @@ enum BodyKind {
     Lfs,
 }
 enum Reference {
-    Git(LargeBlobReference),
+    Git(PackIdentity),
     Lfs(LfsObject),
 }
 
@@ -101,7 +101,7 @@ impl Deployment {
                         break;
                     }
                     cursor = match page.last().ok_or(BackupError::Invalid("empty page"))? {
-                        Reference::Git(value) => value.oid.to_vec(),
+                        Reference::Git(value) => value.pack_digest.to_vec(),
                         Reference::Lfs(value) => value.sha256.to_vec(),
                     };
                     for reference in page {
@@ -111,37 +111,85 @@ impl Deployment {
                             "external body has no repository identity",
                         ))?;
                         guard.check()?;
-                        let path = match &reference {
-                            Reference::Git(value) => blob_path(repository_id, &value.sha256),
-                            Reference::Lfs(value) => lfs_path(repository_id, &value.sha256),
-                        };
-                        if let (Some(source), Some(source_store)) = (source, &source_store) {
-                            verify(source_store.clone(), repository_id, &reference).await?;
-                            let size = match &reference {
-                                Reference::Git(value) => value.size,
-                                Reference::Lfs(value) => value.size,
-                            };
-                            crate::external::copy_parts(
-                                self.layout.store().inner().as_ref(),
-                                &source.parts().chain(path.parts()).collect(),
-                                &self.prefix.parts().chain(path.parts()).collect(),
-                                size,
-                            )
-                            .await?;
-                            match self
-                                .layout
-                                .store()
-                                .copy_if_not_exists(
-                                    &source.parts().chain(path.parts()).collect(),
-                                    &self.prefix.parts().chain(path.parts()).collect(),
+                        match &reference {
+                            Reference::Git(value) => {
+                                let packs = PackStore::new(
+                                    destination_store.clone(),
+                                    repository_id,
+                                    scratch.into(),
+                                    host.local_disk_budget().clone(),
+                                    256 * 1024 * 1024,
+                                    64 * 1024 * 1024,
+                                )?;
+                                if let (Some(source), Some(source_store)) = (source, &source_store)
+                                {
+                                    PackStore::new(
+                                        source_store.clone(),
+                                        repository_id,
+                                        scratch.into(),
+                                        host.local_disk_budget().clone(),
+                                        256 * 1024 * 1024,
+                                        64 * 1024 * 1024,
+                                    )?
+                                    .verify(value)
+                                    .await?;
+                                    for path in packs.paths(value) {
+                                        match self
+                                            .layout
+                                            .store()
+                                            .copy_if_not_exists(
+                                                &source.parts().chain(path.parts()).collect(),
+                                                &self.prefix.parts().chain(path.parts()).collect(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(()) | Err(StorageError::StateConflict { .. }) => {}
+                                            Err(error) => return Err(error.into()),
+                                        }
+                                    }
+                                }
+                                packs.verify(value).await?;
+                            }
+                            Reference::Lfs(value) => {
+                                let path = lfs_path(repository_id, &value.sha256);
+                                if let (Some(source), Some(source_store)) = (source, &source_store)
+                                {
+                                    verify_lfs_object(
+                                        source_store.clone(),
+                                        repository_id,
+                                        *value,
+                                        None,
+                                    )
+                                    .await?;
+                                    crate::external::copy_parts(
+                                        self.layout.store().inner().as_ref(),
+                                        &source.parts().chain(path.parts()).collect(),
+                                        &self.prefix.parts().chain(path.parts()).collect(),
+                                        value.size,
+                                    )
+                                    .await?;
+                                    match self
+                                        .layout
+                                        .store()
+                                        .copy_if_not_exists(
+                                            &source.parts().chain(path.parts()).collect(),
+                                            &self.prefix.parts().chain(path.parts()).collect(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) | Err(StorageError::StateConflict { .. }) => {}
+                                        Err(error) => return Err(error.into()),
+                                    }
+                                }
+                                verify_lfs_object(
+                                    destination_store.clone(),
+                                    repository_id,
+                                    *value,
+                                    None,
                                 )
-                                .await
-                            {
-                                Ok(()) | Err(StorageError::StateConflict { .. }) => {}
-                                Err(error) => return Err(error.into()),
+                                .await?;
                             }
                         }
-                        verify(destination_store.clone(), repository_id, &reference).await?;
                         count = count
                             .checked_add(1)
                             .ok_or(BackupError::Invalid("external object count overflow"))?;
@@ -176,24 +224,6 @@ async fn read_identity(database: PathBuf) -> BackupResult<Option<[u8; 16]>> {
     .await?
 }
 
-async fn verify(
-    store: Arc<dyn ObjectStore>,
-    repository_id: [u8; 16],
-    reference: &Reference,
-) -> BackupResult<()> {
-    match reference {
-        Reference::Git(value) => {
-            LargeBlobStore::new(store, repository_id)
-                .verify(value)
-                .await?;
-        }
-        Reference::Lfs(value) => {
-            verify_lfs_object(store, repository_id, *value, None).await?;
-        }
-    }
-    Ok(())
-}
-
 async fn read_page(
     database: PathBuf,
     kind: BodyKind,
@@ -202,7 +232,7 @@ async fn read_page(
     tokio::task::spawn_blocking(move || {
         let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         let sql = match kind {
-            BodyKind::Git => "SELECT oid, size, digest, external_sha256 FROM objects WHERE storage = 'external' AND oid > ?1 ORDER BY oid LIMIT 256",
+            BodyKind::Git => "SELECT digest, bytes, index_digest, index_bytes, format FROM git_packs WHERE digest > ?1 ORDER BY digest LIMIT 256",
             BodyKind::Lfs => "SELECT sha256, size, digest, sha256 FROM lfs_objects WHERE sha256 > ?1 ORDER BY sha256 LIMIT 256",
         };
         let mut statement = connection.prepare(sql)?;
@@ -212,13 +242,20 @@ async fn read_page(
             let oid: Vec<u8> = row.get(0)?;
             let size: i64 = row.get(1)?;
             let digest: Vec<u8> = row.get(2)?;
-            let sha256: Vec<u8> = row.get(3)?;
             let size = u64::try_from(size).map_err(|_| BackupError::Invalid("invalid body size"))?;
             let digest = digest.try_into().map_err(|_| BackupError::Invalid("invalid body digest"))?;
-            let sha256 = sha256.try_into().map_err(|_| BackupError::Invalid("invalid body SHA-256"))?;
             page.push(match kind {
-                BodyKind::Git => Reference::Git(LargeBlobReference { oid: oid.try_into().map_err(|_| BackupError::Invalid("invalid Git OID"))?, size, blake3: digest, sha256 }),
-                BodyKind::Lfs => Reference::Lfs(LfsObject { sha256, size, parts_digest: digest }),
+                BodyKind::Git => {
+                    let format: String = row.get(4)?;
+                    let index_bytes: i64 = row.get(3)?;
+                    Reference::Git(PackIdentity { format: crate::ObjectFormat::parse(&format).ok_or(BackupError::Invalid("invalid pack format"))?,
+                        pack_digest: oid.try_into().map_err(|_| BackupError::Invalid("invalid pack digest"))?, pack_bytes: size,
+                        index_digest: digest, index_bytes: u64::try_from(index_bytes).map_err(|_| BackupError::Invalid("invalid pack index size"))? })
+                },
+                BodyKind::Lfs => {
+                    let sha256: Vec<u8> = row.get(3)?;
+                    Reference::Lfs(LfsObject { sha256: sha256.try_into().map_err(|_| BackupError::Invalid("invalid LFS SHA-256"))?, size, parts_digest: digest })
+                },
             });
         }
         Ok(page)

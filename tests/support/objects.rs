@@ -15,7 +15,7 @@ pub async fn put(
         .try_push(StoredObject {
             oid,
             kind,
-            storage: ObjectStorage::Inline(body.to_vec()),
+            storage: ObjectStorage::Input(body.to_vec()),
         })
         .map_err(|_| "fixture object exceeds batch bounds")?;
     let result = repository.put_objects(identity, batch).await?;

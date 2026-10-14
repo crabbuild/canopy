@@ -1,12 +1,16 @@
-CREATE TABLE object_uploads (
-    id BLOB PRIMARY KEY CHECK(length(id) = 16)
+CREATE TABLE git_packs (
+    digest BLOB PRIMARY KEY CHECK(length(digest) = 32),
+    format TEXT NOT NULL CHECK(format IN ('sha1', 'sha256')),
+    bytes INTEGER NOT NULL CHECK(bytes > 0),
+    index_digest BLOB NOT NULL CHECK(length(index_digest) = 32),
+    index_bytes INTEGER NOT NULL CHECK(index_bytes > 0)
 ) WITHOUT ROWID;
 
-CREATE TABLE object_chunks (
-    upload_id BLOB NOT NULL REFERENCES object_uploads(id),
-    part INTEGER NOT NULL CHECK(part >= 0),
-    body BLOB NOT NULL CHECK(length(body) BETWEEN 1 AND 524288),
-    PRIMARY KEY(upload_id, part)
+CREATE TABLE object_dependencies (
+    pack BLOB NOT NULL CHECK(length(pack) = 32),
+    parent BLOB NOT NULL CHECK(length(parent) IN (20, 32)),
+    dependency BLOB NOT NULL CHECK(length(dependency) IN (21, 33)),
+    PRIMARY KEY(pack, parent, dependency)
 ) WITHOUT ROWID;
 
 CREATE TABLE objects (
@@ -15,18 +19,13 @@ CREATE TABLE objects (
     kind TEXT NOT NULL CHECK(kind IN ('blob', 'tree', 'commit', 'tag')),
     size INTEGER NOT NULL CHECK(size >= 0),
     digest BLOB NOT NULL CHECK(length(digest) = 32),
-    storage TEXT NOT NULL CHECK(storage IN ('inline', 'external', 'chunked')),
-    body BLOB,
-    external_sha256 BLOB,
-    chunk_id BLOB UNIQUE REFERENCES object_uploads(id) CHECK(chunk_id IS NULL OR length(chunk_id) = 16),
-    CHECK(
-        (storage = 'inline' AND body IS NOT NULL AND external_sha256 IS NULL AND chunk_id IS NULL AND size = length(body))
-        OR
-        (storage = 'external' AND kind = 'blob' AND body IS NULL AND chunk_id IS NULL AND length(external_sha256) = 32)
-        OR
-        (storage = 'chunked' AND kind != 'blob' AND body IS NULL AND external_sha256 IS NULL AND chunk_id IS NOT NULL AND size > 786432)
-    )
+    pack BLOB NOT NULL REFERENCES git_packs(digest),
+    graph_valid INTEGER NOT NULL CHECK(graph_valid IN (0, 1)),
+    graph_count INTEGER NOT NULL CHECK(graph_count >= 0),
+    graph_digest BLOB NOT NULL CHECK(length(graph_digest) = 32),
+    rebase_metadata BLOB CHECK(rebase_metadata IS NULL OR (kind = 'commit' AND length(rebase_metadata) = 65))
 );
+CREATE INDEX objects_by_oid_kind ON objects(oid, kind);
 
 CREATE TABLE object_edges (
     parent BLOB NOT NULL REFERENCES objects(oid),

@@ -3,6 +3,9 @@ use crate::paused_blobs::PausedBlobs;
 use canopy_server::{PushPlan, RefUpdate, branch_rules::BranchRuleEdit};
 use std::{sync::atomic::Ordering, time::Duration};
 
+type Application = cellule_app::ApplicationHandle<canopy_server::CanopyApplication>;
+type Target = cellule_runtime::CellTarget;
+
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const AUTH: &str = "http.extraHeader=Authorization: Bearer late-writer-token";
 
@@ -15,6 +18,8 @@ pub async fn verify(
     repository: &Arc<RepositoryCell>,
     store: &Arc<PausedBlobs>,
     url: &str,
+    application: &Application,
+    target: &Target,
 ) -> Result {
     let local = root.join("publication-race");
     run_git(None, &["init", "-b", "main", local.to_str().ok_or("path")?]).await?;
@@ -135,7 +140,9 @@ pub async fn verify(
         } else {
             None
         };
-        tokio::time::timeout(Duration::from_secs(15), store.entered.notified()).await?;
+        tokio::time::timeout(Duration::from_secs(15), store.entered.notified())
+            .await
+            .map_err(|_| format!("native pack fault hook not reached: {kind}"))?;
         if kind == "refs" || kind == "no-report" {
             repository
                 .finalize_push(
@@ -177,7 +184,18 @@ pub async fn verify(
         // A different gateway can commit the same ID while this attempt is paused.
         // The losing ingestion failure must return that success, never a local ng.
         let winner = if raced {
-            Some(gateway_request(root, repository, store.clone(), &body, &id).await?)
+            Some(
+                gateway_request(
+                    root,
+                    repository,
+                    store.clone(),
+                    &body,
+                    &id,
+                    application,
+                    target,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -246,8 +264,16 @@ pub async fn verify(
             }
             // Recreate the gateway with no native/object cache; the saved Cell
             // decision must survive permission/policy or storage recovery.
-            let (status, saved) =
-                gateway_request(root, repository, Arc::new(InMemory::new()), &body, &id).await?;
+            let (status, saved) = gateway_request(
+                root,
+                repository,
+                Arc::new(InMemory::new()),
+                &body,
+                &id,
+                application,
+                target,
+            )
+            .await?;
             assert_eq!(status, if no_report { 409 } else { 200 });
             assert_eq!(saved, report);
         }
@@ -287,7 +313,16 @@ pub async fn verify(
             }
         }
     }
-    verify_preparation(root, repository, store, &local, current).await?;
+    verify_preparation(
+        root,
+        repository,
+        store,
+        &local,
+        current,
+        application,
+        target,
+    )
+    .await?;
     Ok(())
 }
 
@@ -297,17 +332,28 @@ async fn verify_preparation(
     store: &Arc<PausedBlobs>,
     source: &Path,
     current: canopy_server::ObjectId,
+    application: &Application,
+    target: &Target,
 ) -> Result {
     use sha1::{Digest as _, Sha1};
     let mut pack = b"PACK\0\0\0\x02\0\0\0\0".to_vec();
     pack.extend_from_slice(&Sha1::digest(&pack));
     for kind in ["plain", "sideband", "no-report", "stock", "race"] {
         let scratch = tempfile::tempdir_in(root)?;
+        let budget = DiskBudget::new(1 << 30);
+        let cold = fresh_repository(
+            scratch.path(),
+            repository,
+            store.clone(),
+            budget.clone(),
+            application,
+            target,
+        )?;
         let gateway = Arc::new(GitGateway::new(
-            repository.clone(),
+            cold,
             scratch.path().into(),
             store.clone(),
-            DiskBudget::new(1 << 30),
+            budget,
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -357,7 +403,23 @@ async fn verify_preparation(
                 .body(body.clone())
         };
         let generation = repository.default_branch(None).await?.output.generation;
-        store.read_armed.store(true, Ordering::SeqCst);
+        if kind == "stock" {
+            // Stock Git reads discovery first. A cold pack failure there is a
+            // transport failure, so exercise its durable ingestion refusal on
+            // a new commit after discovery has completed instead.
+            tokio::fs::write(
+                source.join("preparation-stock"),
+                b"new native publication
+",
+            )
+            .await?;
+            run_git(Some(source), &["add", "preparation-stock"]).await?;
+            run_git(Some(source), &["commit", "-m", "Native publication fault"]).await?;
+            store.armed.store(true, Ordering::SeqCst);
+        } else {
+            store.read_armed.store(true, Ordering::SeqCst);
+        }
+
         let child = if kind == "stock" {
             Some(
                 Command::new("git")
@@ -387,9 +449,22 @@ async fn verify_preparation(
         } else {
             None
         };
-        tokio::time::timeout(Duration::from_secs(15), store.entered.notified()).await?;
+        tokio::time::timeout(Duration::from_secs(15), store.entered.notified())
+            .await
+            .map_err(|_| format!("native pack fault hook not reached: {kind}"))?;
         let winner = if kind == "race" {
-            Some(gateway_request(root, repository, store.clone(), &body, &id).await?)
+            Some(
+                gateway_request(
+                    root,
+                    repository,
+                    store.clone(),
+                    &body,
+                    &id,
+                    application,
+                    target,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -400,7 +475,7 @@ async fn verify_preparation(
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "{stderr}");
             assert!(
-                stderr.contains("Canopy push failed before publication"),
+                stderr.contains("Canopy object ingestion failed"),
                 "{stderr}"
             );
             assert!(!stderr.contains("HTTP 500"), "{stderr}");
@@ -425,7 +500,16 @@ async fn verify_preparation(
                     }
                 }
             }
-            let replay = gateway_request(root, repository, store.clone(), &body, &id).await?;
+            let replay = gateway_request(
+                root,
+                repository,
+                store.clone(),
+                &body,
+                &id,
+                application,
+                target,
+            )
+            .await?;
             assert_eq!(replay, (status, report.to_vec()));
         }
         if winner.is_none() {
@@ -468,14 +552,20 @@ async fn gateway_request(
     store: Arc<dyn ObjectStore>,
     body: &[u8],
     id: &str,
+    application: &Application,
+    target: &Target,
 ) -> Result<(u16, Vec<u8>)> {
     let scratch = tempfile::tempdir_in(root)?;
-    let gateway = GitGateway::new(
-        Arc::clone(repository),
-        scratch.path().into(),
-        store,
-        DiskBudget::new(1 << 30),
-    );
+    let budget = DiskBudget::new(1 << 30);
+    let cold = fresh_repository(
+        scratch.path(),
+        repository,
+        store.clone(),
+        budget.clone(),
+        application,
+        target,
+    )?;
+    let gateway = GitGateway::new(cold, scratch.path().into(), store, budget);
     let response = gateway
         .handle(
             canopy_server::git_http::GitHttpRequest {
@@ -497,4 +587,29 @@ async fn gateway_request(
         response.status,
         axum::body::to_bytes(response.body, 1 << 20).await?.to_vec(),
     ))
+}
+
+fn fresh_repository(
+    root: &Path,
+    repository: &RepositoryCell,
+    store: Arc<dyn ObjectStore>,
+    budget: DiskBudget,
+    application: &Application,
+    target: &Target,
+) -> Result<Arc<RepositoryCell>> {
+    let packs = canopy_server::git_pack::PackStore::new(
+        store,
+        repository.repository_id(),
+        root.into(),
+        budget,
+        256 * 1024 * 1024,
+        64 * 1024 * 1024,
+    )?;
+    Ok(Arc::new(RepositoryCell::new(
+        application,
+        target.clone(),
+        repository.repository_id(),
+        repository.object_format(),
+        packs,
+    )?))
 }

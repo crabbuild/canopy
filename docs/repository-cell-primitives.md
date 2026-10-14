@@ -49,8 +49,8 @@ recovery lifecycle. Nodes must host thousands of these repository identities
 with bounded memory, disk, descriptors, workers and queued operations.
 
 All existing Git smart-HTTP, LFS, collaboration, ACL and recovery requirements
-remain. Ordinary Git objects stay in SQLite; large bodies stay in immutable
-object storage. A SQL-only density measurement does not qualify the complete
+remain. Git object metadata stays in SQLite; all Git bodies stay in immutable
+native pack/index pairs in object storage. A SQL-only density measurement does not qualify the complete
 primitive-enabled repository design.
 
 ## Current contract gap
@@ -63,8 +63,10 @@ in `src/lib.rs`. `RepositoryCell` holds `SqlCell<RepositoryModule>`. Its schema
 contains Git/collaboration state; no repository KV, queue or workflow capability
 is wired into the product.
 
-The pinned Cellule revision is `a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`.
-Read-only inspection establishes the following constraints in that source:
+The following source audit was recorded against Cellule revision
+`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. Canopy now pins exact crates.io
+version `=0.2.0`; this historical audit does not qualify composed primitives
+on the new release. The recorded constraints were:
 
 | Surface | Existing contract | Required change |
 | --- | --- | --- |

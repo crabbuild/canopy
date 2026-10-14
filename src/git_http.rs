@@ -30,6 +30,9 @@ const MAX_CGI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CGI_STDERR_BYTES: usize = 64 * 1024;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_CGI_HEADER_BYTES: usize = 64 * 1024;
+// Native pack generation and large transfers can exceed two minutes. Keep a
+// finite lifetime while allowing complete repository histories to be served.
+const CGI_DEADLINE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHttpError {
@@ -243,7 +246,7 @@ impl GitHttpBackend {
         start_stream(
             process,
             (keep_alive, Arc::clone(&self.cache), request.body),
-            Duration::from_secs(120),
+            CGI_DEADLINE,
         )
         .await
     }

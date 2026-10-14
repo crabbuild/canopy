@@ -6,8 +6,6 @@ mod branch_rules;
 mod bulk_refs;
 #[path = "repository_cell/checks.rs"]
 mod checks;
-#[path = "repository_cell/chunks.rs"]
-mod chunks;
 #[path = "repository_cell/default_branch.rs"]
 mod default_branch;
 #[path = "repository_cell/graph.rs"]
@@ -18,6 +16,10 @@ mod issues;
 mod merge;
 #[path = "support/objects.rs"]
 mod objects;
+#[path = "support/packs.rs"]
+mod pack_store;
+#[path = "repository_cell/packs.rs"]
+mod packs;
 #[path = "repository_cell/pages.rs"]
 mod pages;
 #[path = "repository_cell/pulls.rs"]
@@ -48,9 +50,29 @@ use cellule_runtime::{
 use cellule_store::Store;
 use object_store::{memory::InMemory, path::Path};
 
-#[tokio::test(flavor = "multi_thread")]
-async fn repository_cell_publishes_objects_and_refs_atomically()
--> Result<(), Box<dyn std::error::Error>> {
+#[test]
+fn repository_cell_publishes_objects_and_refs_atomically() -> Result<(), Box<dyn std::error::Error>>
+{
+    // This one scenario composes every repository primitive. Constructing and
+    // polling its combined future in debug builds exceeds libtest's 2 MiB stack.
+    // Give only the scenario driver extra space; runtime workers keep defaults.
+    std::thread::Builder::new()
+        .name("repository-cell-scenario".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(repository_cell_scenario())
+                .expect("repository Cell scenario");
+        })?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    Ok(())
+}
+
+async fn repository_cell_scenario() -> Result<(), Box<dyn std::error::Error>> {
     let application = Arc::new(CanopyApplication::compile(build_descriptor(
         include_bytes!("../Cargo.toml"),
         "repository-cell-test",
@@ -71,7 +93,12 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         .module_code(RepositoryModule::NAME)
         .ok_or(Error::Registry("repository module missing"))?;
     let proof = CellCatalog::new(layout.clone(), tenant)
-        .provision(CatalogEntry::new(&target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            &target,
+            CatalogRole::Sql,
+            code,
+            canopy_server::REPOSITORY_SCHEMA_VERSION,
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let incarnation = IncarnationId::from_bytes([5; 16]);
@@ -98,7 +125,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
             .bootstrap(
                 proof,
                 CellReplica::new(
-                    layout,
+                    layout.clone(),
                     *target.cell_id().as_bytes(),
                     *incarnation.as_bytes(),
                     Limits::default(),
@@ -161,11 +188,19 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         let mut other_id = repository_id;
         other_id[0] ^= 1;
         assert!(matches!(
-            RepositoryCell::new(&application_handle, target.clone(), other_id, canopy_server::ObjectFormat::Sha1),
+            RepositoryCell::new(&application_handle,
+target.clone(),
+other_id,
+canopy_server::ObjectFormat::Sha1,
+pack_store::new(&layout, files.path(), other_id)?),
             Err(Error::Identity("repository UUID differs from Cell target"))
         ));
         let graph_sql = application_handle.sql::<RepositoryModule>(target.clone())?;
-        let repository = RepositoryCell::new(&application_handle, target.clone(), repository_id, canopy_server::ObjectFormat::Sha1)?;
+        let repository = RepositoryCell::new(&application_handle,
+target.clone(),
+repository_id,
+canopy_server::ObjectFormat::Sha1,
+pack_store::new(&layout, files.path(), repository_id)?)?;
         let empty = repository.refs_page("", None).await?.output;
         assert_eq!(empty.generation, 0);
         assert!(empty.refs.is_empty());
@@ -485,7 +520,7 @@ async fn repository_cell_publishes_objects_and_refs_atomically()
         pulls::verify(&repository).await?;
         merge::verify(&repository, &graph_sql, &application_handle, &target).await?;
         rebase::verify(&repository, &graph_sql).await?;
-        chunks::exercise(&repository, &graph_sql).await?;
+        packs::exercise(&repository, &graph_sql).await?;
         bulk_refs::verify(&repository).await?;
         Ok(())
     }

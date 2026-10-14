@@ -363,6 +363,21 @@ async fn disconnected_admission_finishes_release_and_allows_a_later_restore() ->
     pending.abort();
     assert!(pending.await.unwrap_err().is_cancelled());
     fixture.store.proceed.notify_one();
+    // Disconnecting the HTTP waiter does not join the tracked release task.
+    // Prove that it finishes without another request driving progress before
+    // asking for capacity again; an in-flight release may legitimately be busy.
+    timeout(Duration::from_secs(10), async {
+        while fixture.repository_dir.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let released = CellAuthority::new(fixture.layout.clone())
+        .load(fixture.target.cell_id())
+        .await?
+        .ok_or("released Cell authority missing")?;
+    assert_eq!(released.value().state, ControlState::Idle);
+    assert!(released.value().owner.is_none());
     create(&fixture.client, fixture.address, "fourth").await?;
     fixture.clone_original(fixture.address).await?;
     fixture.server.shutdown().await?;

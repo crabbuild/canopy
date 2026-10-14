@@ -110,9 +110,35 @@ async fn bulk_mirror_round_trip(store: Arc<dyn ObjectStore>) -> Result {
         .map(|index| format!("{prefix}-{index:04}"))
         .collect();
     assert!(names[0].len() > 255);
+    // Distinct targets cross the SQL reachability statement limit during clone;
+    // thousands of aliases to one object would exercise only a single want.
+    let tree = run_git(Some(&source), &["rev-parse", "HEAD^{tree}"]).await?;
+    let tree = std::str::from_utf8(&tree)?.trim();
+    let mut targets = Vec::new();
+    for index in 0..129 {
+        let message = format!("Distinct mirror target {index}");
+        let target = run_git(
+            Some(&source),
+            &[
+                "-c",
+                "user.name=Canopy",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit-tree",
+                tree,
+                "-p",
+                &oid,
+                "-m",
+                &message,
+            ],
+        )
+        .await?;
+        targets.push(String::from_utf8(target)?.trim().to_owned());
+    }
     let create: String = names
         .iter()
-        .map(|name| format!("create {name} {oid}\n"))
+        .enumerate()
+        .map(|(index, name)| format!("create {name} {}\n", targets[index % targets.len()]))
         .collect();
     edit_refs(&source, &create).await?;
     let before = generation(&client, &api).await?;

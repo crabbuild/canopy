@@ -1,6 +1,6 @@
 # Understand Canopy's persisted contracts
 
-This reference defines the identities, storage boundaries, authorization checks and retry behavior that Canopy must preserve across node loss. It describes the current development format. [Versioned migrations](../ROADMAP.md#r01-safe-upgrades-and-schema-migration) are still required before persistent customer repositories can survive upgrades.
+This reference defines the identities, storage boundaries, authorization checks and retry behavior that Canopy must preserve across node loss. It describes only the current compiled release. Canopy follows the latest Cellule release and uses a fresh storage prefix for incompatible changes; backward compatibility and in-place migrations are out of scope. See the [Cellule integration policy](../AGENTS.md).
 
 > **Document type:** Reference. **Goal:** preserve durable behavior and make conflicts, retries, and recovery observable.
 
@@ -24,7 +24,7 @@ request
   ▼
 Directory Cell ── repository UUID ──► Repository Cell
                                          │ refs, ACL, issues, PRs, checks
-                                         │ Git object metadata and small bodies
+                                         │ Git object metadata and graph proofs
                                          ├──► immutable large Git/LFS bodies
                                          │      in object storage
                                          └──► disposable native Git cache
@@ -46,7 +46,7 @@ sequenceDiagram
     A->>D: authenticate and resolve owner/name
     D-->>A: repository UUID and access context
     A->>R: submit mutation with identity and preconditions
-    R->>O: publish immutable external bodies when needed
+    R->>O: publish and verify immutable native Git pack/index pairs
     R->>R: validate ACL, version, graph, and policy
     R-->>A: commit result or conflict
     Note over R: The mutation and replay record share one durable boundary.
@@ -80,15 +80,15 @@ The Directory Cell binds names and accounts to durable identities; the Repositor
 
 ### Git and LFS storage
 
-Small Git objects remain in SQLite. Large Git blobs and Git LFS bodies use immutable object-store bytes with SQLite references and verification metadata.
+Repository schema 3 keeps object identities, pack references and verified typed dependencies in SQLite. All Git bodies remain in self-contained native pack/index pairs. Git LFS retains its separate immutable object-store protocol.
 
 | Surface | Current value | Owner |
 | --- | --- | --- |
 | Git object ID | SHA-1 or SHA-256, according to the repository's immutable object format, over canonical Git type, decimal length, NUL and body | `object_id` |
-| Small Git objects | SQLite `objects.body`, maximum 768 KiB | Repository Cell |
-| Large trees, commits and tags | SQLite chunks of at most 512 KiB; object size above 768 KiB without a fixed byte quota | `object_chunks`, verified before object publication |
-| Object publication | at most 128 records, 3 MiB aggregate inline payload; SQLite verification targets 64 MiB, with larger objects verified individually | `PutObjects`, operation 5, codec 3 |
-| Large Git blobs | immutable `repos/<uuid>/git-blobs/<sha256>` body, SQLite digest/size/reference | `LargeBlobStore` |
+| Git bodies | Immutable native pack/index pairs, SHA-1 or SHA-256; both files bound by BLAKE3, exact lengths and native checksums | `git_pack`, Repository Cell metadata |
+| Structural object verification | Streaming graph projection; no body persisted in SQLite | native reader, verified dependency metadata |
+| Object publication | at most 512 metadata records; transient in-memory ingress up to 768 KiB per object / 3 MiB per batch; dependency writes contain at most 8,192 rows and reads at most 512 | `PutObjects`, operation 5, codec 4 |
+| Large Git blobs | streamed canonical-OID/BLAKE3 verification; bodies remain compressed in native packs | native Git reader, `PackStore` |
 | LFS objects | immutable `repos/<uuid>/lfs/<sha256>` body, SQLite digest/size/reference | `LfsService` |
 | LFS locks | unique path per repository; UUID identity, owning account and UTC second-precision timestamp in SQLite | `LfsService` / lock API |
 | External bodies | No fixed logical byte quota; 8 MiB immutable parts, a 16-byte Git manifest or a part-digest LFS manifest | Each conditional S3 copy handles one bounded part |
@@ -106,7 +106,7 @@ These limits bound individual requests and publication work. They do not cap tot
 | Symbolic HEAD | `ref_generation.default_branch`, initially `refs/heads/main`; owner-authorized compare-and-set with ref generation | `RepositoryCell::set_default_branch` |
 | HTTP push identity | repository-local UUID bound to account and BLAKE3 request digest; different IDs identify independent operations | `pushes` |
 | HTTP push outcome | status, headers and BLAKE3-verified body in SQLite chunks; publish response pointer, rejection decision and ordered push notes atomically with accepted refs | `CompletePush`, codec 5 |
-| Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 1 |
+| Graph certificates | at most 128 candidates; SQLite verification targets 64 MiB, with larger objects verified individually; typed dependencies must already be certified | `CertifyObjects`, operation 6, codec 3 |
 | Git connectivity at ref publication | at most 100,000 certified new tips, with commit-only branch tips; same transaction as ACL, ref CAS and outcome | `object_closure`, shared ref finalization |
 | LFS metadata publication | check actor's write role in the SQLite insert transaction | `record_lfs_object` |
 
@@ -235,13 +235,15 @@ checks child status in pages of 128. Certified children need no separate Cell
 call; uncertified children carry their observed immutable metadata into traversal.
 It groups at most 128 candidate object IDs in dependency order. Its cache of objects ready
 for certification covers only the pending batch. `CertifyObjects` independently
-reads each candidate from SQLite, recomputes hashes and graph edges, and requires
-all typed children to be certified. It checks child metadata in groups of at most
-128 rows. The same transaction records deduplicated parent/child edges in
+reads each candidate's verified dependency metadata from SQLite, checks its complete count and BLAKE3 digest, and requires
+all typed children to be certified. It checks child kind and closure in groups
+of at most 128 rows through the covering `objects_by_oid_kind` index; unused wide
+metadata rows are not fetched. The same transaction records deduplicated parent/child edges in
 `object_edges`, with a reverse child index for fetch authorization. Only
 certified typed edges enter this index; gitlinks do not create local edges.
-Newly verified inline and chunked bodies target 64 MiB per command; a larger
-chunked object is verified individually; references to verified external blob bodies do not consume that budget.
+Structural objects target 64 MiB per certificate command. Verified blob certificates are published with their metadata batch; they
+have no outgoing edges and do not consume the structural byte budget. Canonical
+object IDs and raw-body digests are checked before their native pack is published.
 The final ref transaction checks up to 100,000 new tips and their certificates
 in groups of 128, together with current ACL, versions and namespace conflicts.
 An ordered update map detects duplicates and planned ancestor conflicts. Exact
@@ -255,8 +257,8 @@ rejects its whole application savepoint. The client traversal cannot assert a
 certificate. Certificates and refs are separate publications. A failed or
 interrupted preparation may retain valid certificates from earlier batches;
 retries reuse them. Partially certified roots cannot publish refs, and certificate
-commits do not advance `ref_generation`. An external blob certificate relies on
-the verified immutable upload before its SQLite record; there is no external
+commits do not advance `ref_generation`. Every object certificate relies on
+its verified immutable native pack before the SQLite record; there is no external
 network I/O inside certificate or ref transactions.
 
 `RepositoryCell::finalize_push` and HTTP completion share this preparation path.
@@ -615,9 +617,10 @@ collector removes those bodies yet. Account creation is idempotent only for
 the same account, active token digest and scope. Bootstrap accepts an issued
 active owner admin token and does not replace or revive credentials.
 
-Git packs and the bare repository cache are transport and acceleration
-artifacts. Neither is authoritative. The gateway can reconstruct cache objects
-from the Cell and external store. Integration tests prove exact-root restore
+The Repository Cell owns Git identity, graph and ref metadata; verified immutable
+pack/index pairs in the object store hold the corresponding Git bodies. The bare
+repository cache is disposable. The gateway reconstructs its selected objects
+from Cell metadata and those pairs. Integration tests prove exact-root restore
 after clean node shutdown and local SQLite loss. The process smoke also proves
 Git and LFS fetch after an unclean owner exit, lease expiry and a third process
 claiming the Cell from an S3-compatible object store. A proxy also drops a
@@ -635,10 +638,10 @@ required. See [SQLite's contract](https://www.sqlite.org/autoinc.html).
 
 Each refresh captures the maximum stored sequence after reading its ref snapshot.
 Header pages query `after < sequence <= maximum` in sequence order, so concurrent
-new publications wait for a subsequent refresh. Each page contains at most 128
-records and 768 KiB of aggregate inline bodies. A second query reads the exact
+new publications wait for a subsequent refresh. Each page contains at most 512
+metadata records and no body payload. A second query reads the exact
 missing IDs, sorted by OID, with the header receipt as its minimum observation.
-A byte-limited page advances only through its selected prefix. The gateway advances
+A page advances only through its selected metadata records. The gateway advances
 its in-memory cursor only after every selected body has verified and completed its
 cache write. Failure or cancellation leaves the failed page eligible for retry;
 completed files are reused. The cursor belongs to the same cache owner and resets
@@ -649,15 +652,17 @@ Each gateway retains one disk-accounted cache of verified immutable objects.
 Ref snapshots, pushes and native merge candidates get separate bare directories
 that borrow those objects through Git's
 [alternates contract](https://git-scm.com/docs/gitrepository-layout).
-The shared cache receives only verified durable Cell records and external bodies.
+The shared cache receives only objects verified against durable Cell metadata
+and native packs.
 Native writes stay in the private generation; failed or unpublished pushes never
 populate the shared cache. A successful push's new objects enter it through the
 next durable hydration read. Snapshot HEAD/refs remain private and unchanged for
 the lifetime of a fetch, even while new snapshots reuse the same object bytes.
 
-An object is compressed into an accounted temporary file, then installed at its
-OID only after verification and compression finish. Incomplete files never count
-as cache hits. Existing OIDs skip body queries, external downloads and compression;
+The repository pack cache verifies each complete pack/index pair before reuse.
+The serving cache projects only selected objects into accounted loose files;
+large objects stream through native Git and small objects use bounded decoding.
+Incomplete writes never count as cache hits. Existing OIDs skip repeated writes;
 refresh seeks past the completed sequence and checks local paths only for new
 headers or a retried page. A ref-only refresh reads the high-water mark without
 scanning old headers. No cache serves as
@@ -674,10 +679,9 @@ writer's reservation through a read-then-resize race.
 Records are immutable through product APIs, and no collector removes them.
 This makes the two observations safe; a future collector must fence active
 reads before deleting records or bodies. The reader rejects changed/missing IDs,
-invalid descriptors, and inline size, Git OID or BLAKE3 mismatches. Inline bodies
-move into one bounded blocking verification task without a payload clone.
-Chunked and external records carry descriptors; their body readers verify the
-actual bytes before the gateway writes them to the disposable cache. Refs become
+invalid descriptors, format mismatches and corrupt native pack/index identities.
+Native index membership and entry headers bind stored object metadata to its pack.
+Direct body reads additionally check canonical OIDs, raw lengths and BLAKE3. Refs become
 visible there only after successful hydration for the selected fetch mode.
 This bounds each query,
 not total repository hydration time or native Git scratch usage. The previous
@@ -706,7 +710,7 @@ Both commands disable replacement refs so stored bytes retain their canonical
 identity. The batch reader caps headers at 128 bytes, validates kind and size
 before allocation, reads the exact body and delimiter, and recomputes its Git
 OID. Missing, truncated, malformed or corrupt output fails the push. Enumeration,
-headers, inline/non-blob body reads, delimiters and process completion have
+headers, bounded structural body reads, delimiters and process completion have
 120-second deadlines. External blobs stream in at most 8 MiB chunks, with
 120-second input/part idle deadlines and no whole-upload duration ceiling.
 OID hashing uses a blocking worker so large bodies do not occupy an async
@@ -717,73 +721,45 @@ successful exits before publishing refs or recording the successful report.
 Previously published graph closure makes exclusions safe; ref publication
 still requires every new tip to have a durable certificate.
 
-External Git blobs use multipart staging for bounded parts under a unique
-repository-scoped prefix. Canopy hashes the exact declared body as it streams,
-checks the Git OID, conditionally copies the parts, and creates the immutable
-SHA-256 manifest. It verifies the destination before returning metadata. Conflicting canonical bytes fail; they
-are never overwritten. Staging deletion and incomplete multipart abort are
-attempted on ordinary failure. Process loss can leave staging/multipart debris;
-operator lifecycle cleanup and qualified collection remain required.
+Native Git produces separate self-contained structural and blob packs for each
+import or push's new history, excluding previously published tips without
+enabling thin packs. Each v2 index
+is generated under disk admission. Both files are uploaded to staging keys,
+conditionally copied to content-addressed `repos/<uuid>/git-packs/` keys, and
+verified in full before metadata may name them. A conflicting immutable file
+fails publication. No old Git-body reader is compiled.
 
-Hydration and backup verification read one part of at most 8 MiB at a time,
-pinning the manifest version/ETag. The final range is withheld until Git SHA-1,
-SHA-256 and BLAKE3 all match the SQLite reference. A failed or canceled range
-invalidates its reader. Hydration compresses into disk-accounted cache files on
-blocking workers; each writer retains the cache reservation until it exits.
-The ref generation is not published for Git service until hydration finishes.
+Object verification streams canonical Git hashing and BLAKE3 with bounded buffers.
+Structural graph verification retains edges without retaining messages or path
+names. Merge and rebase validation uses content digests, typed edges and immutable normalized
+commit fingerprints; commit bodies remain in the native pack.
 
-External Git blobs use an immutable `CANOPY01` manifest (eight magic bytes,
-then an eight-byte little-endian logical size). LFS bodies use `CANOPY02` with
-one BLAKE3 digest per part after the size; SQLite pins the manifest's BLAKE3
-digest. The body bytes live at `<key>.parts/<16-digit hex index>`. Each part is
-at most 8 MiB; empty bodies have one empty part.
-Parts are conditionally copied before the manifest is created, and the whole
-logical body is reverified before SQLite metadata is published. Backup copies
-all referenced parts before copying the manifest. There is no whole-object S3
-copy and no fixed logical file-size quota. `CANOPY02` replaces the previous LFS
-manifest and digest meaning. This hard cutover requires a fresh preview prefix
-or re-uploaded LFS bodies; no old-body decoder or migration is provided.
+Candidate existence queries and metadata publication group up to 512 objects.
+Transient in-memory ingress is bounded to 768 KiB per object and 3 MiB per batch;
+it is packed and verified before dispatching `PutObjects` codec 4. The command
+accepts only prepared pack references. It compares immutable content and graph
+metadata after bounded multi-row insertion. Any conflicting record rejects
+and rolls back the entire application savepoint. Dependency rows are staged in
+multi-row writes of at most 8,192 within Cellule's 1 MiB SQL command limit, then
+their exact count and BLAKE3 digest are
+checked during graph certification. Staging never publishes a ref.
 
-Trees, commits and tags have no fixed byte quota, but publication and graph
-parsing currently materialize individual bodies. Available worker memory remains
-a practical constraint; this is not production capacity qualification.
+Certificate preparation groups at most 128 objects and 64 MiB of structural
+bodies. One oversized structural object may occupy a batch by itself. Before
+preparing its first uncertified object, it warms both existing graph indexes
+through read-only 512-pair pages with indexed tuple seeks. This moves cold page
+I/O outside Cellule's five-second write execution budget without creating extra
+publications. Certified edges use multi-row writes of at most 512 rows; typed
+closure verification and atomic rejection remain unchanged.
 
-Candidate existence queries group up to 128 IDs. Missing records accumulate in
-an `ObjectBatch` with at most 128 records and 3 MiB of aggregate inline bodies,
-leaving room for metadata beneath the 4 MiB operation input limit. External
-blob records count toward the record limit; their bytes are verified and
-uploaded before publication. Chunk references count toward the record limit and
-a 64 MiB aggregate verification target shared with inline bytes. An oversized
-individual object is verified alone. The
-decoder enforces these bounds before publication. One typed Cell command publishes the batch and returns one receipt.
-It recomputes inline Git OIDs and BLAKE3 digests, then compares every inserted
-or existing row with the complete expected record. A mismatch rejects the
-command and rolls back all inserts in that batch. Repeating the same mutation
-identity and payload returns the recorded result through Cellule deduplication.
-
-Trees, commits and tags larger than 768 KiB are staged in `object_uploads` and
-`object_chunks`; their bodies stay in SQLite. Each part is at most 512 KiB and
-there is no fixed number of parts per object. Part command identities derive from
-the caller's upload identity and part index, so retrying the same staging
-operation replays committed parts. Staging does not create an `objects` row:
-queries and ref validation cannot see incomplete uploads.
-
-`PutObjects` codec 3 accepts a chunk reference containing upload ID, size and
-BLAKE3. In the publication transaction it requires the exact chunk count and
-part lengths, reconstructs the body, verifies the canonical Git OID and BLAKE3,
-and then inserts the immutable object record. A failure rolls back every object
-in that batch. Inline and external-blob records use the same publication command.
-Repeated identical objects converge on the existing record; unused duplicate
-uploads remain staged until a collector can prove they are unreferenced.
-
-Hydration and direct SQLite object reads use the same chunk count, length and
-hash checks. Every SQL result contains at most one chunk, fitting Cellule's
-1 MiB result limit. Reads reconstruct a bounded whole object in memory. Graph
-certification reconstructs chunked objects before applying the same typed edge
-checks as inline objects; chunking does not certify missing edges. Part data is
-immutable through product APIs, and no collector exists yet. Any future collector
-must preserve chunks reachable from objects and invalidate graph certificates
-before removing their dependencies.
+Hydration verifies pack/index identity before projecting selected objects into
+the disposable Git cache. Large
+objects stream through native Git without whole-object allocation by Canopy;
+small objects use bounded decoding. Direct object-body reads have a 64 MiB
+allocation bound. A cold read currently downloads its complete referenced pack;
+provider traffic can include bodies omitted from a filtered clone's wire pack.
+Sparse range reads are not yet implemented. Git pack orphan reclamation remains
+separate from the Cellule retention collector.
 
 Object batches remain separate from ref and push-outcome publication. A later
 failure can leave earlier batches unreferenced; a retry finds those records
@@ -800,8 +776,9 @@ concurrent cache replacement cannot delete files beneath an admitted reader.
 Receive-pack collects its response with the existing 64 MiB limit, then persists
 objects, validates refs and records the outcome before sending HTTP success.
 
-CGI headers and stderr are each bounded at 64 KiB. The existing 120-second
-subprocess deadline includes output backpressure. Once headers are sent, a
+CGI headers and stderr are each bounded at 64 KiB. The finite 30-minute
+subprocess deadline permits native packing of large histories and includes
+output backpressure. Once headers are sent, a
 process failure or timeout produces an HTTP body error rather than successful
 EOF; before headers it fails the request. Dropping the response cancels its
 worker. The spawn helper consumes and drops the parent command before waiting for
@@ -825,8 +802,8 @@ annotated-tag chains. Native Git checks target existence, peels tags and emits
 all protocol bytes. Commit ancestors and tree children are not traversed for
 this exchange. Direct blob/tree refs still require their own verified bodies;
 a large blob tag can therefore consume substantial discovery cache space.
-Selected SQLite object reads reuse the 128-record/768-KiB inline page limit;
-chunked and external objects use the same verified hydration path as transfers.
+Selected SQLite object reads reuse the 512-record metadata page limit and
+the same verified native pack installation path as transfers.
 Missing or corrupt targets fail preparation instead of disappearing from refs.
 
 A current ready cache is reused when its mutex is immediately available. Discovery
@@ -1180,10 +1157,10 @@ Schema version 1 is still changing in this unreleased repository. The chunk,
 HEAD, discovery, token-metadata, issue, check, branch-rule, pull/review, review-head, merge, candidate, object insertion-sequence and membership-version layouts, operations 7–10,
 and the operation-5/8/9 codec changes
 require a fresh development storage prefix;
-there is no upgrade reader for older development databases. The module
-descriptor and object paths will become compatibility boundaries at the first
-persistent preview. The current build pins Cellule revision
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. The earlier entity-partition
+there is no upgrade reader for older development databases. The module descriptor
+and object paths identify the current format; older formats are rejected rather
+than migrated. The current build pins the Cellule crates to
+exact crates.io version `=0.2.0`. The earlier entity-partition
 cutover also made pre-cutover prefixes incompatible; no migration is available.
 
 ## Accounts and authentication
@@ -1811,8 +1788,8 @@ or restoring write access therefore cannot revive an old approval. The immutable
 owner uses generation zero. Unauthorized ACL calls cannot change generations.
 Existing ACL access, roster and check-reporting policy stays the same; check
 results continue to use their configured context versions, as documented above.
-A fresh development prefix is required; old memberships have no generation
-backfill. A future migration must initialize those before enabling these APIs.
+A fresh storage prefix is required; memberships are initialized with generations
+by the current schema. Old memberships are not backfilled or accepted.
 
 All three mutations are bounded guarded SQL batches through the registered Cell
 SQL command. Their recorded pre-mutation domain decision, conditional write and
@@ -2221,7 +2198,7 @@ native worker is trusted to compute the merge tree; the Cell validates exact
 canonical commit bytes and certified graph closure before recording readiness.
 It does not independently recompute the merge algorithm.
 
-Generated objects use the same verified SQLite/chunk/external-blob ingestion as
+Generated objects use the same verified native-pack ingestion as
 pushes. A ready result and `refs/canopy/merge-candidates/<UUID>` commit in one
 transaction, advancing the ref generation for cache invalidation and coherent
 pagination. The entire `refs/canopy` namespace, including its root, is reserved.
@@ -2253,10 +2230,11 @@ its cache lifetime. Completed scratch writes are charged before object ingestion
 native peak disk/memory/CPU bounds and crash-left cleanup remain release gates.
 
 Candidate input/result objects and their ancestor closure are retention roots.
-No GC runs today. Abandoned pending rows, ready refs, external orphan objects and
-historic candidates need quota/retention policy before persistent public use.
-Schema 1 remains unreleased: new candidate tables, operation 10 and operation 9
-codec 4 require a fresh development prefix. No dependency or lockfile changes.
+Maintenance GC reclaims obsolete Cellule database objects; it does not remove
+candidate rows, ready refs or external Git/LFS bodies. Abandoned pending rows,
+external orphan objects and historic candidates need quota/retention policy
+before persistent public use. Repository schema 3 initializes only fresh Cells;
+current command identities and codecs are checked with the compiled release.
 
 
 ## Repository browser
@@ -2475,7 +2453,7 @@ Stock `git lfs pull` without credentials verifies this behavior.
 Both Directory and Repository initialization schemas changed in this unreleased
 build. Use a fresh development prefix; existing data is not migrated or removed.
 Source digest validation rejects old modules; mixed-build rolling upgrades are
-not supported. Production upgrade migration remains a delivery gate.
+not supported. These are intentional boundaries of the current-release policy.
 
 ## Deployment release enrollment and maintenance
 
@@ -2521,9 +2499,9 @@ Session enumeration is bounded at 4,096 and fails closed on overflow. Maintenanc
 end requires the exact operation and drain proof, then uses the upstream release
 CAS. Retrying completed end returns its unchanged Ready record.
 
-The upstream contracts are implemented in pinned Cellule revision
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`, specifically runtime
-`cell/application.rs`, `recovery/release.rs` and `node.rs::advertised_sessions`. `start_maintenance` closes release
+The upstream contracts are implemented in Cellule 0.2.0, specifically runtime
+`cell/application.rs`, `recovery/release/mod.rs` and
+`node/directory/advertisement.rs::advertised_sessions`. `start_maintenance` closes release
 admission but does not itself drain writers; Canopy supplies that lifecycle.
 Heartbeat expiry is not writer-close evidence. Source store errors propagate;
 there is no fallback to an unregistered release.
@@ -2609,16 +2587,15 @@ so the reservation is also checked on serving and maintenance admission. An olde
 binary without that check must not access these destinations.
 
 Create copies the runtime pin/graph, then restores each pinned repository SQLite
-snapshot locally to enumerate external Git/LFS references. The pinned SQLite data
-is the body manifest: no second mutable index determines backup contents. Rows
-are paginated in batches of 256. Source and destination bytes must match the
-recorded size and SHA-256; Git blobs also match their Git OID and whole-body
-BLAKE3, while LFS parts match the SQLite-anchored manifest. Body parts and manifests are
-conditionally copied before the completion CAS. Conflicting destination bodies
-must verify or the operation fails. Snapshot disk reservations cover each restored
-database and remain held until its scratch directory is removed. Capture admits
-at most 100,000 Cells. Git blob and LFS body verification stream bounded ranges
-without a fixed logical byte quota through their respective verified readers.
+snapshot locally to enumerate native Git pack/index pairs and LFS references.
+The pinned SQLite data determines backup contents; no second mutable index is
+used. Rows are paginated in batches of 256. Each native file must match its
+recorded BLAKE3 digest and length. LFS parts match the SQLite-anchored manifest.
+Both native files and all LFS parts/manifests are conditionally copied before
+completion CAS. Conflicting destination data must verify or the operation fails.
+Snapshot disk reservations cover each restored database until its scratch is
+removed. Capture admits at most 100,000 Cells. Verification streams bounded
+buffers without a fixed logical pack or LFS byte quota.
 
 Verify and restore enroll at the completed backup prefix and read no original
 source prefix. Restore copies into a disjoint, reserved prefix and preserves the
@@ -2759,8 +2736,10 @@ remain required. No new configuration surface was added for diagnostic output.
 ## Cellule integration
 
 Canopy directly uses `cellule-app`, `cellule-host`, `cellule-runtime`,
-`cellule-ltx` and `cellule-store`, pinned to Cellule commit
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. `cellule-types` is transitive.
+`cellule-ltx` and `cellule-store`, each pinned to exact crates.io version
+`=0.2.0`, released from commit `aaacf311622a2fea009067d1f5f217751ee1a2cf`.
+`cellule-types` is transitive at the same version; Cargo.lock records registry
+checksums for all six crates.
 The lockfile contains no Crab Cell, Crab product/server or Xet packages.
 Historical qualification runs in the delivery/performance logs retain their
 original dependency revisions; they are not performance evidence for this build.
@@ -2790,9 +2769,12 @@ its derived target against the catalog partition and control Cell ID before
 copying referenced bodies. A provisioned repository before owner initialization
 may have no identity only when it has no external bodies.
 
-This changes the compiled release and runtime storage path. Use a fresh
-development prefix. Existing selected-release validation rejects the old
-compiled release; there is no Crab Cell reader, mixed-version rolling upgrade,
+Cellule 0.2.0 changes the compiled release and runtime storage path to Node
+Bundle v1, including authenticated catalog/history encodings and `.nodebundle`
+paths. Older encodings and paths are rejected without a fallback reader. Use a
+fresh development prefix; before retiring an older deployment, drain and
+materialize its acknowledged history with the previous binary. Existing selected-release validation rejects
+the old compiled release; there is no Crab Cell reader, mixed-version rolling upgrade,
 or backup conversion.
 
 `server::storage::probe` runs before serving-node or maintenance-worker enrollment.

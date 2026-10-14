@@ -450,7 +450,7 @@ async fn cancelled_maintenance_recovery_retains_enrollment_until_cell_cleanup() 
                 .registry()
                 .module_code(RepositoryModule::NAME)
                 .ok_or("missing module")?,
-            1,
+            canopy_server::REPOSITORY_SCHEMA_VERSION,
         )?)
         .await?;
     let operation = RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes());

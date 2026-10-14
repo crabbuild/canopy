@@ -1,3 +1,5 @@
+#[path = "support/packs.rs"]
+mod pack_store;
 use std::{
     path::Path,
     sync::Arc,
@@ -53,7 +55,12 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         .ok_or(Error::Registry("repository module missing"))?;
     let catalog = CellCatalog::new(layout.clone(), tenant);
     let proof = catalog
-        .provision(CatalogEntry::new(&target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            &target,
+            CatalogRole::Sql,
+            code,
+            canopy_server::REPOSITORY_SCHEMA_VERSION,
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let first_session = SessionId::from_bytes([34; 16]);
@@ -99,6 +106,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         target.clone(),
         repository_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, first_disk.path(), repository_id)?,
     )?);
     let owner_identity = support::identity()?;
     repository.ensure_owner(owner_identity, "canopy").await?;
@@ -307,6 +315,7 @@ async fn a_second_node_clones_from_the_published_root_after_local_disk_loss()
         target,
         repository_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, second_disk.path(), repository_id)?,
     )?);
     assert_eq!(push_cert_seed(&sql).await?, first_seed);
     assert_eq!(

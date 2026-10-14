@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: "cellule-*"
+    groups:
+      cellule:
+        patterns:
+          - "cellule-*"
+    open-pull-requests-limit: 1

@@ -12,7 +12,7 @@ import time
 import uuid
 
 from benchmark_repositories import Client, corpus, percentiles, seed, verify
-from smoke_s3_process import start
+from smoke_s3_process import start, wait_for_lease_expiry
 
 
 def qualify(args):
@@ -42,7 +42,7 @@ def qualify(args):
         client.close()
         process.kill()
         process.wait(timeout=10)
-        time.sleep(11)
+        wait_for_lease_expiry()
         report["phase"] = "recovery_startup"
         started = time.monotonic()
         process, base = start(args.binary, args.work_dir, settings, "restored")

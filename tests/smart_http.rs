@@ -60,7 +60,12 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         .module_code(RepositoryModule::NAME)
         .ok_or(Error::Registry("repository module missing"))?;
     let proof = CellCatalog::new(layout.clone(), tenant)
-        .provision(CatalogEntry::new(&target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            &target,
+            CatalogRole::Sql,
+            code,
+            canopy_server::REPOSITORY_SCHEMA_VERSION,
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let incarnation = IncarnationId::from_bytes([24; 16]);
@@ -107,18 +112,26 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             tenant,
             application_id,
         )?;
+        let paused_blobs = Arc::new(paused_blobs::PausedBlobs::default());
+        let blob_store: Arc<dyn ObjectStore> = paused_blobs.clone();
+        let disk_budget = DiskBudget::new(1 << 30);
         let repository = Arc::new(RepositoryCell::new(
             &application_handle,
-            target,
+            target.clone(),
             repository_id,
             canopy_server::ObjectFormat::Sha1,
+            canopy_server::git_pack::PackStore::new(
+                Arc::clone(&blob_store),
+                repository_id,
+                scratch.path().into(),
+                disk_budget.clone(),
+                256 * 1024 * 1024,
+                64 * 1024 * 1024,
+            )?,
         )?);
         repository
             .ensure_owner(support::identity()?, "canopy")
             .await?;
-        let paused_blobs = Arc::new(paused_blobs::PausedBlobs::default());
-        let blob_store: Arc<dyn ObjectStore> = paused_blobs.clone();
-        let disk_budget = DiskBudget::new(1 << 30);
         let gateway = Arc::new(GitGateway::new(
             Arc::clone(&repository),
             scratch.path().to_path_buf(),
@@ -379,7 +392,7 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
             }
             for object in page {
                 cursor = Some(object.oid);
-                external_seen |= matches!(object.storage, ObjectStorage::External { .. });
+                external_seen |= matches!(object.storage, ObjectStorage::Packed(_));
             }
         }
         assert!(external_seen);
@@ -447,10 +460,30 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         })
         .await?;
         drop(teardown_gateway);
+        let mut pack_bytes = 0;
+        for entry in std::fs::read_dir(scratch.path())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b"canopy-pack-")
+            {
+                for file in std::fs::read_dir(entry.path())? {
+                    pack_bytes += file?.metadata()?.len();
+                }
+            }
+            assert!(
+                !entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .starts_with(b"canopy-git-"),
+                "gateway teardown must remove native cache generations"
+            );
+        }
         assert_eq!(
             disk_budget.used(),
-            0,
-            "gateway teardown releases retained object and snapshot charges"
+            pack_bytes,
+            "only the Repository Cell's verified native pairs remain charged"
         );
 
         let gateway = Arc::new(GitGateway::new(
@@ -511,7 +544,15 @@ async fn stock_git_push_and_clone_are_backed_by_one_repository_cell()
         assert!(tokio::fs::read(clone.join("tracked.lfs")).await? == lfs_body);
         native_resources::verify(scratch.path(), &url).await?;
         cache_reuse::verify(scratch.path(), &local, &url).await?;
-        publication::verify(scratch.path(), &repository, &paused_blobs, &url).await?;
+        publication::verify(
+            scratch.path(),
+            &repository,
+            &paused_blobs,
+            &url,
+            &application_handle,
+            &target,
+        )
+        .await?;
         let _ = stop_tx.send(());
         server.await??;
         Ok(())

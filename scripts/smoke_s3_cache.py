@@ -11,7 +11,7 @@ import time
 import urllib.request
 import uuid
 
-from smoke_s3_process import create_repository, git, start
+from smoke_s3_process import create_repository, git, start, wait_for_lease_expiry
 
 AUTH = "http.extraHeader=Authorization: Bearer local-test-token"
 
@@ -160,7 +160,7 @@ def qualify(args):
         print("PASS: stock pushes/clones reuse 260 object files and scan/hydrate only three new objects", flush=True)
         process.kill()
         process.wait(timeout=10)
-        time.sleep(11)
+        wait_for_lease_expiry()
         process, restored = start(args.binary, args.work_dir, settings, "restored")
         processes.append(process)
         restored_url = url.replace(base, restored, 1)

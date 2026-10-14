@@ -9,7 +9,6 @@ import signal
 import ssl
 import subprocess
 import threading
-import time
 import uuid
 
 
@@ -53,7 +52,7 @@ def proxy(upstream, certificate, key):
 
 
 def qualify(binary, directory, settings, processes):
-    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status, api_get, verify_discovery
+    from smoke_s3_process import port, start, create_repository, git, clone_and_verify, api_status, api_get, verify_discovery, wait_for_lease_expiry
 
     ca, ca_key = directory / "peer-ca.pem", directory / "peer-ca-key.pem"
     certificate, key = directory / "peer-server.pem", directory / "peer-key.pem"
@@ -119,7 +118,7 @@ def qualify(binary, directory, settings, processes):
         first.kill()
         first.wait(timeout=10)
         assert api_status(base_b, "/api/repositories", "local-test-token") == 503
-        time.sleep(11)
+        wait_for_lease_expiry()
         for name, oid, readme, lfs in expected:
             clone_and_verify(f"{base_b}/canopy/{name}.git", directory / f"{name}-takeover",
                              oid, readme, lfs)
@@ -172,7 +171,7 @@ def qualify(binary, directory, settings, processes):
             pass
         else:
             raise AssertionError("maintenance resumed before crashed-owner recovery")
-        time.sleep(11)  # Node lease is 10 seconds; expiry still requires a fencing CAS.
+        wait_for_lease_expiry()
         recovered = maintenance("recover", interrupted_operation)
         assert recovered["drained"] and recovered["release"]["state"] == "maintenance"
         assert maintenance("end", interrupted_operation)["release"]["state"] == "ready"

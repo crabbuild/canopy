@@ -18,14 +18,13 @@ use object_store::ObjectStore;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
-    INLINE_OBJECT_LIMIT, ObjectBatch, ObjectKind, ObjectStorage, PushPlan, RefExpectation,
-    RefUpdate, RepositoryCell, StoredObject,
+    ObjectBatch, ObjectKind, ObjectStorage, PackedObject, PushPlan, RefExpectation, RefUpdate,
+    RepositoryCell, StoredObject,
     directory::TokenScope,
     git_cache::{CacheError, GitCache},
     git_http::{GitHttpBackend, GitHttpError, GitHttpRequest, GitHttpResponse},
     git_input::{GitInput, InputError, MAX_FETCH_REQUEST_BYTES},
     git_objects::GitObjects,
-    large_blob::{LargeBlobError, LargeBlobStore},
     lfs::LfsService,
     object_batch::MAX_OBJECTS,
     push::{PushCompletion, PushError},
@@ -57,7 +56,7 @@ pub enum GatewayError {
     #[error("repository Cell operation failed")]
     Cell(#[source] CellError),
     #[error("large Git blob store failed")]
-    Blob(#[from] LargeBlobError),
+    Pack(#[from] crate::git_pack::PackError),
     #[error("cache I/O failed")]
     Io(#[from] std::io::Error),
     #[error("Git cache command failed: {0}")]
@@ -102,7 +101,6 @@ pub struct GitGateway {
     repository: Arc<RepositoryCell>,
     signer_directory: Option<Arc<crate::directory::DirectoryCell>>,
     certificate_seed: OnceCell<[u8; 32]>,
-    large_blobs: LargeBlobStore,
     lfs: LfsService,
     scratch_root: PathBuf,
     disk_budget: DiskBudget,
@@ -118,13 +116,11 @@ impl GitGateway {
         blob_store: Arc<dyn ObjectStore>,
         disk_budget: DiskBudget,
     ) -> Self {
-        let large_blobs = LargeBlobStore::new(Arc::clone(&blob_store), repository.repository_id());
         let lfs = LfsService::new(Arc::clone(&repository), blob_store);
         Self {
             repository,
             signer_directory: None,
             certificate_seed: OnceCell::new(),
-            large_blobs,
             lfs,
             scratch_root,
             disk_budget,
@@ -438,7 +434,27 @@ impl GitGateway {
         }
         // Published refs already have durable graph closure. Excluding them avoids
         // re-reading old history; the final Cell transaction still verifies every new tip.
-        let excluded = before.values().filter_map(|state| state.oid).collect();
+        let excluded: Vec<_> = before.values().filter_map(|state| state.oid).collect();
+        let [structural, blobs] =
+            GitObjects::classify(&backend.git_dir(), included.clone(), excluded.clone()).await?;
+        if structural.is_empty() && blobs.is_empty() {
+            return Ok(());
+        }
+        // Separate compact structural reads from potentially large blob data;
+        // both representations remain immutable native packs.
+        let mut pairs = Vec::new();
+        for ids in [structural, blobs] {
+            if !ids.is_empty() {
+                let pair = self
+                    .repository
+                    .packs
+                    .build(Arc::clone(&backend.cache), ids, Vec::new(), false)
+                    .await?;
+                let identity = self.repository.packs.publish(Arc::clone(&pair)).await?;
+                pairs.push((pair, identity));
+            }
+        }
+
         let mut objects = GitObjects::start(&backend.git_dir(), included, excluded)?;
         let mut batch = ObjectBatch::default();
         loop {
@@ -459,38 +475,39 @@ impl GitGateway {
                 .map_err(|error| GatewayError::Cell(Box::new(error)))?
                 .output;
             for oid in candidates.into_iter().filter(|oid| !present.contains(oid)) {
-                let mut input = objects.read(oid).await?;
-                let object =
-                    if input.kind == ObjectKind::Blob && input.size > INLINE_OBJECT_LIMIT as u64 {
-                        let uploaded = self
-                            .large_blobs
-                            .put(oid, input.size, &mut input.reader)
-                            .await?;
-                        input.finish().await?;
-                        StoredObject {
-                            oid,
-                            kind: ObjectKind::Blob,
-                            storage: ObjectStorage::External {
-                                size: uploaded.size,
-                                blake3: uploaded.blake3,
-                                sha256: uploaded.sha256,
-                            },
-                        }
-                    } else {
-                        let (kind, body) = input.body().await?;
-                        if body.len() > INLINE_OBJECT_LIMIT {
-                            self.repository
-                                .stage_object(new_identity()?, kind, &body)
-                                .await
-                                .map_err(|error| GatewayError::Cell(Box::new(error)))?
-                        } else {
-                            StoredObject {
-                                oid,
-                                kind,
-                                storage: ObjectStorage::Inline(body),
-                            }
-                        }
-                    };
+                let (kind, size, digest, dependencies, rebase_metadata) =
+                    objects.read(oid).await?.metadata().await?;
+                let mut selected = None;
+                for (pair, identity) in &pairs {
+                    if pair.data()?.contains(oid)? {
+                        selected = Some((pair, identity));
+                        break;
+                    }
+                }
+                let (pair, pack) = selected.ok_or(GatewayError::MalformedCache)?;
+                let header = pair
+                    .data()?
+                    .header(oid)?
+                    .ok_or(GatewayError::MalformedCache)?;
+                if header.kind != kind || header.size != size {
+                    return Err(GatewayError::MalformedCache);
+                }
+                let mut object = StoredObject {
+                    oid,
+                    kind,
+                    storage: ObjectStorage::Packed(Box::new(PackedObject::verified(
+                        self.repository.id,
+                        pack.clone(),
+                        oid,
+                        kind,
+                        size,
+                        digest,
+                        dependencies,
+                    ))),
+                };
+                if let ObjectStorage::Packed(value) = &mut object.storage {
+                    value.rebase_metadata = rebase_metadata;
+                }
                 if let Err(object) = batch.try_push(object) {
                     self.repository
                         .put_objects(new_identity()?, std::mem::take(&mut batch))

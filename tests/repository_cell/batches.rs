@@ -11,7 +11,7 @@ use cellule_runtime::{
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn identity() -> Result<MutationIdentity> {
+pub(super) fn identity() -> Result<MutationIdentity> {
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
     Ok(MutationIdentity {
         request_id: RequestId::from_bytes(uuid::Uuid::new_v4().into_bytes()),
@@ -24,7 +24,7 @@ fn inline(body: Vec<u8>) -> StoredObject {
     StoredObject {
         oid: object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, &body),
         kind: ObjectKind::Blob,
-        storage: ObjectStorage::Inline(body),
+        storage: ObjectStorage::Input(body),
     }
 }
 
@@ -50,7 +50,7 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
                 batch([StoredObject {
                     oid: foreign_id,
                     kind: ObjectKind::Blob,
-                    storage: ObjectStorage::Inline(foreign.to_vec()),
+                    storage: ObjectStorage::Input(foreign.to_vec()),
                 }]),
             )
             .await,
@@ -161,24 +161,16 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
             .is_empty()
     );
 
-    // External bytes are uploaded by the caller; their identity record is immutable here.
-    let external = |size| StoredObject {
-        oid: canopy_server::ObjectId::Sha1([27; 20]),
-        kind: ObjectKind::Blob,
-        storage: ObjectStorage::External {
-            size,
-            blake3: [28; 32],
-            sha256: [29; 32],
-        },
-    };
-    repository
-        .put_objects(identity()?, batch([external(1_000_000)]))
+    // A prepared capability cannot be rebound to a different Git object.
+    let mut prepared = repository
+        .stage_object(ObjectKind::Blob, b"opaque native pack reference")
         .await?;
-    let fresh = inline(b"must roll back with external identity conflict".to_vec());
+    prepared.oid = canopy_server::ObjectId::Sha1([27; 20]);
+    let fresh = inline(b"must roll back with rebound pack reference".to_vec());
     let fresh_id = fresh.oid;
     assert!(matches!(
         repository
-            .put_objects(identity()?, batch([fresh, external(1_000_001)]))
+            .put_objects(identity()?, batch([fresh, prepared]))
             .await,
         Err(InvocationError::Rejected(_))
     ));
@@ -189,27 +181,10 @@ pub async fn exercise(repository: &RepositoryCell, sql: &SqlCell<RepositoryModul
             .output
             .is_empty()
     );
-    for object in [
-        StoredObject {
-            oid: canopy_server::ObjectId::Sha1([31; 20]),
-            kind: ObjectKind::Tree,
-            storage: ObjectStorage::External {
-                size: 1,
-                blake3: [32; 32],
-                sha256: [33; 32],
-            },
-        },
-        external(u64::MAX),
-    ] {
-        assert!(matches!(
-            repository.put_objects(identity()?, batch([object])).await,
-            Err(InvocationError::Rejected(_))
-        ));
-    }
     assert!(repository.existing_objects(&[]).await.is_err());
     assert!(
         repository
-            .existing_objects(&vec![canopy_server::ObjectId::Sha1([0; 20]); 129])
+            .existing_objects(&vec![canopy_server::ObjectId::Sha1([0; 20]); 513])
             .await
             .is_err()
     );

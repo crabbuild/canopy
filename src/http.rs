@@ -684,6 +684,10 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::SERVICE_UNAVAILABLE,
             "Repository refs are changing; retry the request",
         ),
+        Err(GatewayError::Pack(error)) if error.is_admission() => plain(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "Git cache disk budget exhausted",
+        ),
         Err(
             GatewayError::Cache(error)
             | GatewayError::Http(crate::git_http::GitHttpError::Cache(error)),

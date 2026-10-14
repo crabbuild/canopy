@@ -4,6 +4,34 @@ use cellule_runtime::primitives::sql::{SqlBatch, SqlStatement, SqlValue};
 // Correlate each ancestor lookup so SQLite can stop at the first live ref,
 // without materializing the entire reverse graph or scanning all refs.
 const REACHABLE_WANT: &str = "WITH RECURSIVE ancestors(oid) AS (VALUES (?1) UNION SELECT e.parent FROM object_edges e JOIN ancestors a ON e.child = a.oid) SELECT g.generation, EXISTS (SELECT 1 FROM ancestors a WHERE EXISTS (SELECT 1 FROM refs r WHERE r.oid = a.oid)) FROM ref_generation g WHERE g.singleton = 1";
+// The protocol ceiling is 128 statements, but scattered cold index reads also
+// share Cellule's five-second execution budget. Leave headroom for each batch.
+const MAX_REACHABILITY_STATEMENTS: usize = 16;
+const GRAPH_READ_PARENTS: usize = 64;
+const GRAPH_READ_ROWS: usize = 128;
+
+fn graph_page(ids: &[crate::ObjectId], parent: &[u8], child: &[u8]) -> SqlBatch {
+    let remaining: Vec<_> = ids.iter().filter(|oid| oid.as_ref() > parent).collect();
+    let mut parameters = vec![
+        SqlValue::Blob(parent.to_vec()),
+        SqlValue::Blob(child.to_vec()),
+    ];
+    parameters.extend(remaining.iter().map(|oid| SqlValue::Blob(oid.to_vec())));
+    parameters.push(SqlValue::Integer(GRAPH_READ_ROWS as i64));
+    SqlBatch {
+        statements: vec![SqlStatement {
+            // Seek the current parent's child directly; never rescan its old
+            // children or completed parents. Limit edges before looking up type.
+            // Blob filtering happens after this bounded read, so a blob-heavy
+            // tree cannot force an unbounded scan to fill a structural page.
+            sql: format!(
+                "SELECT e.parent, e.child, o.kind FROM (SELECT parent, child FROM object_edges WHERE parent = ? AND child > ? UNION ALL SELECT parent, child FROM object_edges WHERE parent IN ({}) ORDER BY parent, child LIMIT ?) e JOIN objects o INDEXED BY objects_by_oid_kind ON o.oid = e.child ORDER BY e.parent, e.child",
+                vec!["?"; remaining.len()].join(",")
+            ),
+            parameters,
+        }],
+    }
+}
 
 pub(super) struct FetchRequest {
     pub(super) wants: BTreeSet<crate::ObjectId>,
@@ -195,7 +223,9 @@ impl GitGateway {
         // certified by the Cell also fence trees and blobs, including cached
         // objects retained after a ref deletion. Generation binds every batch.
         let ids: Vec<_> = wants.iter().collect();
-        for ids in ids.chunks(MAX_OBJECTS) {
+        // Each wanted ID consumes one statement, independently of the object
+        // metadata page size. Use smaller batches within SQL's 128-statement cap.
+        for ids in ids.chunks(MAX_REACHABILITY_STATEMENTS) {
             let result = self
                 .repository
                 .sql
@@ -287,34 +317,22 @@ impl GitGateway {
         let mut visited = BTreeSet::new();
         let mut stats = Hydration::default();
         while !pending.is_empty() {
-            let ids: Vec<_> = pending.iter().take(MAX_OBJECTS).copied().collect();
+            let ids: Vec<_> = pending.iter().take(GRAPH_READ_PARENTS).copied().collect();
             for oid in &ids {
                 pending.remove(oid);
                 visited.insert(*oid);
             }
-            let placeholders = vec!["?"; ids.len()].join(",");
-            let kind_filter = if include_blobs {
-                ""
-            } else {
-                "AND o.kind != 'blob'"
-            };
             let mut after_parent = Vec::new();
             let mut after_child = Vec::new();
             loop {
                 // Certified edges supply only reachable structure. Page both
                 // parents and children so a large tree stays within SQL wire bounds.
-                let mut parameters: Vec<_> =
-                    ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect();
-                parameters.extend([
-                    SqlValue::Blob(after_parent.clone()),
-                    SqlValue::Blob(after_parent.clone()),
-                    SqlValue::Blob(after_child.clone()),
-                    SqlValue::Integer(MAX_OBJECTS as i64),
-                ]);
-                let result = self.repository.sql.query(None, SqlBatch { statements: vec![SqlStatement {
-                    sql: format!("SELECT e.parent, e.child, o.kind FROM object_edges e JOIN objects o ON o.oid = e.child WHERE e.parent IN ({placeholders}) {kind_filter} AND (e.parent > ? OR (e.parent = ? AND e.child > ?)) ORDER BY e.parent, e.child LIMIT ?"),
-                    parameters,
-                }] }).await.map_err(|error| GatewayError::Cell(Box::new(error)))?;
+                let result = self
+                    .repository
+                    .sql
+                    .query(None, graph_page(&ids, &after_parent, &after_child))
+                    .await
+                    .map_err(|error| GatewayError::Cell(Box::new(error)))?;
                 let rows = &result
                     .output
                     .first()
@@ -347,7 +365,7 @@ impl GitGateway {
                 if !blobs.is_empty() {
                     self.hydrate_objects(cache, blobs, &mut stats).await?;
                 }
-                if rows.len() < MAX_OBJECTS {
+                if rows.len() < GRAPH_READ_ROWS {
                     break;
                 }
             }
@@ -394,11 +412,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn graph_pages_seek_dense_parents_and_cover_kind_without_wide_rows()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use cellule_ltx::rusqlite::{
+            Connection, StatementStatus, params, params_from_iter, types::Value,
+        };
+        for format in [crate::ObjectFormat::Sha1, crate::ObjectFormat::Sha256] {
+            let db = Connection::open_in_memory()?;
+            db.execute_batch("CREATE TABLE objects(sequence INTEGER PRIMARY KEY, oid BLOB UNIQUE, kind TEXT, padding BLOB); CREATE INDEX objects_by_oid_kind ON objects(oid, kind); CREATE TABLE object_edges(parent BLOB, child BLOB, PRIMARY KEY(parent, child)) WITHOUT ROWID")?;
+            let oid = |n: u32| {
+                let mut bytes = vec![0; format.bytes()];
+                bytes[..4].copy_from_slice(&n.to_be_bytes());
+                crate::ObjectId::try_from(bytes).unwrap()
+            };
+            let ids: Vec<_> = [10, 30, 40].into_iter().map(oid).collect();
+            let mut expected = Vec::new();
+            db.execute_batch("BEGIN")?;
+            for n in 0..2_071 {
+                let child = oid(100 + n);
+                let kind = if n % 43 == 0 { "tree" } else { "blob" };
+                db.execute(
+                    "INSERT INTO objects(oid, kind, padding) VALUES (?1, ?2, zeroblob(4096))",
+                    params![child.as_ref(), kind],
+                )?;
+                for parent in ids.iter().copied().chain([oid(20)]) {
+                    db.execute(
+                        "INSERT INTO object_edges VALUES (?1, ?2)",
+                        params![parent.as_ref(), child.as_ref()],
+                    )?;
+                    if ids.contains(&parent) {
+                        expected.push((parent.to_vec(), child.to_vec(), kind.to_owned()));
+                    }
+                }
+            }
+            db.execute_batch("COMMIT")?;
+            expected.sort();
+            let mut cursor = (Vec::new(), Vec::new());
+            let mut actual = Vec::new();
+            loop {
+                let batch = graph_page(&ids, &cursor.0, &cursor.1);
+                let query = &batch.statements[0];
+                let values: Vec<_> = query
+                    .parameters
+                    .iter()
+                    .map(|value| match value {
+                        SqlValue::Blob(value) => Value::Blob(value.clone()),
+                        SqlValue::Integer(value) => Value::Integer(*value),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                let plans: Vec<String> = db
+                    .prepare(&format!("EXPLAIN QUERY PLAN {}", query.sql))?
+                    .query_map(params_from_iter(&values), |row| row.get(3))?
+                    .collect::<Result<_, _>>()?;
+                assert!(
+                    plans
+                        .iter()
+                        .any(|plan| plan.contains("COVERING INDEX objects_by_oid_kind")),
+                    "{plans:?}"
+                );
+                let mut statement = db.prepare(&query.sql)?;
+                let rows: Vec<(Vec<u8>, Vec<u8>, String)> = statement
+                    .query_map(params_from_iter(&values), |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                assert!(rows.len() <= GRAPH_READ_ROWS);
+                assert!(statement.get_status(StatementStatus::VmStep) < 30_000);
+                if rows.is_empty() {
+                    break;
+                }
+                assert!((&rows[0].0, &rows[0].1) > (&cursor.0, &cursor.1));
+                let last = rows.last().unwrap();
+                cursor = (last.0.clone(), last.1.clone());
+                actual.extend(rows);
+            }
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reachability_stops_at_live_refs_without_scanning_other_history()
     -> Result<(), Box<dyn std::error::Error>> {
         use cellule_ltx::rusqlite::{Connection, StatementStatus, params};
         let db = Connection::open_in_memory()?;
         db.execute_batch(crate::SCHEMA)?;
+        db.execute("INSERT INTO git_packs (digest, format, bytes, index_digest, index_bytes) VALUES (zeroblob(32), 'sha1', 1, zeroblob(32), 1)", [])?;
         let oid = |n: u32| {
             let mut oid = [0; 20];
             oid[..4].copy_from_slice(&n.to_be_bytes());
@@ -406,7 +506,7 @@ mod tests {
         };
         db.execute_batch("BEGIN")?;
         for n in 0..10_000 {
-            db.execute("INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'blob', 0, zeroblob(32), 'inline', X'')", [oid(n).as_slice()])?;
+            db.execute("INSERT INTO objects (oid, kind, size, digest, pack, graph_valid, graph_count, graph_digest) VALUES (?1, 'blob', 0, zeroblob(32), zeroblob(32), 1, 0, zeroblob(32))", [oid(n).as_slice()])?;
             db.execute(
                 "INSERT INTO refs (name, oid, version) VALUES (?1, ?2, 1)",
                 params![format!("refs/tags/{n}"), oid(n).as_slice()],

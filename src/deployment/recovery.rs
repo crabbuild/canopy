@@ -57,9 +57,13 @@ impl Deployment {
         config: WorkerConfig,
     ) -> std::result::Result<(), ServerError> {
         self.require_maintenance(operation).await?;
-        let data_dir = config.data_dir;
+        let data_dir = config.data_dir.clone();
         let local =
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??;
+        let worker = maintenance::Worker::new(&config, local.path())?;
+        let claim =
+            maintenance::acquire(self, operation, maintenance::Action::Recover, Some(worker))
+                .await?;
         crate::server::storage::probe(
             self.layout.store(),
             &self.layout.application_prefix().join("canopy-probe"),
@@ -224,6 +228,7 @@ impl Deployment {
         self.nodes
             .withdraw(&*observed.lock().await, unix_now_ms()?)
             .await?;
+        claim.finish(self).await?;
         result
     }
 }

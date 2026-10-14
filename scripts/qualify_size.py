@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -38,10 +39,19 @@ def main():
     parser.add_argument("--provider-only", action="store_true")
     parser.add_argument("--docker-volume", action="store_true")
     parser.add_argument("--release", action="store_true")
+    parser.add_argument("--process-binary", type=Path,
+                        help="Also exercise this Canopy binary through restart, takeover, peers and backup")
     args = parser.parse_args()
+    if args.process_binary is not None:
+        args.process_binary = args.process_binary.resolve(strict=True)
     name = f"canopy-size-{uuid.uuid4().hex[:12]}"
     with tempfile.TemporaryDirectory(prefix=name) as temporary:
         directory = Path(temporary).resolve()
+        process_binary = directory / "canopy"
+        if args.process_binary is not None:
+            # Every restart must execute the same build, even if Cargo replaces
+            # its output while the fixture is running.
+            shutil.copy2(args.process_binary, process_binary)
         image = "rustfs/rustfs:1.0.0-beta.8-glibc"
         owner = f"{os.getuid()}:{os.getgid()}"
         volume = None
@@ -102,7 +112,7 @@ def main():
             env["CANOPY_TEST_S3_ENDPOINT"] = endpoint
             env["CANOPY_TEST_S3_BUCKET"] = "canopy-size"
             tests = [] if args.provider_only else [
-                "size::push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore"
+                "size::native_pack_exceeds_512_mib_and_git_lfs_exceed_5_gib_after_restore"
             ]
             tests.extend([
                 "sha256::sha256_real_provider_round_trip",
@@ -126,6 +136,15 @@ def main():
                 subprocess.run([*cargo, test,
                                 "--", "--exact", "--ignored", "--nocapture"],
                                env=env, check=True, cwd=Path(__file__).resolve().parents[1])
+            if args.process_binary is not None:
+                process_env = {**env, "AWS_ENDPOINT": endpoint, "AWS_ALLOW_HTTP": "true",
+                               "CANOPY_NODE_SIGNING_KEY_HEX": os.urandom(32).hex()}
+                subprocess.run([
+                    sys.executable, "-B", str(Path(__file__).with_name("smoke_s3_process.py")),
+                    "--binary", str(process_binary),
+                    "--storage-url", "s3://canopy-size/process-qualification",
+                    "--work-parent", str(directory),
+                ], env=process_env, check=True)
         except Exception:
             if started:
                 subprocess.run(["docker", "logs", "--tail", "60", name])

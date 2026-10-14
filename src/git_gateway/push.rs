@@ -66,6 +66,9 @@ impl GitGateway {
             Ok(prepared) => prepared,
             Err(error) => {
                 let reason = match &error {
+                    GatewayError::Pack(error) if error.is_admission() => {
+                        "Canopy push failed before publication: pack disk budget exhausted"
+                    }
                     GatewayError::Cache(error) | GatewayError::Http(GitHttpError::Cache(error))
                         if error.is_admission() =>
                     {

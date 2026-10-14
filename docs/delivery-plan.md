@@ -144,8 +144,8 @@ These are the next implementation slices. Each slice must update its contract, b
      retries must converge. Pinned SQLite roots provide the external body manifest.
    - Extend independent same-provider copy qualification to the production store
      and cross-provider export. Preserve identity/release validation, exact Git/LFS
-     bytes and collaboration/ACL state after source deletion. Add old-release
-     migration only with explicit format/version proof.
+     bytes and collaboration/ACL state after source deletion. Old-release
+     migration is out of scope under the current Cellule integration policy.
    - Add retention and collection only after roots include active transfers,
      pending operations, recovery roots and backup pins. Acceptance: concurrent
      fetch/merge/backup and injected collector failure never remove required
@@ -158,6 +158,11 @@ should remove bytes while fetch, backup or a pending merge can still read them.
 ## Qualification history
 
 The remaining sections record completed slices and open proof at the revision where each was tested. Read the gate table above for current release status. Start with a topic below if you need the detailed acceptance record:
+
+Historical suggestions to add upgrade migrations or preserve old formats are
+superseded by the [current Cellule integration policy](../AGENTS.md). Incompatible
+changes intentionally require a fresh prefix; the recorded test evidence below
+retains its original release and scope.
 
 | Topic | Representative evidence |
 | --- | --- |
@@ -3799,3 +3804,97 @@ discovery test expects 401 for an anonymous repository listing, while the
 existing public-listing route deliberately returns 200. That assertion also
 predates this cutover. Hosted CI and production-provider qualification remain
 open.
+
+### Cellule 0.2.0 release pin (2026-10-13)
+
+Canopy now pins all five direct Cellule crates to exact crates.io version
+`=0.2.0`, published from `aaacf311622a2fea009067d1f5f217751ee1a2cf`.
+`cellule-types` resolves to the same version, and the lockfile records registry
+checksums for all six crates. Unrelated locked dependencies are unchanged.
+The manifest now declares the already-documented Rust 1.97 minimum.
+
+This is a fresh-prefix cutover. Cellule 0.2.0 uses Node Bundle v1 and rejects
+older bundle encodings and paths without migration. Before retiring an older
+deployment, drain and materialize its acknowledged history with the previous
+binary. Existing prefixes and backups are not qualified for in-place upgrade.
+
+The verification run exposed fixture assumptions that needed correction:
+
+- Process takeover checks still waited for a ten-second lease; the signed node
+  lease is thirty seconds. The smoke scripts now share a 31-second expiry wait.
+- Disconnecting an admission request does not join its tracked release task.
+  The regression now waits for local cleanup and asserts durable `Idle` state
+  with no owner before testing subsequent admission and exact Git recovery.
+- The combined Repository Cell debug scenario overflows libtest's default
+  stack. A larger-stack diagnostic run passed. Only this scenario's driver now
+  has an explicit 8 MiB stack; runtime workers retain their defaults, and all
+  original assertions remain.
+- Independent fixtures run serially in CI to bound process load. Individual
+  scenarios still exercise concurrent requests, native workers and multiple nodes.
+
+`qualify_size.py --provider-only --process-binary <canopy>` now runs the existing
+process smoke after the eight isolated RustFS protocol probes. It snapshots the
+supplied executable into the temporary fixture so all restarts use one build,
+sets isolated provider credentials, and removes its container and volume on
+completion or failure. CI builds the server, runs the Python harness tests and
+invokes this combined qualification.
+
+Local validation used Rust 1.97.0, Git 2.50.1 and RustFS
+`1.0.0-beta.8-glibc` on macOS:
+
+- All 219 ordinary Rust tests pass across the library, binary and integration
+  targets, including the 93 full-server tests. Seven completed test binaries
+  were staged onto local disk for the final serial run to avoid shared build
+  volume I/O stalls; the corrected Repository Cell target passed through Cargo.
+- All eight isolated RustFS protocol probes pass: SHA-256 repositories and merge
+  candidates, signed HTTP/SSH pushes, stock SSH, bulk refs, partial clones and
+  stock LFS over SSH.
+- The eleven Python harness tests, normal server build, all-target Clippy with
+  warnings denied, formatting and diff checks pass.
+- The complete process qualification passes with the locally staged executable:
+  Git/LFS and collaboration API state survive restart, local disk corruption,
+  dropped replies and lease takeover. Two live HTTPS nodes serve eight
+  repositories beyond resident capacity, including owner loss and interrupted
+  maintenance recovery. The backup CLI restores exact 80 MiB Git and LFS bodies,
+  empty LFS objects and issue state after every original source object is deleted.
+  The isolated provider container and volume were removed successfully.
+
+An initial parallel run hit a transient workspace-lock failure that passed in
+isolation and in the serial run. The first process run from the shared build
+volume timed out during restart; the successful repeat used an immutable local
+executable.
+These runs are functional qualification, not latency or throughput evidence.
+The separate >5 GiB gate was not run: the Docker VM had about 26 GiB free,
+below its 40 GiB preflight requirement.
+
+### Current-release-only integration audit (2026-10-13)
+
+Fresh-prefix cutovers are intentional product policy. Canopy follows the latest
+published Cellule release without preserving older runtime or Canopy formats.
+The upstream HEAD and `v0.2.0` tag still resolve to
+`aaacf311622a2fea009067d1f5f217751ee1a2cf` at this audit.
+
+The audit covered module registration, command codecs, dependency sources,
+deployment admission, root reservations, local workspace markers, external-body
+readers, configuration parsing and their callers. No legacy runtime adapter,
+old-format reader, retained module implementation, configuration alias, or
+upgrade migration chain was found to remove. Each module has one schema and an
+empty `retained_codes` list. Its single `MigrationDescriptor` initializes fresh
+SQLite state through the current Cellule API. Chunked non-blob storage, optional
+API fields, Git protocol support, and recovery of the same compiled release are
+active behavior, not old-format compatibility.
+
+Removed stale migration promises from the roadmap and current operational
+contracts, including a reference to a nonexistent maintenance upgrade path.
+`AGENTS.md` records the policy for future changes. CI now checks that every direct
+and transitive Cellule crate resolves to one exact stable crates.io release;
+the grouped Dependabot configuration requests updates after reaching the default
+branch. No runtime source or dependency version changed in this audit.
+
+Validation: all 18 Python tests pass, including seven dependency-policy cases
+covering partial upgrades, version ranges, aliases, alternate sources, duplicate
+versions and missing lock entries. All ten existing deployment admission/recovery
+tests pass against Cellule 0.2.0. Both workflow YAML files parse; formatting and
+`git diff --check` pass. The complete protocol/process qualification above remains
+the evidence for the unchanged runtime; it was not repeated for this policy and
+CI change.

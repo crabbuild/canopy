@@ -300,7 +300,7 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
-async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
+async fn native_pack_hydration_preserves_large_blobs_and_admission()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::TempDir::new()?;
     let budget = DiskBudget::new(1 << 20);
@@ -311,32 +311,37 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
         crate::ObjectFormat::Sha1,
     )
     .await?;
-    let blobs = crate::large_blob::LargeBlobStore::new(
+    let packs = crate::git_pack::PackStore::new(
         Arc::new(object_store::memory::InMemory::new()),
-        [7; 16],
-    );
+        uuid::Uuid::new_v4().into_bytes(),
+        root.path().into(),
+        budget.clone(),
+        1 << 20,
+        16 << 20,
+    )?;
     let body = vec![17; 9 * 1024 * 1024];
-    let reference = blobs
-        .put(
-            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
-            body.len() as u64,
-            &mut body.as_slice(),
+    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
+    let source = packs
+        .prepare(
+            crate::ObjectFormat::Sha1,
+            vec![(ObjectKind::Blob, body.clone())],
         )
         .await?;
-    cache.store_blob(blobs.read(&reference).await?).await?;
-    let output = tokio::process::Command::new("git")
-        .arg("--git-dir")
-        .arg(cache.git_dir())
-        .args(["cat-file", "blob", &hex::encode(reference.oid)])
+    let identity = packs.publish(Arc::clone(&source)).await?;
+    drop(source);
+    let pack = packs.load(&identity).await?;
+    cache.install_pack(pack.clone()).await?;
+    assert!(cache.missing_objects(vec![oid]).await?.is_empty());
+    let output = crate::native_git::command(&cache.git_dir())?
+        .args(["cat-file", "blob", &hex::encode(oid)])
         .output()
         .await?;
     assert!(output.status.success());
     assert_eq!(output.stdout, body);
-    assert_eq!(budget.used(), tree_bytes(cache.root())?);
-    drop(cache);
-    assert_eq!(budget.used(), 0);
-
-    let cache = GitCache::create(
+    let before = budget.used();
+    cache.install_pack(pack.clone()).await?;
+    assert_eq!(budget.used(), before);
+    let other = GitCache::create(
         root.path().into(),
         budget.clone(),
         "refs/heads/main",
@@ -345,65 +350,17 @@ async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
     .await?;
     let occupied = budget.try_reserve(budget.capacity() - budget.used())?;
     assert!(
-        cache
-            .store_blob(blobs.read(&reference).await?)
+        other
+            .install_pack(pack.clone())
             .await
             .is_err_and(|error| error.is_admission())
     );
+    assert_eq!(other.missing_objects(vec![oid]).await?, vec![oid]);
+    drop(occupied);
+    drop(other);
     drop(cache);
-    assert_eq!(budget.used(), occupied.bytes());
-    Ok(())
-}
-
-#[tokio::test]
-async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn std::error::Error>>
-{
-    use object_store::ObjectStoreExt;
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-    )
-    .await?;
-    let store = Arc::new(object_store::memory::InMemory::new());
-    let blobs = crate::large_blob::LargeBlobStore::new(store.clone(), [9; 16]);
-    let mut body = vec![23; 9 * 1024 * 1024];
-    let reference = blobs
-        .put(
-            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
-            body.len() as u64,
-            &mut body.as_slice(),
-        )
-        .await?;
-    // The first range can be written before the final range detects corruption.
-    // Only the test-owned blob key is changed, then restored before retry.
-    let path = crate::external::part(&crate::large_blob::blob_path([9; 16], &reference.sha256), 1);
-    let metadata = store.head(&path).await?;
-    let last = body.last_mut().ok_or("empty fixture")?;
-    *last ^= 1;
-    store
-        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
-        .await?;
-    assert!(
-        cache
-            .store_blob(blobs.read(&reference).await?)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        cache.missing_objects(vec![reference.oid]).await?,
-        vec![reference.oid]
-    );
-    *body.last_mut().ok_or("empty fixture")? ^= 1;
-    store
-        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
-        .await?;
-    cache.store_blob(blobs.read(&reference).await?).await?;
-    assert!(cache.missing_objects(vec![reference.oid]).await?.is_empty());
-    drop(cache);
+    drop(pack);
+    drop(packs);
     assert_eq!(budget.used(), 0);
     Ok(())
 }

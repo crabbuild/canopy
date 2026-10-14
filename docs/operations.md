@@ -63,8 +63,8 @@ takeover. Cross-node placement races and larger hot sets still need qualificatio
 Each storage prefix has one durable tenant/application identity and a selected
 compiled release. First startup initializes an empty deployment; later nodes
 must match its release and configured image identity. A nonempty catalog without
-release metadata is rejected. Existing preview prefixes require explicit future
-migration; do not point this build at them as an upgrade.
+release metadata is rejected. Incompatible releases use fresh storage prefixes; old-format readers and
+in-place migrations are intentionally unsupported.
 
 To close admission and drain the fleet, choose a fresh operation UUID and use
 the same binary and configuration as the deployment:
@@ -113,8 +113,45 @@ failed root verification return an error. Retry the same operation after the
 reported condition is resolved; recovery never resumes serving automatically.
 Do not remove authority records or force `drained` to bypass an error.
 
-Upgrade/migration and object collection remain pending. Maintenance and owner
-recovery do not provide a separate backup copy.
+Maintenance and owner recovery operate within the selected release; they do not
+upgrade it or provide a separate backup copy.
+
+### Collect obsolete Cellule objects
+
+Begin maintenance, stop serving nodes cleanly, recover any interrupted owners,
+and wait for `status` to report `drained: true`. Then run a bounded collection:
+
+```bash
+canopy gc deploy/config.json "$CANOPY_OPERATION_UUID" 86400000 100000
+```
+
+The final arguments are a grace window in milliseconds and the maximum number
+of deletes in this pass (1–100,000). The example retains objects modified in the
+last 24 hours. The JSON receipt reports live/pinned, grace-protected, eligible and
+deleted counts. Repeat while `complete` is false. Finally end maintenance with
+the same operation UUID.
+
+Collection uses Cellule's verified live-root and backup-pin traversal. It deletes
+only old, unreachable immutable Cellule objects; native Git packs and Git LFS content have a
+separate reference set. Missing or corrupt reachable data prevents the sweep.
+Expired node advertisements do not count as a completed drain.
+
+Plan provider capacity for the history accumulated between collection windows,
+including import and compaction publications. The three-repository native-pack
+trial occupied 15.19 GiB before collection and 0.989 GiB afterward. A small live
+database does not bound that temporary remote history. Retain an operational
+grace window and all required backup pins; the benchmark's short grace applies
+only to its isolated, fully drained fixture. See the
+[storage qualification](benchmarks/2026-10-14-storage-optimization.md).
+
+The worker requires provider credentials, the node signing key, and an exclusive
+local `data_dir`. A persistent claim prevents recovery or reopening admission
+while deletion is in progress. After a killed worker, repeat `gc` with the same
+operation, node identity, signing key and local directory: its workspace lock
+proves the original local process has closed before adopting the claim. A grace
+window or expired lease never clears that claim. Caller cancellation leaves the
+worker responsible for finishing and releasing exclusion. Collection leaves
+the deployment in maintenance until an explicit `end`.
 
 ### Backup and restore
 
@@ -147,7 +184,7 @@ head and Cell control twice and rejects concurrent changes. On busy deployments,
 stop nodes cleanly without entering Maintenance, then capture. Retry an uncertain
 operation with the same UUID and destination; a new snapshot needs a new UUID.
 
-The copy includes runtime roots, SQLite state, external Git blobs and LFS bodies.
+The copy includes runtime roots, SQLite state, native Git pack/index pairs and LFS bodies.
 Verification reads only the backup prefix, so the original prefix may be lost.
 Restore preserves the pinned identity and release and needs matching configuration
 and binary. Point a fresh node's `storage_url` at the completed destination.
@@ -157,8 +194,8 @@ failed operation after repairing its reported cause. Replaying a completed resto
 does not reset subsequently published service state.
 
 This is a same-provider copy, not protection from losing the entire bucket or
-provider. Cross-provider export, old-release migration, automated retention and
-the complete interruption fault matrix remain pending. Do not use older binaries
+provider. Cross-provider export, automated retention and the complete interruption fault
+matrix remain pending. Old-release migration is out of scope. Do not use older binaries
 that lack prefix reservations with these backup/restore destinations.
 
 ### Recover a lost push reply

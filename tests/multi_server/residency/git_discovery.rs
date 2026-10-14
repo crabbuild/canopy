@@ -9,7 +9,7 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
     blake3::Hasher::new().finalize_xof().fill(&mut body);
     tokio::fs::write(source.join("history.bin"), &body).await?;
     run_git(Some(&source), &["add", "history.bin"]).await?;
-    run_git(Some(&source), &["commit", "-m", "External history body"]).await?;
+    run_git(Some(&source), &["commit", "-m", "Packed history body"]).await?;
     run_git(
         Some(&source),
         &[
@@ -23,7 +23,19 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
     .await?;
     let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
     let advertised = format!("{} refs/heads/main", std::str::from_utf8(&oid)?.trim());
-    let suffix = format!("/git-blobs/{}", hex::encode(Sha256::digest(&body)));
+    let database = cellule_ltx::rusqlite::Connection::open_with_flags(
+        fixture.repository_dir.join("repository.sqlite"),
+        cellule_ltx::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let blob = run_git(Some(&source), &["rev-parse", "HEAD:history.bin"]).await?;
+    let commit = canopy_server::ObjectId::from_hex(blob.trim_ascii())?;
+    let pack: Vec<u8> = database.query_row(
+        "SELECT pack FROM objects WHERE oid = ?1",
+        [commit.as_ref()],
+        |row| row.get(0),
+    )?;
+    drop(database);
+    let suffix = format!("/git-packs/{}.pack", hex::encode(pack));
     let mut stored = fixture.store.inner.list(None);
     let mut blob = None;
     while let Some(meta) = std::future::poll_fn(|cx| stored.as_mut().poll_next(cx)).await {
@@ -37,7 +49,7 @@ async fn ref_discovery_does_not_wait_for_a_full_history_restore() -> Result {
         create(&fixture.client, fixture.address, name).await?;
     }
     assert!(!fixture.repository_dir.exists());
-    *fixture.store.paused_read.lock().unwrap() = Some(blob.ok_or("external Git body missing")?);
+    *fixture.store.paused_read.lock().unwrap() = Some(blob.ok_or("native Git pack missing")?);
     let destination = fixture.workspace.path().join("cold-clone");
     let clone = async {
         run_git(

@@ -766,7 +766,16 @@ async fn acquire_sql_cell(
         .provision(
             &catalog,
             &registry,
-            CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
+            CatalogEntry::new(
+                target,
+                CatalogRole::Sql,
+                code,
+                if spec.module == crate::RepositoryModule::NAME {
+                    crate::REPOSITORY_SCHEMA_VERSION
+                } else {
+                    1
+                },
+            )?,
         )
         .await?;
     acquire_provisioned_sql_cell(node, layout, directory, spec, session, endpoint, proof).await

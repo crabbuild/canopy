@@ -127,8 +127,11 @@ to the dedicated test volume.
 Docker must mount that host volume; the script verifies visibility before writes.
 Use `DOCKER_CONTEXT` to select an isolated Docker environment if needed.
 The fixture uses public test credentials and removes its own container and data.
-The Verify workflow invokes this gate, but its current `ubuntu-latest` runner does not have the required temporary space; [release CI work](../ROADMAP.md#r04-trustworthy-ci-and-release-artifacts) remains open. Ordinary `cargo test` skips
-the resource-intensive provider tests. `--provider-only` runs the smaller Git
+The Verify workflow runs the smaller `--provider-only` compatibility probes
+and `--process-binary target/debug/canopy` restart, takeover and backup checks.
+The full size gate needs a dedicated runner with the required temporary space;
+[release CI work](../ROADMAP.md#r04-trustworthy-ci-and-release-artifacts) remains open.
+Ordinary `cargo test` skips the resource-intensive provider tests. `--provider-only` runs the smaller Git
 compatibility probes against an isolated Docker volume when the host's large
 test volume is unavailable. For the full gate on a Docker VM with sufficient
 dedicated disk but no host-volume sharing, use `--docker-volume`; it creates and

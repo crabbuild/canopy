@@ -241,9 +241,16 @@ fn certified(
         return Ok(false);
     }
     let rows=context.sql(&SqlBatch {statements:vec![SqlStatement {
-        sql:"SELECT o.body FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1 AND o.kind = 'commit' AND o.storage = 'inline'".into(),parameters:vec![SqlValue::Blob(commit.to_vec())],
+        sql:"SELECT o.digest, o.size FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1 AND o.kind = 'commit'".into(),parameters:vec![SqlValue::Blob(commit.to_vec())],
     }]})?;
     Ok(
-        matches!(rows.first().and_then(|set|set.rows.first()).map(Vec::as_slice),Some([SqlValue::Blob(stored)]) if *stored == body),
+        matches!(rows.first().and_then(|set|set.rows.first()).map(Vec::as_slice),Some([SqlValue::Blob(digest), SqlValue::Integer(size)]) if *size == body.len() as i64 && digest.as_slice() == blake3::hash(&body).as_bytes()),
     )
+}
+
+pub(crate) fn rebase_metadata(kind: ObjectKind, body: &[u8]) -> Option<Vec<u8>> {
+    if kind != ObjectKind::Commit {
+        return None;
+    }
+    rebase::Commit::parse(body).map(|commit| commit.metadata())
 }

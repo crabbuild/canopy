@@ -12,7 +12,7 @@ pub async fn verify(repository: &RepositoryCell) -> Result<(), Box<dyn std::erro
                 .try_push(StoredObject {
                     oid,
                     kind: ObjectKind::Blob,
-                    storage: ObjectStorage::Inline(body),
+                    storage: ObjectStorage::Input(body),
                 })
                 .map_err(|_| "fixture exceeds object batch")?;
             updates.push(RefUpdate {

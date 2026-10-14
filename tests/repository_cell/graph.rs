@@ -114,6 +114,7 @@ pub async fn verify(
             .contains(&SqlValue::Blob(root.to_vec()))
     );
     put(repository, ObjectKind::Blob, blob_body).await?;
+    let before = certificates(sql).await?;
     for candidates in [
         vec![root, tree, blob],
         vec![blob, root],
@@ -125,11 +126,7 @@ pub async fn verify(
                 .await,
             Err(InvocationError::Rejected(_))
         ));
-        assert!(
-            !certificates(sql)
-                .await?
-                .contains(&SqlValue::Blob(blob.to_vec()))
-        );
+        assert_eq!(certificates(sql).await?, before);
     }
     // A rejected batch must roll back edges as well as closure certificates;
     // otherwise a staged tree could authorize a later raw-OID fetch.
@@ -307,7 +304,7 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
                     .try_push(StoredObject {
                         oid: *oid,
                         kind: ObjectKind::Blob,
-                        storage: ObjectStorage::Inline(body.clone())
+                        storage: ObjectStorage::Input(body.clone())
                     })
                     .is_ok()
             );
@@ -327,7 +324,7 @@ async fn resumable(repository: &RepositoryCell, sql: &SqlCell<RepositoryModule>)
             .iter()
             .filter(|(oid, _)| persisted.contains(&SqlValue::Blob(oid.to_vec())))
             .count(),
-        256
+        leaves.len()
     );
     assert!(!persisted.contains(&SqlValue::Blob(root.to_vec())));
     assert_eq!(
@@ -389,7 +386,7 @@ struct CertificateCommand;
 impl cellule_runtime::Command for CertificateCommand {
     const MODULE: &'static str = "repository";
     const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 2;
+    const CODEC_VERSION: u32 = 4;
     type Input = CertificateInput;
     type Output = bool;
     fn execute(

@@ -9,7 +9,9 @@ use tokio::{
 };
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::{INLINE_OBJECT_LIMIT, ObjectKind, object_id};
+use crate::ObjectKind;
+#[cfg(test)]
+use crate::{INLINE_OBJECT_LIMIT, object_id};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_LIMIT: usize = 128;
@@ -173,6 +175,53 @@ pub(crate) struct GitObjects {
 }
 
 impl GitObjects {
+    pub(crate) async fn classify(
+        git_dir: &Path,
+        included: Vec<crate::ObjectId>,
+        excluded: Vec<crate::ObjectId>,
+    ) -> Result<[Vec<crate::ObjectId>; 2], ObjectReadError> {
+        let mut walk = GitObjectWalk::start(git_dir, included, excluded, false, None)?;
+        let (mut batch, mut requests) = Process::start(git_dir, &["cat-file", "--batch-check"])?;
+        let mut groups = [Vec::new(), Vec::new()];
+        while let Some(oid) = walk.next().await? {
+            let line = timeout(IO_TIMEOUT, async {
+                requests
+                    .write_all(format!("{}\n", hex::encode(oid)).as_bytes())
+                    .await?;
+                header(&mut batch.output)
+                    .await?
+                    .ok_or(ObjectReadError::Malformed)
+            })
+            .await
+            .map_err(|_| ObjectReadError::Timeout)??;
+            let mut fields = line.split(|byte| *byte == b' ');
+            if parse_oid(fields.next().ok_or(ObjectReadError::Malformed)?)? != oid {
+                return Err(ObjectReadError::Malformed);
+            }
+            let kind = fields.next().ok_or(ObjectReadError::Malformed)?;
+            let group = match kind {
+                b"blob" => 1,
+                b"tree" | b"commit" | b"tag" => 0,
+                _ => return Err(ObjectReadError::Malformed),
+            };
+            let size = fields.next().ok_or(ObjectReadError::Malformed)?;
+            if size.is_empty() || !size.iter().all(u8::is_ascii_digit) || fields.next().is_some() {
+                return Err(ObjectReadError::Malformed);
+            }
+            groups[group]
+                .try_reserve(1)
+                .map_err(ObjectReadError::Allocation)?;
+            groups[group].push(oid);
+        }
+        walk.finish().await?;
+        drop(requests);
+        if header(&mut batch.output).await?.is_some() {
+            return Err(ObjectReadError::Malformed);
+        }
+        batch.finish().await?;
+        Ok(groups)
+    }
+
     pub(crate) fn start(
         git_dir: &Path,
         included: Vec<crate::ObjectId>,
@@ -247,6 +296,7 @@ pub(crate) struct GitObject<'a, R> {
 }
 
 impl<R: AsyncRead + Unpin> GitObject<'_, R> {
+    #[cfg(test)]
     pub(crate) async fn body(mut self) -> Result<(ObjectKind, Vec<u8>), ObjectReadError> {
         let limit = if self.kind == ObjectKind::Blob {
             INLINE_OBJECT_LIMIT
@@ -275,6 +325,56 @@ impl<R: AsyncRead + Unpin> GitObject<'_, R> {
         })
         .await
         .map_err(|_| ObjectReadError::Timeout)?
+    }
+
+    pub(crate) async fn metadata(
+        mut self,
+    ) -> Result<
+        (
+            ObjectKind,
+            u64,
+            [u8; 32],
+            Option<Vec<crate::graph::Edge>>,
+            Option<Vec<u8>>,
+        ),
+        ObjectReadError,
+    > {
+        let kind = self.kind;
+        let size = self.size;
+        let oid = self.oid;
+        let mut graph = crate::graph::stream::StreamGraph::new(oid.format(), kind);
+        let mut small_commit = (kind == ObjectKind::Commit && size <= 64 * 1024)
+            .then(|| Vec::with_capacity(size as usize));
+        let mut git = crate::git_format::ObjectHasher::new(oid.format(), kind, size);
+        let mut hash = blake3::Hasher::new();
+        let mut buffer = vec![0; 1024 * 1024];
+        while self.reader.limit() != 0 {
+            let count = timeout(IO_TIMEOUT, self.reader.read(&mut buffer))
+                .await
+                .map_err(|_| ObjectReadError::Timeout)??;
+            if count == 0 {
+                return Err(ObjectReadError::Malformed);
+            }
+            git.update(&buffer[..count]);
+            hash.update(&buffer[..count]);
+            graph
+                .feed(&buffer[..count])
+                .map_err(ObjectReadError::Allocation)?;
+            if let Some(body) = &mut small_commit {
+                body.extend_from_slice(&buffer[..count]);
+            }
+        }
+        self.finish().await?;
+        if git.finalize() != oid {
+            return Err(ObjectReadError::Malformed);
+        }
+        Ok((
+            kind,
+            size,
+            *hash.finalize().as_bytes(),
+            graph.finish(),
+            small_commit.and_then(|body| crate::pulls::candidates::rebase_metadata(kind, &body)),
+        ))
     }
 
     // cat-file separates bodies with a newline. The sized reader prevents an

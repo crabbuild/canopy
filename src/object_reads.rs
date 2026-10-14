@@ -6,8 +6,8 @@ use cellule_runtime::{
 };
 
 use crate::{
-    INLINE_OBJECT_LIMIT, ObjectKind, ObjectStorage, RepositoryCell, StoredObject,
-    object_batch::MAX_OBJECTS, object_id,
+    ObjectKind, ObjectStorage, PackedObject, RepositoryCell, StoredObject,
+    object_batch::MAX_OBJECTS,
 };
 
 pub(crate) struct ObjectHeaders {
@@ -15,10 +15,10 @@ pub(crate) struct ObjectHeaders {
     pub(crate) through: i64,
 }
 
-const CHANGED_HEADERS: &str = "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence LIMIT ?3";
+const CHANGED_HEADERS: &str = "SELECT sequence, oid, 0 FROM objects WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence LIMIT ?3";
 
 impl RepositoryCell {
-    /// Reads at most 128 objects and 768 KiB of inline bodies, in OID order.
+    /// Reads at most 512 immutable native-pack metadata records, in OID order.
     ///
     /// Continue after the last OID until an empty page, including after short
     /// pages. Objects are immutable; a future collector must fence this read.
@@ -26,10 +26,20 @@ impl RepositoryCell {
         &self,
         after: Option<crate::ObjectId>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
-        let headers = self.read_object_headers(None, SqlStatement {
-            sql: "SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2".into(),
-            parameters: vec![SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec())), SqlValue::Integer(MAX_OBJECTS as i64)],
-        }).await?;
+        let headers = self
+            .read_object_headers(
+                None,
+                SqlStatement {
+                    sql:
+                        "SELECT sequence, oid, 0 FROM objects WHERE oid > ?1 ORDER BY oid LIMIT ?2"
+                            .into(),
+                    parameters: vec![
+                        SqlValue::Blob(after.map_or_else(Vec::new, |oid| oid.to_vec())),
+                        SqlValue::Integer(MAX_OBJECTS as i64),
+                    ],
+                },
+            )
+            .await?;
         self.object_records(headers.objects).await
     }
 
@@ -44,7 +54,7 @@ impl RepositoryCell {
         }
         let placeholders = vec!["?"; ids.len()].join(",");
         let headers = self.read_object_headers(None, SqlStatement {
-            sql: format!("SELECT sequence, oid, CASE WHEN storage = 'inline' THEN size ELSE 0 END FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
+            sql: format!("SELECT sequence, oid, 0 FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
             parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect(),
         }).await?;
         Ok(self.object_records(headers.objects).await?.output)
@@ -129,7 +139,7 @@ impl RepositoryCell {
         headers: Observed<Vec<crate::ObjectId>>,
     ) -> Result<Observed<Vec<StoredObject>>, InvocationError<Vec<SqlResultSet>>> {
         // Callers may remove already cached IDs, but never add IDs: the header
-        // query's size bound and receipt protect this body read's wire ceiling.
+        // query's count bound and receipt protect this metadata read.
         let mut ids = headers.output;
         ids.sort_unstable();
         if ids.is_empty() {
@@ -139,11 +149,11 @@ impl RepositoryCell {
             });
         }
         let placeholders = vec!["?"; ids.len()].join(",");
-        // Immutable records bind this second read to the selected headers. The
-        // payload bound leaves room for record metadata under Cellule's 1 MiB cap.
+        // Immutable records bind this second read to the selected headers.
+        // Fixed metadata widths fit comfortably under Cellule's 1 MiB cap.
         let result = self.sql.query(Some(headers.receipt), SqlBatch {
             statements: vec![SqlStatement {
-                sql: format!("SELECT oid, kind, size, digest, storage, body, external_sha256, chunk_id FROM objects WHERE oid IN ({placeholders}) ORDER BY oid"),
+                sql: format!("SELECT o.oid, o.kind, o.size, o.digest, o.graph_valid, o.graph_count, o.graph_digest, p.format, p.digest, p.bytes, p.index_digest, p.index_bytes, o.rebase_metadata FROM objects o JOIN git_packs p ON p.digest = o.pack WHERE o.oid IN ({placeholders}) ORDER BY o.oid"),
                 parameters: ids.iter().map(|oid| SqlValue::Blob(oid.to_vec())).collect(),
             }],
         }).await?;
@@ -153,12 +163,12 @@ impl RepositoryCell {
             .next()
             .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing object page")))?
             .rows;
-        // Hash a whole bounded page off the async executor. Move SQL bodies into
-        // the result so page verification does not duplicate their payloads.
+        // Decode the bounded metadata page off the async executor.
+        let repository = self.id;
         let output = tokio::task::spawn_blocking(move || {
             let objects = rows
                 .into_iter()
-                .map(decode_object)
+                .map(|row| decode_object(row, repository))
                 .collect::<cellule_runtime::Result<Vec<_>>>()?;
             if objects.iter().map(|object| object.oid).ne(ids) {
                 return Err(Error::Command("objects changed during page read"));
@@ -182,7 +192,6 @@ impl RepositoryCell {
 
 fn decode_headers(rows: &[Vec<SqlValue>]) -> cellule_runtime::Result<(Vec<crate::ObjectId>, i64)> {
     let mut ids = Vec::new();
-    let mut bytes = 0;
     let mut through = 0;
     for row in rows {
         let [
@@ -200,84 +209,78 @@ fn decode_headers(rows: &[Vec<SqlValue>]) -> cellule_runtime::Result<(Vec<crate:
             .as_slice()
             .try_into()
             .map_err(|_| Error::Command("invalid stored object ID"))?;
-        let size = usize::try_from(*size)
-            .ok()
-            .filter(|size| *size <= INLINE_OBJECT_LIMIT)
-            .ok_or(Error::Command("invalid inline object size"))?;
-        if size > INLINE_OBJECT_LIMIT - bytes {
-            break;
+        if *size != 0 {
+            return Err(Error::Command("unexpected metadata header payload"));
         }
-        bytes += size;
         ids.push(oid);
         through = *sequence;
     }
     Ok((ids, through))
 }
 
-fn decode_object(row: Vec<SqlValue>) -> cellule_runtime::Result<StoredObject> {
-    let row: [SqlValue; 8] = row
-        .try_into()
-        .map_err(|_| Error::Command("invalid stored object row"))?;
+fn decode_object(
+    row: Vec<SqlValue>,
+    repository: [u8; 16],
+) -> cellule_runtime::Result<StoredObject> {
     let [
         SqlValue::Blob(oid),
         SqlValue::Text(kind),
         SqlValue::Integer(size),
         SqlValue::Blob(digest),
-        SqlValue::Text(storage),
-        body,
-        external_sha256,
-        chunk_id,
-    ] = row
+        SqlValue::Integer(valid),
+        SqlValue::Integer(count),
+        SqlValue::Blob(graph_digest),
+        SqlValue::Text(format),
+        SqlValue::Blob(pack_digest),
+        SqlValue::Integer(pack_bytes),
+        SqlValue::Blob(index_digest),
+        SqlValue::Integer(index_bytes),
+        rebase_metadata,
+    ] = row.as_slice()
     else {
-        return Err(Error::Command("invalid stored object row"));
+        return Err(Error::Command("invalid packed object row"));
     };
-    let oid: crate::ObjectId = oid
-        .try_into()
-        .map_err(|_| Error::Command("invalid stored object ID"))?;
-    let digest: [u8; 32] = digest
-        .try_into()
-        .map_err(|_| Error::Command("invalid object digest"))?;
+    let invalid = || Error::Command("invalid packed object metadata");
+    let oid: crate::ObjectId = oid.as_slice().try_into().map_err(|_| invalid())?;
     let kind = match kind.as_str() {
         "blob" => ObjectKind::Blob,
         "tree" => ObjectKind::Tree,
         "commit" => ObjectKind::Commit,
         "tag" => ObjectKind::Tag,
-        _ => return Err(Error::Command("invalid stored object kind")),
+        _ => return Err(invalid()),
     };
-    let storage = match (storage.as_str(), body, external_sha256, chunk_id) {
-        ("inline", SqlValue::Blob(body), SqlValue::Null, SqlValue::Null)
-            if usize::try_from(size).ok() == Some(body.len())
-                && body.len() <= INLINE_OBJECT_LIMIT
-                && object_id(oid.format(), kind, &body) == oid
-                && blake3::hash(&body).as_bytes() == &digest =>
-        {
-            ObjectStorage::Inline(body)
-        }
-        ("external", SqlValue::Null, SqlValue::Blob(sha256), SqlValue::Null)
-            if kind == ObjectKind::Blob && size >= 0 =>
-        {
-            ObjectStorage::External {
-                size: size as u64,
-                blake3: digest,
-                sha256: sha256
-                    .try_into()
-                    .map_err(|_| Error::Command("invalid SHA-256 digest"))?,
-            }
-        }
-        ("chunked", SqlValue::Null, SqlValue::Null, SqlValue::Blob(upload))
-            if kind != ObjectKind::Blob && size > INLINE_OBJECT_LIMIT as i64 =>
-        {
-            ObjectStorage::Chunked {
-                upload: upload
-                    .try_into()
-                    .map_err(|_| Error::Command("invalid object chunk reference"))?,
-                size: size as u64,
-                blake3: digest,
-            }
-        }
-        _ => return Err(Error::Command("corrupt stored object")),
+    let format = crate::ObjectFormat::parse(format).ok_or_else(invalid)?;
+    if oid.format() != format || ![0, 1].contains(valid) || *pack_bytes <= 0 || *index_bytes <= 0 {
+        return Err(invalid());
+    }
+    let reference = PackedObject {
+        repository,
+        oid,
+        kind,
+        size: u64::try_from(*size).map_err(|_| invalid())?,
+        digest: digest.as_slice().try_into().map_err(|_| invalid())?,
+        pack: crate::git_pack::PackIdentity {
+            format,
+            pack_digest: pack_digest.as_slice().try_into().map_err(|_| invalid())?,
+            pack_bytes: *pack_bytes as u64,
+            index_digest: index_digest.as_slice().try_into().map_err(|_| invalid())?,
+            index_bytes: *index_bytes as u64,
+        },
+        graph_valid: *valid == 1,
+        graph_count: u64::try_from(*count).map_err(|_| invalid())?,
+        graph_digest: graph_digest.as_slice().try_into().map_err(|_| invalid())?,
+        dependencies: None,
+        rebase_metadata: match rebase_metadata {
+            SqlValue::Null => None,
+            SqlValue::Blob(bytes) if bytes.len() == 65 => Some(bytes.clone()),
+            _ => return Err(invalid()),
+        },
     };
-    Ok(StoredObject { oid, kind, storage })
+    Ok(StoredObject {
+        oid,
+        kind,
+        storage: ObjectStorage::Packed(Box::new(reference)),
+    })
 }
 
 #[cfg(test)]

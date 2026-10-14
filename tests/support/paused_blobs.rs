@@ -44,7 +44,7 @@ impl ObjectStore for PausedBlobs {
         path: &StorePath,
         options: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        // Large-blob ingestion starts only after native receive-pack has
+        // Native-pack ingestion starts only after native receive-pack has
         // accepted the disposable refs, but before Cell ref publication.
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -63,7 +63,7 @@ impl ObjectStore for PausedBlobs {
         path: &StorePath,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        if path.as_ref().contains("/git-blobs/") && self.read_armed.swap(false, Ordering::SeqCst) {
+        if path.as_ref().contains("/git-packs/") && self.read_armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
             self.proceed.notified().await;
             if self.fail.swap(false, Ordering::SeqCst) {

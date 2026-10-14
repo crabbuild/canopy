@@ -196,22 +196,14 @@ async fn batch_reads_large_blob_across_pipe_buffers() -> TestResult {
     let oid = parse_oid(output.trim_ascii())?;
     let mut objects = GitObjects::start(&directory.path().join(".git"), vec![oid], vec![])?;
     assert_eq!(objects.next().await?, Some(oid));
-    let mut object = objects.read(oid).await?;
-    let store = crate::large_blob::LargeBlobStore::new(
-        std::sync::Arc::new(object_store::memory::InMemory::new()),
-        [1; 16],
-    );
-    let reference = store.put(oid, object.size, &mut object.reader).await?;
-    object.finish().await?;
+    let (kind, size, digest, edges, projection) = objects.read(oid).await?.metadata().await?;
+    assert!(projection.is_none());
+    assert_eq!(kind, ObjectKind::Blob);
+    assert_eq!(size, body.len() as u64);
+    assert_eq!(digest, *blake3::hash(&body).as_bytes());
+    assert_eq!(edges, Some(Vec::new()));
     assert_eq!(objects.next().await?, None);
     objects.finish().await?;
-    let mut reader = store.read(&reference).await?;
-    let mut offset = 0;
-    while let Some(bytes) = reader.next().await? {
-        assert_eq!(bytes.as_ref(), &body[offset..offset + bytes.len()]);
-        offset += bytes.len();
-    }
-    assert_eq!(offset, body.len());
     Ok(())
 }
 

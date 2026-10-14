@@ -4,6 +4,8 @@ mod accounts;
 mod expiry;
 #[path = "support/objects.rs"]
 mod objects;
+#[path = "support/packs.rs"]
+mod pack_store;
 #[path = "directory/ssh_keys.rs"]
 mod ssh_keys;
 
@@ -166,6 +168,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         first_target.clone(),
         first_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, files.path(), first_id)?,
     )?;
     let second_repository = RepositoryCell::new(
         &app_handle(
@@ -186,6 +189,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         second_target.clone(),
         second_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, files.path(), second_id)?,
     )?;
     first_repository
         .ensure_owner(random_identity()?, "alice")
@@ -290,6 +294,21 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         oid,
         object_id(canopy_server::ObjectFormat::Sha1, ObjectKind::Blob, body)
     );
+    // A verified capability remains bound to the repository whose prefix
+    // contains its immutable pair, even when another Cell shares the store.
+    let prepared = first_repository
+        .object_page(None)
+        .await?
+        .output
+        .into_iter()
+        .find(|object| object.oid == oid)
+        .ok_or("missing prepared pack reference")?;
+    let mut batch = canopy_server::ObjectBatch::default();
+    assert!(batch.try_push(prepared).is_ok());
+    assert!(matches!(
+        second_repository.put_objects(identity(60)?, batch).await,
+        Err(cellule_runtime::InvocationError::Rejected(_))
+    ));
     assert!(
         second_repository
             .existing_objects(&[oid])
@@ -362,6 +381,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         first_target,
         first_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, files.path(), first_id)?,
     )?;
     let beta = RepositoryCell::new(
         &app_handle(
@@ -382,6 +402,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
         second_target,
         second_id,
         canopy_server::ObjectFormat::Sha1,
+        pack_store::new(&layout, files.path(), second_id)?,
     )?;
     assert_eq!(
         alpha.object(oid, None).await?.output,
@@ -437,7 +458,16 @@ async fn bootstrap(
     let (module, schema) = module_schema;
     let code = registry.module_code(module).ok_or("module missing")?;
     let proof = CellCatalog::new(layout.clone(), target.tenant())
-        .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            target,
+            CatalogRole::Sql,
+            code,
+            if module == RepositoryModule::NAME {
+                canopy_server::REPOSITORY_SCHEMA_VERSION
+            } else {
+                1
+            },
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let observed = authority
@@ -482,7 +512,16 @@ async fn restore(
 ) -> Result<CellHandle, Box<dyn std::error::Error>> {
     let code = registry.module_code(module).ok_or("module missing")?;
     let proof = CellCatalog::new(layout.clone(), target.tenant())
-        .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            target,
+            CatalogRole::Sql,
+            code,
+            if module == RepositoryModule::NAME {
+                canopy_server::REPOSITORY_SCHEMA_VERSION
+            } else {
+                1
+            },
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let observed = authority

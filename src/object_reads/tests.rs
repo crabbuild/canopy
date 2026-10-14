@@ -1,4 +1,5 @@
 use super::*;
+use crate::{INLINE_OBJECT_LIMIT, object_id};
 use cellule_ltx::rusqlite::{Connection, StatementStatus, params};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -11,10 +12,9 @@ fn database() -> Result<Connection> {
 
 fn insert(db: &Connection, body: &[u8]) -> Result<crate::ObjectId> {
     let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, body);
-    db.execute(
-        "INSERT INTO objects (oid, kind, size, digest, storage, body) VALUES (?1, 'blob', ?2, ?3, 'inline', ?4) ON CONFLICT(oid) DO NOTHING",
-        params![oid.as_ref(), body.len() as i64, blake3::hash(body).as_bytes().as_slice(), body],
-    )?;
+    db.execute("INSERT INTO git_packs (digest, format, bytes, index_digest, index_bytes) VALUES (zeroblob(32), 'sha1', 1, zeroblob(32), 1) ON CONFLICT DO NOTHING", [])?;
+    db.execute("INSERT INTO objects (oid, kind, size, digest, pack, graph_valid, graph_count, graph_digest) VALUES (?1, 'blob', ?2, ?3, zeroblob(32), 1, 0, ?4) ON CONFLICT(oid) DO NOTHING",
+        params![oid.as_ref(), body.len() as i64, blake3::hash(body).as_bytes().as_slice(), blake3::hash(b"").as_bytes().as_slice()])?;
     Ok(oid)
 }
 
@@ -75,17 +75,15 @@ fn insertion_cursor_finds_lower_oids_and_excludes_later_publications() -> Result
 }
 
 #[test]
-fn byte_limited_page_advances_only_over_the_selected_prefix() -> Result {
+fn metadata_page_is_independent_of_body_sizes() -> Result {
     let db = database()?;
     let first = insert(&db, &vec![1; INLINE_OBJECT_LIMIT / 2])?;
     let second = insert(&db, &vec![2; INLINE_OBJECT_LIMIT])?;
     let third = insert(&db, b"third")?;
     let high = high_water(&db)?;
     let (ids, after) = page(&db, 0, high)?;
-    assert_eq!(ids, vec![first]);
-    let (ids, after) = page(&db, after, high)?;
-    assert_eq!(ids, vec![second]);
-    assert_eq!(page(&db, after, high)?.0, vec![third]);
+    assert_eq!(ids, vec![first, second, third]);
+    assert_eq!(after, high);
     Ok(())
 }
 

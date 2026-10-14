@@ -25,6 +25,7 @@ import uuid
 
 import smoke_s3_account_audit
 import smoke_s3_backup
+import smoke_s3_retention
 import smoke_s3_branch_rules
 import smoke_s3_checks
 import smoke_s3_corpus
@@ -35,6 +36,12 @@ import smoke_s3_threads
 import smoke_s3_browse
 import smoke_s3_merge
 import smoke_s3_peers
+
+
+def wait_for_lease_expiry():
+    # src/server.rs signs a 30-second node lease. Expiry permits fencing; it
+    # does not itself transfer ownership or prove recovery succeeded.
+    time.sleep(31)
 
 
 def port():
@@ -485,8 +492,8 @@ def verify_many_objects(base_url, directory, count, expected):
     print(f"PASS: {count}-file clone restored both commits, annotated tag and 300 refs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
-def seed_sqlite_chunks(base_url, directory):
-    url, _ = create_repository(base_url, "sqlite-chunks")
+def seed_structural_objects(base_url, directory):
+    url, _ = create_repository(base_url, "structural-objects")
     local = directory / "chunk-source"
     git("init", "--bare", str(local))
     expected = {}
@@ -517,15 +524,15 @@ def seed_sqlite_chunks(base_url, directory):
     started = time.monotonic()
     git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
         "push", url, "refs/heads/main", "refs/tags/release", cwd=local)
-    print(f"PASS: large tree, commit and tag pushed into SQLite chunks in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: large tree, commit and tag pushed into native packs in {time.monotonic() - started:.2f}s", flush=True)
     return expected
 
 
-def verify_sqlite_chunks(base_url, directory, expected):
+def verify_structural_objects(base_url, directory, expected):
     clone = directory / "chunk-restored"
     started = time.monotonic()
     git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
-        "clone", "--bare", f"{base_url}/canopy/sqlite-chunks.git", str(clone))
+        "clone", "--bare", f"{base_url}/canopy/structural-objects.git", str(clone))
     for kind, (oid, path) in expected.items():
         # run()/git() strip whitespace for command output. Compare raw object bytes here.
         actual = subprocess.run(["git", "cat-file", kind, oid], cwd=clone,
@@ -534,7 +541,7 @@ def verify_sqlite_chunks(base_url, directory, expected):
     assert git("rev-parse", "refs/heads/main", cwd=clone).decode() == expected["commit"][0]
     assert git("rev-parse", "refs/tags/release", cwd=clone).decode() == expected["tag"][0]
     git("fsck", "--strict", "--full", cwd=clone)
-    print(f"PASS: SQLite chunks restored exact tree/commit/tag bytes and OIDs after takeover in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: Native packs restored exact tree/commit/tag bytes and OIDs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
 def main():
@@ -544,7 +551,7 @@ def main():
     parser.add_argument("--work-parent", type=Path, required=True)
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
-    parser.add_argument("--sqlite-chunks", action="store_true", help="Qualify large tree, commit and tag objects stored in SQLite and restored after takeover")
+    parser.add_argument("--structural-objects", action="store_true", help="Qualify large tree, commit and tag objects stored in native packs and restored after takeover")
     parser.add_argument("--corpus-repository", type=Path, help="Read HEAD history from an existing repository without changing it; qualify exact object bytes after takeover")
     args = parser.parse_args()
     if args.many_objects < 0:
@@ -701,7 +708,7 @@ def main():
             expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
             audit_state = smoke_s3_account_audit.seed(base_url)
-            chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
+            chunks = seed_structural_objects(base_url, directory) if args.structural_objects else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             corpus = None
@@ -746,7 +753,7 @@ def main():
             # SQLite is a recovered cache: corrupting the killed node's copy must
             # not prevent restoration of acknowledged data from object storage.
             (abandoned / "directory.sqlite").write_bytes(b"discard this stale database")
-            time.sleep(11)  # Wait past the signed node advertisement's 10-second lease.
+            wait_for_lease_expiry()
             third, base_url = start(args.binary, directory, settings, "third", data_instance="second")
             processes.append(third)
             assert not sentinel.exists()
@@ -834,7 +841,7 @@ def main():
             if large is not None:
                 verify_large_clone(base_url, directory, large)
             if chunks is not None:
-                verify_sqlite_chunks(base_url, directory, chunks)
+                verify_structural_objects(base_url, directory, chunks)
             if many is not None:
                 verify_many_objects(base_url, directory, args.many_objects, many)
             if corpus is not None:
@@ -845,6 +852,7 @@ def main():
                 raise RuntimeError("takeover owner did not shut down cleanly")
             smoke_s3_peers.qualify(args.binary, directory, settings, processes)
             smoke_s3_backup.qualify(args.binary, directory, settings, processes)
+            smoke_s3_retention.qualify(args.binary, directory, settings, processes)
             assert {path.name for path in (directory / "host-git").iterdir()} == {"config"}
             print("PASS: native Git ignores host config, object paths, exec path, protocol and trace settings", flush=True)
             print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")

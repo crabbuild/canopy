@@ -195,9 +195,9 @@ pub async fn verify(
     assert!(budget.used() >= occupied.bytes());
     assert!(budget.used() <= budget.capacity());
     drop(occupied);
-    // Ref discovery fits even when expanding the repository history cannot.
+    // Compressed native pairs let discovery and fetch share verified history.
     // Nested tags and direct tree/blob refs must preserve native peeling rules.
-    let retained = budget.used();
+    let mut retained = budget.used();
     let occupied = budget.try_reserve(budget.capacity() - retained - 64 * 1024)?;
     for service in ["git-upload-pack", "git-receive-pack"] {
         let bytes = client
@@ -224,7 +224,15 @@ pub async fn verify(
                     .any(|part| part == peeled.as_bytes())
             );
         }
-        assert_eq!(budget.used(), occupied.bytes() + retained);
+        if service == "git-upload-pack" {
+            assert!(budget.used() >= occupied.bytes() + retained);
+            assert!(budget.used() <= budget.capacity());
+            // A completed pair can remain resident after temporary discovery
+            // cache files are released; the next request must reuse that pair.
+            retained = budget.used() - occupied.bytes();
+        } else {
+            assert_eq!(budget.used(), occupied.bytes() + retained);
+        }
     }
     let bytes = client
         .post(format!("{url}/git-upload-pack"))
@@ -259,7 +267,10 @@ pub async fn verify(
     );
     drop(occupied);
     fetch().send().await?.error_for_status()?.bytes().await?;
-    assert!(budget.used() > common.len() as u64 * 40);
+    assert!(
+        budget.used() > common.len() as u64 * 40,
+        "selected disposable projections remain fully charged"
+    );
     let retained = budget.used();
     // A current full cache can serve discovery without recopying its targets.
     let occupied = budget.try_reserve(budget.capacity() - retained - 512)?;

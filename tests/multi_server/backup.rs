@@ -90,7 +90,8 @@ async fn backup_restores_git_lfs_and_collaboration_without_original_storage() ->
     let report = deployment
         .create_backup(id, backup.clone(), worker())
         .await?;
-    assert_eq!(report.external_objects, 2);
+    // One structural pair, one blob pair and one LFS body.
+    assert_eq!(report.external_objects, 3);
     assert_eq!(report.cells, 2);
     deployment
         .create_backup(id, backup.clone(), worker())

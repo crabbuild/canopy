@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn large_tree_commit_and_tag_restore_from_sqlite_after_owner_restart()
+async fn large_tree_commit_and_tag_restore_from_native_packs_after_owner_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let workspace = tempfile::TempDir::new()?;

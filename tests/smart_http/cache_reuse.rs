@@ -69,8 +69,8 @@ pub async fn verify(
     )
     .await?;
     let after = cached_objects(root)?;
-    // A new blob, tree and commit are hydrated. Existing bodies keep their
-    // actual files across receive-pack and the next fetch of the published ref generation.
+    // Only selected new objects enter the disposable projection; existing
+    // files remain unchanged across push and fetch.
     assert_eq!(after.len(), before.len() + 3);
     for (path, metadata) in before {
         assert_eq!(after.get(&path), Some(&metadata));

@@ -1,4 +1,4 @@
-//! Immutable, fixed-size parts for Git blob and LFS bodies.
+//! Immutable, fixed-size parts for Git LFS bodies.
 
 use bytes::{Bytes, BytesMut};
 use object_store::{
@@ -9,7 +9,6 @@ use std::future::poll_fn;
 use std::{future::Future, sync::Arc, time::Duration};
 
 pub(crate) const PART_BYTES: usize = 8 * 1024 * 1024;
-const MAGIC: &[u8; 8] = b"CANOPY01";
 const LFS_MAGIC: &[u8; 8] = b"CANOPY02";
 
 pub(crate) struct Manifest {
@@ -90,12 +89,6 @@ impl Upload {
         self.active = None;
         self.parts += 1;
         Ok(())
-    }
-
-    pub(crate) async fn publish(&mut self, path: &Path, size: u64) -> object_store::Result<()> {
-        let mut manifest = MAGIC.to_vec();
-        manifest.extend_from_slice(&size.to_le_bytes());
-        self.publish_manifest(path, size, manifest).await
     }
 
     pub(crate) async fn publish_lfs(
@@ -204,21 +197,6 @@ async fn bounded(
         Ok((meta, bytes.freeze()))
     })
     .await
-}
-
-pub(crate) async fn open(
-    store: &dyn ObjectStore,
-    path: &Path,
-    size: u64,
-) -> object_store::Result<Manifest> {
-    let (meta, bytes) = bounded(store, path, GetOptions::default(), 16).await?;
-    if &bytes[..8] != MAGIC || bytes[8..] != size.to_le_bytes() {
-        return Err(invalid());
-    }
-    if size == 0 {
-        bounded(store, &part(path, 0), GetOptions::default(), 0).await?;
-    }
-    Ok(Manifest { meta, bytes })
 }
 
 pub(crate) async fn open_lfs(

@@ -46,7 +46,7 @@ struct FileSshConfig {
 #[derive(Debug, Error)]
 enum StartupError {
     #[error(
-        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid> | canopy backup <config.json> create|verify <pin-uuid> <backup-prefix> | canopy backup <config.json> restore <pin-uuid> <backup-prefix> <destination-prefix>"
+        "usage: canopy <config.json> | canopy maintenance <config.json> status | canopy maintenance <config.json> begin|recover|end <operation-uuid> | canopy gc <config.json> <operation-uuid> <grace-ms> <max-deletes> | canopy backup <config.json> create|verify <pin-uuid> <backup-prefix> | canopy backup <config.json> restore <pin-uuid> <backup-prefix> <destination-prefix>"
     )]
     Usage,
     #[error("SSH host key is invalid")]
@@ -117,6 +117,37 @@ async fn run() -> Result<(), StartupError> {
     let Some(first) = args.next() else {
         return Err(StartupError::Usage);
     };
+    if first == "gc" {
+        let path = args.next().ok_or(StartupError::Usage)?;
+        let operation = args.next().ok_or(StartupError::Usage)?;
+        let grace = args.next().ok_or(StartupError::Usage)?;
+        let limit = args.next().ok_or(StartupError::Usage)?;
+        if args.next().is_some() {
+            return Err(StartupError::Usage);
+        }
+        let file: FileConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+        let operation = RequestId::from_bytes(
+            Uuid::parse_str(operation.to_str().ok_or(StartupError::Usage)?)?.into_bytes(),
+        );
+        let number = |value: &std::ffi::OsStr| -> Result<u64, StartupError> {
+            value
+                .to_str()
+                .ok_or(StartupError::Usage)?
+                .parse()
+                .map_err(|_| StartupError::Usage)
+        };
+        let deployment = deployment(&file)?;
+        let report = deployment
+            .collect_garbage(
+                operation,
+                worker_config(file)?,
+                number(&grace)?,
+                number(&limit)?,
+            )
+            .await?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
     if first == "backup" {
         let path = args.next().ok_or(StartupError::Usage)?;
         let action = args.next().ok_or(StartupError::Usage)?;

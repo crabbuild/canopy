@@ -486,6 +486,14 @@ impl RepositoryManager {
             target,
             entry.repository_id,
             entry.object_format,
+            crate::git_pack::PackStore::new(
+                Arc::clone(&self.external_store),
+                entry.repository_id,
+                self.local.path().to_path_buf(),
+                self.disk_budget.clone(),
+                256 * 1024 * 1024,
+                64 * 1024 * 1024,
+            )?,
         )?);
         let gateway = Arc::new(
             GitGateway::new(

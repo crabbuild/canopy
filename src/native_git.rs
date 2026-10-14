@@ -35,33 +35,7 @@ pub(crate) fn idle_fence(git_dir: &Path) -> io::Result<Option<File>> {
 
 pub(crate) fn command(git_dir: &Path) -> io::Result<Command> {
     let mut command = Command::new("git");
-    let fence = lock_file(&git_dir.join(WORKER_LOCK))?;
-    fence.try_lock_shared().map_err(io::Error::from)?;
-    #[cfg(unix)]
-    {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        // Keep the fence outside stdio slots that spawn replaces. CLOEXEC is
-        // cleared only in this child, never in the multithreaded parent.
-        // SAFETY: fcntl duplicates this live descriptor into a new owned slot.
-        let fd = unsafe { libc::fcntl(fence.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
-        if fd == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the successful duplication returned an unowned descriptor.
-        let fence = unsafe { File::from_raw_fd(fd) };
-        // SAFETY: only async-signal-safe fcntl runs after fork. The closure owns
-        // the descriptor through spawn; exec and descendants retain its lock.
-        unsafe {
-            command.pre_exec(move || {
-                let fd = fence.as_raw_fd();
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
+    inherit_fence(&mut command, git_dir)?;
     // Host configuration can redirect objects, execute helpers or emit traces
     // outside our accounting. Provider credentials must not reach Git or hooks.
     command.env_clear();
@@ -105,6 +79,45 @@ pub(crate) fn command(git_dir: &Path) -> io::Result<Command> {
             "core.packedGitLimit=64m",
         ]);
     Ok(command)
+}
+
+/// Retains both the private output fence and its managed cache ancestor through
+/// exec and descendants. Startup fences cache ancestors before reclaiming them.
+pub(crate) fn command_with_extra_fence(directory: &Path, ancestor: &Path) -> io::Result<Command> {
+    let mut command = command(directory)?;
+    inherit_fence(&mut command, ancestor)?;
+    Ok(command)
+}
+
+fn inherit_fence(command: &mut Command, directory: &Path) -> io::Result<()> {
+    let fence = lock_file(&directory.join(WORKER_LOCK))?;
+    fence.try_lock_shared().map_err(io::Error::from)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        // Keep the fence outside stdio slots that spawn replaces. CLOEXEC is
+        // cleared only in this child, never in the multithreaded parent.
+        // SAFETY: fcntl duplicates this live descriptor into a new owned slot.
+        let fd = unsafe { libc::fcntl(fence.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+        if fd == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the successful duplication returned an unowned descriptor.
+        let fence = unsafe { File::from_raw_fd(fd) };
+        // SAFETY: only async-signal-safe fcntl runs after fork. The closure owns
+        // the descriptor through spawn; exec and descendants retain its lock.
+        unsafe {
+            command.pre_exec(move || {
+                let fd = fence.as_raw_fd();
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -199,6 +212,49 @@ mod tests {
         );
         assert!(!root.join("outside").exists());
         assert!(!root.join("trace").exists());
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod pack_fence_tests {
+    use super::*;
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn private_pack_worker_also_fences_its_managed_cache_ancestor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::TempDir::new()?;
+        let private = root.path().join("private");
+        let ancestor = root.path().join("ancestor");
+        std::fs::create_dir(&private)?;
+        std::fs::create_dir(&ancestor)?;
+        let mut child = command_with_extra_fence(&private, &ancestor)?
+            .args(["-c", "alias.hold=!printf 'ready\\n'; read release", "hold"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut input = child.stdin.take().ok_or("stdin")?;
+        let mut output = BufReader::new(child.stdout.take().ok_or("stdout")?);
+        let mut ready = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            output.read_line(&mut ready),
+        )
+        .await??;
+        assert_eq!(ready, "ready\n");
+        for path in [&private, &ancestor] {
+            assert!(idle_fence(path).is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock));
+        }
+        input.write_all(b"release\n").await?;
+        drop(input);
+        assert!(child.wait().await?.success());
+        for path in [&private, &ancestor] {
+            assert!(idle_fence(path)?.is_some());
+        }
         Ok(())
     }
 }

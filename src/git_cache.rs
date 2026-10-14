@@ -5,19 +5,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 use cellule_ltx::{DiskBudget, DiskReservation, LtxError};
 use flate2::{Compression, write::ZlibEncoder};
 use tokio::sync::Mutex;
 
-use crate::{
-    ObjectKind, RefExpectation,
-    large_blob::{LargeBlobError, LargeBlobRead},
-    object_id,
-    refs::valid_ref_name,
-};
+use crate::{ObjectKind, RefExpectation, object_id, refs::valid_ref_name};
 
 pub(crate) const CACHE_PREFIX: &str = "canopy-git-";
 
@@ -29,8 +24,6 @@ pub enum CacheError {
     Io(#[from] io::Error),
     #[error("Git cache disk admission failed")]
     Budget(#[from] LtxError),
-    #[error("Git blob hydration failed")]
-    Blob(#[from] LargeBlobError),
     #[error("Git cache worker failed")]
     Task(#[from] tokio::task::JoinError),
 }
@@ -55,6 +48,8 @@ pub(crate) struct GitCache {
     // Only durable hydration writes this cache. Stripe by OID so concurrent
     // fetches share a completed loose object without serializing all objects.
     object_writes: OnceLock<[Arc<Mutex<()>>; 64]>,
+    packs: RwLock<BTreeMap<[u8; 32], Arc<crate::git_pack::OwnedPack>>>,
+    pack_writes: Arc<Mutex<()>>,
 }
 
 impl GitCache {
@@ -87,6 +82,8 @@ impl GitCache {
                 reservation: Some(budget.try_reserve(0)?),
                 objects,
                 object_writes: OnceLock::new(),
+                packs: RwLock::new(BTreeMap::new()),
+                pack_writes: Arc::new(Mutex::new(())),
             });
             for directory in ["objects/info", "objects/pack", "refs/heads", "refs/tags", "hooks"] {
                 fs::create_dir_all(cache.git_dir().join(directory))?;
@@ -109,6 +106,10 @@ impl GitCache {
             }
             Ok(cache)
         }).await?
+    }
+
+    pub(crate) fn object_format(&self) -> crate::ObjectFormat {
+        self.object_format
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -170,6 +171,20 @@ impl GitCache {
     }
 
     fn object_present(&self, oid: crate::ObjectId) -> io::Result<bool> {
+        for pack in self
+            .packs
+            .read()
+            .map_err(|_| io::Error::other("Git pack cache lock poisoned"))?
+            .values()
+        {
+            if pack
+                .data()
+                .and_then(|data| data.contains(oid))
+                .map_err(io::Error::other)?
+            {
+                return Ok(true);
+            }
+        }
         match fs::symlink_metadata(self.object_path(oid)) {
             Ok(metadata) if metadata.is_file() => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -207,6 +222,53 @@ impl GitCache {
             temporary,
             destination,
         ))
+    }
+
+    /// Installs a native pair with the index renamed last. Git never observes
+    /// an index naming an incomplete pack. The cache retains the immutable
+    /// source owner and charges linked files conservatively to its own budget.
+    pub(crate) async fn install_pack(
+        self: &Arc<Self>,
+        pack: Arc<crate::git_pack::OwnedPack>,
+    ) -> Result<(), CacheError> {
+        let write = Arc::clone(&self.pack_writes).lock_owned().await;
+        let cache = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _write = write;
+            let identity = pack.data().map_err(io::Error::other)?.identity();
+            if identity.format != cache.object_format {
+                return Err(
+                    io::Error::new(io::ErrorKind::InvalidData, "Git pack format differs").into(),
+                );
+            }
+            if cache
+                .packs
+                .read()
+                .map_err(|_| io::Error::other("Git pack cache lock poisoned"))?
+                .contains_key(&identity.pack_digest)
+            {
+                return Ok(());
+            }
+            let source = pack.directory().map_err(io::Error::other)?;
+            let stem = format!("objects/pack/pack-{}", hex::encode(identity.pack_digest));
+            for (extension, bytes) in [("pack", identity.pack_bytes), ("idx", identity.index_bytes)]
+            {
+                let destination = cache.git_dir().join(format!("{stem}.{extension}"));
+                let pending = cache.git_dir().join(format!("{stem}.{extension}.pending"));
+                cache.reservation()?.try_grow(bytes)?;
+                // Source and cache share the configured scratch filesystem.
+                // Count each link's bytes even though physical blocks are shared.
+                fs::hard_link(source.join(format!("objects.{extension}")), &pending)?;
+                fs::rename(pending, destination)?;
+            }
+            cache
+                .packs
+                .write()
+                .map_err(|_| io::Error::other("Git pack cache lock poisoned"))?
+                .insert(identity.pack_digest, pack);
+            Ok(())
+        })
+        .await?
     }
 
     pub(crate) async fn store_receive_hook(
@@ -274,48 +336,103 @@ impl GitCache {
         .await?
     }
 
-    pub(crate) async fn store_blob(
+    /// Streams one selected object through native Git without making omitted
+    /// pack entries available to the serving cache. The immutable pair remains
+    /// the durable authority; this loose file is a disposable projection.
+    pub(crate) async fn store_native_object(
         self: &Arc<Self>,
-        mut reader: LargeBlobRead,
+        source: Arc<crate::git_pack::OwnedPack>,
+        reference: crate::PackedObject,
+        root: PathBuf,
+        budget: DiskBudget,
     ) -> Result<(), CacheError> {
-        let reference = reader.reference();
-        let write = self.object_write_lock(reference.oid).lock_owned().await;
+        let oid = reference.oid;
+        let kind = reference.kind;
+        let size = reference.size;
+        let digest = reference.digest;
+        let write = self.object_write_lock(oid).lock_owned().await;
         let cache = Arc::clone(self);
-        let pending = tokio::task::spawn_blocking(move || {
-            if reference.oid.format() != cache.object_format {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Git object format mismatch",
-                )
-                .into());
+        tokio::spawn(async move {
+            let _write = write;
+            if cache.object_present(oid)? {
+                return Ok(());
             }
-            if cache.object_present(reference.oid)? {
-                return Ok::<_, CacheError>(None);
-            }
-            let (mut encoder, temporary, destination) = cache.object_writer(reference.oid)?;
-            encoder.write_all(format!("blob {}\0", reference.size).as_bytes())?;
-            Ok::<_, CacheError>(Some((encoder, temporary, destination)))
-        })
-        .await??;
-        let Some((mut encoder, temporary, destination)) = pending else {
-            return Ok(());
-        };
-        while let Some(bytes) = reader.next().await? {
-            // The writer owns the cache reservation until each compression worker
-            // exits, including when its async waiter is canceled.
-            encoder = tokio::task::spawn_blocking(move || {
-                encoder.write_all(&bytes)?;
-                Ok::<_, CacheError>(encoder)
+            let input = GitCache::create(root, budget, "refs/heads/main", oid.format()).await?;
+            input.install_pack(source).await?;
+            let mut child = crate::native_git::command(&input.git_dir())?
+                .args(["cat-file", kind.git_name(), &hex::encode(oid)])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()?;
+            let mut reader = child
+                .stdout
+                .take()
+                .ok_or_else(|| io::Error::other("missing native object stream"))?;
+            let owner = Arc::clone(&cache);
+            let mut pending = tokio::task::spawn_blocking(move || {
+                let (mut encoder, temporary, destination) = owner.object_writer(oid)?;
+                encoder.write_all(format!("{} {size}\0", kind.git_name()).as_bytes())?;
+                Ok::<_, CacheError>((
+                    encoder,
+                    temporary,
+                    destination,
+                    crate::git_format::ObjectHasher::new(oid.format(), kind, size),
+                    blake3::Hasher::new(),
+                ))
             })
             .await??;
-        }
-        tokio::task::spawn_blocking(move || {
-            let _write = write;
-            drop(encoder.finish()?);
-            temporary
-                .persist_noclobber(destination)
-                .map_err(|error| error.error)?;
-            Ok::<_, CacheError>(())
+            let transferred = async {
+                use tokio::io::AsyncReadExt;
+                let mut count = 0u64;
+                loop {
+                    let mut buffer = vec![0; 1024 * 1024];
+                    let bytes = tokio::time::timeout(
+                        std::time::Duration::from_secs(120),
+                        reader.read(&mut buffer),
+                    )
+                    .await
+                    .map_err(io::Error::other)??;
+                    if bytes == 0 {
+                        break;
+                    }
+                    count = count
+                        .checked_add(bytes as u64)
+                        .filter(|count| *count <= size)
+                        .ok_or_else(|| io::Error::other("native object length differs"))?;
+                    buffer.truncate(bytes);
+                    pending = tokio::task::spawn_blocking(move || {
+                        pending.3.update(&buffer);
+                        pending.4.update(&buffer);
+                        pending.0.write_all(&buffer)?;
+                        Ok::<_, CacheError>(pending)
+                    })
+                    .await??;
+                }
+                Ok::<_, CacheError>((count, pending))
+            }
+            .await;
+            if transferred.is_err() {
+                let _ = child.start_kill();
+            }
+            let status = child.wait().await?;
+            let (count, (encoder, temporary, destination, hash, body_hash)) = transferred?;
+            if !status.success()
+                || count != size
+                || hash.finalize() != oid
+                || body_hash.finalize().as_bytes() != &digest
+            {
+                return Err(io::Error::other("corrupt native object stream").into());
+            }
+            tokio::task::spawn_blocking(move || {
+                drop(encoder.finish()?);
+                temporary
+                    .persist_noclobber(destination)
+                    .map_err(|error| error.error)?;
+                Ok::<_, CacheError>(())
+            })
+            .await?
         })
         .await?
     }

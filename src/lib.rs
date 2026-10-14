@@ -30,15 +30,15 @@ pub mod git_gateway;
 pub mod git_http;
 pub mod git_input;
 mod git_objects;
+pub mod git_pack;
 mod git_read;
 mod graph;
 pub mod http;
 pub mod issues;
-pub mod large_blob;
 pub mod lfs;
 mod native_git;
 mod object_batch;
-mod object_chunks;
+mod object_packs;
 mod object_reads;
 pub mod pulls;
 mod push;
@@ -52,11 +52,12 @@ mod web;
 pub use access::{COLLABORATOR_PAGE_SIZE, Collaborator, ReadIdentity};
 pub use default_branch::DefaultBranch;
 pub use object_batch::ObjectBatch;
-pub use object_chunks::ObjectStageError;
+pub use object_packs::{ObjectStageError, PackedObject};
 pub use push::{PushCertificateReceipt, PushError, PushReceipt};
 pub use refs::{FinalizePush, PushPlan, RefExpectation, RefPage, RefReadError, RefUpdate};
 
 pub const REPOSITORIES: NamespaceId = NamespaceId::from_bytes([71; 16]);
+pub const REPOSITORY_SCHEMA_VERSION: u32 = 3;
 pub const INLINE_OBJECT_LIMIT: usize = 768 * 1024;
 // SQLite's on-disk page count and maximum page size bound representable databases.
 // This is a format boundary, not a repository quota.
@@ -81,9 +82,9 @@ const COMMANDS: [OperationDescriptor; 9] = [
     operation_with_codec(4, 6),
     OperationDescriptor {
         input_limit: object_batch::INPUT_LIMIT,
-        ..operation_with_codec(5, 3)
+        ..operation_with_codec(5, 4)
     },
-    operation_with_codec(6, 2),
+    operation_with_codec(6, 4),
     operation_with_codec(7, 2),
     operation_with_codec(8, 2),
     operation_with_codec(9, 4),
@@ -99,8 +100,8 @@ const fn operation_with_codec(id: u32, codec_version: u32) -> OperationDescripto
     OperationDescriptor {
         id,
         codec_version,
-        schema_min: 1,
-        schema_max: 1,
+        schema_min: REPOSITORY_SCHEMA_VERSION,
+        schema_max: REPOSITORY_SCHEMA_VERSION,
         input_limit: 1 << 20,
         output_limit: 1 << 20,
     }
@@ -148,19 +149,11 @@ impl ObjectKind {
     }
 }
 
-/// Byte location for a verified Git object record.
+/// In-memory ingress or a verified immutable native pack reference.
+/// `Input` is never persisted; only `Packed` appears in stored object pages.
 pub enum ObjectStorage {
-    Inline(Vec<u8>),
-    Chunked {
-        upload: [u8; 16],
-        size: u64,
-        blake3: [u8; 32],
-    },
-    External {
-        size: u64,
-        blake3: [u8; 32],
-        sha256: [u8; 32],
-    },
+    Input(Vec<u8>),
+    Packed(Box<PackedObject>),
 }
 
 /// Immutable Git object returned by one bounded Repository Cell read.
@@ -190,6 +183,9 @@ impl CellModule for RepositoryModule {
                 let mut source = blake3::Hasher::new();
                 source.update(include_bytes!("lib.rs"));
                 source.update(include_bytes!("git_format.rs"));
+                source.update(include_bytes!("git_pack.rs"));
+                source.update(include_bytes!("git_pack/store.rs"));
+                source.update(include_bytes!("git_pack/build.rs"));
                 source.update(include_bytes!("refs.rs"));
                 source.update(include_bytes!("default_branch.rs"));
                 source.update(include_bytes!("graph.rs"));
@@ -197,10 +193,10 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("branch_rules.rs"));
                 source.update(include_bytes!("branch_rules/command.rs"));
                 source.update(include_bytes!("graph/preparation.rs"));
+                source.update(include_bytes!("graph/stream.rs"));
                 source.update(include_bytes!("object_batch.rs"));
-                source.update(include_bytes!("object_chunks.rs"));
+                source.update(include_bytes!("object_packs.rs"));
                 source.update(include_bytes!("object_reads.rs"));
-                source.update(include_bytes!("large_blob.rs"));
                 source.update(include_bytes!("external.rs"));
                 source.update(include_bytes!("push.rs"));
                 source.update(include_bytes!("push/plan.rs"));
@@ -224,11 +220,11 @@ impl CellModule for RepositoryModule {
                 Digest::from_bytes(*source.finalize().as_bytes())
             },
             retained_codes: &[],
-            schema_min: 1,
-            schema_max: 1,
+            schema_min: REPOSITORY_SCHEMA_VERSION,
+            schema_max: REPOSITORY_SCHEMA_VERSION,
             migrations: MIGRATIONS.get_or_init(|| {
                 [MigrationDescriptor {
-                    version: 1,
+                    version: REPOSITORY_SCHEMA_VERSION,
                     sql: SCHEMA,
                     digest: Digest::from_bytes(*blake3::hash(SCHEMA.as_bytes()).as_bytes()),
                 }]
@@ -283,6 +279,7 @@ fn repository_cell_type() -> cellule_runtime::Result<CellType> {
         1,
     )?
     .with_entity_partitions()?
+    .with_schema_range(REPOSITORY_SCHEMA_VERSION, REPOSITORY_SCHEMA_VERSION)?
     .with_limits(REPOSITORY_DATABASE_LIMIT_BYTES, 64 * 1024 * 1024)
 }
 
@@ -293,6 +290,7 @@ pub struct RepositoryCell {
     sql: SqlCell<RepositoryModule>,
     application: ApplicationHandle<CanopyApplication>,
     target: CellTarget,
+    packs: git_pack::PackStore,
 }
 
 impl RepositoryCell {
@@ -309,9 +307,13 @@ impl RepositoryCell {
         target: CellTarget,
         id: [u8; 16],
         object_format: ObjectFormat,
+        packs: git_pack::PackStore,
     ) -> cellule_runtime::Result<Self> {
         if target != repository_target(target.tenant(), target.application(), id)? {
             return Err(Error::Identity("repository UUID differs from Cell target"));
+        }
+        if packs.repository_id() != id {
+            return Err(Error::Identity("pack store UUID differs from repository"));
         }
         Ok(Self {
             id,
@@ -319,6 +321,7 @@ impl RepositoryCell {
             sql: application.sql::<RepositoryModule>(target.clone())?,
             application: application.clone(),
             target,
+            packs,
         })
     }
 
@@ -343,86 +346,62 @@ impl RepositoryCell {
         Observed<Option<(ObjectKind, Vec<u8>)>>,
         cellule_runtime::InvocationError<Vec<cellule_runtime::primitives::sql::SqlResultSet>>,
     > {
-        let result = self
+        let headers = self
             .sql
             .query(
                 minimum,
                 SqlBatch {
                     statements: vec![SqlStatement {
-                        sql:
-                            "SELECT kind, body, digest, size, chunk_id FROM objects WHERE oid = ?1"
-                                .into(),
+                        sql: "SELECT oid FROM objects WHERE oid = ?1".into(),
                         parameters: vec![SqlValue::Blob(oid.to_vec())],
                     }],
                 },
             )
             .await?;
-        let Some(row) = result.output.first().and_then(|set| set.rows.first()) else {
+        if headers.output.first().is_none_or(|set| set.rows.is_empty()) {
             return Ok(Observed {
                 output: None,
-                receipt: result.receipt,
+                receipt: headers.receipt,
             });
-        };
-        let [
-            SqlValue::Text(kind),
-            body,
-            SqlValue::Blob(digest),
-            SqlValue::Integer(size),
-            upload,
-        ] = row.as_slice()
-        else {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("invalid stored object row"),
-            ));
-        };
-        let kind = match kind.as_str() {
-            "blob" => ObjectKind::Blob,
-            "tree" => ObjectKind::Tree,
-            "commit" => ObjectKind::Commit,
-            "tag" => ObjectKind::Tag,
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid stored object kind"),
-                ));
-            }
-        };
-        let body = match (body, upload) {
-            (SqlValue::Blob(bytes), SqlValue::Null)
-                if usize::try_from(*size).ok() == Some(bytes.len()) =>
-            {
-                bytes.clone()
-            }
-            (SqlValue::Null, SqlValue::Blob(upload)) => {
-                let invalid = || {
-                    cellule_runtime::InvocationError::NotStarted(Error::Command(
-                        "invalid object chunk reference",
-                    ))
-                };
-                self.chunked_body(
-                    oid,
-                    kind,
-                    upload.as_slice().try_into().map_err(|_| invalid())?,
-                    u64::try_from(*size).map_err(|_| invalid())?,
-                    digest.as_slice().try_into().map_err(|_| invalid())?,
-                )
-                .await?
-            }
-            _ => {
-                return Err(cellule_runtime::InvocationError::NotStarted(
-                    Error::Command("invalid stored object body"),
-                ));
-            }
-        };
-        if object_id(oid.format(), kind, &body) != oid
-            || blake3::hash(&body).as_bytes() != digest.as_slice()
-        {
-            return Err(cellule_runtime::InvocationError::NotStarted(
-                Error::Command("corrupt stored object"),
-            ));
         }
+        let objects = self
+            .object_records(Observed {
+                output: vec![oid],
+                receipt: headers.receipt,
+            })
+            .await?;
+        let object = objects.output.into_iter().next().ok_or_else(|| {
+            cellule_runtime::InvocationError::NotStarted(Error::Command("missing packed object"))
+        })?;
+        let ObjectStorage::Packed(reference) = object.storage else {
+            return Err(cellule_runtime::InvocationError::NotStarted(
+                Error::Command("invalid persisted storage"),
+            ));
+        };
+        let pack = self
+            .packs
+            .load(&reference.pack)
+            .await
+            .map_err(object_packs::pack_invocation)?;
+        let bytes = tokio::task::spawn_blocking(move || {
+            let (kind, body) = pack
+                .data()?
+                .object(oid, 64 * 1024 * 1024)?
+                .ok_or(git_pack::PackError::Integrity)?;
+            if kind != object.kind
+                || body.len() as u64 != reference.size
+                || blake3::hash(&body).as_bytes() != &reference.digest
+            {
+                return Err(git_pack::PackError::Integrity);
+            }
+            Ok((kind, body))
+        })
+        .await
+        .map_err(|error| object_packs::pack_invocation(git_pack::PackError::Task(error)))?
+        .map_err(object_packs::pack_invocation)?;
         Ok(Observed {
-            output: Some((kind, body)),
-            receipt: result.receipt,
+            output: Some(bytes),
+            receipt: objects.receipt,
         })
     }
 }

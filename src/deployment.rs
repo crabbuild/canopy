@@ -15,9 +15,12 @@ use serde::Serialize;
 
 mod backup;
 pub use backup::{BackupError, BackupReport};
+mod maintenance;
 mod recovery;
+mod retention;
 mod root;
 pub use recovery::WorkerConfig;
+pub use retention::GarbageCollectionReport;
 
 /// Application-wide admission shared by nodes and offline administration.
 #[derive(Clone)]
@@ -146,6 +149,7 @@ impl Deployment {
 
     /// Rejects nodes when identity, selected release, image or phase differs.
     pub async fn require_ready(&self) -> Result<()> {
+        maintenance::require_idle(self).await?;
         self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
@@ -193,6 +197,7 @@ impl Deployment {
 
     /// Closes fleet admission under an explicit, retryable maintenance operation.
     pub async fn begin_maintenance(&self, operation: RequestId) -> Result<ReleaseRecord> {
+        maintenance::require_idle(self).await?;
         self.require_service_root().await?;
         self.identities.layout(self.identity).await?;
         let record = self.record().await?;
@@ -260,6 +265,17 @@ impl Deployment {
 
     /// Reopens the same compiled release only after the exact operation drains.
     pub async fn end_maintenance(
+        &self,
+        operation: RequestId,
+        now_ms: i64,
+    ) -> Result<ReleaseRecord> {
+        let claim = maintenance::acquire(self, operation, maintenance::Action::End, None).await?;
+        let result = self.end_maintenance_inner(operation, now_ms).await;
+        claim.finish(self).await?;
+        result
+    }
+
+    async fn end_maintenance_inner(
         &self,
         operation: RequestId,
         now_ms: i64,
