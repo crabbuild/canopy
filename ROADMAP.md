@@ -1,6 +1,6 @@
 # Canopy roadmap
 
-Canopy's Git-hosting core works, but the service is not yet ready for an unattended team deployment. This roadmap tracks the remaining work from the current `main` baseline (`ab43e71`, 2026-09-27). It is a planning checklist, not a claim that every capability mentioned below is absent. See [delivery gates](docs/delivery-plan.md) for the detailed acceptance record, [Git compatibility](docs/git-compatibility.md) for protocol coverage, and [performance evidence](docs/performance-plan.md) for measured limits.
+Canopy implements the Git-hosting core, but the current native-storage build still needs end-to-end qualification before an unattended team deployment. This is a planning checklist, not a claim that every capability mentioned below is absent. See the [current storage qualification status](docs/benchmarks/2026-10-14-storage-optimization.md), [delivery gates](docs/delivery-plan.md), [Git compatibility](docs/git-compatibility.md), and [performance evidence](docs/performance-plan.md).
 
 ## How to use this roadmap
 
@@ -13,14 +13,13 @@ Canopy's Git-hosting core works, but the service is not yet ready for an unatten
 
 This is the first intended production-use milestone. The existing bounded Compose profile is a starting point, not a completed install or capacity claim.
 
-### R01. Safe upgrades and schema migration
+### R01. Current-release deployment and format validation
 
-- [ ] Version persistent Canopy and runtime formats; add a fenced, repeatable upgrade command and migration path for a populated deployment.
-- [ ] Require a verified backup and compatible release/configuration before migration; document failed-upgrade recovery and rollback limits.
-- [ ] Upgrade a prior release containing Git objects, LFS, ACLs, issues, checks, and pull requests; interrupt and retry each migration phase, then clone and inspect the restored state.
-- [ ] Define whether mixed-version nodes are supported. Until proven, enforce a fully drained, single-version upgrade.
+- [ ] Qualify release, identity, storage-format, schema and fencing rejection against the exact release candidate.
+- [ ] Qualify fresh initialization and same-release crash recovery, retries, backup and restore with populated Git, LFS and collaboration state.
+- [ ] Document a fully drained deployment using the latest published Cellule release and a fresh storage prefix for breaking Cellule or Canopy format changes.
 
-**Current state:** schema changes still require a fresh storage prefix; maintenance admission and drain exist, but there is no upgrade path.
+**Current state:** only the compiled release and its current formats are supported. Fresh-prefix deployment for breaking changes is intentional. Old readers, retained module code, migration chains, compatibility adapters and mixed-version operation are outside the supported contract. Cellule's single schema-initialization descriptor remains required for fresh Cells.
 
 ### R02. Backup, restore, and owner-recovery fault qualification
 
@@ -37,7 +36,7 @@ This is the first intended production-use milestone. The existing bounded Compos
 - [ ] Add a fenced collector for abandoned uploads, old outcomes/candidates, and unreachable Git/LFS objects, with an inspectable dry run and bounded work.
 - [ ] Prove with concurrent reads, backup, publication, owner loss, and injected collector failures that required bytes are never removed; collect abandoned bytes only after their grace period.
 
-**Current state:** no production collector; abandoned staging and outcomes can accumulate. Collection must remain conservative until its root proof passes.
+**Current state:** `canopy gc` uses Cellule's retention-aware collector under a verified maintenance drain, backup pins, grace/deletion bounds and a durable worker claim. It collects superseded Cellule state. Product-owned pack/catalog/LFS artifacts and abandoned staging need their own root and retention policy; complete collection qualification remains open.
 
 ### R04. Trustworthy CI and release artifacts
 
@@ -46,7 +45,7 @@ This is the first intended production-use milestone. The existing bounded Compos
 - [ ] Add required failure-path and provider gates to branch protection, then publish versioned, digest-identified images and a repeatable release checklist.
 - [ ] Record toolchain, Git, Git LFS, Cellule revision, image digest, provider, and test outcomes for each release candidate.
 
-**Current state:** `.github/workflows/verify.yml` invokes the full size gate on `ubuntu-latest`; a previous hosted run exhausted disk.
+**Current state:** standard CI runs formatting, Clippy, ordinary tests, Python harness checks and provider/process probes. The separate release workflow repeats correctness checks in release mode with provider/process probes. Both use `--provider-only`; the full size gate still needs a runner with sufficient capacity and recorded evidence for the exact release candidate.
 
 ### R05. Production object-store qualification
 
@@ -99,7 +98,7 @@ This is the first intended production-use milestone. The existing bounded Compos
 ### Private team release exit checks
 
 - [ ] R01–R10 acceptance proof is recorded for the exact release candidate and selected object store.
-- [ ] A clean install, upgrade of a populated prior release, backup, source-prefix loss, and restore all pass the operator runbook.
+- [ ] A clean install, current-format rejection checks, same-release backup, source-prefix loss and restore all pass the operator runbook. Breaking formats use a fresh prefix.
 - [ ] Stock Git and Git LFS work after recovery; permissions, issues, reviews, checks, and pull requests retain their state.
 - [ ] The release notes state measured limits for active repositories, concurrent transfers, local disk, memory, restore time, and object-store cost. Unmeasured capacity is not advertised.
 

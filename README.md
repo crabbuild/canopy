@@ -36,7 +36,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | Browser | Embedded repository, issue, pull-request and account views | [Repository browser](docs/user-guide.md#repository-browser) |
 
 These are implementation capabilities, not a production capacity guarantee.
-The [roadmap](ROADMAP.md) lists remaining work such as migrations, full fault
+The [roadmap](ROADMAP.md) lists remaining work such as release validation, full fault
 qualification, collection, provider qualification, observability and a repeatable
 deployment. The [delivery plan](docs/delivery-plan.md) records release gates;
 the [performance plan](docs/performance-plan.md) separates measured results from
@@ -49,8 +49,9 @@ before relying on a feature in a new environment.
 
 The **Directory Cell** maps an owner and repository name to a stable repository
 UUID and owns accounts. Each UUID identifies a **Repository Cell** containing
-authoritative refs, Git metadata, ACLs and collaboration records. Large Git
-blobs and LFS bodies are immutable external objects referenced by that Cell.
+authoritative catalog/ref roots, ACLs and collaboration records. Native Git
+packs, indexes, catalog metadata and LFS bodies are immutable external objects
+referenced by the committed state.
 Native Git handles wire protocols using a **disposable cache**: after local disk
 loss, Canopy restores published Cell state from the object store and rebuilds
 the cache. See the [persisted contracts](docs/contracts.md) for publication and
