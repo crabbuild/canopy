@@ -301,6 +301,10 @@ impl ServingPin {
                             }
                             observation.refresh(&inner, &actor).await?;
                             job(&spool, owner.clone(), move |s| s.imported(source)).await?;
+                            if materialize {
+                                job(&spool, owner.clone(), move |s| s.mark_pack_complete(source))
+                                    .await?;
+                            }
                             stats.packs = stats
                                 .packs
                                 .checked_add(1)

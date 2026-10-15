@@ -133,7 +133,10 @@ async fn cold_single_branch_fetch_skips_unrelated_commit_and_tree_history() -> R
             ],
         )
         .await?;
-        assert!(stored_objects(&clone).await?.contains(&last_tree));
+        let objects = stored_objects(&clone).await?;
+        assert!(objects.contains(&last_tree));
+        assert!(!objects.contains(&other_commit));
+        assert!(!objects.contains(&other_tree));
         assert!(!cache_contains(&disk, &other_commit)?);
         assert!(!cache_contains(&disk, &other_tree)?);
         run_git(
@@ -147,8 +150,17 @@ async fn cold_single_branch_fetch_skips_unrelated_commit_and_tree_history() -> R
             ],
         )
         .await?;
-        assert!(cache_contains(&disk, &other_commit)?);
-        assert!(cache_contains(&disk, &other_tree)?);
+        let objects = stored_objects(&clone).await?;
+        assert!(objects.contains(&other_commit));
+        assert!(objects.contains(&other_tree));
+        for (kind, object) in [("commit", &other_commit), ("tree", &other_tree)] {
+            assert_eq!(
+                run_git(Some(&clone), &["cat-file", kind, object]).await?,
+                run_git(Some(&source), &["cat-file", kind, object]).await?
+            );
+        }
+        assert!(!cache_contains(&disk, &other_commit)?);
+        assert!(!cache_contains(&disk, &other_tree)?);
         restored.shutdown().await?;
     }
     Ok(())
@@ -313,8 +325,8 @@ async fn filtered_clones_round_trip(store: Arc<dyn ObjectStore>) -> Result {
         assert_eq!(tokio::fs::read(clone.join("two")).await?, bodies[1]);
         run_git(Some(&clone), &["fsck", "--strict"]).await?;
     }
-    // Explicitly cache the branch while referenced, then delete it again. Fetch
-    // no longer loads orphan blobs, but cached orphans must still be denied.
+    // Cache an explicit blob want while its branch is referenced, then delete
+    // the branch. Physically cached orphans must fail reachability validation.
     run_git(
         Some(&source),
         &["-c", AUTH, "push", &url, "refs/heads/discarded"],
@@ -327,6 +339,8 @@ async fn filtered_clones_round_trip(store: Arc<dyn ObjectStore>) -> Result {
             "-c",
             AUTH,
             "clone",
+            "--filter=blob:none",
+            "--no-checkout",
             "--single-branch",
             "--branch",
             "discarded",
@@ -335,6 +349,15 @@ async fn filtered_clones_round_trip(store: Arc<dyn ObjectStore>) -> Result {
         ],
     )
     .await?;
+    assert_eq!(
+        run_git(
+            Some(&discarded_clone),
+            &["-c", AUTH, "cat-file", "blob", &discarded]
+        )
+        .await?,
+        run_git(Some(&source), &["cat-file", "blob", &discarded]).await?
+    );
+    assert!(cache_contains(&restored_disk, &discarded)?);
     run_git(
         Some(&source),
         &["-c", AUTH, "push", &url, ":refs/heads/discarded"],

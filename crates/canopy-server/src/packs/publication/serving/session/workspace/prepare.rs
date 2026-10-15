@@ -222,6 +222,11 @@ impl NativeWorkspace {
                         // Wants were checked against the complete certified ref
                         // closure above. Reuse authenticated immutable packs for
                         // an unfiltered fetch; physical presence grants no wants.
+                        // SSH v2 can prepare several groups on the same cache.
+                        // Keep completion on that cache's shared spool and
+                        // serialize installation through its existing lock.
+                        let _selection = core.cache.selection.lock().await;
+                        observation.refresh(&inner, &actor).await?;
                         let mut sources = reader.source_changes(None, None)?;
                         loop {
                             observation.refresh(&inner, &actor).await?;
@@ -233,7 +238,10 @@ impl NativeWorkspace {
                                 observation.refresh(&inner, &actor).await?;
                                 let native = record.native();
                                 native.validate(inner.context.repository(), inner.lease.format)?;
-                                if !job(&spool, owner.clone(), move |s| s.pack_seen(native)).await?
+                                if !job(&core.spool, owner.clone(), move |s| {
+                                    s.pack_complete(native)
+                                })
+                                .await?
                                 {
                                     inner
                                         .context
@@ -245,7 +253,10 @@ impl NativeWorkspace {
                                         )
                                         .await?;
                                     observation.refresh(&inner, &actor).await?;
-                                    job(&spool, owner.clone(), move |s| s.imported(native)).await?;
+                                    job(&core.spool, owner.clone(), move |s| {
+                                        s.mark_pack_complete(native)
+                                    })
+                                    .await?;
                                 }
                             }
                         }

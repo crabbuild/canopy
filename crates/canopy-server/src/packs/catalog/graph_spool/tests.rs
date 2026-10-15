@@ -167,11 +167,16 @@ fn physical_input_dedup_ignores_namespace_but_rejects_conflicting_bindings() -> 
         },
     };
     assert!(!s.pack_seen(p)?);
+    assert!(!s.pack_complete(p)?);
     s.imported(p)?;
+    assert!(!s.pack_complete(p)?);
+    s.mark_pack_complete(p)?;
+    assert!(s.pack_complete(p)?);
     let mut other = p;
     other.operation = [7; 16];
     other.pack.manifest_digest = [8; 32];
     assert!(s.pack_seen(other)?);
+    assert!(s.pack_complete(other)?);
     for mutation in 0..5 {
         let mut conflict = other;
         match mutation {
@@ -185,7 +190,12 @@ fn physical_input_dedup_ignores_namespace_but_rejects_conflicting_bindings() -> 
             s.pack_seen(conflict),
             Err(MetadataError::IdentityConflict)
         ));
+        assert!(matches!(
+            s.pack_complete(conflict),
+            Err(MetadataError::IdentityConflict)
+        ));
     }
     assert_eq!(s.counts()?, (0, 1));
+    assert_eq!(s.contains(&[id(ObjectFormat::Sha1, 1)])?, [false]);
     Ok(())
 }

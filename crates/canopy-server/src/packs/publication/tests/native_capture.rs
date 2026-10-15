@@ -444,6 +444,29 @@ enum MetadataFault {
     MissingArtifact,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenewalPhase {
+    Replay,
+    Finish,
+}
+
+#[tokio::test]
+async fn native_receive_metadata_finish_survives_original_deadline_after_custody_renewal() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let qualification = Box::pin(native_receive_metadata_case(
+            format,
+            false,
+            CompletionMode::Success,
+            None,
+            Some(RenewalPhase::Finish),
+        ))
+        .await?;
+        assert!(qualification.is_none());
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_receive_metadata_replay_survives_original_deadline_after_custody_renewal() -> Result
 {
@@ -453,7 +476,7 @@ async fn native_receive_metadata_replay_survives_original_deadline_after_custody
             false,
             CompletionMode::Success,
             None,
-            true,
+            Some(RenewalPhase::Replay),
         ))
         .await?;
         assert!(qualification.is_none());
@@ -475,7 +498,7 @@ async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_sha
                 true,
                 CompletionMode::Success,
                 Some(fault),
-                false,
+                None,
             ))
             .await?;
             assert!(qualification.is_none());
@@ -495,7 +518,7 @@ type RootedQualification = std::pin::Pin<Box<dyn std::future::Future<Output = Re
 
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
     let qualification = Box::pin(native_receive_metadata_case(
-        format, rooted, mode, None, false,
+        format, rooted, mode, None, None,
     ))
     .await?;
     if let Some(qualification) = qualification {
@@ -508,7 +531,7 @@ async fn native_receive_metadata_case(
     rooted: bool,
     mode: CompletionMode,
     metadata_fault: Option<MetadataFault>,
-    renew_replay: bool,
+    renewal: Option<RenewalPhase>,
 ) -> Result<Option<RootedQualification>> {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
@@ -523,7 +546,7 @@ async fn native_receive_metadata_case(
         provider.clone(),
         object_store::throttle::ThrottleConfig::default(),
     ));
-    let object_store: Arc<dyn object_store::ObjectStore> = if renew_replay {
+    let object_store: Arc<dyn object_store::ObjectStore> = if renewal.is_some() {
         throttled.clone()
     } else {
         provider.clone()
@@ -1018,6 +1041,7 @@ async fn native_receive_metadata_case(
     let renewal_ticket = ticket.clone();
     let slow_store = throttled.clone();
     let (started, entered) = tokio::sync::oneshot::channel();
+    let mut started = Some(started);
     let work = ticket.spawn_bound(move |_, context| async move {
         let result = async {
             let mut builder = CatalogPreparation::new_staged(
@@ -1029,7 +1053,7 @@ async fn native_receive_metadata_case(
                 limits(),
             )
             .await?;
-            if renew_replay {
+            if renewal == Some(RenewalPhase::Replay) {
                 // Force the complete multi-shard replay across an old local
                 // deadline while a real registered renewal refreshes custody.
                 slow_store.config_mut(|config| {
@@ -1038,7 +1062,7 @@ async fn native_receive_metadata_case(
                 let deadline = renewal_ticket
                     .shorten_bound_lease_for_test(Duration::from_secs(1))
                     .map_err(crate::packs::verification::PhysicalError::from)?;
-                let _ = started.send(deadline);
+                let _ = started.take().expect("one renewal phase").send(deadline);
             }
             let added = builder.add_staged_pack(staged).await;
             if metadata_fault.is_some() {
@@ -1050,14 +1074,25 @@ async fn native_receive_metadata_case(
                 return Err(error);
             }
             added?;
+            if renewal == Some(RenewalPhase::Finish) {
+                // Delay the first immutable output upload beyond the old
+                // deadline while the same bound session receives a renewal.
+                slow_store.config_mut(|config| {
+                    config.wait_put_per_call = Duration::from_millis(1100);
+                });
+                let deadline = renewal_ticket
+                    .shorten_bound_lease_for_test(Duration::from_secs(1))
+                    .map_err(crate::packs::verification::PhysicalError::from)?;
+                let _ = started.take().expect("one renewal phase").send(deadline);
+            }
             builder.finish().await
         }
         .await;
         result.map_err(|error| StagingError::Input(Box::new(error)))
     })?;
-    let original_deadline = if renew_replay {
+    let original_deadline = if renewal.is_some() {
         let deadline = entered.await?;
-        // Let add_staged_pack capture the original deadline before renewal.
+        // Let the selected assembly phase capture its deadline before renewal.
         tokio::time::sleep(Duration::from_millis(50)).await;
         ticket.renew_for_test();
         timeout(Duration::from_secs(1), async {

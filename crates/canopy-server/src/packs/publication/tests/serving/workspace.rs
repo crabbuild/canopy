@@ -549,6 +549,15 @@ async fn reachability_stops_at_live_refs_without_scanning_other_history() -> Res
         workspace
             .prepare_fetch(vec![fixture.main], None, false)
             .await?;
+        workspace
+            .prepare_fetch(vec![fixture.side], None, false)
+            .await?;
+        let (first, second) = tokio::join!(
+            workspace.prepare_fetch(vec![fixture.main], None, false),
+            workspace.prepare_fetch(vec![fixture.side], None, false),
+        );
+        first?;
+        second?;
         // The pack also physically contains this unrelated tag. Installing it
         // must neither expand want authority nor create per-object loose files.
         crate::packs::metadata::tests::git(

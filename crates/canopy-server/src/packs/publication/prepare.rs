@@ -558,9 +558,19 @@ impl CatalogPreparation {
         if self.active.is_some() {
             return Err(CatalogPreparationError::Integrity);
         }
-        timeout_at(deadline, self.finish_inner())
-            .await
-            .map_err(|_| PreparationBaseError::Inactive)?
+        if let Some(context) = self.staging.clone() {
+            // Closure certification and immutable output construction can span
+            // renewed leases. Observe shared custody and its residence ceiling
+            // rather than the deadline captured at the start of this phase.
+            tokio::select! {
+                result = self.finish_inner() => result,
+                _ = context.fenced() => Err(PreparationBaseError::Inactive.into()),
+            }
+        } else {
+            timeout_at(deadline, self.finish_inner())
+                .await
+                .map_err(|_| PreparationBaseError::Inactive)?
+        }
     }
     async fn finish_inner(mut self) -> Result<PreparedCatalog, CatalogPreparationError> {
         let context = self.base.context();

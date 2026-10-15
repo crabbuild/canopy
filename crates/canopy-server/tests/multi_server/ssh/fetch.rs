@@ -138,7 +138,7 @@ async fn cold_ssh_blobless_clones_hydrate_only_explicit_blob_wants() -> Result {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips() -> Result {
+async fn cold_full_fetches_reuse_packs_without_expanding_blobs_into_loose_files() -> Result {
     let workspace = tempfile::TempDir::new()?;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let host = ssh_key::PrivateKey::new(
@@ -228,7 +228,28 @@ async fn cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips() ->
                 vec![0x61; 2 * 1024 * 1024]
             );
             git(Some(&clone), &ssh, &["fsck", "--strict", "--full"]).await?;
-            assert!(cache_contains(&cold, &blobs[0])?);
+            let objects = String::from_utf8(
+                git(
+                    Some(&clone),
+                    &ssh,
+                    &[
+                        "cat-file",
+                        "--batch-all-objects",
+                        "--batch-check=%(objectname)",
+                    ],
+                )
+                .await?,
+            )?;
+            assert!(objects.contains(&blobs[0]));
+            assert!(
+                !objects.contains(&blobs[1]),
+                "{name}: unrelated branch sent to client"
+            );
+            assert!(
+                !objects.contains(&blobs[2]),
+                "{name}: deleted branch sent to client"
+            );
+            assert!(!cache_contains(&cold, &blobs[0])?);
             assert!(
                 !cache_contains(&cold, &blobs[1])?,
                 "{name}: unrelated branch blob hydrated"
@@ -268,7 +289,7 @@ async fn cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips() ->
                 git(Some(&clone), &ssh, &["show", "origin/other:asset"]).await?,
                 vec![0x62; 2 * 1024 * 1024]
             );
-            assert!(cache_contains(&cold, &blobs[1])?);
+            assert!(!cache_contains(&cold, &blobs[1])?);
             assert!(!cache_contains(&cold, &blobs[2])?);
             git(Some(&clone), &ssh, &["fsck", "--strict", "--full"]).await?;
             restored.shutdown().await?;
@@ -311,7 +332,7 @@ async fn cold_full_fetches_only_hydrate_blobs_reachable_from_requested_tips() ->
                 git(Some(&existing), &ssh, &["show", "origin/other:asset"]).await?,
                 vec![0x62; 2 * 1024 * 1024]
             );
-            assert!(cache_contains(&cold, &blobs[1])?);
+            assert!(!cache_contains(&cold, &blobs[1])?);
             assert!(
                 !cache_contains(&cold, &blobs[0])?,
                 "{name}: negotiation hydrated an unrequested blob"
