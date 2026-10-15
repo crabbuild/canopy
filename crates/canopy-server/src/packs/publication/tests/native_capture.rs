@@ -453,13 +453,14 @@ async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_sha
             MetadataFault::TruncatedReplay,
             MetadataFault::MissingArtifact,
         ] {
-            Box::pin(native_receive_metadata_case(
+            let qualification = Box::pin(native_receive_metadata_case(
                 format,
                 true,
                 CompletionMode::Success,
                 Some(fault),
             ))
             .await?;
+            assert!(qualification.is_none());
         }
     }
     Ok(())
@@ -472,15 +473,21 @@ async fn publication_state(fixture: &Fixture) -> Result<Vec<u8>> {
         Ok([state.0.to_be_bytes(), state.1.to_be_bytes(), state.2.to_be_bytes()].concat())
     }).await?)
 }
+type RootedQualification = std::pin::Pin<Box<dyn std::future::Future<Output = Result>>>;
+
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
-    Box::pin(native_receive_metadata_case(format, rooted, mode, None)).await
+    let qualification = Box::pin(native_receive_metadata_case(format, rooted, mode, None)).await?;
+    if let Some(qualification) = qualification {
+        qualification.await?;
+    }
+    Ok(())
 }
 async fn native_receive_metadata_case(
     format: ObjectFormat,
     rooted: bool,
     mode: CompletionMode,
     metadata_fault: Option<MetadataFault>,
-) -> Result {
+) -> Result<Option<RootedQualification>> {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
         CompletionMode::Durable { .. }
@@ -846,7 +853,7 @@ async fn native_receive_metadata_case(
             .await?;
         }
         cleaned(work_root.path(), &disk).await?;
-        return Ok(());
+        return Ok(None);
     }
     if let CompletionMode::RefFree {
         kind,
@@ -876,7 +883,7 @@ async fn native_receive_metadata_case(
         .await?;
         cleaned(work_root.path(), &disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
     let before_publication = publication_state(&fixture).await?;
     let physical_root = Arc::new(tempfile::TempDir::new()?);
@@ -931,7 +938,7 @@ async fn native_receive_metadata_case(
         assert_eq!(publication_state(&fixture).await?, before_publication);
         cleaned(physical_root.path(), &physical_disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
     let staged = staged.map_err(|error| error.to_string())?;
     assert_eq!(staged.shard_count(), input.object_count);
@@ -1010,7 +1017,7 @@ async fn native_receive_metadata_case(
         assert_eq!(publication_state(&fixture).await?, before_publication);
         cleaned(physical_root.path(), &physical_disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
     let prepared = prepared.map_err(|error| error.to_string())?;
     if rooted {
@@ -1026,38 +1033,42 @@ async fn native_receive_metadata_case(
                 | CompletionMode::PolicyDispatch { .. }
                 | CompletionMode::Dispatch { .. }
         ) {
-            let result = qualify_rooted(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                mode,
-            )
-            .await;
-            if mode == CompletionMode::MandatoryRegistration {
-                assert!(coordinator.close_and_drain().await.is_empty());
-                fixture.runtime.shutdown().await?;
-            }
-            result?;
-            if matches!(
-                mode,
-                CompletionMode::PolicyRefusalDispatch { .. }
-                    | CompletionMode::PolicyDispatch { .. }
-                    | CompletionMode::Dispatch { .. }
-            ) {
-                cleaned(physical_root.path(), &physical_disk).await?;
-                fixture.runtime.shutdown().await?;
-            } else {
-                cleaned(work_root.path(), &disk).await?;
-                cleaned(physical_root.path(), &physical_disk).await?;
-            }
-            return Ok(());
+            // Finish polling the large native setup before polling recovery.
+            // The continuation owns the same fixture, custody and scratch pins.
+            return Ok(Some(Box::pin(async move {
+                let result = qualify_rooted(
+                    super::root_dispatch::Context {
+                        fixture: &fixture,
+                        prepared: Arc::new(prepared),
+                        store: &store,
+                        staging: &coordinator,
+                        ticket: &ticket,
+                        root: physical_root.path(),
+                        budget: physical_disk.clone(),
+                        request: recovered,
+                    },
+                    mode,
+                )
+                .await;
+                if mode == CompletionMode::MandatoryRegistration {
+                    assert!(coordinator.close_and_drain().await.is_empty());
+                    fixture.runtime.shutdown().await?;
+                }
+                result?;
+                if matches!(
+                    mode,
+                    CompletionMode::PolicyRefusalDispatch { .. }
+                        | CompletionMode::PolicyDispatch { .. }
+                        | CompletionMode::Dispatch { .. }
+                ) {
+                    cleaned(physical_root.path(), &physical_disk).await?;
+                    fixture.runtime.shutdown().await?;
+                } else {
+                    cleaned(work_root.path(), &disk).await?;
+                    cleaned(physical_root.path(), &physical_disk).await?;
+                }
+                Ok(())
+            })));
         }
         let (fixture, replay) = super::root_completion::spawn_qualify(
             fixture,
@@ -1073,7 +1084,7 @@ async fn native_receive_metadata_case(
         cleaned(physical_root.path(), &physical_disk).await?;
         assert!(coordinator.close_and_drain().await.is_empty());
         super::root_completion::restored(&fixture, &store, replay).await?;
-        return Ok(());
+        return Ok(None);
     }
     let expected = recovered.response.clone();
     let producer_root = Arc::clone(&physical_root);
@@ -1202,7 +1213,7 @@ async fn native_receive_metadata_case(
         Ok(Vec::new())
     }).await?;
     fixture.runtime.shutdown().await?;
-    Ok(())
+    Ok(None)
 }
 
 #[tokio::test]
