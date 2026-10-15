@@ -46,18 +46,27 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         let (command, registered) =
             prepared_command(&f, &prepared, request.clone(), root.path(), budget.clone()).await?;
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
+        // Keep these nested recovery futures off the default 2 MiB test stack.
         assert!(
-            registered
-                .ready_terminal_release(f.client(), &graph.store, admin.clone(), identity()?)
-                .await
-                .is_err()
+            Box::pin(registered.ready_terminal_release(
+                f.client(),
+                &graph.store,
+                admin.clone(),
+                identity()?
+            ))
+            .await
+            .is_err()
         );
         let original = command.execute().await?;
-        let released = registered
-            .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
-            .await?
-            .complete()
-            .await?;
+        let released = Box::pin(registered.ready_terminal_release(
+            f.client(),
+            &graph.store,
+            admin,
+            identity()?,
+        ))
+        .await?
+        .complete()
+        .await?;
         assert_eq!(released.output, TerminalReleaseReply::Released);
         let token = check.token;
         f.handle.query(0,128,move |db| {
@@ -71,14 +80,13 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         let restored = RegisteredRootRecovery::load(&f.client(), &f.target, &graph.store, &check)
             .await?
             .ok_or("merge archive absent")?;
-        let PublicationOutcome::Merge(recovered) = restored
-            .dispatch_any(
-                &f.client(),
-                &graph.store,
-                &f.authority(),
-                &std::sync::atomic::AtomicBool::new(false),
-            )
-            .await?
+        let PublicationOutcome::Merge(recovered) = Box::pin(restored.dispatch_any(
+            &f.client(),
+            &graph.store,
+            &f.authority(),
+            &std::sync::atomic::AtomicBool::new(false),
+        ))
+        .await?
         else {
             return Err("merge archive purpose".into());
         };
@@ -94,12 +102,16 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         // transaction. Its independent pin can then select the original audit.
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
         assert_eq!(
-            retry_recovery
-                .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
-                .await?
-                .complete()
-                .await?
-                .output,
+            Box::pin(retry_recovery.ready_terminal_release(
+                f.client(),
+                &graph.store,
+                admin,
+                identity()?
+            ))
+            .await?
+            .complete()
+            .await?
+            .output,
             TerminalReleaseReply::Released
         );
         merged_roots(&f, &graph).await?;
