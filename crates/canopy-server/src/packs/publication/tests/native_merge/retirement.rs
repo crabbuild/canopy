@@ -126,6 +126,15 @@ fn applied_attempt(
 #[tokio::test]
 async fn negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        negative_archive(format).await?;
+    }
+    Ok(())
+}
+
+fn negative_archive(
+    format: ObjectFormat,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Result>>> {
+    Box::pin(async move {
         let (f, graph, request) = initial(format, false).await?;
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let check = prepared.base.capability().2.clone();
@@ -184,8 +193,8 @@ async fn negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds() -> R
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
         f.runtime.shutdown().await?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test]
