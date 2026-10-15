@@ -40,33 +40,35 @@ async fn retained_pin(f: &Fixture, check: &LeaseCheck, expected: u64) -> Result 
 async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_or_receipt()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        applied_attempt(format).await?;
+    }
+    Ok(())
+}
+
+// Construct the scenario in a separate call so the harness and polling frame
+// hold its heap pointer instead of the large recovery future on a 2 MiB stack.
+fn applied_attempt(
+    format: ObjectFormat,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Result>>> {
+    Box::pin(async move {
         let (f, graph, request) = initial(format, false).await?;
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let check = prepared.base.capability().2.clone();
         let (command, registered) =
             prepared_command(&f, &prepared, request.clone(), root.path(), budget.clone()).await?;
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
-        // Keep these nested recovery futures off the default 2 MiB test stack.
         assert!(
-            Box::pin(registered.ready_terminal_release(
-                f.client(),
-                &graph.store,
-                admin.clone(),
-                identity()?
-            ))
-            .await
-            .is_err()
+            registered
+                .ready_terminal_release(f.client(), &graph.store, admin.clone(), identity()?)
+                .await
+                .is_err()
         );
         let original = command.execute().await?;
-        let released = Box::pin(registered.ready_terminal_release(
-            f.client(),
-            &graph.store,
-            admin,
-            identity()?,
-        ))
-        .await?
-        .complete()
-        .await?;
+        let released = registered
+            .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
+            .await?
+            .complete()
+            .await?;
         assert_eq!(released.output, TerminalReleaseReply::Released);
         let token = check.token;
         f.handle.query(0,128,move |db| {
@@ -80,13 +82,14 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         let restored = RegisteredRootRecovery::load(&f.client(), &f.target, &graph.store, &check)
             .await?
             .ok_or("merge archive absent")?;
-        let PublicationOutcome::Merge(recovered) = Box::pin(restored.dispatch_any(
-            &f.client(),
-            &graph.store,
-            &f.authority(),
-            &std::sync::atomic::AtomicBool::new(false),
-        ))
-        .await?
+        let PublicationOutcome::Merge(recovered) = restored
+            .dispatch_any(
+                &f.client(),
+                &graph.store,
+                &f.authority(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .await?
         else {
             return Err("merge archive purpose".into());
         };
@@ -102,16 +105,12 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         // transaction. Its independent pin can then select the original audit.
         let admin = terminal_retention::maintenance(&f.handle, f.repository).await?;
         assert_eq!(
-            Box::pin(retry_recovery.ready_terminal_release(
-                f.client(),
-                &graph.store,
-                admin,
-                identity()?
-            ))
-            .await?
-            .complete()
-            .await?
-            .output,
+            retry_recovery
+                .ready_terminal_release(f.client(), &graph.store, admin, identity()?)
+                .await?
+                .complete()
+                .await?
+                .output,
             TerminalReleaseReply::Released
         );
         merged_roots(&f, &graph).await?;
@@ -120,8 +119,8 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
         f.runtime.shutdown().await?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test]
