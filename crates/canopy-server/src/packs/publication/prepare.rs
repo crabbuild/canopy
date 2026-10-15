@@ -455,14 +455,14 @@ impl CatalogPreparation {
         &mut self,
         input: StagedNativeMetadata,
     ) -> Result<(), CatalogPreparationError> {
-        let deadline = self.start()?;
+        self.start()?;
         let context = self
             .staging
             .clone()
             .ok_or(CatalogPreparationError::Integrity)?;
         // The complete operation is poisoned on cancellation, including a
         // failed/absent provider artifact or an incomplete descriptor replay.
-        let result = timeout_at(deadline, async {
+        let work = async {
             let native = input.witness.native();
             self.failed = false;
             self.begin_retained_pack(input.witness).await?;
@@ -495,9 +495,14 @@ impl CatalogPreparation {
             context.ensure_live().map_err(PhysicalError::from)?;
             self.failed = false;
             self.finish_pack().await
-        })
-        .await
-        .map_err(|_| PreparationBaseError::Inactive)?;
+        };
+        // A full pack can span several renewed leases. Observe the shared
+        // custody clock and permanent fence instead of the first shard's
+        // deadline; the fixed bound residence ceiling still limits this work.
+        let result = tokio::select! {
+            result = work => result,
+            _ = context.fenced() => Err(PreparationBaseError::Inactive.into()),
+        };
         if result.is_err() {
             self.failed = true;
         }

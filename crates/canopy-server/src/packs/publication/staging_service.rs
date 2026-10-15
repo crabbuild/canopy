@@ -1518,6 +1518,19 @@ impl StagingTicket {
         Ok(ceiling)
     }
     #[cfg(test)]
+    pub(super) fn shorten_bound_lease_for_test(
+        &self,
+        remaining: Duration,
+    ) -> Result<Instant, StagingError> {
+        let mut local = self.job.local.lock().expect("staging local");
+        let session = local.bound.as_ref().ok_or(StagingError::NotReady)?;
+        let deadline = (Instant::now() + remaining).min(session.live_lease()?.1);
+        *session.deadline.lock().expect("bound deadline") = deadline;
+        local.deadline = deadline;
+        self.job.changed.notify_one();
+        Ok(deadline)
+    }
+    #[cfg(test)]
     pub(super) fn expire_bound_for_test(&self) -> Result<Instant, StagingError> {
         let mut local = self.job.local.lock().expect("staging local");
         let session = local.bound.as_ref().ok_or(StagingError::NotReady)?;
@@ -1599,7 +1612,7 @@ impl StagingContext {
             Ok(())
         }
     }
-    async fn fenced(&self) {
+    pub(super) async fn fenced(&self) {
         let mut status = self.job.status.subscribe();
         loop {
             let (deadline, session) = {
