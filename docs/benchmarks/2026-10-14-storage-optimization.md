@@ -3,9 +3,10 @@
 The current integration uses the native catalog/publication implementation from
 `main` at `aa18585`, published Cellule 0.2.0, repository schema 4 and storage
 format `canopy-pack-v2`. It retains same-release recovery and requires fresh
-storage prefixes. Current integrated gates and RustFS measurements are pending.
-All measurements below belong to the earlier, separate implementation and its
-recorded binary; they do not qualify this integration.
+storage prefixes. The [October 15 qualification](2026-10-15-native-storage.md)
+records the current integration and its separate source, binary and measurements.
+All measurements below belong to the earlier implementation and its recorded
+binary; they remain historical evidence.
 
 The earlier storage changes keep Git bodies in verified, immutable native pack/index
 pairs, batch metadata publication, and expose Cellule's retention collector

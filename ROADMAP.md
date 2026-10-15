@@ -36,7 +36,7 @@ This is the first intended production-use milestone. The existing bounded Compos
 - [ ] Add a fenced collector for abandoned uploads, old outcomes/candidates, and unreachable Git/LFS objects, with an inspectable dry run and bounded work.
 - [ ] Prove with concurrent reads, backup, publication, owner loss, and injected collector failures that required bytes are never removed; collect abandoned bytes only after their grace period.
 
-**Current state:** `canopy gc` uses Cellule's retention-aware collector under a verified maintenance drain, backup pins, grace/deletion bounds and a durable worker claim. It collects superseded Cellule state. Product-owned pack/catalog/LFS artifacts and abandoned staging need their own root and retention policy; complete collection qualification remains open.
+**Current state:** `canopy gc` uses Cellule's retention-aware collector under a verified maintenance drain, backup pins, grace/deletion bounds and a durable worker claim. It collects superseded Cellule state. The [October 15 qualification](docs/benchmarks/2026-10-15-native-storage.md) records three full repositories before and after collection and fresh restore. Product-owned pack/catalog/LFS artifacts and abandoned staging still need their own root and retention policy; R03 remains open.
 
 ### R04. Trustworthy CI and release artifacts
 

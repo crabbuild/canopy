@@ -63,8 +63,8 @@ takeover. Cross-node placement races and larger hot sets still need qualificatio
 Each storage prefix has one durable tenant/application identity and a selected
 compiled release. First startup initializes an empty deployment; later nodes
 must match its release and configured image identity. A nonempty catalog without
-release metadata is rejected. Existing preview prefixes require explicit future
-migration; do not point this build at them as an upgrade.
+release metadata is rejected. Breaking schema or format changes require a fresh
+storage prefix; this build has no compatibility reader or in-place upgrade path.
 
 To close admission and drain the fleet, choose a fresh operation UUID and use
 the same binary and configuration as the deployment:
@@ -113,8 +113,9 @@ failed root verification return an error. Retry the same operation after the
 reported condition is resolved; recovery never resumes serving automatically.
 Do not remove authority records or force `drained` to bypass an error.
 
-Upgrade/migration and object collection remain pending. Maintenance and owner
-recovery do not provide a separate backup copy.
+Cellule object collection uses the [retention maintenance procedure](#cellule-retention-collection).
+Product-owned pack/catalog/LFS collection remains a separate policy. Maintenance
+and owner recovery do not provide a separate backup copy.
 
 ### Backup and restore
 
@@ -157,9 +158,9 @@ failed operation after repairing its reported cause. Replaying a completed resto
 does not reset subsequently published service state.
 
 This is a same-provider copy, not protection from losing the entire bucket or
-provider. Cross-provider export, old-release migration, automated retention and
-the complete interruption fault matrix remain pending. Do not use older binaries
-that lack prefix reservations with these backup/restore destinations.
+provider. Cross-provider export, automated retention and the complete interruption
+fault matrix remain pending. Restore requires the same compiled release and
+current formats; breaking changes use a fresh storage prefix.
 
 ### Recover a lost push reply
 

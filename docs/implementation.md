@@ -264,6 +264,8 @@ verified live roots and backup pins, enforces its grace and deletion bounds, and
 joins work before releasing the claim. Product pack/catalog/LFS retention is a
 separate policy. The operational sequence is in [operations](operations.md#cellule-retention-collection).
 
-The integrated source has preliminary type-check and Python harness results;
-full Rust, isolated provider/process and fresh medium-corpus qualification remain
-pending. Historical measurements retain their original binaries and formats.
+The [October 15 qualification](benchmarks/2026-10-15-native-storage.md) records
+full object-body/ref/HEAD/fsck/API checks for bat, Starship and libgit2 before and
+after Cellule GC and fresh-workspace restoration, plus browse measurements. Full
+workspace and isolated provider/process qualification are recorded separately in
+that report. Historical evidence retains its original binaries and formats.

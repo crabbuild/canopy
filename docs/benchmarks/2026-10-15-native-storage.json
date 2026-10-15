@@ -1,0 +1,1980 @@
+{
+  "captured_utc": "2026-10-15T19:22:15.998649+00:00",
+  "source_commit": "12dc9a19881ca4c87353a7643a374d20bc800d58",
+  "qualification_source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+  "test_stack_source_equivalence": {
+    "state": "passed",
+    "source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "runtime_base_commit": "12dc9a19881ca4c87353a7643a374d20bc800d58",
+    "files_compared": 727,
+    "changed_files": [
+      "crates/canopy-server/src/packs/publication/tests/native_head.rs",
+      "crates/canopy-server/src/packs/publication/tests/native_merge/retirement.rs"
+    ],
+    "compiled_runtime_change": false,
+    "cfg_test_boundary": "crates/canopy-server/src/packs/publication/mod.rs:304",
+    "original_source_archive": "source.tar",
+    "qualification_source_archive": "source-test-retirement-heaps.tar",
+    "captured_utc": "2026-10-15T07:46:02.402713+00:00"
+  },
+  "original_stack_reproduction": {
+    "binary": "canopy_server-4c94d44cbce73e9e",
+    "stack_bytes": 2097152,
+    "exit_code": -6,
+    "seconds": 73.89485187502578
+  },
+  "fixed_stack_reproduction": {
+    "state": "passed",
+    "stack_bytes": 2097152,
+    "source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "started_utc": "2026-10-15T07:46:02.507893+00:00",
+    "exit_code": 0,
+    "seconds": 196.71240079205018
+  },
+  "additional_stack_diagnosis": {
+    "state": "diagnosis-complete",
+    "source_commit": "7362d076748d851db3d9e82a5e832e7090c34bbe",
+    "binary_sha256": "40b38d0c10dbfc08798fe80252c8a4d0d4d95ddda3f75a68d2a6307cb5c44ba0",
+    "stack_bytes": 2097152,
+    "previously_passed": 432,
+    "known_failed": [
+      "packs::publication::tests::native_head::native_head_reuses_ref_tree_and_preserves_original_receipt_after_typed_retirement"
+    ],
+    "runs": [
+      {
+        "exit_code": -6,
+        "seconds": 15.571115583996288,
+        "finished": 12,
+        "stack_overflows": [
+          "packs::publication::tests::native_merge::retirement::negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds"
+        ],
+        "log": "remaining-unit-stacks-1.log"
+      },
+      {
+        "exit_code": 0,
+        "seconds": 803.8268396250205,
+        "finished": 303,
+        "stack_overflows": [],
+        "log": "remaining-unit-stacks-2.log"
+      }
+    ],
+    "started_utc": "2026-10-15T07:31:31.349814+00:00",
+    "passed": 747,
+    "failed": [
+      "packs::publication::tests::native_head::native_head_reuses_ref_tree_and_preserves_original_receipt_after_typed_retirement",
+      "packs::publication::tests::native_merge::retirement::negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds"
+    ],
+    "remaining": 0,
+    "finished_utc": "2026-10-15T07:45:11.495453+00:00"
+  },
+  "final_harness_source_equivalence": {
+    "state": "passed",
+    "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+    "rust_qualified_source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "changed_paths": [
+      "scripts/smoke_s3_backup.py",
+      "scripts/smoke_s3_peers.py",
+      "scripts/smoke_s3_process.py"
+    ],
+    "all_other_724_source_files_identical": true,
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8"
+  },
+  "backup_harness_source_equivalence": {
+    "state": "passed",
+    "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+    "previous_source_commit": "1a0fc93d526d205979e03523435ba0c6a9a027c1",
+    "changed_paths": [
+      "scripts/smoke_s3_backup.py"
+    ],
+    "rust_source_unchanged": true,
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "python_tests": 105,
+    "python_exit_code": 0,
+    "python_seconds": 45.085,
+    "python_log": "python-backup-harness.log",
+    "backup_script_sha256": "ffb5a2ca1a7b5ab20bc735a980628f28c0217ee56aac8ca948fe6adeb783af0a"
+  },
+  "backup_count_diagnosis": {
+    "state": "diagnosed",
+    "expected_legacy_count": 3,
+    "actual_external_manifest_count": 26,
+    "physical_key_count": 61,
+    "families": {
+      "git-catalogs": 9,
+      "git-inputs": 12,
+      "git-packs": 3,
+      "lfs": 2
+    },
+    "inventory_sha256": "7a1feb76fc5896bd0443c447522a7f19bbc69bccb5123b31de686f19cebbc9df"
+  },
+  "backup_retention_probe": {
+    "state": "passed",
+    "started_utc": "2026-10-15T19:12:39.473607+00:00",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "script_sha256": {
+      "smoke_s3_backup.py": "ffb5a2ca1a7b5ab20bc735a980628f28c0217ee56aac8ca948fe6adeb783af0a",
+      "smoke_s3_retention.py": "551afec5c8e4cff728bbb48f0605967e838a28d67b3e45322be58ef7938558b1"
+    },
+    "backup": {
+      "saved": {
+        "pin": "4d4de244-3545-4f5e-91ee-ed1126244eb4",
+        "root": "qualification/backup-native-inventory/process-smoke/d3c8abc2-9d5b-4da6-8ef6-bc504cb508bc/backup-copy",
+        "cells": 2,
+        "external_objects": 26
+      },
+      "restored": {
+        "pin": "4d4de244-3545-4f5e-91ee-ed1126244eb4",
+        "root": "qualification/backup-native-inventory/process-smoke/d3c8abc2-9d5b-4da6-8ef6-bc504cb508bc/backup-restored",
+        "cells": 2,
+        "external_objects": 26
+      },
+      "external_manifest_count": 26,
+      "external_inventory_sha256": "73183146886bfb8c69fdde0b93e6a0abb0c170a402ed1407fe427ddf9ffe06fd",
+      "source_deleted": true,
+      "corrupt_copy_rejected": true,
+      "cold_clone_verified": true,
+      "issue_verified": true
+    },
+    "retention": {
+      "deleted_objects": 248,
+      "last_report": {
+        "listed_objects": 410,
+        "immutable_candidates": 299,
+        "reachable_objects": 52,
+        "retained_objects": 52,
+        "grace_objects": 0,
+        "eligible_objects": 247,
+        "deleted_objects": 247,
+        "current_controls": 2,
+        "retained_pins": 1,
+        "complete": true
+      },
+      "backup_verified": true,
+      "cold_clone_verified": true
+    },
+    "seconds": 120.83030666701961,
+    "finished_utc": "2026-10-15T19:14:40.315911+00:00"
+  },
+  "superseded_extended_process": {
+    "state": "failed",
+    "started_utc": "2026-10-15T19:03:33.782137+00:00",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "peer_script_sha256": "62566d1eb9bb7910053af81040e070b3d583e270869f0e4ed0473f2d26b62b77",
+    "source_commit": "1a0fc93d526d205979e03523435ba0c6a9a027c1",
+    "profile": [
+      "--large-clone",
+      "--many-objects",
+      "256",
+      "--structural-objects",
+      "--structural-object-bytes",
+      "68157440"
+    ],
+    "error": "",
+    "seconds": 416.4211825419916,
+    "finished_utc": "2026-10-15T19:10:30.257295+00:00"
+  },
+  "peer_harness_source_equivalence": {
+    "state": "passed",
+    "source_commit": "1a0fc93d526d205979e03523435ba0c6a9a027c1",
+    "previous_source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "changed_paths": [
+      "scripts/smoke_s3_peers.py"
+    ],
+    "rust_source_unchanged": true,
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "python_tests": 105,
+    "python_exit_code": 0,
+    "python_seconds": 47.655,
+    "python_log": "python-peer-harness.log",
+    "peer_script_sha256": "62566d1eb9bb7910053af81040e070b3d583e270869f0e4ed0473f2d26b62b77"
+  },
+  "peer_tls_probe": {
+    "state": "passed",
+    "started_utc": "2026-10-15T19:02:05.942183+00:00",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "peer_script_sha256": "62566d1eb9bb7910053af81040e070b3d583e270869f0e4ed0473f2d26b62b77",
+    "seconds": 157.06976595905144,
+    "finished_utc": "2026-10-15T19:04:43.108462+00:00"
+  },
+  "extended_process": {
+    "state": "passed",
+    "started_utc": "2026-10-15T19:13:22.285310+00:00",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "backup_script_sha256": "ffb5a2ca1a7b5ab20bc735a980628f28c0217ee56aac8ca948fe6adeb783af0a",
+    "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+    "profile": [
+      "--large-clone",
+      "--many-objects",
+      "256",
+      "--structural-objects",
+      "--structural-object-bytes",
+      "68157440"
+    ],
+    "seconds": 493.9588900420349,
+    "finished_utc": "2026-10-15T19:21:36.316138+00:00"
+  },
+  "process_harness_python": {
+    "state": "passed",
+    "source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "started_utc": "2026-10-15T17:44:11.910904+00:00",
+    "exit_code": 0,
+    "seconds": 42.9214055420598,
+    "finished_utc": "2026-10-15T17:44:54.832541+00:00"
+  },
+  "process_harness_activation": {
+    "state": "passed",
+    "started_utc": "2026-10-15T17:44:12.823561+00:00",
+    "source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "rust_qualified_source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "changed_files": [
+      "scripts/smoke_s3_process.py"
+    ],
+    "all_other_files_unchanged": true,
+    "binary_sha256": "0be8986fe9d9a9c12780dead22f9c8dc8c63a3adf88cdc7f682778e5bfc9f254",
+    "files_verified": 727,
+    "finished_utc": "2026-10-15T18:34:34.242039+00:00"
+  },
+  "process_cache_recovery_probe": {
+    "state": "passed",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "harness_sha256": "02a170d0925ae6f05e4c559001b7c4926331dfa83048587c45f061f9664f97ef",
+    "storage_url": "s3://canopy-benchmark/qualification/cache-hydration/cf6fead6-2877-4c18-8018-02ceaa875581",
+    "started_utc": "2026-10-15T17:40:35.009927+00:00",
+    "blob": "12735a460af03df3b27e7a8dd63e6e1d1c2188f4",
+    "stale_cache_count": 1,
+    "hydrated_cache_count": 1,
+    "stale_cache_reclaimed": true,
+    "corrupt_sqlite_discarded": true,
+    "acknowledged_git_and_head_restored": true,
+    "clean_shutdown": true,
+    "seconds": 35.77593683404848,
+    "finished_utc": "2026-10-15T17:41:10.786269+00:00"
+  },
+  "binary": {
+    "source_commit": "12dc9a19881ca4c87353a7643a374d20bc800d58",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "binary_bytes": 70621392,
+    "profile": "release",
+    "cellule": "0.2.0",
+    "schema": 4,
+    "storage_format": "canopy-pack-v2",
+    "qualification_status": "repository verification running; full workspace/provider/process gates pending",
+    "runtime_equivalent_source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "runtime_image_equivalence": "runtime-image-equivalence.json",
+    "immutable_qualified_artifact": true
+  },
+  "dependency_check": {
+    "captured_utc": "2026-10-15T05:35:35.029928+00:00",
+    "source": "Official crates.io API, live requests",
+    "releases": [
+      {
+        "name": "cellule-app",
+        "source": "https://crates.io/api/v1/crates/cellule-app",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:16:20.482357Z"
+      },
+      {
+        "name": "cellule-host",
+        "source": "https://crates.io/api/v1/crates/cellule-host",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:16:36.982608Z"
+      },
+      {
+        "name": "cellule-ltx",
+        "source": "https://crates.io/api/v1/crates/cellule-ltx",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:14:56.127567Z"
+      },
+      {
+        "name": "cellule-runtime",
+        "source": "https://crates.io/api/v1/crates/cellule-runtime",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:15:54.928938Z"
+      },
+      {
+        "name": "cellule-store",
+        "source": "https://crates.io/api/v1/crates/cellule-store",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:14:45.791071Z"
+      },
+      {
+        "name": "cellule-types",
+        "source": "https://crates.io/api/v1/crates/cellule-types",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_utc": "2026-10-13T01:12:54.510864Z"
+      }
+    ],
+    "aligned_with_compiled_release": true
+  },
+  "final_dependency_check": {
+    "checked_utc": "2026-10-15T07:08:45.122451+00:00",
+    "source": "Official crates.io API",
+    "crates": [
+      {
+        "crate": "cellule-app",
+        "url": "https://crates.io/api/v1/crates/cellule-app",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:16:20.482357Z"
+      },
+      {
+        "crate": "cellule-host",
+        "url": "https://crates.io/api/v1/crates/cellule-host",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:16:36.982608Z"
+      },
+      {
+        "crate": "cellule-ltx",
+        "url": "https://crates.io/api/v1/crates/cellule-ltx",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:14:56.127567Z"
+      },
+      {
+        "crate": "cellule-runtime",
+        "url": "https://crates.io/api/v1/crates/cellule-runtime",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:15:54.928938Z"
+      },
+      {
+        "crate": "cellule-store",
+        "url": "https://crates.io/api/v1/crates/cellule-store",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:14:45.791071Z"
+      },
+      {
+        "crate": "cellule-types",
+        "url": "https://crates.io/api/v1/crates/cellule-types",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0",
+        "published_at": "2026-10-13T01:12:54.510864Z"
+      }
+    ]
+  },
+  "evening_dependency_check": {
+    "checked_utc": "2026-10-15T18:41:35.144852+00:00",
+    "source": "Official crates.io API",
+    "crates": [
+      {
+        "crate": "cellule-app",
+        "url": "https://crates.io/api/v1/crates/cellule-app",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      },
+      {
+        "crate": "cellule-host",
+        "url": "https://crates.io/api/v1/crates/cellule-host",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      },
+      {
+        "crate": "cellule-ltx",
+        "url": "https://crates.io/api/v1/crates/cellule-ltx",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      },
+      {
+        "crate": "cellule-runtime",
+        "url": "https://crates.io/api/v1/crates/cellule-runtime",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      },
+      {
+        "crate": "cellule-store",
+        "url": "https://crates.io/api/v1/crates/cellule-store",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      },
+      {
+        "crate": "cellule-types",
+        "url": "https://crates.io/api/v1/crates/cellule-types",
+        "max_stable_version": "0.2.0",
+        "newest_version": "0.2.0"
+      }
+    ]
+  },
+  "runtime_image_equivalence": {
+    "state": "passed",
+    "source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "measured_runtime_source_commit": "12dc9a19881ca4c87353a7643a374d20bc800d58",
+    "measured_binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "current_build_binary_sha256": "cc08a2361f792147047b7c1ff1ca30ef2ca6ab0a4445db93adfda45510634190",
+    "binary_bytes": 70621392,
+    "differing_bytes": 47,
+    "excluded_metadata_ranges": [
+      {
+        "kind": "Mach-O LC_UUID",
+        "start": 2024,
+        "end": 2040
+      },
+      {
+        "kind": "derived SHA-256 code-sign first-page hash",
+        "start": 70073936,
+        "end": 70073968
+      }
+    ],
+    "all_other_file_bytes_equal": true,
+    "first_signature_page_hashes_verified": true,
+    "normalized_file_sha256": "7f3703573f7c4ff20ca1d302011d3462df08c4c7d4e47dd0b48651225b831956",
+    "method": "Compare every byte; only the explicit linker UUID and its verified derived ad-hoc signature page hash differ. Neither executable is modified.",
+    "captured_utc": "2026-10-15T18:47:57.518869+00:00"
+  },
+  "corpus": {
+    "state": "passed",
+    "captured_utc": "2026-10-15T05:49:21.123694+00:00",
+    "source_commit": "58b4b52a783a08c7d28f6a320f1e689ad5a87492+working-91f9507aafeec4ba",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "cellule": "0.2.0",
+    "repository_schema": 4,
+    "storage_format": "canopy-pack-v2",
+    "repositories": [
+      {
+        "repository": "bat",
+        "objects": 20952,
+        "refs": 66,
+        "all_object_bytes_equal": true,
+        "clone_fsck_passed": true,
+        "import_seconds": 21.917903000023216,
+        "clone_seconds": 30.795469499891624,
+        "api_blob_samples": 3,
+        "api_commit_records_checked": 128,
+        "head_reference": "refs/heads/master",
+        "head_oid": "d9559c69f541873f8c47ac8ad81d985f4441edf6",
+        "all_object_bytes_sha256": "ef957f77437a906af80f6381aaa0a78998ea8ce7f700876427f0624cb0c87100"
+      },
+      {
+        "repository": "starship",
+        "objects": 38333,
+        "refs": 164,
+        "all_object_bytes_equal": true,
+        "clone_fsck_passed": true,
+        "import_seconds": 38.66624029201921,
+        "clone_seconds": 47.59193941601552,
+        "api_blob_samples": 3,
+        "api_commit_records_checked": 128,
+        "head_reference": "refs/heads/main",
+        "head_oid": "df688000684138943610bbaa2a6c454db6987d48",
+        "all_object_bytes_sha256": "b4a625af0cc416e04af88e614d0dcd2f8a2f4b4d82bb41805b980c90b7304b88"
+      },
+      {
+        "repository": "libgit2",
+        "objects": 134967,
+        "refs": 271,
+        "all_object_bytes_equal": true,
+        "clone_fsck_passed": true,
+        "import_seconds": 363.5411464580102,
+        "clone_seconds": 240.1334371669218,
+        "api_blob_samples": 3,
+        "api_commit_records_checked": 128,
+        "head_reference": "refs/heads/main",
+        "head_oid": "4af47f040cb4d80c75f37f626f511843e0dd8d44",
+        "all_object_bytes_sha256": "9a2d91500b281267cf1e5f92493a8b76a3a5a3c626a7f9b3f6f7e770714a6821"
+      }
+    ],
+    "tree_pagination_paths": [
+      {
+        "repository": "bat",
+        "path_base64": "",
+        "pages": 1,
+        "entries": 24,
+        "all_equal": true
+      },
+      {
+        "repository": "bat",
+        "path_base64": "dGVzdHM",
+        "pages": 1,
+        "entries": 16,
+        "all_equal": true
+      },
+      {
+        "repository": "bat",
+        "path_base64": "dGVzdHMvZXhhbXBsZXM",
+        "pages": 2,
+        "entries": 39,
+        "all_equal": true
+      },
+      {
+        "repository": "bat",
+        "path_base64": "dGVzdHMvc25hcHNob3RzL291dHB1dA",
+        "pages": 2,
+        "entries": 33,
+        "all_equal": true
+      },
+      {
+        "repository": "starship",
+        "path_base64": "",
+        "pages": 1,
+        "entries": 26,
+        "all_equal": true
+      },
+      {
+        "repository": "starship",
+        "path_base64": "LmdpdGh1Yi93b3JrZmxvd3M",
+        "pages": 1,
+        "entries": 8,
+        "all_equal": true
+      },
+      {
+        "repository": "starship",
+        "path_base64": "aW5zdGFsbC9tYWNvc19wYWNrYWdlcy9wa2dfcmVzb3VyY2VzL0VuZ2xpc2gubHByb2o",
+        "pages": 1,
+        "entries": 3,
+        "all_equal": true
+      },
+      {
+        "repository": "starship",
+        "path_base64": "bWVkaWE",
+        "pages": 1,
+        "entries": 20,
+        "all_equal": true
+      },
+      {
+        "repository": "libgit2",
+        "path_base64": "",
+        "pages": 1,
+        "entries": 29,
+        "all_equal": true
+      },
+      {
+        "repository": "libgit2",
+        "path_base64": "ZGVwcy9wY3JlMg",
+        "pages": 2,
+        "entries": 42,
+        "all_equal": true
+      },
+      {
+        "repository": "libgit2",
+        "path_base64": "dGVzdHMvbGliZ2l0Mi9vYmplY3QvcmF3",
+        "pages": 1,
+        "entries": 10,
+        "all_equal": true
+      },
+      {
+        "repository": "libgit2",
+        "path_base64": "dGVzdHMvcmVzb3VyY2Vz",
+        "pages": 3,
+        "entries": 89,
+        "all_equal": true
+      }
+    ],
+    "api_scope": "Every ref; complete pages for selected tree paths; three exact blob previews and four history pages (128 commit records) per repository. Every stored Git object body compared separately through stock Git.",
+    "dedicated_attribution_endpoint": "not implemented (422), outside the four requested API kinds",
+    "wider_workspace_provider_process_qualification": "tracked separately in build root",
+    "equivalent_commit": "12dc9a19881ca4c87353a7643a374d20bc800d58",
+    "source_equivalence": "All 727 tracked files match the committed source; original build snapshot identity is retained.",
+    "post_gc_verification": {
+      "state": "passed",
+      "captured_utc": "2026-10-15T05:59:50.756120+00:00",
+      "objects": 194252,
+      "refs": 501,
+      "all_object_bytes_heads_fsck_and_apis_equal": true,
+      "full_selected_tree_pages": true,
+      "fresh_local_workspace": true,
+      "deleted_cellule_objects": 1664,
+      "proof_directory": "after-gc-verification"
+    },
+    "fresh_workspace_api_reads": {
+      "state": "passed",
+      "verified": 12,
+      "evidence": "results/cold-reads.json"
+    }
+  },
+  "before_gc": {
+    "captured_utc": "2026-10-15T05:49:28.440391+00:00",
+    "storage_url": "s3://canopy-benchmark/qualification/native-main/88272c1d-7d05-41a4-a287-e31c17cf50f9",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "physical_method": "Apparent bytes of every regular backing file under the exact RustFS fixture prefix. Longest listed-key prefix maps files to S3 objects; unmatched files are counted separately. Includes provider framing and metadata; excludes filesystem allocation overhead.",
+    "physical": {
+      "directory": {
+        "bytes": 7834274,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      },
+      "input_body": {
+        "bytes": 160676473,
+        "files": 177,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 94093,
+        "files": 189,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 167004,
+        "files": 171,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33846366,
+        "files": 13,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5445596,
+        "files": 9,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230728186,
+        "files": 107,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160389768,
+        "files": 45,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 436977,
+        "files": 591,
+        "object_keys": 591,
+        "artifacts": 591
+      },
+      "provider_unlisted": {
+        "bytes": 92898,
+        "files": 8,
+        "object_keys": 0,
+        "artifacts": 0
+      },
+      "root": {
+        "bytes": 4233657,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      },
+      "cellule_pack": {
+        "bytes": 7908265,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      }
+    },
+    "physical_bytes": 611853557,
+    "logical": {
+      "directory": {
+        "bytes": 7540960,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      },
+      "input_body": {
+        "bytes": 160614876,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 30859,
+        "files": 126,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 109777,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33841360,
+        "files": 8,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5442416,
+        "files": 6,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230688432,
+        "files": 66,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160373199,
+        "files": 24,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 136256,
+        "files": 591,
+        "object_keys": 591,
+        "artifacts": 591
+      },
+      "root": {
+        "bytes": 3939195,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      },
+      "cellule_pack": {
+        "bytes": 7613803,
+        "files": 574,
+        "object_keys": 574,
+        "artifacts": 574
+      }
+    },
+    "logical_bytes": 610331133,
+    "logical_object_keys": 2771,
+    "unlisted_physical_files": [
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/root-lineage/v1/e982bc491da741cda687cb9bbd3a2698/21d07a037cad956e727ffefbf523a5f8e7cca33beab11a9f13420533c948a093.bin/xl.meta",
+        "bytes": 727
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/root-lineage/v1/e982bc491da741cda687cb9bbd3a2698/2e0cfced117cd2f51fecc967dfc7a46dfc5da73b7c8762cded14c2eadfc94ad1.bin/xl.meta",
+        "bytes": 727
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/079ee476323918658a7c32475cb9226f1cedec4d09c90f29c37f2f01c424b121.pack/xl.meta",
+        "bytes": 13516
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/2e0cfced117cd2f51fecc967dfc7a46dfc5da73b7c8762cded14c2eadfc94ad1.root/xl.meta",
+        "bytes": 11838
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/c94376062284b1605fb4152f080c568493654da5479bd63ce48bc8a1df4bdbf1.dir/xl.meta",
+        "bytes": 18583
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/de780288e09ee843e9119ffcbb06c956a0d56c34dda7f0960d52c0c06aea0b39.pack/xl.meta",
+        "bytes": 17758
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/21d07a037cad956e727ffefbf523a5f8e7cca33beab11a9f13420533c948a093.root/xl.meta",
+        "bytes": 11342
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/56b34a68a53d518d4221f7c896b4e6f2f4a3348d77859057d899688fe6cdcab2.dir/xl.meta",
+        "bytes": 18407
+      }
+    ],
+    "classification_correction": {
+      "source": "storage-before-gc.json",
+      "reason": "Every extension-only captures entry is a cells/v1/.../objects/*.pack Cellule packed data object. Corrected family name only; original reports, exact keys, counts and byte totals preserved.",
+      "verified_logical_keys": 574
+    }
+  },
+  "after_gc": {
+    "captured_utc": "2026-10-15T05:49:45.322035+00:00",
+    "storage_url": "s3://canopy-benchmark/qualification/native-main/88272c1d-7d05-41a4-a287-e31c17cf50f9",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "physical_method": "Apparent bytes of every regular backing file under the exact RustFS fixture prefix. Longest listed-key prefix maps files to S3 objects; unmatched files are counted separately. Includes provider framing and metadata; excludes filesystem allocation overhead.",
+    "physical": {
+      "directory": {
+        "bytes": 64051,
+        "files": 5,
+        "object_keys": 5,
+        "artifacts": 5
+      },
+      "input_body": {
+        "bytes": 160676473,
+        "files": 177,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 94093,
+        "files": 189,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 167004,
+        "files": 171,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33846366,
+        "files": 13,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5445596,
+        "files": 9,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230728186,
+        "files": 107,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160389768,
+        "files": 45,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 452348,
+        "files": 611,
+        "object_keys": 611,
+        "artifacts": 611
+      },
+      "root": {
+        "bytes": 42293,
+        "files": 5,
+        "object_keys": 5,
+        "artifacts": 5
+      },
+      "cellule_pack": {
+        "bytes": 2118052,
+        "files": 75,
+        "object_keys": 75,
+        "artifacts": 75
+      }
+    },
+    "physical_bytes": 594024230,
+    "logical": {
+      "directory": {
+        "bytes": 61496,
+        "files": 5,
+        "object_keys": 5,
+        "artifacts": 5
+      },
+      "input_body": {
+        "bytes": 160614876,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 30859,
+        "files": 126,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 109777,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33841360,
+        "files": 8,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5442416,
+        "files": 6,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230688432,
+        "files": 66,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160373199,
+        "files": 24,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 141649,
+        "files": 611,
+        "object_keys": 611,
+        "artifacts": 611
+      },
+      "root": {
+        "bytes": 39728,
+        "files": 5,
+        "object_keys": 5,
+        "artifacts": 5
+      },
+      "cellule_pack": {
+        "bytes": 2079577,
+        "files": 75,
+        "object_keys": 75,
+        "artifacts": 75
+      }
+    },
+    "logical_bytes": 593423369,
+    "logical_object_keys": 1154,
+    "unlisted_physical_files": [],
+    "classification_correction": {
+      "source": "storage-after-gc.json",
+      "reason": "Every extension-only captures entry is a cells/v1/.../objects/*.pack Cellule packed data object. Corrected family name only; original reports, exact keys, counts and byte totals preserved.",
+      "verified_logical_keys": 75
+    }
+  },
+  "post_browse": {
+    "captured_utc": "2026-10-15T06:23:52.158347+00:00",
+    "storage_url": "s3://canopy-benchmark/qualification/native-main/88272c1d-7d05-41a4-a287-e31c17cf50f9",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "physical_method": "Apparent bytes of every regular backing file under the exact RustFS fixture prefix. Longest listed-key prefix maps files to S3 objects; unmatched files are counted separately. Includes provider framing and metadata; excludes filesystem allocation overhead.",
+    "physical": {
+      "directory": {
+        "bytes": 17264316,
+        "files": 1535,
+        "object_keys": 1535,
+        "artifacts": 1535
+      },
+      "input_body": {
+        "bytes": 160676473,
+        "files": 177,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 94093,
+        "files": 189,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 167004,
+        "files": 171,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33846366,
+        "files": 13,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5445596,
+        "files": 9,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230728186,
+        "files": 107,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160389768,
+        "files": 45,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 1036636,
+        "files": 1365,
+        "object_keys": 1365,
+        "artifacts": 1365
+      },
+      "provider_unlisted": {
+        "bytes": 247164,
+        "files": 22,
+        "object_keys": 0,
+        "artifacts": 0
+      },
+      "root": {
+        "bytes": 6417438,
+        "files": 690,
+        "object_keys": 690,
+        "artifacts": 690
+      },
+      "cellule_pack": {
+        "bytes": 15350335,
+        "files": 770,
+        "object_keys": 767,
+        "artifacts": 767
+      }
+    },
+    "physical_bytes": 631663375,
+    "logical": {
+      "directory": {
+        "bytes": 16481696,
+        "files": 1535,
+        "object_keys": 1535,
+        "artifacts": 1535
+      },
+      "input_body": {
+        "bytes": 160614876,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 48
+      },
+      "input_root": {
+        "bytes": 30859,
+        "files": 126,
+        "object_keys": 126,
+        "artifacts": 63
+      },
+      "native_catalog_node": {
+        "bytes": 109777,
+        "files": 114,
+        "object_keys": 114,
+        "artifacts": 57
+      },
+      "native_directory": {
+        "bytes": 33841360,
+        "files": 8,
+        "object_keys": 8,
+        "artifacts": 3
+      },
+      "native_index": {
+        "bytes": 5442416,
+        "files": 6,
+        "object_keys": 6,
+        "artifacts": 3
+      },
+      "native_metadata": {
+        "bytes": 230688432,
+        "files": 66,
+        "object_keys": 66,
+        "artifacts": 25
+      },
+      "native_pack": {
+        "bytes": 160373199,
+        "files": 24,
+        "object_keys": 24,
+        "artifacts": 3
+      },
+      "other": {
+        "bytes": 342223,
+        "files": 1365,
+        "object_keys": 1365,
+        "artifacts": 1365
+      },
+      "root": {
+        "bytes": 6063468,
+        "files": 690,
+        "object_keys": 690,
+        "artifacts": 690
+      },
+      "cellule_pack": {
+        "bytes": 14957033,
+        "files": 767,
+        "object_keys": 767,
+        "artifacts": 767
+      }
+    },
+    "logical_bytes": 628945339,
+    "logical_object_keys": 4815,
+    "unlisted_physical_files": [
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/root-lineage/v1/256aaa7da0ca448db66d775282cc434a/4833f053d41d17f1c5a14ecffef451dfc8f1e30a1e0ef69dda6ac0960b984171.bin/xl.meta",
+        "bytes": 727
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/root-lineage/v1/256aaa7da0ca448db66d775282cc434a/6aa76b970848254ef30a6b15dcd548c094edc24b38bee64c4b2481b56ba20a4f.bin/xl.meta",
+        "bytes": 727
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/fe3caf82c835e7844a053aa2c929f0c203259073c3ccaa5e3da15f87dbfddff0.dir/xl.meta",
+        "bytes": 8463
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/7bc461f204d00f376cd0bb8fb08d8931dd0b3cf0d266497ca3dcda11e0282e55.dir/xl.meta",
+        "bytes": 651
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/acc7bd0e463400ac8addd34c941f1d8fe1b660349aa9e078e6c3e740bdeea2d3.pack/xl.meta",
+        "bytes": 16511
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/6aa76b970848254ef30a6b15dcd548c094edc24b38bee64c4b2481b56ba20a4f.root/xl.meta",
+        "bytes": 13348
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/5963374840b39631342788675bd3d59c9792042ef472226a17cf734dff89e9b8.dir/xl.meta",
+        "bytes": 23071
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/c16091c1c1cb9807f789dbcc042c91effd9282f8f52b40e7c978b9eecd1e8311.dir/xl.meta",
+        "bytes": 8551
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/36992fcc90fe62f7e35fcbdb573c25a019b6bb3c5f8c4e196a06eb4e8713fe6c.dir/xl.meta",
+        "bytes": 23071
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/a07dcd20e6e2684282c51e9acfd6ddbb76274ad258f93b10f20a85db484c49e1.dir/xl.meta",
+        "bytes": 651
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/b4d48365fc62b95cd04c6d09492b6d548efee80f5b7dde8c8af89292756d5add.pack/xl.meta",
+        "bytes": 17488
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/20c93a9d1441f5b0ead0e241db02196726a612072363e50bb9d4916952c55878/inc/256aaa7da0ca448db66d775282cc434a/objects/4833f053d41d17f1c5a14ecffef451dfc8f1e30a1e0ef69dda6ac0960b984171.root/xl.meta",
+        "bytes": 12852
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/68b8a5074e4e282249b967b72692f0505b6d6a7863cbe3e3a346df04ffb16f03.dir/xl.meta",
+        "bytes": 651
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/2814d8e2a8a860c8fe62e4264ba2c1e9b334280c634eaa6d07eb4b5e85288019.dir/xl.meta",
+        "bytes": 23071
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/f00ac31b926bf87b201998e0db07233837467434524c94d1cd6dd402045fba01.root/xl.meta",
+        "bytes": 12356
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/79ad7899319af1b309a8b1faf507bafc6d5141f5baf714a64bc8f4fd8ba100dc.dir/xl.meta",
+        "bytes": 7847
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/585cca6e199e6c5dfe2f148495afbea8499140303e500a8d43c82abeb7a6b5a2.dir/xl.meta",
+        "bytes": 651
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/792a52fa8873e3896d21881e983e9720b6ac4c6e270944d2fca4ca4c25c918d7.pack/xl.meta",
+        "bytes": 16595
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/5273a9d9f28483a3af93ded3b823c1a77267ffe6c08fadafe1350d9d7833c574.dir/xl.meta",
+        "bytes": 7759
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/03a662847b49221ae89494148eccce6f3b7b109262541a0772739f2feecd59bf.dir/xl.meta",
+        "bytes": 23071
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/0284cf37e7ea55e6d6ad7c76cf236c33262dd9100bd308b0a402116ce434e556.root/xl.meta",
+        "bytes": 11860
+      },
+      {
+        "path": "cells/v1/apps/f2e9c34612d241ebbce3311c08eb4a62/cells/5671374e58805959a7262e6bb640494779201554fcf3bc70190b83f806b05ec7/inc/e982bc491da741cda687cb9bbd3a2698/objects/d2cc64649b97603cd605d9a836a2a2a3541822aee60b769ce2dc1a3d4660287d.pack/xl.meta",
+        "bytes": 17192
+      }
+    ],
+    "classification_correction": {
+      "source": "storage-post-browse.json",
+      "reason": "All extension-only captures entries are Cellule objects/*.pack keys. Renamed category without changing totals.",
+      "verified_logical_keys": 767
+    },
+    "scope_note": "Online observation after full post-GC verification, 12 cold-workspace reads and 11,474 warm benchmark requests; serving heartbeat/publication may continue during this non-atomic inventory. Includes unlisted backing files. No second GC performed."
+  },
+  "baseline": {
+    "captured_utc": "2026-10-15T01:55:50.286170+00:00",
+    "baseline_cellule": "0.2.0",
+    "reported_rustfs_data_tree_apparent_bytes": 22525385112,
+    "bucket_regular_file_bytes": 22525370449,
+    "outside_bucket_difference_bytes": 14663,
+    "directory_regular_file_bytes": 7899358413,
+    "directory_immutable_keys": 351653,
+    "method": "Read-only scan of regular files under the RustFS bucket directory; apparent bytes include provider metadata and data-part framing. Object counts deduplicate backing files by immutable key. No deletion or reachability claim.",
+    "baseline_json_sha256": "57b401005da4eb5682e2c290d1b044aa41ff798e7d39d561b85267055b39032b",
+    "bucket_breakdown_sha256": "0eed4d56a8f79d580e3653f40b5e594cab1bea9984aaf4550c4d1780c87dc03f",
+    "scope_note": "Original report counts the whole RustFS data tree; dedicated corpus bucket inventory differs by 14663 bytes. Fresh native measurements scan the exact deployment prefix and report unlisted provider files separately. Compare apparent regular-file bytes, not allocated VM filesystem usage."
+  },
+  "garbage_collection": {
+    "operation": "99b49e85-976e-4406-9930-de70098ad3a7",
+    "passes": [
+      {
+        "seconds": 9.297116999980062,
+        "report": {
+          "listed_objects": 2350,
+          "immutable_candidates": 1751,
+          "reachable_objects": 87,
+          "retained_objects": 87,
+          "grace_objects": 0,
+          "eligible_objects": 1664,
+          "deleted_objects": 1664,
+          "current_controls": 4,
+          "retained_pins": 0,
+          "complete": true
+        }
+      }
+    ],
+    "state": "complete"
+  },
+  "cold_reads": {
+    "method": "One first full authenticated HTTP read after graceful shutdown and fresh local workspace per repository/API. Excludes healthz startup; RustFS and host filesystem caches may be warm. Not a percentile or fully cold provider benchmark.",
+    "results": [
+      {
+        "repository": "bat",
+        "operation": "blob",
+        "latency_ms": 1717.557291034609,
+        "response_bytes": 22279,
+        "startup_seconds": 1.0512839580187574,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "bat",
+        "operation": "commits",
+        "latency_ms": 3115.7047499436885,
+        "response_bytes": 20535,
+        "startup_seconds": 0.5792585840681568,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "bat",
+        "operation": "refs",
+        "latency_ms": 297.9790000244975,
+        "response_bytes": 6832,
+        "startup_seconds": 0.5556554580107331,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "bat",
+        "operation": "tree",
+        "latency_ms": 2241.450082976371,
+        "response_bytes": 4541,
+        "startup_seconds": 1.0334134169388562,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "libgit2",
+        "operation": "blob",
+        "latency_ms": 3872.913834056817,
+        "response_bytes": 22154,
+        "startup_seconds": 1.0310157909989357,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "libgit2",
+        "operation": "commits",
+        "latency_ms": 5007.826166925952,
+        "response_bytes": 18498,
+        "startup_seconds": 0.6664082080824301,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "libgit2",
+        "operation": "refs",
+        "latency_ms": 208.63866701256484,
+        "response_bytes": 25061,
+        "startup_seconds": 0.6468817499699071,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "libgit2",
+        "operation": "tree",
+        "latency_ms": 2760.773833026178,
+        "response_bytes": 5398,
+        "startup_seconds": 1.0328317920211703,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "starship",
+        "operation": "blob",
+        "latency_ms": 1210.0983749842271,
+        "response_bytes": 22185,
+        "startup_seconds": 1.049035458941944,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "starship",
+        "operation": "commits",
+        "latency_ms": 2843.330917065032,
+        "response_bytes": 19598,
+        "startup_seconds": 1.0459265420213342,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "starship",
+        "operation": "refs",
+        "latency_ms": 490.4339590575546,
+        "response_bytes": 15078,
+        "startup_seconds": 1.0539884169120342,
+        "status": 200,
+        "response_verified": true
+      },
+      {
+        "repository": "starship",
+        "operation": "tree",
+        "latency_ms": 1907.0911249145865,
+        "response_bytes": 5088,
+        "startup_seconds": 1.0474654169520363,
+        "status": 200,
+        "response_verified": true
+      }
+    ]
+  },
+  "warm_measurement_method": {
+    "method": "closed-loop, persistent HTTP/1.1 connections, full response read, no retries",
+    "mixed_workload": "equal rotation over one query for each repository/API pair; medium sampled blob",
+    "duration_per_group_seconds": 8.0,
+    "concurrency": [
+      1,
+      4
+    ],
+    "repeats": 2
+  },
+  "warm_aggregation": "Pool raw latency samples across both trials; nearest-rank percentiles. Successful requests and response bytes divided by the sum of actual trial durations; no summed rates or averaged percentiles.",
+  "warm_results": [
+    {
+      "repository": "all",
+      "operation": "mixed",
+      "concurrency": 1,
+      "attempts": 32,
+      "successes": 32,
+      "errors": 0,
+      "elapsed_seconds": 19.138353791902773,
+      "requests_per_second": 1.6720351367701671,
+      "response_mib_per_second": 0.02444835302691302,
+      "latency_ms": {
+        "p50": 150.08925006259233,
+        "p95": 2850.6643750006333,
+        "p99": 2937.793624936603
+      }
+    },
+    {
+      "repository": "all",
+      "operation": "mixed",
+      "concurrency": 4,
+      "attempts": 97,
+      "successes": 97,
+      "errors": 0,
+      "elapsed_seconds": 21.218805790995248,
+      "requests_per_second": 4.571416551687583,
+      "response_mib_per_second": 0.06963764920448519,
+      "latency_ms": {
+        "p50": 208.67841690778732,
+        "p95": 3701.124874991365,
+        "p99": 4382.5643750606105
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "blob",
+      "concurrency": 1,
+      "attempts": 51,
+      "successes": 51,
+      "errors": 0,
+      "elapsed_seconds": 16.540011209086515,
+      "requests_per_second": 3.0834320095250205,
+      "response_mib_per_second": 0.21264022614481842,
+      "latency_ms": {
+        "p50": 292.68170800060034,
+        "p95": 647.6248749531806,
+        "p99": 1145.3940420178697
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "blob",
+      "concurrency": 4,
+      "attempts": 148,
+      "successes": 148,
+      "errors": 0,
+      "elapsed_seconds": 16.584007749101147,
+      "requests_per_second": 8.92426018119906,
+      "response_mib_per_second": 0.6450469724266509,
+      "latency_ms": {
+        "p50": 443.28795897308737,
+        "p95": 834.6678329398856,
+        "p99": 1487.2602919349447
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "commits",
+      "concurrency": 1,
+      "attempts": 6,
+      "successes": 6,
+      "errors": 0,
+      "elapsed_seconds": 19.923467208980583,
+      "requests_per_second": 0.30115240169118135,
+      "response_mib_per_second": 0.005701520422337849,
+      "latency_ms": {
+        "p50": 3142.1082080341876,
+        "p95": 4125.456375069916,
+        "p99": 4125.456375069916
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "commits",
+      "concurrency": 4,
+      "attempts": 28,
+      "successes": 28,
+      "errors": 0,
+      "elapsed_seconds": 18.9588872079039,
+      "requests_per_second": 1.476879929341364,
+      "response_mib_per_second": 0.02953123233652151,
+      "latency_ms": {
+        "p50": 3110.6809999328107,
+        "p95": 4257.9138750443235,
+        "p99": 4293.876167037524
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "refs",
+      "concurrency": 1,
+      "attempts": 713,
+      "successes": 713,
+      "errors": 0,
+      "elapsed_seconds": 16.042291291989386,
+      "requests_per_second": 44.445022660574175,
+      "response_mib_per_second": 0.28958167535499835,
+      "latency_ms": {
+        "p50": 24.8757500667125,
+        "p95": 44.15645799599588,
+        "p99": 57.99899995326996
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "refs",
+      "concurrency": 4,
+      "attempts": 2400,
+      "successes": 2400,
+      "errors": 0,
+      "elapsed_seconds": 16.042705750092864,
+      "requests_per_second": 149.60069936993688,
+      "response_mib_per_second": 0.9747237950281226,
+      "latency_ms": {
+        "p50": 16.39533299021423,
+        "p95": 61.51379202492535,
+        "p99": 78.73658300377429
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "tree",
+      "concurrency": 1,
+      "attempts": 72,
+      "successes": 72,
+      "errors": 0,
+      "elapsed_seconds": 16.54015316697769,
+      "requests_per_second": 4.353043123188699,
+      "response_mib_per_second": 0.025355624328285,
+      "latency_ms": {
+        "p50": 158.60500000417233,
+        "p95": 610.6297079240903,
+        "p99": 784.1266669565812
+      }
+    },
+    {
+      "repository": "bat",
+      "operation": "tree",
+      "concurrency": 4,
+      "attempts": 250,
+      "successes": 250,
+      "errors": 0,
+      "elapsed_seconds": 16.611242791172117,
+      "requests_per_second": 15.050047918922722,
+      "response_mib_per_second": 0.08757715109656573,
+      "latency_ms": {
+        "p50": 183.34029102697968,
+        "p95": 649.8822499997914,
+        "p99": 1036.7236660094932
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "blob",
+      "concurrency": 1,
+      "attempts": 41,
+      "successes": 41,
+      "errors": 0,
+      "elapsed_seconds": 16.558681790949777,
+      "requests_per_second": 2.4760425085533524,
+      "response_mib_per_second": 0.152900446179729,
+      "latency_ms": {
+        "p50": 359.654291998595,
+        "p95": 785.2027079788968,
+        "p99": 1080.859125009738
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "blob",
+      "concurrency": 4,
+      "attempts": 146,
+      "successes": 146,
+      "errors": 0,
+      "elapsed_seconds": 16.568943708087318,
+      "requests_per_second": 8.811666125025052,
+      "response_mib_per_second": 0.5636727630207855,
+      "latency_ms": {
+        "p50": 504.0497080190107,
+        "p95": 792.1191659988835,
+        "p99": 885.5659590335563
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "commits",
+      "concurrency": 1,
+      "attempts": 7,
+      "successes": 7,
+      "errors": 0,
+      "elapsed_seconds": 18.889531416003592,
+      "requests_per_second": 0.37057562974110936,
+      "response_mib_per_second": 0.006530836886871976,
+      "latency_ms": {
+        "p50": 2596.7865829588845,
+        "p95": 4647.928624995984,
+        "p99": 4647.928624995984
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "commits",
+      "concurrency": 4,
+      "attempts": 28,
+      "successes": 28,
+      "errors": 0,
+      "elapsed_seconds": 16.994784374022856,
+      "requests_per_second": 1.6475642987738646,
+      "response_mib_per_second": 0.028967376148409815,
+      "latency_ms": {
+        "p50": 2054.943374940194,
+        "p95": 3526.8444169778377,
+        "p99": 3527.486833045259
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "refs",
+      "concurrency": 1,
+      "attempts": 1039,
+      "successes": 1039,
+      "errors": 0,
+      "elapsed_seconds": 16.035073166014627,
+      "requests_per_second": 64.79546362171256,
+      "response_mib_per_second": 1.5486136568295845,
+      "latency_ms": {
+        "p50": 10.329957935027778,
+        "p95": 35.10695800650865,
+        "p99": 56.80791602935642
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "refs",
+      "concurrency": 4,
+      "attempts": 1904,
+      "successes": 1904,
+      "errors": 0,
+      "elapsed_seconds": 16.02469187497627,
+      "requests_per_second": 118.81663715314461,
+      "response_mib_per_second": 2.839721435255963,
+      "latency_ms": {
+        "p50": 18.749042064882815,
+        "p95": 89.0887079294771,
+        "p99": 129.4307919451967
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "tree",
+      "concurrency": 1,
+      "attempts": 59,
+      "successes": 59,
+      "errors": 0,
+      "elapsed_seconds": 16.37868070800323,
+      "requests_per_second": 3.602243736955591,
+      "response_mib_per_second": 0.018992690322077416,
+      "latency_ms": {
+        "p50": 203.3157499972731,
+        "p95": 666.7511670384556,
+        "p99": 841.6428329655901
+      }
+    },
+    {
+      "repository": "libgit2",
+      "operation": "tree",
+      "concurrency": 4,
+      "attempts": 222,
+      "successes": 222,
+      "errors": 0,
+      "elapsed_seconds": 16.703519250033423,
+      "requests_per_second": 13.290612395921045,
+      "response_mib_per_second": 0.0702799524570234,
+      "latency_ms": {
+        "p50": 208.73466599732637,
+        "p95": 688.8832499971613,
+        "p99": 874.1668340517208
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "blob",
+      "concurrency": 1,
+      "attempts": 61,
+      "successes": 61,
+      "errors": 0,
+      "elapsed_seconds": 16.687753124977462,
+      "requests_per_second": 3.6553752649119673,
+      "response_mib_per_second": 0.22452658926736563,
+      "latency_ms": {
+        "p50": 207.47679204214364,
+        "p95": 564.7345830220729,
+        "p99": 667.3221660312265
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "blob",
+      "concurrency": 4,
+      "attempts": 141,
+      "successes": 141,
+      "errors": 0,
+      "elapsed_seconds": 16.785071666003205,
+      "requests_per_second": 8.400321595622616,
+      "response_mib_per_second": 0.5134882748119307,
+      "latency_ms": {
+        "p50": 434.05975005589426,
+        "p95": 885.4027499910444,
+        "p99": 1100.3043330274522
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "commits",
+      "concurrency": 1,
+      "attempts": 9,
+      "successes": 9,
+      "errors": 0,
+      "elapsed_seconds": 18.718768041115254,
+      "requests_per_second": 0.4808008721637957,
+      "response_mib_per_second": 0.008545219324381596,
+      "latency_ms": {
+        "p50": 2330.3796669933945,
+        "p95": 3049.1317079868168,
+        "p99": 3049.1317079868168
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "commits",
+      "concurrency": 4,
+      "attempts": 32,
+      "successes": 32,
+      "errors": 0,
+      "elapsed_seconds": 18.660066998912953,
+      "requests_per_second": 1.7148920205840723,
+      "response_mib_per_second": 0.030281963971266444,
+      "latency_ms": {
+        "p50": 2094.548290944658,
+        "p95": 3081.987417070195,
+        "p99": 3101.8335840199143
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "refs",
+      "concurrency": 1,
+      "attempts": 834,
+      "successes": 834,
+      "errors": 0,
+      "elapsed_seconds": 16.03657645895146,
+      "requests_per_second": 52.00611253497747,
+      "response_mib_per_second": 0.747821965029135,
+      "latency_ms": {
+        "p50": 11.184707982465625,
+        "p95": 40.05862504709512,
+        "p99": 53.62862499896437
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "refs",
+      "concurrency": 4,
+      "attempts": 2812,
+      "successes": 2812,
+      "errors": 0,
+      "elapsed_seconds": 16.121262750122696,
+      "requests_per_second": 174.42802363472416,
+      "response_mib_per_second": 2.508188000072833,
+      "latency_ms": {
+        "p50": 12.591624981723726,
+        "p95": 54.89604198373854,
+        "p99": 85.55033407174051
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "tree",
+      "concurrency": 1,
+      "attempts": 63,
+      "successes": 63,
+      "errors": 0,
+      "elapsed_seconds": 16.077648540958762,
+      "requests_per_second": 3.9184834672498137,
+      "response_mib_per_second": 0.012581444608665482,
+      "latency_ms": {
+        "p50": 231.43070796504617,
+        "p95": 533.7357500102371,
+        "p99": 596.9165000133216
+      }
+    },
+    {
+      "repository": "starship",
+      "operation": "tree",
+      "concurrency": 4,
+      "attempts": 279,
+      "successes": 279,
+      "errors": 0,
+      "elapsed_seconds": 16.647743915906176,
+      "requests_per_second": 16.759027614151847,
+      "response_mib_per_second": 0.05278188486752141,
+      "latency_ms": {
+        "p50": 183.54470806661993,
+        "p95": 648.0151249561459,
+        "p99": 757.4171250453219
+      }
+    }
+  ],
+  "workspace_gates": {
+    "state": "passed",
+    "source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "cellule": "0.2.0",
+    "schema": 4,
+    "storage_format": "canopy-pack-v2",
+    "started_utc": "2026-10-15T17:28:34.280422+00:00",
+    "gates": [
+      {
+        "name": "dependency-policy",
+        "exit_code": 0,
+        "seconds": 0.0703032499877736,
+        "log": "dependency-policy.log"
+      },
+      {
+        "name": "format",
+        "exit_code": 0,
+        "seconds": 1.4924878330202773,
+        "log": "format.log"
+      },
+      {
+        "name": "all-target-clippy",
+        "exit_code": 0,
+        "seconds": 49.77081887505483,
+        "log": "all-target-clippy.log"
+      },
+      {
+        "name": "ordinary-tests",
+        "exit_code": 0,
+        "seconds": 3332.7650082920445,
+        "log": "ordinary-tests.log"
+      },
+      {
+        "name": "python",
+        "exit_code": 0,
+        "seconds": 44.6627316250233,
+        "log": "python.log"
+      },
+      {
+        "name": "release-build",
+        "exit_code": 0,
+        "seconds": 530.0212494999869,
+        "log": "release-build.log"
+      }
+    ],
+    "stage": "release-build",
+    "binary_sha256": "0be8986fe9d9a9c12780dead22f9c8dc8c63a3adf88cdc7f682778e5bfc9f254",
+    "finished_utc": "2026-10-15T18:34:33.859565+00:00"
+  },
+  "final_process_backup": {
+    "saved": {
+      "pin": "6005db5e-94ca-476e-a5bd-70cbf8f20e84",
+      "root": "qualification/extended-process-native-backup-harness/process-smoke/f81dade2-bb2a-4612-ace2-ce3ea5efd04b/backup-copy",
+      "cells": 2,
+      "external_objects": 26
+    },
+    "restored": {
+      "pin": "6005db5e-94ca-476e-a5bd-70cbf8f20e84",
+      "root": "qualification/extended-process-native-backup-harness/process-smoke/f81dade2-bb2a-4612-ace2-ce3ea5efd04b/backup-restored",
+      "cells": 2,
+      "external_objects": 26
+    },
+    "external_manifest_count": 26,
+    "external_inventory_sha256": "93df98819341b2ebec553973f270fe72f84674e270be51d1095edc9f7e1f44ae",
+    "source_deleted": true,
+    "corrupt_copy_rejected": true,
+    "cold_clone_verified": true,
+    "issue_verified": true
+  },
+  "final_process_retention": {
+    "deleted_objects": 256,
+    "last_report": {
+      "listed_objects": 418,
+      "immutable_candidates": 305,
+      "reachable_objects": 50,
+      "retained_objects": 50,
+      "grace_objects": 0,
+      "eligible_objects": 255,
+      "deleted_objects": 255,
+      "current_controls": 2,
+      "retained_pins": 1,
+      "complete": true
+    },
+    "backup_verified": true,
+    "cold_clone_verified": true
+  },
+  "prior_provider_process_attempt": {
+    "state": "failed",
+    "cellule": "0.2.0",
+    "schema": 4,
+    "storage_format": "canopy-pack-v2",
+    "profile": "release",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "rust_qualified_source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "alternate_target_compile_check_sha256": "0be8986fe9d9a9c12780dead22f9c8dc8c63a3adf88cdc7f682778e5bfc9f254",
+    "runtime_image_equivalence_gate": "runtime-image-equivalence.json",
+    "process_profile": [
+      "--large-clone",
+      "--many-objects",
+      "256",
+      "--structural-objects",
+      "--structural-object-bytes",
+      "68157440",
+      "--retain-work-dir"
+    ],
+    "started_utc": "2026-10-15T18:47:58.035643+00:00",
+    "error": "Command '['/opt/homebrew/opt/python@3.14/bin/python3.14', '-B', 'native-medium-cache-final-20261015/source/scripts/smoke_s3_process.py', '--binary', '/private/var/folders/rn/k2b7mvbs2dgb__6ys6_h94pm0000gn/T/canopy-size-95af668fccdf98z1k51f/canopy', '--storage-url', 's3://canopy-size/process-qualification', '--work-parent', 'native-medium-cache-final-20261015/process-work', '--large-clone', '--many-objects', '256', '--structural-objects', '--structural-object-bytes', '68157440', '--retain-work-dir']' died with <Signals.SIGINT: 2>.",
+    "exit_code": 1,
+    "seconds": 1779.200018582982,
+    "finished_utc": "2026-10-15T19:17:37.221470+00:00"
+  },
+  "isolated_provider_process": {
+    "state": "passed",
+    "captured_utc": "2026-10-15T19:21:36.522060+00:00",
+    "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+    "provider_source_commit": "624bd26d7a3d04ae64aaf0ca1f3e50b6a7c89e05",
+    "rust_qualified_source_commit": "930e6c7a4018b02081ac1421d1f1d5ce9e63691e",
+    "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+    "provider_cases_expected": [
+      "size::native_pack_exceeds_512_mib_and_git_lfs_exceed_5_gib_after_restore",
+      "sha256::sha256_real_provider_round_trip",
+      "sha256::sha256_real_provider_native_merge_candidates",
+      "push_options::signed_push_real_provider_round_trip",
+      "ssh::signed_sha256_ssh_real_provider_round_trip",
+      "ssh::stock_ssh_real_provider_round_trip",
+      "bulk_refs::bulk_mirror_real_provider_round_trip",
+      "partial_clone::filtered_clones_real_provider_round_trip",
+      "ssh::lfs::stock_lfs_ssh_real_provider_round_trip"
+    ],
+    "provider_cases_passed": [
+      "size::native_pack_exceeds_512_mib_and_git_lfs_exceed_5_gib_after_restore",
+      "sha256::sha256_real_provider_round_trip",
+      "sha256::sha256_real_provider_native_merge_candidates",
+      "push_options::signed_push_real_provider_round_trip",
+      "ssh::signed_sha256_ssh_real_provider_round_trip",
+      "ssh::stock_ssh_real_provider_round_trip",
+      "bulk_refs::bulk_mirror_real_provider_round_trip",
+      "partial_clone::filtered_clones_real_provider_round_trip",
+      "ssh::lfs::stock_lfs_ssh_real_provider_round_trip"
+    ],
+    "extended_process": {
+      "state": "passed",
+      "started_utc": "2026-10-15T19:13:22.285310+00:00",
+      "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+      "backup_script_sha256": "ffb5a2ca1a7b5ab20bc735a980628f28c0217ee56aac8ca948fe6adeb783af0a",
+      "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+      "profile": [
+        "--large-clone",
+        "--many-objects",
+        "256",
+        "--structural-objects",
+        "--structural-object-bytes",
+        "68157440"
+      ],
+      "seconds": 493.9588900420349,
+      "finished_utc": "2026-10-15T19:21:36.316138+00:00"
+    },
+    "current_harness_source_equivalence": {
+      "state": "passed",
+      "source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+      "previous_source_commit": "1a0fc93d526d205979e03523435ba0c6a9a027c1",
+      "changed_paths": [
+        "scripts/smoke_s3_backup.py"
+      ],
+      "rust_source_unchanged": true,
+      "binary_sha256": "ffa22ca297d764537df7a72870f267e1f58fbacf26267e6243910fdb882919f8",
+      "python_tests": 105,
+      "python_exit_code": 0,
+      "python_seconds": 45.085,
+      "python_log": "python-backup-harness.log",
+      "backup_script_sha256": "ffb5a2ca1a7b5ab20bc735a980628f28c0217ee56aac8ca948fe6adeb783af0a"
+    },
+    "provider_log_sha256": "6101a15acdf53255d008d1950898fcee5a33d980b76b21bf7a9548be2279e175",
+    "provider_log": "isolated-provider-process-full-final.log",
+    "scope_note": "The nine Rust provider cases use identical Rust source. The complete extended process profile uses the corrected peer TLS proxy and native backup inventory at the current Python harness commit. Original attempts and their failures are preserved separately."
+  },
+  "state": "passed",
+  "ordinary_rust_test_summary": {
+    "unique_passed": 896,
+    "failed": 0,
+    "provider_cases_deferred": 9,
+    "nested_child_result_duplicates_excluded": 2
+  },
+  "evidence_sha256": {
+    "medium-metadata-cache-final-20261015/verify_mirrors.py": "b1038426fd92c44b16d052e78b642b618007c6896563438a80d5d7e8648dfe9a",
+    "medium-metadata-cache-final-20261015/verify_tree_pagination.py": "75e01b0109515c6ff9f54e8ca9045d27eb7a8e9da360c2161fab9e29a0d94b4c",
+    "medium-metadata-cache-final-20261015/complete-verification-report.json": "745721a6b19594d78e4d09d5cdb6d067659cdc5a6cdf4b7543dccdf545890622",
+    "medium-metadata-cache-final-20261015/complete-repository-verification/mirror-ref-proof.json": "3c8b4f603399ca33490ba47c25792780accf6f69699ef79b365f2ba0d7769011",
+    "medium-metadata-cache-final-20261015/after-gc-verification/mirror-ref-proof.json": "a22be4ec4486b541336afba70d92823428459c3ebe8e1ed725996947391e3edd",
+    "medium-metadata-cache-final-20261015/results/samples.jsonl": "246f723c9afc33818deb179d3dc326848f696e4b456d624056e2ade9af58d90e",
+    "medium-metadata-cache-final-20261015/results/measurements.json": "f8873ef943819f5fa7a61a54e65151ca2efcaaec05efc7b6fa309214d742f685",
+    "medium-metadata-cache-final-20261015/results/inventory-before-gc.json": "6c813af07877231e2c6163dd357c7d9431dabbfad48982d136f0927b5ea63610",
+    "medium-metadata-cache-final-20261015/results/inventory-after-gc.json": "8a76e17cc846dab4c7e6b696aefdd09a78a50f322919abd2584f9f0bd18184a8",
+    "medium-metadata-cache-final-20261015/results/inventory-post-browse.json": "01d1c46c35c9c892e0d0fb9be780560969423bb57c4f3045f5b2edc93cf7faeb",
+    "native-medium-cache-final-20261015/verification-results.json": "03c2d081914c4201a10edf0775fe9db943b3c01a9f5f5fc4f716f15c3ed2ae13",
+    "native-medium-cache-final-20261015/source-manifest-rust-qualified-930.json": "048eca61b95b6a5c75c7d6b4e7cd18155f8414509139cc895f93fd55de5e9402",
+    "native-medium-cache-final-20261015/source-manifest-native-backup-harness.json": "632c2a1f075b7df7a33fc56d274092228759881d7513ff91ec83a74f449c4121",
+    "native-medium-cache-final-20261015/final-harness-source-equivalence.json": "315144c9b9feaf479abc9967a90431ba192c0add3d292076e12aa588483b774d",
+    "native-medium-cache-final-20261015/current-provider-process-results.json": "1da5190587d0db9e07645efae915879cae4feed33dd67d8c9248baa6c43b9ad5",
+    "native-medium-cache-final-20261015/runtime-image-equivalence.json": "6099d2744c54d7853874548d19df149185cc1e9f0915db4249a0f2b9ad16fedb",
+    "native-medium-cache-final-20261015/python-backup-harness.log": "ba2da238849eaf5a8f9ece2ef8b91639e89430039f9d4676dc39c87686371ac8",
+    "native-medium-cache-final-20261015/isolated-provider-process-full-final.log": "6101a15acdf53255d008d1950898fcee5a33d980b76b21bf7a9548be2279e175",
+    "native-medium-cache-final-20261015/extended-process-native-backup-harness.log": "f2ee4b194f362e7001663827f57928e0197c3dce672191bb9d83187394bd40db"
+  },
+  "superseded_process_interruption": {
+    "state": "interrupted_superseded_process_fixture",
+    "signal": "SIGINT",
+    "pid": 48734,
+    "provider_cases_passed": [
+      "bulk_refs::bulk_mirror_real_provider_round_trip",
+      "partial_clone::filtered_clones_real_provider_round_trip",
+      "push_options::signed_push_real_provider_round_trip",
+      "sha256::sha256_real_provider_native_merge_candidates",
+      "sha256::sha256_real_provider_round_trip",
+      "size::native_pack_exceeds_512_mib_and_git_lfs_exceed_5_gib_after_restore",
+      "ssh::lfs::stock_lfs_ssh_real_provider_round_trip",
+      "ssh::signed_sha256_ssh_real_provider_round_trip",
+      "ssh::stock_ssh_real_provider_round_trip"
+    ],
+    "replacement_source_commit": "81925e121c2fad14c25ab993001835b1bc5dc3d3",
+    "replacement_profile": "extended-process-native-backup-harness-20261015/results.json",
+    "reason": "Nine required Rust provider cases passed. The old POST-only TLS proxy and fixed external-object count are superseded by the independently running complete current harness. Interrupt only the old Python process child; its finally blocks reclaim its servers and isolated RustFS volume.",
+    "utc": "2026-10-15T19:17:35.274969+00:00"
+  }
+}

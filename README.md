@@ -93,7 +93,8 @@ sequenceDiagram
 This is a development path for one node with an existing S3-compatible object
 store. The [bounded Linux deployment](deploy/README.md) describes the container
 profile and its resource limits. Use a **new storage prefix** for this build;
-there is no migration from earlier preview layouts yet.
+breaking schema or format changes require a fresh prefix. This build supports
+only its compiled release and current storage formats.
 
 1. Install Rust 1.97 or newer and Git with `http-backend`,
    `merge-tree --write-tree` (`-z --name-only --no-messages`) and `commit-tree`.

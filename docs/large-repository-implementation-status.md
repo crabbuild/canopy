@@ -1,5 +1,17 @@
 # Large-repository implementation status
 
+Current storage integration (2026-10-15): source `12dc9a1` uses published
+Cellule 0.2.0, repository schema 4 and `canopy-pack-v2`, with fresh-prefix format
+changes. Immutable native packs, bounded metadata publication and Cellule
+retention collection are integrated. Full repository verification for bat,
+Starship and libgit2 passes before and after GC/fresh-workspace restore; see the
+[current qualification](benchmarks/2026-10-15-native-storage.md) for scope,
+measurements and gate results. Product Git/LFS artifact collection and the
+[large-team capacity amendment](large-team-scalability.md) remain open.
+
+The following implementation checkpoints are historical, including their
+original dependency revisions, incomplete gates and source layouts.
+
 Updated during implementation on 2026-10-05. **The full implementation and capacity goal remains open.** The [large-team amendment](large-team-scalability.md) is mandatory scope alongside the original storage design. Passing primitive tests is not completion of the hard cutover or proof of capacity.
 
 Packed cutover [PR #34](https://github.com/crabbuild/canopy/pull/34) was merged into
