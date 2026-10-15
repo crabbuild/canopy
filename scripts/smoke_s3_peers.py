@@ -1,57 +1,25 @@
 """Two live HTTPS peers, remote Git/LFS, and takeover without gateway restart."""
 
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import http.client
 import json
 import os
 import signal
 import ssl
 import subprocess
-import threading
 import time
 import uuid
 
 from lease_contract import NODE_LEASE_WAIT_SECONDS
+from local_tcp_proxy import LocalProxy
 
 
 @contextmanager
 def proxy(upstream, certificate, key):
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            body = self.rfile.read(int(self.headers["Content-Length"]))
-            connection = http.client.HTTPConnection(upstream, timeout=30)
-            try:
-                connection.request("POST", self.path, body,
-                                   {"Content-Type": "application/octet-stream"})
-                response = connection.getresponse()
-                reply = response.read()
-                self.send_response(response.status)
-                self.send_header("Content-Length", str(len(reply)))
-                self.end_headers()
-                self.wfile.write(reply)
-            except (OSError, http.client.HTTPException):
-                self.send_error(502)
-            finally:
-                connection.close()
-
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certificate, key)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        yield f"https://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join()
+    # Preserve Git/LFS methods, authenticated headers, and streaming bodies.
+    with LocalProxy([upstream], tls_context=context) as relay:
+        yield relay.url
 
 
 def peer_certificate(directory):
