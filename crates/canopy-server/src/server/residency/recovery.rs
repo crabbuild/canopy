@@ -49,7 +49,13 @@ impl RecoveryServices {
             StagingCoordinator::new_resident(
                 client.clone(),
                 target.clone(),
-                StagingLimits::default(),
+                StagingLimits {
+                    // Real histories can need more than one minute to replay
+                    // verified metadata. Keep the existing five-minute ceiling;
+                    // custody still renews independently every lease interval.
+                    bound_lifetime_ms: crate::packs::publication::MAX_LEASE_MS,
+                    ..StagingLimits::default()
+                },
                 authority.clone(),
                 manager.staging_budget.clone(),
                 coordinator.clone(),
