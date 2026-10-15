@@ -336,6 +336,20 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
         assert (directory / "asset.lfs").read_bytes() == expected_lfs
 
 
+def hydrate_fetch_cache(url, directory, expected_oid, expected_readme, branch="main"):
+    authorization = "http.extraHeader=Authorization: Bearer local-test-token"
+    git("-c", authorization, "clone", "--filter=blob:none", "--no-checkout",
+        "--single-branch", "--branch", branch, url, str(directory))
+    readme = git("rev-parse", f"{expected_oid.decode()}:README.md", cwd=directory).decode()
+    actual = subprocess.run(
+        ["git", "-c", "credential.helper=", "-c", authorization, "cat-file", "blob", readme],
+        cwd=directory, capture_output=True, check=True,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    ).stdout
+    assert actual == expected_readme
+    return readme
+
+
 def push_with_lost_reply(base_url, local):
     captured = {}
     push_id = str(uuid.uuid4())
@@ -758,11 +772,15 @@ def main():
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
+            # Materialize real lazy-fetch hydration scratch for owner-death cleanup.
+            readme = hydrate_fetch_cache(url, directory / "partial-before-owner-death",
+                                        oid, b"Canopy process smoke\n", branch="trunk")
             second.kill()
             second.wait(timeout=10)
             abandoned = directory / "second" / "canopy-pack-v2"
-            stale_caches = list(abandoned.glob("canopy-git-*"))
-            assert stale_caches, "expected a retained fetch cache at owner death"
+            stale_caches = list(abandoned.rglob("canopy-git-*"))
+            assert any((cache / "repo.git" / "objects" / readme[:2] / readme[2:]).is_file()
+                       for cache in stale_caches), "expected the hydrated blob cache at owner death"
             sentinel = abandoned / "abandoned-upload"
             sentinel.write_bytes(b"disposable scratch")
             # SQLite is a recovered cache: corrupting the killed node's copy must
