@@ -78,7 +78,9 @@ async fn command(
 async fn native_candidate_ready_is_atomic_retained_and_recovers_original_receipt_after_body_retirement()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
-        let (f, graph, merge) = native_merge::initial(format, false).await?;
+        // Keep the stock-Git fixture construction off this recovery test's
+        // future frame; it independently exercises preparation and publication.
+        let (f, graph, merge) = Box::pin(native_merge::initial(format, false)).await?;
         let (base, _, _) =
             opened(&f, *uuid::Uuid::new_v4().as_bytes(), graph.store.clone()).await?;
         let mut native = prepared_for_store(
