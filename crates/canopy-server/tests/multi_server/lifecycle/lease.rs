@@ -249,13 +249,25 @@ async fn expired_successful_renewal_reply_cannot_reopen_ingress() -> Result {
         .send()
         .await;
     assert!(expired_at_reply > expires);
+    // Cellule retains the original drain failure through its host/facility
+    // wrappers. Require the actual typed fencing cause, not its outer shape.
+    let mut cause = shutdown
+        .as_ref()
+        .err()
+        .map(|error| error as &(dyn std::error::Error + 'static));
+    let mut fenced = false;
+    while let Some(error) = cause {
+        if matches!(
+            error.downcast_ref::<cellule_runtime::Error>(),
+            Some(cellule_runtime::Error::Fenced)
+        ) {
+            fenced = true;
+            break;
+        }
+        cause = error.source();
+    }
     assert!(
-        matches!(
-            shutdown,
-            Err(canopy_server::server::ServerError::Runtime(
-                cellule_runtime::Error::Fenced
-            ))
-        ),
+        fenced,
         "expired successful refresh did not fence: {shutdown:?}"
     );
     assert!(

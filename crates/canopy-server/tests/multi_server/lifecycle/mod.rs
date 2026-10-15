@@ -48,6 +48,60 @@ impl PausedStore {
     }
 }
 
+#[tokio::test]
+async fn delayed_renewal_pause_uses_first_post_arm_progress() -> Result {
+    let store = Arc::new(PausedStore::default());
+    let path = StorePath::from("renewal-probe");
+    let body = |progress: u64, expires: i64| {
+        serde_json::to_vec(&serde_json::json!({
+            "lease": {"progress": progress.to_string(), "expires_at_ms": expires.to_string()}
+        }))
+        .unwrap()
+    };
+    // Startup may already have renewed several times before a test arms it.
+    store
+        .put_opts(&path, body(8, 100).into(), PutOptions::default())
+        .await?;
+    store.delay_renewals.store(true, Ordering::SeqCst);
+    let first_body = body(9, 200);
+    let writer = store.clone();
+    let key = path.clone();
+    let payload = first_body.clone();
+    let first = tokio::spawn(async move {
+        writer
+            .put_opts(&key, payload.into(), PutOptions::default())
+            .await
+    });
+    store.wait().await?;
+    let captured = *store.renewal_expiry.lock().unwrap();
+    let published = store.inner.get(&path).await?.bytes().await?;
+    let held = !first.is_finished();
+    store.proceed.notify_one();
+    let result = timeout(Duration::from_secs(1), first).await??;
+    assert_eq!(captured, Some(200));
+    assert_eq!(published.as_ref(), first_body);
+    assert!(held, "first successful renewal reply was not held");
+    result?;
+
+    let writer = store.clone();
+    let key = path.clone();
+    let later = tokio::spawn(async move {
+        writer
+            .put_opts(&key, body(10, 300).into(), PutOptions::default())
+            .await
+    });
+    store.wait().await?;
+    let published = store.inner.get(&path).await?.bytes().await?;
+    store.proceed.notify_one();
+    let result = timeout(Duration::from_secs(1), later).await??;
+    assert_eq!(published.as_ref(), first_body);
+    assert!(matches!(
+        result,
+        Err(object_store::Error::PermissionDenied { .. })
+    ));
+    Ok(())
+}
+
 impl fmt::Display for PausedStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("paused-lifecycle-store")
@@ -78,8 +132,9 @@ impl ObjectStore for PausedStore {
             *self.initial_advertisement.lock().unwrap() = advertisement.clone();
         }
         let delayed = self.delay_renewals.load(Ordering::SeqCst);
-        if delayed && progress.is_some_and(|value| value > 2) {
-            // Keep later renewals unpublished until the confirmed lease expires.
+        let renewal = progress.is_some_and(|value| value > 1);
+        if delayed && renewal && self.renewal_expiry.lock().unwrap().is_some() {
+            // Keep renewals after the first held reply unpublished until expiry.
             self.entered.notify_one();
             self.proceed.notified().await;
             return Err(object_store::Error::PermissionDenied {
@@ -111,7 +166,7 @@ impl ObjectStore for PausedStore {
             }
         }
         let result = self.inner.put_opts(path, payload, options).await;
-        if delayed && progress == Some(2) && result.is_ok() {
+        if delayed && renewal && result.is_ok() {
             let expires = advertisement.as_ref().unwrap()["lease"]["expires_at_ms"]
                 .as_str()
                 .unwrap()
