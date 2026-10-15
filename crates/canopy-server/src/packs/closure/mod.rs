@@ -34,6 +34,16 @@ use spool::Spool;
 pub use verifier::ClosureVerifier;
 pub use witness::ClosureWitness;
 
+/// Aggregate incoming graphs contain the edges of every metadata shard. Keep
+/// their disposable spool ceiling separate from immutable shard/read limits.
+/// Growth still requires admission for database, journal and SQLite overhead.
+pub fn default_limits() -> MetadataLimits {
+    MetadataLimits {
+        max_file_bytes: 1 << 30,
+        ..MetadataLimits::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClosureBase {
     pub catalog: StoredCatalog,

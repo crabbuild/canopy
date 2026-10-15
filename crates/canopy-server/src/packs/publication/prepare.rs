@@ -178,6 +178,11 @@ pub struct CatalogPreparation {
     input_checkpoint_digest: Option<[u8; 32]>,
     failed: bool,
 }
+struct ConstructionLimits {
+    input: MetadataLimits,
+    closure: MetadataLimits,
+    output: MetadataLimits,
+}
 impl CatalogPreparation {
     pub async fn new(
         root: &Path,
@@ -206,16 +211,30 @@ impl CatalogPreparation {
         limits: MetadataLimits,
         output_limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
-        Self::new_inner(root, budget, base, limits, output_limits, None).await
+        Self::new_inner(
+            root,
+            budget,
+            base,
+            ConstructionLimits {
+                input: limits,
+                closure: limits,
+                output: output_limits,
+            },
+            None,
+        )
+        .await
     }
     /// Production construction retains the admitted worker through every
     /// detached assembler job, while the finished private proof owns no worker.
+    /// The aggregate graph has an explicit ceiling independent of input shards
+    /// and output runs; all three still share the caller's admitted disk budget.
     pub async fn new_staged(
         context: &StagingContext,
         root: &Path,
         budget: DiskBudget,
         base: Arc<PreparationBaseResolver>,
         limits: MetadataLimits,
+        closure_limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
         context.ensure_live().map_err(PhysicalError::from)?;
         if context.token().map_err(PhysicalError::from)? != base.context_token()
@@ -227,10 +246,13 @@ impl CatalogPreparation {
             root,
             budget,
             base,
-            limits,
-            MetadataLimits {
-                max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
-                ..limits
+            ConstructionLimits {
+                input: limits,
+                closure: closure_limits,
+                output: MetadataLimits {
+                    max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
+                    ..limits
+                },
             },
             Some(context.clone()),
         )
@@ -240,10 +262,14 @@ impl CatalogPreparation {
         root: &Path,
         budget: DiskBudget,
         base: Arc<PreparationBaseResolver>,
-        limits: MetadataLimits,
-        output_limits: MetadataLimits,
+        limits: ConstructionLimits,
         staging: Option<StagingContext>,
     ) -> Result<Self, CatalogPreparationError> {
+        let ConstructionLimits {
+            input: limits,
+            closure: closure_limits,
+            output: output_limits,
+        } = limits;
         DirectoryPartitioner::validate_limits(output_limits)?;
         let (lease, deadline) = base.live_lease()?;
         let indexes = base.indexes();
@@ -269,7 +295,7 @@ impl CatalogPreparation {
                 Arc::clone(&workspace),
                 budget.clone(),
                 context,
-                limits,
+                closure_limits,
                 activity.clone(),
             )
             .await?;

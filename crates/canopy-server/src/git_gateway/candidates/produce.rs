@@ -231,6 +231,7 @@ impl GitGateway {
                     gateway.disk_budget.clone(),
                     base,
                     MetadataLimits::default(),
+                    crate::packs::closure::default_limits(),
                 )
                 .await
                 .map_err(work)?;

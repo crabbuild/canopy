@@ -1026,6 +1026,7 @@ async fn native_receive_metadata_case(
                 producer_disk,
                 base,
                 limits(),
+                limits(),
             )
             .await?;
             if renew_replay {
