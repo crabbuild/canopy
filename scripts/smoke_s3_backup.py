@@ -69,12 +69,28 @@ def qualify(binary, directory, settings, processes):
             raise RuntimeError(f"backup {action} failed: {error}")
         return json.loads(result.stdout)
 
-    saved = administer("create", backup_prefix)
-    assert saved["cells"] == 2 and saved["external_objects"] == 3
-    assert administer("create", backup_prefix) == saved
     aws = ["aws"]
     if os.environ.get("AWS_ENDPOINT"):
         aws.extend(["--endpoint-url", os.environ["AWS_ENDPOINT"]])
+
+    def external_roots(prefix):
+        root = f"{prefix}/repos/{uuid.UUID(repository).hex}/"
+        listing = subprocess.run([
+            *aws, "s3api", "list-objects-v2", "--bucket",
+            urllib.parse.urlsplit(backup_url).netloc, "--prefix", root,
+        ], check=True, capture_output=True)
+        return sorted(item["Key"][len(root):]
+                      for item in json.loads(listing.stdout).get("Contents", [])
+                      if ".parts/" not in item["Key"])
+
+    saved = administer("create", backup_prefix)
+    roots = external_roots(backup_prefix)
+    assert {root.split("/")[0] for root in roots} == {
+        "git-packs", "git-catalogs", "git-inputs", "lfs"}
+    assert [root for root in roots if root.startswith("lfs/")] == sorted([
+        f"lfs/{empty_oid}", f"lfs/{hashlib.sha256(lfs).hexdigest()}"])
+    assert saved["cells"] == 2 and saved["external_objects"] == len(roots)
+    assert administer("create", backup_prefix) == saved
     lfs_url = f"{backup_url}/repos/{uuid.UUID(repository).hex}/lfs/{hashlib.sha256(lfs).hexdigest()}.parts/0000000000000000"
     corrupt = directory / "corrupt-backup-lfs"
     corrupt.write_bytes(b"corrupt fixture bytes")
@@ -96,7 +112,9 @@ def qualify(binary, directory, settings, processes):
     assert json.loads(listing.stdout).get("KeyCount", 0) == 0
     assert administer("verify", backup_prefix) == saved
     restored = administer("restore", backup_prefix, restore_prefix)
-    assert restored["cells"] == 2 and restored["external_objects"] == 3
+    assert restored["cells"] == saved["cells"]
+    assert restored["external_objects"] == saved["external_objects"]
+    assert external_roots(restore_prefix) == roots
     node, restored_base = start(binary, directory, {**settings, "storage_url": restored_url,
                                                   "node_id": str(uuid.uuid4())}, "backup-new-node")
     processes.append(node)
@@ -107,5 +125,12 @@ def qualify(binary, directory, settings, processes):
     node.send_signal(signal.SIGTERM)
     node.wait(timeout=30)
     assert node.returncode == 0
+    (directory / "backup-results.json").write_text(json.dumps({
+        "saved": saved, "restored": restored,
+        "external_manifest_count": len(roots),
+        "external_inventory_sha256": hashlib.sha256("\n".join(roots).encode()).hexdigest(),
+        "source_deleted": True, "corrupt_copy_rejected": True,
+        "cold_clone_verified": True, "issue_verified": True,
+    }, indent=2))
     print(f"LFS qualification: bytes={len(lfs)}, stock push={push_seconds:.2f}s, restored clone+verification={clone_seconds:.2f}s", flush=True)
-    print("PASS: stock 80 MiB Git blob plus 80 MiB and empty LFS transfers, then real backup CLI copies SQLite and external bodies; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)
+    print("PASS: stock 80 MiB Git blob plus 80 MiB and empty LFS transfers, then real backup CLI copies SQLite and native artifacts; deleting every original source object still permits verification, isolated restore, exact stock clone/LFS and issue recovery", flush=True)

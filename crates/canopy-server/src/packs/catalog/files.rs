@@ -30,7 +30,9 @@ impl Default for CatalogFileLimits {
     fn default() -> Self {
         Self {
             open_files: 32,
-            cached_files: 16,
+            // A medium full-history import can have 17 metadata shards plus
+            // directory files. Leave eight of the 32 slots for borrowed work.
+            cached_files: 24,
             metadata: MetadataLimits::default(),
         }
     }

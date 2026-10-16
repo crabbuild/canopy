@@ -1,7 +1,4 @@
-//! Immutable object parts and content-addressed large Git blobs.
+//! Immutable native artifacts and object parts for Git/LFS.
 
 pub mod artifact;
-pub mod blob;
 pub mod external;
-
-pub use blob::{LargeBlobError, LargeBlobRead, LargeBlobReference, LargeBlobStore};

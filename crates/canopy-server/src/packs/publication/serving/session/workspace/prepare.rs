@@ -218,6 +218,51 @@ impl NativeWorkspace {
                             }
                         }
                     }
+                    if filter.is_none() && !needs_blob_sizes {
+                        // Wants were checked against the complete certified ref
+                        // closure above. Reuse authenticated immutable packs for
+                        // an unfiltered fetch; physical presence grants no wants.
+                        // SSH v2 can prepare several groups on the same cache.
+                        // Keep completion on that cache's shared spool and
+                        // serialize installation through its existing lock.
+                        let _selection = core.cache.selection.lock().await;
+                        observation.refresh(&inner, &actor).await?;
+                        let mut sources = reader.source_changes(None, None)?;
+                        loop {
+                            observation.refresh(&inner, &actor).await?;
+                            let page = sources.page(128, 64 << 10).await?;
+                            if page.is_empty() {
+                                break;
+                            }
+                            for record in page {
+                                observation.refresh(&inner, &actor).await?;
+                                let native = record.native();
+                                native.validate(inner.context.repository(), inner.lease.format)?;
+                                if !job(&core.spool, owner.clone(), move |s| {
+                                    s.pack_complete(native)
+                                })
+                                .await?
+                                {
+                                    inner
+                                        .context
+                                        .files
+                                        .install_pack_workspace(
+                                            core.cache.clone(),
+                                            native,
+                                            owner.clone(),
+                                        )
+                                        .await?;
+                                    observation.refresh(&inner, &actor).await?;
+                                    job(&core.spool, owner.clone(), move |s| {
+                                        s.mark_pack_complete(native)
+                                    })
+                                    .await?;
+                                }
+                            }
+                        }
+                        inner.observe(actor).await?;
+                        return Ok(());
+                    }
                     loop {
                         observation.refresh(&inner, &actor).await?;
                         let pending = job(&spool, owner.clone(), |s| s.pending()).await?;

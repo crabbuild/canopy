@@ -6,8 +6,8 @@ const fn command<C: Command>(input_limit: u32, output_limit: u32) -> OperationDe
     OperationDescriptor {
         id: C::ID,
         codec_version: C::CODEC_VERSION,
-        schema_min: 1,
-        schema_max: 1,
+        schema_min: crate::REPOSITORY_SCHEMA_VERSION,
+        schema_max: crate::REPOSITORY_SCHEMA_VERSION,
         input_limit,
         output_limit,
     }
@@ -16,8 +16,8 @@ const fn query<Q: Query>(input_limit: u32, output_limit: u32) -> OperationDescri
     OperationDescriptor {
         id: Q::ID,
         codec_version: Q::CODEC_VERSION,
-        schema_min: 1,
-        schema_max: 1,
+        schema_min: crate::REPOSITORY_SCHEMA_VERSION,
+        schema_max: crate::REPOSITORY_SCHEMA_VERSION,
         input_limit,
         output_limit,
     }

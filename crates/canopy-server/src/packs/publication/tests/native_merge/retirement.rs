@@ -40,6 +40,17 @@ async fn retained_pin(f: &Fixture, check: &LeaseCheck, expected: u64) -> Result 
 async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_or_receipt()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        applied_attempt(format).await?;
+    }
+    Ok(())
+}
+
+// Construct the scenario in a separate call so the harness and polling frame
+// hold its heap pointer instead of the large recovery future on a 2 MiB stack.
+fn applied_attempt(
+    format: ObjectFormat,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Result>>> {
+    Box::pin(async move {
         let (f, graph, request) = initial(format, false).await?;
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let check = prepared.base.capability().2.clone();
@@ -108,13 +119,22 @@ async fn native_merge_applied_attempt_releases_pin_without_losing_original_uuid_
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
         f.runtime.shutdown().await?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test]
 async fn negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        negative_archive(format).await?;
+    }
+    Ok(())
+}
+
+fn negative_archive(
+    format: ObjectFormat,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Result>>> {
+    Box::pin(async move {
         let (f, graph, request) = initial(format, false).await?;
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let check = prepared.base.capability().2.clone();
@@ -173,8 +193,8 @@ async fn negative_merge_archive_keeps_its_denial_after_same_uuid_succeeds() -> R
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
         f.runtime.shutdown().await?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test]

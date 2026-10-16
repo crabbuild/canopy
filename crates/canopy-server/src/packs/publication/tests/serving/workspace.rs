@@ -546,6 +546,39 @@ async fn reachability_stops_at_live_refs_without_scanning_other_history() -> Res
             String::from_utf8(refs)?,
             "refs/heads/main\nrefs/heads/side\n"
         );
+        workspace
+            .prepare_fetch(vec![fixture.main], None, false)
+            .await?;
+        workspace
+            .prepare_fetch(vec![fixture.side], None, false)
+            .await?;
+        let (first, second) = tokio::join!(
+            workspace.prepare_fetch(vec![fixture.main], None, false),
+            workspace.prepare_fetch(vec![fixture.side], None, false),
+        );
+        first?;
+        second?;
+        // The pack also physically contains this unrelated tag. Installing it
+        // must neither expand want authority nor create per-object loose files.
+        crate::packs::metadata::tests::git(
+            &workspace.git_dir(),
+            &["cat-file", "-e", &hex::encode(fixture.tag)],
+            None,
+        )
+        .await?;
+        let main = hex::encode(fixture.main);
+        assert!(
+            !workspace
+                .git_dir()
+                .join("objects")
+                .join(&main[..2])
+                .join(&main[2..])
+                .exists()
+        );
+        assert!(matches!(
+            GitGateway::validate_wants(&workspace, &BTreeSet::from([fixture.tag])).await,
+            Err(GatewayError::UnreachableWant)
+        ));
         let empty = RefStateSnapshotRoot::upload(
             &store,
             operation(122),

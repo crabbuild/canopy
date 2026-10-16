@@ -39,6 +39,11 @@ async fn streamed_native_extraction_publishes_only_a_verified_complete_object()
         source
             .store_object(expected.oid, expected.kind, body.clone())
             .await?;
+        let foreign_body = b"an unrelated object must remain private";
+        let foreign = object_id(format, ObjectKind::Blob, foreign_body);
+        source
+            .store_object(foreign, ObjectKind::Blob, foreign_body.to_vec())
+            .await?;
         let mut wrong = expected;
         wrong.digest[0] ^= 1;
         assert!(
@@ -52,6 +57,7 @@ async fn streamed_native_extraction_publishes_only_a_verified_complete_object()
             .copy_native_owned(source.git_dir(), expected, source.clone())
             .await?;
         assert!(target.object_present(expected.oid)?);
+        assert!(!target.object_present(foreign)?);
         let mut objects = GitObjects::batch_owned(&target.git_dir(), &native, target.clone())?;
         assert_eq!(objects.read_verified(expected, body.len()).await?, body);
         objects.finish().await?;
@@ -531,215 +537,5 @@ async fn failed_cleanup_does_not_release_disk_admission() -> Result<(), Box<dyn 
     }
     assert!(remaining, "requires an unprivileged test user");
     assert_eq!(retained, charged);
-    Ok(())
-}
-
-#[tokio::test]
-async fn streaming_blob_hydration_preserves_bytes_and_disk_admission()
--> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    let blobs =
-        crate::blob::LargeBlobStore::new(Arc::new(object_store::memory::InMemory::new()), [7; 16]);
-    let body = vec![17; 9 * 1024 * 1024];
-    let reference = blobs
-        .put(
-            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
-            body.len() as u64,
-            &mut body.as_slice(),
-        )
-        .await?;
-    cache.store_blob(blobs.read(&reference).await?).await?;
-    let output = tokio::process::Command::new("git")
-        .arg("--git-dir")
-        .arg(cache.git_dir())
-        .args(["cat-file", "blob", &hex::encode(reference.oid)])
-        .output()
-        .await?;
-    assert!(output.status.success());
-    assert_eq!(output.stdout, body);
-    assert_eq!(budget.used(), tree_bytes(cache.root())?);
-    drop(cache);
-    assert_eq!(budget.used(), 0);
-
-    let cache = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    let occupied = budget.try_reserve(budget.capacity() - budget.used())?;
-    assert!(
-        cache
-            .store_blob(blobs.read(&reference).await?)
-            .await
-            .is_err_and(|error| error.is_admission())
-    );
-    drop(cache);
-    assert_eq!(budget.used(), occupied.bytes());
-    Ok(())
-}
-
-#[tokio::test]
-async fn corrupt_stream_never_installs_a_reusable_object() -> Result<(), Box<dyn std::error::Error>>
-{
-    use object_store::ObjectStoreExt;
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(1 << 20);
-    let cache = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    let store = Arc::new(object_store::memory::InMemory::new());
-    let blobs = crate::blob::LargeBlobStore::new(store.clone(), [9; 16]);
-    let mut body = vec![23; 9 * 1024 * 1024];
-    let reference = blobs
-        .put(
-            object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body),
-            body.len() as u64,
-            &mut body.as_slice(),
-        )
-        .await?;
-    // The first range can be written before the final range detects corruption.
-    // Only the test-owned blob key is changed, then restored before retry.
-    let path = crate::external::part(&crate::blob::blob_path([9; 16], &reference.sha256), 1);
-    let metadata = store.head(&path).await?;
-    let last = body.last_mut().ok_or("empty fixture")?;
-    *last ^= 1;
-    store
-        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
-        .await?;
-    assert!(
-        cache
-            .store_blob(blobs.read(&reference).await?)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        cache.missing_objects(vec![reference.oid]).await?,
-        vec![reference.oid]
-    );
-    *body.last_mut().ok_or("empty fixture")? ^= 1;
-    store
-        .put(&metadata.location, body[8 * 1024 * 1024..].to_vec().into())
-        .await?;
-    cache.store_blob(blobs.read(&reference).await?).await?;
-    assert!(cache.missing_objects(vec![reference.oid]).await?.is_empty());
-    drop(cache);
-    assert_eq!(budget.used(), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn incomplete_pack_extracts_verified_large_blobs_without_admitting_foreign_members()
--> Result<(), Box<dyn std::error::Error>> {
-    let root = tempfile::TempDir::new()?;
-    let budget = DiskBudget::new(256 << 20);
-    let source = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    let body = vec![b'x'; 2 << 20];
-    let oid = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, &body);
-    let digest = *blake3::hash(&body).as_bytes();
-    source
-        .store_object(oid, ObjectKind::Blob, body.clone())
-        .await?;
-    let foreign = object_id(crate::ObjectFormat::Sha1, ObjectKind::Blob, b"foreign");
-    source
-        .store_object(foreign, ObjectKind::Blob, b"foreign".to_vec())
-        .await?;
-    let packed = source.repacked(root.path().into(), budget.clone()).await?;
-    let (hash, pack, index, ids) = packed.pack_sources().await?.pop().unwrap();
-    assert_eq!(
-        ids.iter().copied().collect::<HashSet<_>>(),
-        [oid, foreign].into_iter().collect()
-    );
-    let store = Arc::new(object_store::memory::InMemory::new());
-    let reader = crate::pack_store::PackReader::new(
-        store,
-        [4; 16],
-        root.path().into(),
-        budget.clone(),
-        crate::ObjectFormat::Sha1,
-        source.native.clone(),
-    );
-    let record = crate::pack_store::PackRecord {
-        hash,
-        pack: reader.upload(pack).await?,
-        index: reader.upload(index).await?,
-        approved: false,
-    };
-    let target = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    target
-        .store_native_blob(
-            reader
-                .native_reader(record.clone(), oid, body.len() as u64, digest)
-                .await?,
-        )
-        .await?;
-    assert!(target.missing_objects(vec![oid]).await?.is_empty());
-    assert_eq!(target.missing_objects(vec![foreign]).await?, vec![foreign]);
-    let output = crate::native_git::command(&target.git_dir())?
-        .args(["cat-file", "blob", &hex::encode(oid)])
-        .output()
-        .await?;
-    assert!(output.status.success());
-    assert_eq!(output.stdout, body);
-    assert!(
-        reader
-            .cache()
-            .await?
-            .missing_objects(vec![oid, foreign])
-            .await?
-            .len()
-            == 2
-    );
-    let invalid = GitCache::create(
-        root.path().into(),
-        budget.clone(),
-        "refs/heads/main",
-        crate::ObjectFormat::Sha1,
-        crate::native_resources::NativeResources::default()
-            .scope(crate::native_resources::NativeClass::Foreground),
-    )
-    .await?;
-    assert!(
-        invalid
-            .store_native_blob(reader.native_reader(record, oid, 2 << 20, [0; 32]).await?)
-            .await
-            .is_err()
-    );
-    assert_eq!(invalid.missing_objects(vec![oid]).await?, vec![oid]);
     Ok(())
 }

@@ -4,9 +4,9 @@ use cellule_runtime::Digest;
 // Captured read-only from the unchanged RustFS deployment. The canonical
 // descriptor's SHA-256 is 8b85c842995e4a2b0bcc6d1f3d361ccdbd2c33a1c52592241b50ad8cfe9aeb88.
 // The full historical application is refused by the Repository hard cutover.
-// Directory compatibility is checked separately; no old binary restore is implied.
+// Both modules reject predecessor code; fresh prefixes are required.
 #[test]
-fn bounded_authentication_retains_the_exact_selected_predecessor_directory()
+fn bounded_authentication_rejects_the_selected_predecessor_directory()
 -> Result<(), Box<dyn std::error::Error>> {
     let previous = include_bytes!("fixtures/c51-selected-release.json").trim_ascii_end();
     assert_eq!(
@@ -24,8 +24,6 @@ fn bounded_authentication_retains_the_exact_selected_predecessor_directory()
             "rolling release does not retain predecessor module code"
         ))
     ));
-    let scoped = retained_directory::predecessor(&registry, previous)?;
-    registry.verify_rolling_from(&scoped)?;
     let predecessor: serde_json::Value = serde_json::from_slice(previous)?;
     let old_directory = predecessor["modules"]
         .as_array()
@@ -38,7 +36,9 @@ fn bounded_authentication_retains_the_exact_selected_predecessor_directory()
         .map_err(|_| "invalid predecessor code length")?;
     let old_code = Digest::from_bytes(bytes);
     assert_ne!(Some(old_code), registry.module_code("directory"));
-    assert!(registry.supports_cell(directory::DIRECTORY, CatalogRole::Sql, old_code, 1));
+    assert!(!registry.supports_cell(directory::DIRECTORY, CatalogRole::Sql, old_code, 1));
+    assert!(DirectoryModule.descriptor().retained_codes.is_empty());
+    assert!(RepositoryModule.descriptor().retained_codes.is_empty());
     for schema in [0, 2] {
         assert!(!registry.supports_cell(directory::DIRECTORY, CatalogRole::Sql, old_code, schema));
     }
@@ -95,7 +95,7 @@ fn packed_repository_rejects_an_unqualified_predecessor_upgrade()
     ));
     assert!(
         registry.verify_rolling_from(previous).is_err(),
-        "pack storage requires a qualified repository migration before rolling upgrade"
+        "pack storage requires a fresh deployment prefix"
     );
     Ok(())
 }

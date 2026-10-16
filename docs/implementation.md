@@ -45,7 +45,7 @@ These are current admission limits, not measured production throughput:
 | Concurrent Git/LFS transfers | Eight per node; excess requests return `503` and `Retry-After: 1`. |
 | Fetch request body | Up to 64 MiB; clone/fetch response packs stream with backpressure. |
 | Push report | Buffered up to 64 MiB; push bodies have no fixed byte quota. |
-| Git blob and LFS body | Immutable 8 MiB parts, with no fixed logical file-size quota. |
+| Native Git artifacts and LFS bodies | Verified immutable parts up to 8 MiB; current manifest format supports up to 512 GiB per artifact. |
 | Active repository gateways | `max_active_repositories` per node (1–9,999); stored repositories may exceed this. |
 | Local admitted disk | Set by `local_disk_limit_bytes`; exhaustion returns `507`. |
 
@@ -53,14 +53,13 @@ The current service supports one repository owner.
 Incoming Git requests stream to temporary files charged to the same disk budget
 as the node's SQLite files. Push bodies have no fixed byte quota; fetch requests
 remain bounded at 64 MiB. Push reports are buffered up to 64 MiB, while clone/fetch
-packs stream with backpressure. Git blobs and LFS objects use immutable 8 MiB
-parts without a fixed logical file-size quota. Trees, commits and tags above
-768 KiB use SQLite chunks without a fixed individual object-size quota.
-Git LFS basic downloads resume with a tail `Range` request and a verified
-`206` response. The server reads only the requested parts and verifies each
-against a manifest digest pinned in SQLite.
-Publication and graph parsing still materialize non-blob bodies, so very large
-structural objects depend on available worker memory.
+packs stream with backpressure. Git bodies remain in verified native pack/index
+artifacts, with canonical metadata and typed graph facts in immutable shards and
+directory runs. Repository SQLite stores accepted roots and business metadata.
+Structural verification streams bounded chunks. LFS downloads can resume with
+verified tail ranges. Each artifact uses authenticated parts up to 8 MiB and the
+current manifest's 512 GiB format bound. These bounds are not measured production
+capacity.
 Partial uploads stay invisible to Git.
 Each node admits eight Git/LFS transfers across all repositories. Overload
 returns 503 with `Retry-After: 1`; retry after capacity is available. Health,
@@ -89,7 +88,7 @@ See [native pack policy](contracts.md#native-pack-resource-policy) and
 
 ### Local workspace and shutdown
 
-The node locks its `data_dir` and owns `canopy-pack-v1/` beneath it. On Unix,
+The node locks its `data_dir` and owns `canopy-pack-v2/` beneath it. On Unix,
 restart removes abandoned local state before restoring Cells from object storage;
 live Git descendants prevent cleanup. Unknown runtime markers and cleanup errors
 stop startup. Keep the lock files in place; files outside the managed runtime
@@ -136,10 +135,13 @@ A terminal ownership-release failure leaves
 that repository unavailable until node restart; confirmed-release cleanup errors
 are retried on later admission. There is no
 account deletion API, organization model or production capacity evidence.
-`Cargo.toml` pins Cellule's runtime, app, host, LTX and store crates to revision
-`a28de7bc09ce36d87e642adc4f4b6be50d6fcb69`. Canopy remains a separate
-product crate and builds without a local Cellule checkout. There are no Crab
-product/server or Xet dependencies.
+The server manifest pins Cellule's runtime, app, host, LTX and store crates to
+published `=0.2.0`; `Cargo.lock` binds all six Cellule crates to that registry
+release. `scripts/check_cellule.py` checks every workspace member and the lockfile.
+Only the compiled module code and current storage formats are supported. Directory
+has no retained predecessor allowlist. Repository schema 4 has one fresh-cell
+initialization descriptor and uses the native catalog/publication path from the
+modular workspace. Storage format `canopy-pack-v2` rejects older deployments.
 
 ### Storage compatibility and graph verification
 
@@ -150,40 +152,27 @@ prefixes/backups are unsupported. Startup rejects unmarked application roots,
 and release admission rejects a different compiled release. See the
 [runtime integration contract](contracts.md#cellule-integration).
 
-Before ref publication, bounded certificate batches verify the durable Git
-graph: commit trees and parents, tree entries and tag targets must exist with
-the correct object type. Each batch covers at most 128 objects, targeting 64 MiB of
-SQLite object bytes. Ref publication checks certified tips atomically with
-permissions and ref versions; branch tips must be commits. Submodule gitlinks may name commits in another repository.
-SQLite certificates let later pushes reuse validated history. Push ingestion streams
-candidates from accepted ref tips, excludes previously published history, and
-reads missing objects through one persistent Git batch process. Object sizes
-are checked before allocation and canonical OIDs before storage. SQLite lookups
-group up to 128 candidate IDs; object publication groups up to 128 records and
-3 MiB of inline bytes in one Cell transaction, targeting 64 MiB of SQLite
-object bytes verified per batch. A conflicting record rejects
-the whole batch. Recovery tests include annotated tags, submodules and
-`git fsck` on the restored clone.
+Before publication, trusted native and closure verification checks canonical Git
+identities and typed dependencies. Accepted roots bind the exact repository,
+operation, source catalog and owner/lease. Final publication rechecks actor
+access, branch policy, ref observations and exact retry identity atomically with
+the recorded native outcome. There are no Git-body rows, chunk staging or mutable
+object-certificate readers in the Repository Cell.
 
 ### Cache hydration and partial clone
 
-Cold cache hydration reads insertion-ordered pages of at most 128 records and 768 KiB
-of inline bodies. It verifies inline identities on a blocking worker; chunked
-and external bodies retain their own verification before cache writes. Pages
-reduce SQLite query overhead. Blobless fetch (`--filter=blob:none`) skips ordinary
-blob bodies until explicitly requested. Other fetches enumerate missing blobs
-reachable from requested tips, applying the native filter before hydration.
-Tree and object-type constraints, including those in combined filters, skip
-omitted bodies; size filters still need missing blob bodies. Advertised ref/tag targets are always prepared.
-Non-blob history is still prepared across the repository. Supported filters and remaining gaps are listed in
-[Git compatibility](git-compatibility.md).
-While a gateway remains resident, verified object files are shared across private
-ref snapshots, pushes and merge candidates. An indexed insertion cursor limits
-refresh to newly published object headers and missing bodies. Each refresh captures
-a fixed upper bound; each fully verified page advances the cursor. Failed pages
-retry without skipping bytes. Native output stays private until it is
-published to the Cell and subsequently verified into the reusable cache. See the
-[process proof and remaining limits](performance-plan.md#indexed-object-refresh).
+Serving snapshots select a certified catalog and coherent refs and recheck live
+access. Native workspaces authenticate indexes and required artifact ranges;
+verified selected objects enter private disk-accounted caches. A cached OID alone
+cannot authorize a fetch want. Blobless and supported native filters follow the
+same certified reachability rules. See [Git compatibility](git-compatibility.md)
+for supported filters and qualification limits.
+
+Publication batches canonical metadata into immutable files instead of mutating
+a Cell for each object. Metadata pages contain up to 512 objects; directory runs
+target 64 MiB. Sparse reads and decoded native working sets still consume I/O,
+CPU and disk. Final qualification must measure the complete corpus on one frozen
+executable, including cold clones and APIs after retention collection.
 
 ## Verify a build
 
@@ -232,7 +221,7 @@ Optional flags expand the qualification:
 | --- | --- |
 | `--large-clone` | Push two 80 MiB random blobs, then clone with protocol v0 and v2 after takeover. Each pack exceeds 64 MiB; both file hashes and `git fsck` must match. This checks transfer size, not production capacity. |
 | `--many-objects 256` | Push 256 files, update one file with an annotated tag, then clone after takeover. Combined with `--large-clone`, exercise resident eviction across four repositories and Git/LFS recovery before restart. |
-| `--sqlite-chunks` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify raw bytes and OIDs after takeover with strict `git fsck`. |
+| `--structural-objects` | Push a 32,000-entry tree and commit/tag messages above 1 MiB; verify exact bytes after takeover and strict fsck. Add `--structural-object-bytes 68157440` to exercise 65 MiB messages. |
 | `--corpus-repository /path/to/existing/repository` | Read that checkout's HEAD history, bundle it into temporary fixtures under `--work-parent`, then compare every reachable object's type, size and bytes in v0/v2 clones after takeover, with strict `git fsck`. Other source branches and tags are outside this check. |
 
 For a local container store, verify that the intended data/log volume is shared
@@ -243,18 +232,15 @@ completed on a dedicated Docker volume, ending at 5.4 GiB with 5.1 GiB under
 its internal temporary directory. Size the test store accordingly; this is an
 observation from that run, not a production storage bound.
 
-To measure cold recovery, set
-`RUST_LOG=warn,canopy_server::git_gateway=debug,canopy_server::server::residency=debug`.
-The node reports Cell acquisition time and cache hydration time, with object
-count, raw/cache bytes and time spent in page reads, body retrieval and cache
-writes. Page time includes inline integrity verification; cache time includes
-worker scheduling, OID verification, compression and admitted disk writes.
-Use release builds for performance measurements.
+Use release builds for performance measurements and retain the exact source,
+lockfile, binary identity, configuration and raw timings. Measure complete cold
+recovery, imports, clones, APIs and pre/post-GC storage independently. Historical
+row/chunk hydration logs do not qualify the current native catalog path.
 
-The chunk, default-branch, repository-discovery, token-metadata, collaboration,
-visibility and object insertion-sequence layouts change the unreleased schema; use a fresh development storage prefix when moving
-from older builds. No upgrade migration or mixed-build rolling upgrade is supported yet.
-Do not reuse an existing development prefix with this changed initialization schema.
+The current schema and compiled release require a fresh storage prefix and data
+directory. Older-state readers, upgrade chains and mixed-release operation are
+not supported. Same-release recovery, backup/restore, retries and fencing remain
+required.
 
 ## Contributing
 
@@ -269,3 +255,17 @@ Keep behavior, tests, and documentation aligned when you change Canopy:
 ## License
 
 Canopy declares the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) in `Cargo.toml`.
+
+
+The `gc` administration command wraps Cellule's retention-aware collector in a
+verified maintenance drain. A persistent operation/worker/workspace claim
+serializes collection, recovery and maintenance completion. The sweep keeps
+verified live roots and backup pins, enforces its grace and deletion bounds, and
+joins work before releasing the claim. Product pack/catalog/LFS retention is a
+separate policy. The operational sequence is in [operations](operations.md#cellule-retention-collection).
+
+The [October 15 qualification](benchmarks/2026-10-15-native-storage.md) records
+full object-body/ref/HEAD/fsck/API checks for bat, Starship and libgit2 before and
+after Cellule GC and fresh-workspace restoration, plus browse measurements. Full
+workspace and isolated provider/process qualification are recorded separately in
+that report. Historical evidence retains its original binaries and formats.

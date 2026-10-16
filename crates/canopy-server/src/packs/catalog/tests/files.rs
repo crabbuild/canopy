@@ -51,6 +51,59 @@ async fn source(prepared: &Prepared) -> Result<SourceRecord> {
 }
 
 #[tokio::test]
+async fn default_cache_reuses_medium_repository_metadata_working_set() -> Result {
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let prepared = prepared(format).await?;
+        let stored_run = run(&prepared).await?;
+        let objects: Vec<_> = prepared.fixture.objects.values().cloned().collect();
+        let (&oid, (expected, _)) = prepared.fixture.objects.iter().next().ok_or("object")?;
+        let mut segments = Vec::new();
+        // Seventeen distinct authenticated metadata files and one directory
+        // match the working-set shape that exceeded the former cache capacity.
+        for number in 80..97 {
+            let mut identity = prepared.fixture.identity;
+            identity.operation = [number; 16];
+            let mut writer = builder(&prepared.fixture, DiskBudget::new(128 << 20), identity)?;
+            fill(&mut writer, &objects)?;
+            segments.push(
+                Arc::new(writer.seal(&prepared.fixture.index)?)
+                    .upload(&prepared.store)
+                    .await?,
+            );
+        }
+        for (profile, expected_downloads) in [
+            (
+                CatalogFileLimits {
+                    cached_files: 16,
+                    ..CatalogFileLimits::default()
+                },
+                36,
+            ),
+            (CatalogFileLimits::default(), 18),
+        ] {
+            let budget = DiskBudget::new(128 << 20);
+            let loader = files(&prepared, budget.clone(), profile)?;
+            for pass in 0..2 {
+                drop(RunLoader::load(&loader, stored_run).await?);
+                for &stored in &segments {
+                    let metadata = SourceLoader::load(&loader, stored).await?;
+                    assert_eq!(metadata.header(oid)?.ok_or("header")?.object, *expected);
+                }
+                assert_eq!(
+                    loader.stats()?.downloaded_files,
+                    if pass == 0 { 18 } else { expected_downloads }
+                );
+                assert!(loader.stats()?.open_files <= profile.open_files);
+                assert!(loader.stats()?.cached_files <= profile.cached_files);
+            }
+            drop(loader);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn worker_files_coalesce_native_lookups_and_reuse_cache_across_roots() -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let prepared = prepared(format).await?;

@@ -5,3 +5,5 @@
 
 /deploy/config.json
 /deploy/.proof-*/
+
+__pycache__/

@@ -1,0 +1,1622 @@
+{
+  "date": "2026-10-13",
+  "timezone": "America/Vancouver",
+  "environment": {
+    "cpu": "Apple M2 Max",
+    "logical_cpus": 12,
+    "memory_bytes": 34359738368,
+    "os": "macOS Darwin 25.5.0 arm64",
+    "dedicated_host": false,
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "git": "git version 2.50.1 (Apple Git-155)",
+    "cellule_version": "0.2.0",
+    "head": "9c5f1d1bf837fdc2e38ee229aa409712b9579f69",
+    "dirty_worktree": true,
+    "build_profile": "release",
+    "binary_sha256": "7292067d1a34a796066f32f07e2cba84c69ac619cae64d16c8f7e670ac0095c1",
+    "cargo_lock_sha256": "1e400d63d86f6f8d364de72e669be1d4db7c183a4e079d419a859bb46e385366",
+    "transport": "HTTP/1.1 loopback, authenticated single account, no reverse proxy/TLS",
+    "provider": {
+      "container": "canopy-api-bench-20261013",
+      "volume": "canopy-api-bench-20261013-data",
+      "image": "rustfs/rustfs:1.0.0-beta.8-glibc",
+      "endpoint": "http://127.0.0.1:32793",
+      "bucket": "canopy-benchmark",
+      "cpu_limit": 4,
+      "memory_limit_gib": 8,
+      "image_id": "sha256:040304b66e029a5cde4bed140b41513e925909839a9b912a40a98340610d1f66"
+    },
+    "admission": {
+      "node_active_transfers": 8,
+      "account_active_transfers": 4,
+      "account_waiters": 4,
+      "maximum_wait_seconds": 1
+    },
+    "max_active_repositories": 8
+  },
+  "corpus": {
+    "repositories": [
+      {
+        "name": "bat",
+        "source_url": "https://github.com/sharkdp/bat.git",
+        "branch": "master",
+        "provider_pull_refs_excluded": 2577,
+        "source_stats": "count: 0\nsize: 0\nin-pack: 20952\npacks: 1\nsize-pack: 35959\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0\n",
+        "commit_count": 4068,
+        "object_count": 20952,
+        "commit": "d9559c69f541873f8c47ac8ad81d985f4441edf6",
+        "pack_bytes": 36234681,
+        "object_format": "sha1",
+        "owner": "canopy",
+        "repository_id": "c26304a7-f3e4-433a-9332-77ffcbb26cbd",
+        "clone_url": "http://127.0.0.1:60523/canopy/bat.git",
+        "import": {
+          "seconds": 28.921057333005592,
+          "exit_code": 0,
+          "objects_per_second": 724.454841285797,
+          "source_pack_mib_per_second": 1.1948416766020888
+        }
+      },
+      {
+        "name": "starship",
+        "source_url": "https://github.com/starship/starship.git",
+        "branch": "main",
+        "provider_pull_refs_excluded": 4513,
+        "source_stats": "count: 0\nsize: 0\nin-pack: 38333\npacks: 1\nsize-pack: 48427\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0\n",
+        "commit_count": 4556,
+        "object_count": 38333,
+        "commit": "df688000684138943610bbaa2a6c454db6987d48",
+        "pack_bytes": 48515539,
+        "object_format": "sha1",
+        "owner": "canopy",
+        "repository_id": "f82d4523-84d1-4ab4-8099-743457d303ae",
+        "clone_url": "http://127.0.0.1:60523/canopy/starship.git",
+        "import": {
+          "seconds": 79.99967504100641,
+          "exit_code": 0,
+          "objects_per_second": 479.16444635995316,
+          "source_pack_mib_per_second": 0.5783526428974817
+        }
+      },
+      {
+        "name": "libgit2",
+        "source_url": "https://github.com/libgit2/libgit2.git",
+        "branch": "main",
+        "provider_pull_refs_excluded": 6804,
+        "source_stats": "count: 0\nsize: 0\nin-pack: 134967\npacks: 1\nsize-pack: 77541\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0\n",
+        "commit_count": 19565,
+        "object_count": 134967,
+        "commit": "4af47f040cb4d80c75f37f626f511843e0dd8d44",
+        "pack_bytes": 75622259,
+        "object_format": "sha1",
+        "owner": "canopy",
+        "repository_id": "beb16211-3d72-4397-94e6-09639ba05503",
+        "clone_url": "http://127.0.0.1:60523/canopy/libgit2.git",
+        "import": {
+          "seconds": 813.6219757079962,
+          "exit_code": 0,
+          "objects_per_second": 165.8841624607726,
+          "source_pack_mib_per_second": 0.08863945211677081
+        }
+      }
+    ]
+  },
+  "verification": {
+    "repositories": [
+      {
+        "repository": "bat",
+        "refs_verified": 66,
+        "clone_seconds": 19.773580291017424,
+        "clone_fsck_passed": true,
+        "clone_objects_verified": 20952,
+        "commit_metadata_and_attribution_verified": 128,
+        "files": [
+          {
+            "path": "tests/snapshots/output/grid.snapshot.txt",
+            "bytes": 1025,
+            "oid": "7061949760a95e1bdacff061c222e7600523c038"
+          },
+          {
+            "path": "tests/examples/longline.json",
+            "bytes": 16450,
+            "oid": "0e11bf142d38256d157782dc928f31dbdc2d6c64"
+          },
+          {
+            "path": "tests/integration_tests.rs",
+            "bytes": 153394,
+            "oid": "9463be375f3c0d2f2e9aebbb5adea07b0d350924"
+          }
+        ],
+        "attribution_query_status": 422
+      },
+      {
+        "repository": "starship",
+        "refs_verified": 164,
+        "clone_seconds": 48.21346141700633,
+        "clone_fsck_passed": true,
+        "clone_objects_verified": 38333,
+        "commit_metadata_and_attribution_verified": 128,
+        "files": [
+          {
+            "path": "install/macos_packages/pkg_resources/English.lproj/license.html",
+            "bytes": 1024,
+            "oid": "f446f65e4956895ede297314924caf390d3f4f17"
+          },
+          {
+            "path": ".github/workflows/release.yml",
+            "bytes": 16378,
+            "oid": "1b39bb0accbd8be9259e952df20dd059c21b2282"
+          },
+          {
+            "path": "media/icon.png",
+            "bytes": 129048,
+            "oid": "aaf79dc967943414d67f9ff00f7b06775a86f320"
+          }
+        ],
+        "attribution_query_status": 422
+      },
+      {
+        "repository": "libgit2",
+        "refs_verified": 271,
+        "clone_seconds": 214.87667675002012,
+        "clone_fsck_passed": true,
+        "clone_objects_verified": 134967,
+        "commit_metadata_and_attribution_verified": 128,
+        "files": [
+          {
+            "path": "tests/libgit2/object/raw/chars.c",
+            "bytes": 1025,
+            "oid": "24d630d38614cfa2c97937f7bf896aa478925b40"
+          },
+          {
+            "path": "deps/pcre2/pcre2_compile.h",
+            "bytes": 16360,
+            "oid": "331ca3ad3965ea7d1c67222c736eaabe8830ccc0"
+          },
+          {
+            "path": "tests/resources/gitgit.index",
+            "bytes": 134799,
+            "oid": "215da649e1c68079fb03f4f9bc0f196cca9855c8"
+          }
+        ],
+        "attribution_query_status": 422
+      }
+    ],
+    "attribution_api": "not implemented; browse kind rejected with 422"
+  },
+  "large_file_preview_limits": [
+    {
+      "repository": "bat",
+      "path": "assets/syntaxes.bin",
+      "bytes": 1012454,
+      "content_status": "too_large",
+      "status": 200
+    },
+    {
+      "repository": "starship",
+      "path": "media/demo.gif",
+      "bytes": 2469588,
+      "content_status": "too_large",
+      "status": 200
+    },
+    {
+      "repository": "libgit2",
+      "path": "benchmarks/cli/_script/flamegraph/example-dtrace-stacks.txt",
+      "bytes": 1382457,
+      "content_status": "too_large",
+      "status": 200
+    }
+  ],
+  "warm": {
+    "method": "closed-loop, persistent HTTP/1.1 connections, full response read, no retries",
+    "mixed_workload": "equal rotation over one query for each repository/API pair; medium sampled blob",
+    "duration_per_repeat_seconds": 8,
+    "repeats": 2,
+    "rows": [
+      {
+        "repository": "all",
+        "operation": "mixed",
+        "concurrency": 1,
+        "seconds": 16.00467266701162,
+        "requests": 8787,
+        "outcomes": {
+          "ok": 8787
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.0325420298613608,
+          "p95": 4.82308299979195,
+          "p99": 6.397457967977971,
+          "min": 0.5297499592415988,
+          "max": 92.74037496652454,
+          "mean": 1.8120717856468307
+        },
+        "latency_ms_successful": {
+          "p50": 1.0325420298613608,
+          "p95": 4.82308299979195,
+          "p99": 6.397457967977971,
+          "min": 0.5297499592415988,
+          "max": 92.74037496652454,
+          "mean": 1.8120717856468307
+        },
+        "successful_requests_per_second": 549.0271611809667,
+        "successful_response_mib_per_second": 8.169318987425775,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "all",
+        "operation": "mixed",
+        "concurrency": 4,
+        "seconds": 16.015075459028594,
+        "requests": 14714,
+        "outcomes": {
+          "ok": 14714
+        },
+        "latency_ms_all_attempts": {
+          "p50": 2.1343749831430614,
+          "p95": 11.538084014318883,
+          "p99": 15.04329196177423,
+          "min": 0.8282500202767551,
+          "max": 88.08912499807775,
+          "mean": 4.336179986815298
+        },
+        "latency_ms_successful": {
+          "p50": 2.1343749831430614,
+          "p95": 11.538084014318883,
+          "p99": 15.04329196177423,
+          "min": 0.8282500202767551,
+          "max": 88.08912499807775,
+          "mean": 4.336179986815298
+        },
+        "successful_requests_per_second": 918.7593300851352,
+        "successful_response_mib_per_second": 13.670334790148779,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "all",
+        "operation": "mixed",
+        "concurrency": 16,
+        "seconds": 16.030485082999803,
+        "requests": 145990,
+        "outcomes": {
+          "http_503_or_invalid_body": 122815,
+          "ok": 10565,
+          "BrokenPipeError": 12458,
+          "ConnectionResetError": 66,
+          "RemoteDisconnected": 86
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8549580234102905,
+          "p95": 8.482416975311935,
+          "p99": 21.860542008653283,
+          "min": 0.02929195761680603,
+          "max": 47.4909589975141,
+          "mean": 1.7490142179625363
+        },
+        "latency_ms_successful": {
+          "p50": 10.354708007071167,
+          "p95": 27.166916988790035,
+          "p99": 32.0184999727644,
+          "min": 2.8825420304201543,
+          "max": 47.4909589975141,
+          "mean": 13.002402145956355
+        },
+        "successful_requests_per_second": 659.0567874458206,
+        "successful_response_mib_per_second": 9.770577278489611,
+        "error_percent": 92.76320295910679
+      },
+      {
+        "repository": "bat",
+        "operation": "blob",
+        "concurrency": 1,
+        "seconds": 16.00199016695842,
+        "requests": 13848,
+        "outcomes": {
+          "ok": 13848
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.101000001654029,
+          "p95": 1.4443330001085997,
+          "p99": 1.646874996367842,
+          "min": 0.7540420047007501,
+          "max": 6.462041987106204,
+          "mean": 1.12150191992839
+        },
+        "latency_ms_successful": {
+          "p50": 1.101000001654029,
+          "p95": 1.4443330001085997,
+          "p99": 1.646874996367842,
+          "min": 0.7540420047007501,
+          "max": 6.462041987106204,
+          "mean": 1.12150191992839
+        },
+        "successful_requests_per_second": 865.3923577952154,
+        "successful_response_mib_per_second": 62.95434571926579,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "blob",
+        "concurrency": 4,
+        "seconds": 16.004783916985616,
+        "requests": 28449,
+        "outcomes": {
+          "ok": 28449
+        },
+        "latency_ms_all_attempts": {
+          "p50": 2.164374978747219,
+          "p95": 2.7350829914212227,
+          "p99": 3.00733296899125,
+          "min": 1.1347500258125365,
+          "max": 55.061583989299834,
+          "mean": 2.2109012953796157
+        },
+        "latency_ms_successful": {
+          "p50": 2.164374978747219,
+          "p95": 2.7350829914212227,
+          "p99": 3.00733296899125,
+          "min": 1.1347500258125365,
+          "max": 55.061583989299834,
+          "mean": 2.2109012953796157
+        },
+        "successful_requests_per_second": 1777.531027445334,
+        "successful_response_mib_per_second": 129.33296811357653,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "blob",
+        "concurrency": 16,
+        "seconds": 16.01165054203011,
+        "requests": 146284,
+        "outcomes": {
+          "ok": 19061,
+          "http_503_or_invalid_body": 87036,
+          "BrokenPipeError": 39775,
+          "RemoteDisconnected": 217,
+          "ConnectionResetError": 195
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7972500170581043,
+          "p95": 7.779459003359079,
+          "p99": 9.129625046625733,
+          "min": 0.026124995201826096,
+          "max": 26.476458995603025,
+          "mean": 1.7295034789342059
+        },
+        "latency_ms_successful": {
+          "p50": 7.500582956708968,
+          "p95": 9.475333034060895,
+          "p99": 11.623708007391542,
+          "min": 3.350542043335736,
+          "max": 26.476458995603025,
+          "mean": 7.679052330335933
+        },
+        "successful_requests_per_second": 1190.4456664205502,
+        "successful_response_mib_per_second": 87.55830221538214,
+        "error_percent": 86.96986683437696
+      },
+      {
+        "repository": "bat",
+        "operation": "commits",
+        "concurrency": 1,
+        "seconds": 16.017477457993664,
+        "requests": 3501,
+        "outcomes": {
+          "ok": 3501
+        },
+        "latency_ms_all_attempts": {
+          "p50": 4.089916998054832,
+          "p95": 5.8344590361230075,
+          "p99": 9.358957991935313,
+          "min": 2.862958994228393,
+          "max": 28.306666994467378,
+          "mean": 4.558941061042278
+        },
+        "latency_ms_successful": {
+          "p50": 4.089916998054832,
+          "p95": 5.8344590361230075,
+          "p99": 9.358957991935313,
+          "min": 2.862958994228393,
+          "max": 28.306666994467378,
+          "mean": 4.558941061042278
+        },
+        "successful_requests_per_second": 218.57374291185874,
+        "successful_response_mib_per_second": 4.370237237001032,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "commits",
+        "concurrency": 4,
+        "seconds": 16.006958667945582,
+        "requests": 5430,
+        "outcomes": {
+          "ok": 5430
+        },
+        "latency_ms_all_attempts": {
+          "p50": 10.898125008679926,
+          "p95": 15.361499972641468,
+          "p99": 15.846750000491738,
+          "min": 8.433957991655916,
+          "max": 21.503625030163676,
+          "mean": 11.774078276888236
+        },
+        "latency_ms_successful": {
+          "p50": 10.898125008679926,
+          "p95": 15.361499972641468,
+          "p99": 15.846750000491738,
+          "min": 8.433957991655916,
+          "max": 21.503625030163676,
+          "mean": 11.774078276888236
+        },
+        "successful_requests_per_second": 339.2274642948719,
+        "successful_response_mib_per_second": 6.7831833481177455,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "commits",
+        "concurrency": 16,
+        "seconds": 16.05331412499072,
+        "requests": 151688,
+        "outcomes": {
+          "ok": 2867,
+          "http_503_or_invalid_body": 108631,
+          "BrokenPipeError": 39776,
+          "ConnectionResetError": 189,
+          "RemoteDisconnected": 225
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7049579871818423,
+          "p95": 2.1658329642377794,
+          "p99": 42.14174998924136,
+          "min": 0.022416003048419952,
+          "max": 128.7855840055272,
+          "mean": 1.6847534488501597
+        },
+        "latency_ms_successful": {
+          "p50": 42.33108297921717,
+          "p95": 67.43995798751712,
+          "p99": 99.09195901127532,
+          "min": 20.263166981749237,
+          "max": 128.7855840055272,
+          "mean": 45.66223086149068
+        },
+        "successful_requests_per_second": 178.59240638273235,
+        "successful_response_mib_per_second": 3.5661834712808487,
+        "error_percent": 98.10993618480038
+      },
+      {
+        "repository": "bat",
+        "operation": "refs",
+        "concurrency": 1,
+        "seconds": 16.014794999966398,
+        "requests": 18622,
+        "outcomes": {
+          "ok": 18622
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8425840060226619,
+          "p95": 0.9940830059349537,
+          "p99": 1.0678750113584101,
+          "min": 0.6624590023420751,
+          "max": 5.0185840227641165,
+          "mean": 0.8540398355497097
+        },
+        "latency_ms_successful": {
+          "p50": 0.8425840060226619,
+          "p95": 0.9940830059349537,
+          "p99": 1.0678750113584101,
+          "min": 0.6624590023420751,
+          "max": 5.0185840227641165,
+          "mean": 0.8540398355497097
+        },
+        "successful_requests_per_second": 1162.7997735868034,
+        "successful_response_mib_per_second": 7.57622533144478,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "refs",
+        "concurrency": 4,
+        "seconds": 16.01462700002594,
+        "requests": 35073,
+        "outcomes": {
+          "ok": 35073
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.7980000120587647,
+          "p95": 2.1177500020712614,
+          "p99": 2.2350000217556953,
+          "min": 1.0270840139128268,
+          "max": 10.337167012039572,
+          "mean": 1.8192831381431933
+        },
+        "latency_ms_successful": {
+          "p50": 1.7980000120587647,
+          "p95": 2.1177500020712614,
+          "p99": 2.2350000217556953,
+          "min": 1.0270840139128268,
+          "max": 10.337167012039572,
+          "mean": 1.8192831381431933
+        },
+        "successful_requests_per_second": 2190.0603741781306,
+        "successful_response_mib_per_second": 14.269344784150112,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "refs",
+        "concurrency": 16,
+        "seconds": 16.02138833294157,
+        "requests": 158165,
+        "outcomes": {
+          "ok": 20054,
+          "http_503_or_invalid_body": 124862,
+          "BrokenPipeError": 13093,
+          "RemoteDisconnected": 105,
+          "ConnectionResetError": 51
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.799959001597017,
+          "p95": 7.2485419805161655,
+          "p99": 7.970708014909178,
+          "min": 0.029250048100948334,
+          "max": 17.770208010915667,
+          "mean": 1.6139088356820033
+        },
+        "latency_ms_successful": {
+          "p50": 7.107457960955799,
+          "p95": 8.147875021677464,
+          "p99": 8.82079201983288,
+          "min": 2.2863749763928354,
+          "max": 17.770208010915667,
+          "mean": 7.126413922704734
+        },
+        "successful_requests_per_second": 1251.7017616236778,
+        "successful_response_mib_per_second": 8.155466494954076,
+        "error_percent": 87.32083583599406
+      },
+      {
+        "repository": "bat",
+        "operation": "tree",
+        "concurrency": 1,
+        "seconds": 16.015277875005268,
+        "requests": 18057,
+        "outcomes": {
+          "ok": 18057
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8279170142486691,
+          "p95": 1.1947079910896719,
+          "p99": 1.6283750301226974,
+          "min": 0.5131660145707428,
+          "max": 34.24637496937066,
+          "mean": 0.8809236574188942
+        },
+        "latency_ms_successful": {
+          "p50": 0.8279170142486691,
+          "p95": 1.1947079910896719,
+          "p99": 1.6283750301226974,
+          "min": 0.5131660145707428,
+          "max": 34.24637496937066,
+          "mean": 0.8809236574188942
+        },
+        "successful_requests_per_second": 1127.4859007086732,
+        "successful_response_mib_per_second": 6.566964872894387,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "tree",
+        "concurrency": 4,
+        "seconds": 16.027722750033718,
+        "requests": 37382,
+        "outcomes": {
+          "ok": 37382
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.640458998735994,
+          "p95": 2.4475829559378326,
+          "p99": 3.062208998017013,
+          "min": 0.7026249659247696,
+          "max": 19.468375016003847,
+          "mean": 1.7061047552683481
+        },
+        "latency_ms_successful": {
+          "p50": 1.640458998735994,
+          "p95": 2.4475829559378326,
+          "p99": 3.062208998017013,
+          "min": 0.7026249659247696,
+          "max": 19.468375016003847,
+          "mean": 1.7061047552683481
+        },
+        "successful_requests_per_second": 2332.3338307634103,
+        "successful_response_mib_per_second": 13.585427441303326,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "bat",
+        "operation": "tree",
+        "concurrency": 16,
+        "seconds": 16.00996450096136,
+        "requests": 150745,
+        "outcomes": {
+          "ok": 27129,
+          "http_503_or_invalid_body": 82495,
+          "BrokenPipeError": 40716,
+          "ConnectionResetError": 201,
+          "RemoteDisconnected": 204
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8531250059604645,
+          "p95": 6.033874989952892,
+          "p99": 7.056166010443121,
+          "min": 0.028458016458898783,
+          "max": 12.190042005386204,
+          "mean": 1.6899882608471022
+        },
+        "latency_ms_successful": {
+          "p50": 5.48045797040686,
+          "p95": 7.101957977283746,
+          "p99": 7.9649160034023225,
+          "min": 1.79462501546368,
+          "max": 12.190042005386204,
+          "mean": 5.547666112374419
+        },
+        "successful_requests_per_second": 1694.50719259065,
+        "successful_response_mib_per_second": 9.90357989569809,
+        "error_percent": 82.00338319678929
+      },
+      {
+        "repository": "libgit2",
+        "operation": "blob",
+        "concurrency": 1,
+        "seconds": 16.00327133195242,
+        "requests": 15154,
+        "outcomes": {
+          "ok": 15154
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.0045829694718122,
+          "p95": 1.2737499782815576,
+          "p99": 1.4454579795710742,
+          "min": 0.7080409559421241,
+          "max": 4.052291973493993,
+          "mean": 1.0254417736195982
+        },
+        "latency_ms_successful": {
+          "p50": 1.0045829694718122,
+          "p95": 1.2737499782815576,
+          "p99": 1.4454579795710742,
+          "min": 0.7080409559421241,
+          "max": 4.052291973493993,
+          "mean": 1.0254417736195982
+        },
+        "successful_requests_per_second": 946.9313920675238,
+        "successful_response_mib_per_second": 61.389964203748015,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "blob",
+        "concurrency": 4,
+        "seconds": 16.005381707975175,
+        "requests": 27930,
+        "outcomes": {
+          "ok": 27930
+        },
+        "latency_ms_all_attempts": {
+          "p50": 2.2345830220729113,
+          "p95": 2.8366249753162265,
+          "p99": 3.283208003267646,
+          "min": 1.2243750388734043,
+          "max": 20.5275000189431,
+          "mean": 2.257089662635542
+        },
+        "latency_ms_successful": {
+          "p50": 2.2345830220729113,
+          "p95": 2.8366249753162265,
+          "p99": 3.283208003267646,
+          "min": 1.2243750388734043,
+          "max": 20.5275000189431,
+          "mean": 2.257089662635542
+        },
+        "successful_requests_per_second": 1745.0380446773734,
+        "successful_response_mib_per_second": 113.14824424794928,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "blob",
+        "concurrency": 16,
+        "seconds": 16.012136042059865,
+        "requests": 152697,
+        "outcomes": {
+          "ok": 15933,
+          "http_503_or_invalid_body": 93457,
+          "BrokenPipeError": 42830,
+          "RemoteDisconnected": 253,
+          "ConnectionResetError": 224
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7473749574273825,
+          "p95": 8.710167021490633,
+          "p99": 10.828375001437962,
+          "min": 0.026999972760677338,
+          "max": 41.841500031296164,
+          "mean": 1.6610423994319796
+        },
+        "latency_ms_successful": {
+          "p50": 8.64333298522979,
+          "p95": 11.448832985479385,
+          "p99": 13.542667031288147,
+          "min": 3.043250006157905,
+          "max": 41.841500031296164,
+          "mean": 8.961353011451289
+        },
+        "successful_requests_per_second": 995.0577460838458,
+        "successful_response_mib_per_second": 64.75569542375841,
+        "error_percent": 89.56561032633255
+      },
+      {
+        "repository": "libgit2",
+        "operation": "commits",
+        "concurrency": 1,
+        "seconds": 16.02726750000147,
+        "requests": 3940,
+        "outcomes": {
+          "ok": 3940
+        },
+        "latency_ms_all_attempts": {
+          "p50": 3.8279169821180403,
+          "p95": 5.187375005334616,
+          "p99": 6.551624974235892,
+          "min": 2.923749969340861,
+          "max": 50.19733402878046,
+          "mean": 4.05026076800015
+        },
+        "latency_ms_successful": {
+          "p50": 3.8279169821180403,
+          "p95": 5.187375005334616,
+          "p99": 6.551624974235892,
+          "min": 2.923749969340861,
+          "max": 50.19733402878046,
+          "mean": 4.05026076800015
+        },
+        "successful_requests_per_second": 245.83105011503915,
+        "successful_response_mib_per_second": 4.322186698838102,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "commits",
+        "concurrency": 4,
+        "seconds": 16.184691207949072,
+        "requests": 4750,
+        "outcomes": {
+          "ok": 4750
+        },
+        "latency_ms_all_attempts": {
+          "p50": 11.091416992712766,
+          "p95": 20.288583997171372,
+          "p99": 55.95716700190678,
+          "min": 8.686790999490768,
+          "max": 278.26662501320243,
+          "mean": 13.5943113943856
+        },
+        "latency_ms_successful": {
+          "p50": 11.091416992712766,
+          "p95": 20.288583997171372,
+          "p99": 55.95716700190678,
+          "min": 8.686790999490768,
+          "max": 278.26662501320243,
+          "mean": 13.5943113943856
+        },
+        "successful_requests_per_second": 293.48721819709783,
+        "successful_response_mib_per_second": 5.160118765610484,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "commits",
+        "concurrency": 16,
+        "seconds": 16.069224500039127,
+        "requests": 146005,
+        "outcomes": {
+          "ok": 2324,
+          "http_503_or_invalid_body": 105713,
+          "BrokenPipeError": 37551,
+          "RemoteDisconnected": 200,
+          "ConnectionResetError": 217
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7667079917155206,
+          "p95": 2.0916659850627184,
+          "p99": 43.76049997517839,
+          "min": 0.026250025257468224,
+          "max": 373.9662499865517,
+          "mean": 1.7513654750468928
+        },
+        "latency_ms_successful": {
+          "p50": 44.48579205200076,
+          "p95": 92.43291697930545,
+          "p99": 145.10820800205693,
+          "min": 18.669291981495917,
+          "max": 373.9662499865517,
+          "mean": 56.13284755673295
+        },
+        "successful_requests_per_second": 144.62427853903847,
+        "successful_response_mib_per_second": 2.5428051366668414,
+        "error_percent": 98.40827368925721
+      },
+      {
+        "repository": "libgit2",
+        "operation": "refs",
+        "concurrency": 1,
+        "seconds": 16.01616116700461,
+        "requests": 10256,
+        "outcomes": {
+          "ok": 10256
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.505708962213248,
+          "p95": 1.7992090433835983,
+          "p99": 1.9750000210478902,
+          "min": 1.3214590144343674,
+          "max": 7.476333004888147,
+          "mean": 1.5469342338044034
+        },
+        "latency_ms_successful": {
+          "p50": 1.505708962213248,
+          "p95": 1.7992090433835983,
+          "p99": 1.9750000210478902,
+          "min": 1.3214590144343674,
+          "max": 7.476333004888147,
+          "mean": 1.5469342338044034
+        },
+        "successful_requests_per_second": 640.353196565523,
+        "successful_response_mib_per_second": 15.304461917046138,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "refs",
+        "concurrency": 4,
+        "seconds": 16.005978625034913,
+        "requests": 18717,
+        "outcomes": {
+          "ok": 18717
+        },
+        "latency_ms_all_attempts": {
+          "p50": 3.3329169964417815,
+          "p95": 4.086041997652501,
+          "p99": 4.763916949741542,
+          "min": 1.8169160466641188,
+          "max": 11.757583008147776,
+          "mean": 3.4061987174350397
+        },
+        "latency_ms_successful": {
+          "p50": 3.3329169964417815,
+          "p95": 4.086041997652501,
+          "p99": 4.763916949741542,
+          "min": 1.8169160466641188,
+          "max": 11.757583008147776,
+          "mean": 3.4061987174350397
+        },
+        "successful_requests_per_second": 1169.3755463801997,
+        "successful_response_mib_per_second": 27.94811302932185,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "refs",
+        "concurrency": 16,
+        "seconds": 16.015708165999968,
+        "requests": 155085,
+        "outcomes": {
+          "http_503_or_invalid_body": 106425,
+          "BrokenPipeError": 36914,
+          "ok": 11365,
+          "RemoteDisconnected": 201,
+          "ConnectionResetError": 180
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.741208961699158,
+          "p95": 11.474333005025983,
+          "p99": 13.217750005424023,
+          "min": 0.025707995519042015,
+          "max": 22.79691700823605,
+          "mean": 1.6395113912237211
+        },
+        "latency_ms_successful": {
+          "p50": 11.879750003572553,
+          "p95": 14.615916996262968,
+          "p99": 19.109999993816018,
+          "min": 3.878708987031132,
+          "max": 22.79691700823605,
+          "mean": 12.176306611578461
+        },
+        "successful_requests_per_second": 709.6158272992861,
+        "successful_response_mib_per_second": 16.95984101099721,
+        "error_percent": 92.67176064738692
+      },
+      {
+        "repository": "libgit2",
+        "operation": "tree",
+        "concurrency": 1,
+        "seconds": 16.0273771249922,
+        "requests": 19854,
+        "outcomes": {
+          "ok": 19854
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7934999885037541,
+          "p95": 0.9943749755620956,
+          "p99": 1.1671249521896243,
+          "min": 0.5053749773651361,
+          "max": 36.6911250166595,
+          "mean": 0.8013181317481717
+        },
+        "latency_ms_successful": {
+          "p50": 0.7934999885037541,
+          "p95": 0.9943749755620956,
+          "p99": 1.1671249521896243,
+          "min": 0.5053749773651361,
+          "max": 36.6911250166595,
+          "mean": 0.8013181317481717
+        },
+        "successful_requests_per_second": 1238.7554024070962,
+        "successful_response_mib_per_second": 6.556396755168436,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "tree",
+        "concurrency": 4,
+        "seconds": 16.003774209006224,
+        "requests": 35592,
+        "outcomes": {
+          "ok": 35592
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.7680840101093054,
+          "p95": 2.4791660252958536,
+          "p99": 2.884333021938801,
+          "min": 0.777917040977627,
+          "max": 46.537958027329296,
+          "mean": 1.7930966172506462
+        },
+        "latency_ms_successful": {
+          "p50": 1.7680840101093054,
+          "p95": 2.4791660252958536,
+          "p99": 2.884333021938801,
+          "min": 0.777917040977627,
+          "max": 46.537958027329296,
+          "mean": 1.7930966172506462
+        },
+        "successful_requests_per_second": 2223.9753907531626,
+        "successful_response_mib_per_second": 11.77081581752995,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "libgit2",
+        "operation": "tree",
+        "concurrency": 16,
+        "seconds": 16.023573751037475,
+        "requests": 141247,
+        "outcomes": {
+          "ok": 20254,
+          "http_503_or_invalid_body": 83517,
+          "RemoteDisconnected": 173,
+          "BrokenPipeError": 37141,
+          "ConnectionResetError": 162
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8657919825054705,
+          "p95": 7.516624988056719,
+          "p99": 9.28116700379178,
+          "min": 0.026124995201826096,
+          "max": 77.92679202975705,
+          "mean": 1.806408299506879
+        },
+        "latency_ms_successful": {
+          "p50": 7.014915987383574,
+          "p95": 9.628708998207003,
+          "p99": 11.940707976464182,
+          "min": 2.885083027649671,
+          "max": 77.92679202975705,
+          "mean": 7.218813678929034
+        },
+        "successful_requests_per_second": 1264.0126550226423,
+        "successful_response_mib_per_second": 6.711990129438018,
+        "error_percent": 85.66058040170765
+      },
+      {
+        "repository": "starship",
+        "operation": "blob",
+        "concurrency": 1,
+        "seconds": 16.00264966697432,
+        "requests": 16234,
+        "outcomes": {
+          "ok": 16234
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.9408749756403267,
+          "p95": 1.1576669639907777,
+          "p99": 1.299374969676137,
+          "min": 0.660583027638495,
+          "max": 3.7677089567296207,
+          "mean": 0.956252978667922
+        },
+        "latency_ms_successful": {
+          "p50": 0.9408749756403267,
+          "p95": 1.1576669639907777,
+          "p99": 1.299374969676137,
+          "min": 0.660583027638495,
+          "max": 3.7677089567296207,
+          "mean": 0.956252978667922
+        },
+        "successful_requests_per_second": 1014.4570016741122,
+        "successful_response_mib_per_second": 63.30858390772817,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "blob",
+        "concurrency": 4,
+        "seconds": 16.019204750016797,
+        "requests": 26541,
+        "outcomes": {
+          "ok": 26541
+        },
+        "latency_ms_all_attempts": {
+          "p50": 2.2444999776780605,
+          "p95": 3.361875016707927,
+          "p99": 4.2891670018434525,
+          "min": 1.1972079519182444,
+          "max": 14.385791961103678,
+          "mean": 2.3772514884462317
+        },
+        "latency_ms_successful": {
+          "p50": 2.2444999776780605,
+          "p95": 3.361875016707927,
+          "p99": 4.2891670018434525,
+          "min": 1.1972079519182444,
+          "max": 14.385791961103678,
+          "mean": 2.3772514884462317
+        },
+        "successful_requests_per_second": 1656.823819545235,
+        "successful_response_mib_per_second": 103.39808580733056,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "blob",
+        "concurrency": 16,
+        "seconds": 16.01056633295957,
+        "requests": 149181,
+        "outcomes": {
+          "ok": 17041,
+          "http_503_or_invalid_body": 88827,
+          "BrokenPipeError": 42854,
+          "RemoteDisconnected": 236,
+          "ConnectionResetError": 223
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7764159818179905,
+          "p95": 8.426666958257556,
+          "p99": 10.070791991893202,
+          "min": 0.0272089964710176,
+          "max": 19.993667025119066,
+          "mean": 1.6990347348808084
+        },
+        "latency_ms_successful": {
+          "p50": 8.269332989584655,
+          "p95": 10.661875014193356,
+          "p99": 12.635833001695573,
+          "min": 3.636666981037706,
+          "max": 19.993667025119066,
+          "mean": 8.451818296576976
+        },
+        "successful_requests_per_second": 1064.3596013789447,
+        "successful_response_mib_per_second": 66.54636524212845,
+        "error_percent": 88.57696355434003
+      },
+      {
+        "repository": "starship",
+        "operation": "commits",
+        "concurrency": 1,
+        "seconds": 16.004689000023063,
+        "requests": 3663,
+        "outcomes": {
+          "ok": 3663
+        },
+        "latency_ms_all_attempts": {
+          "p50": 4.277792002540082,
+          "p95": 5.101667018607259,
+          "p99": 6.068875023629516,
+          "min": 3.3681250060908496,
+          "max": 11.682791984640062,
+          "mean": 4.358136191547304
+        },
+        "latency_ms_successful": {
+          "p50": 4.277792002540082,
+          "p95": 5.101667018607259,
+          "p99": 6.068875023629516,
+          "min": 3.3681250060908496,
+          "max": 11.682791984640062,
+          "mean": 4.358136191547304
+        },
+        "successful_requests_per_second": 228.87042666025698,
+        "successful_response_mib_per_second": 4.041330736553808,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "commits",
+        "concurrency": 4,
+        "seconds": 16.037280582997482,
+        "requests": 5826,
+        "outcomes": {
+          "ok": 5826
+        },
+        "latency_ms_all_attempts": {
+          "p50": 10.686875029932708,
+          "p95": 12.921207991894335,
+          "p99": 16.019333037547767,
+          "min": 8.48954200046137,
+          "max": 32.082749996334314,
+          "mean": 10.97801928644032
+        },
+        "latency_ms_successful": {
+          "p50": 10.686875029932708,
+          "p95": 12.921207991894335,
+          "p99": 16.019333037547767,
+          "min": 8.48954200046137,
+          "max": 32.082749996334314,
+          "mean": 10.97801928644032
+        },
+        "successful_requests_per_second": 363.27854774684494,
+        "successful_response_mib_per_second": 6.4148433799877305,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "commits",
+        "concurrency": 16,
+        "seconds": 16.044194416026585,
+        "requests": 155344,
+        "outcomes": {
+          "http_503_or_invalid_body": 102128,
+          "BrokenPipeError": 49763,
+          "ok": 2908,
+          "ConnectionResetError": 289,
+          "RemoteDisconnected": 256
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.6870829965919256,
+          "p95": 2.0948330056853592,
+          "p99": 44.14208303205669,
+          "min": 0.023916014470160007,
+          "max": 79.94050002889708,
+          "mean": 1.645229124241228
+        },
+        "latency_ms_successful": {
+          "p50": 44.31204200955108,
+          "p95": 49.60324999410659,
+          "p99": 68.43279098393396,
+          "min": 21.835583029314876,
+          "max": 79.94050002889708,
+          "mean": 44.99723243675155
+        },
+        "successful_requests_per_second": 181.24936189349538,
+        "successful_response_mib_per_second": 3.1978944968471947,
+        "error_percent": 98.12802554331033
+      },
+      {
+        "repository": "starship",
+        "operation": "refs",
+        "concurrency": 1,
+        "seconds": 16.017063624982256,
+        "requests": 12267,
+        "outcomes": {
+          "ok": 12267
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.2107499642297626,
+          "p95": 1.5799999819137156,
+          "p99": 3.1397080165334046,
+          "min": 0.9955419809557498,
+          "max": 20.694000006187707,
+          "mean": 1.2947523266364327
+        },
+        "latency_ms_successful": {
+          "p50": 1.2107499642297626,
+          "p95": 1.5799999819137156,
+          "p99": 3.1397080165334046,
+          "min": 0.9955419809557498,
+          "max": 20.694000006187707,
+          "mean": 1.2947523266364327
+        },
+        "successful_requests_per_second": 765.8707168314435,
+        "successful_response_mib_per_second": 11.012839001068597,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "refs",
+        "concurrency": 4,
+        "seconds": 16.027744332968723,
+        "requests": 26701,
+        "outcomes": {
+          "ok": 26701
+        },
+        "latency_ms_all_attempts": {
+          "p50": 2.362457977142185,
+          "p95": 2.665541018359363,
+          "p99": 2.864292007870972,
+          "min": 1.3547090347856283,
+          "max": 4.374417010694742,
+          "mean": 2.388159744118872
+        },
+        "latency_ms_successful": {
+          "p50": 2.362457977142185,
+          "p95": 2.665541018359363,
+          "p99": 2.864292007870972,
+          "min": 1.3547090347856283,
+          "max": 4.374417010694742,
+          "mean": 2.388159744118872
+        },
+        "successful_requests_per_second": 1665.9237535425757,
+        "successful_response_mib_per_second": 23.95515285102363,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "refs",
+        "concurrency": 16,
+        "seconds": 16.02671875001397,
+        "requests": 157651,
+        "outcomes": {
+          "ok": 14602,
+          "http_503_or_invalid_body": 111964,
+          "BrokenPipeError": 30744,
+          "RemoteDisconnected": 194,
+          "ConnectionResetError": 147
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.7643330027349293,
+          "p95": 9.344458987470716,
+          "p99": 10.822499985806644,
+          "min": 0.026958005037158728,
+          "max": 16.665208037011325,
+          "mean": 1.613133108635022
+        },
+        "latency_ms_successful": {
+          "p50": 9.434541978407651,
+          "p95": 11.390750005375594,
+          "p99": 12.63729203492403,
+          "min": 3.121916961390525,
+          "max": 16.665208037011325,
+          "mean": 9.575170548322289
+        },
+        "successful_requests_per_second": 911.1035282869285,
+        "successful_response_mib_per_second": 13.101214408407504,
+        "error_percent": 90.73776886921111
+      },
+      {
+        "repository": "starship",
+        "operation": "tree",
+        "concurrency": 1,
+        "seconds": 16.013972209009808,
+        "requests": 19365,
+        "outcomes": {
+          "ok": 19365
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.74954197043553,
+          "p95": 1.1352500296197832,
+          "p99": 2.40679201669991,
+          "min": 0.4905420355498791,
+          "max": 11.217541992664337,
+          "mean": 0.8226428006385161
+        },
+        "latency_ms_successful": {
+          "p50": 0.74954197043553,
+          "p95": 1.1352500296197832,
+          "p99": 2.40679201669991,
+          "min": 0.4905420355498791,
+          "max": 11.217541992664337,
+          "mean": 0.8226428006385161
+        },
+        "successful_requests_per_second": 1209.256500963879,
+        "successful_response_mib_per_second": 3.833752690815503,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "tree",
+        "concurrency": 4,
+        "seconds": 16.004292124009226,
+        "requests": 31545,
+        "outcomes": {
+          "ok": 31545
+        },
+        "latency_ms_all_attempts": {
+          "p50": 1.613333006389439,
+          "p95": 3.273292037192732,
+          "p99": 10.248832986690104,
+          "min": 0.6747079896740615,
+          "max": 74.0720410249196,
+          "mean": 2.024663219069402
+        },
+        "latency_ms_successful": {
+          "p50": 1.613333006389439,
+          "p95": 3.273292037192732,
+          "p99": 10.248832986690104,
+          "min": 0.6747079896740615,
+          "max": 74.0720410249196,
+          "mean": 2.024663219069402
+        },
+        "successful_requests_per_second": 1971.033754918595,
+        "successful_response_mib_per_second": 6.2487241553177215,
+        "error_percent": 0.0
+      },
+      {
+        "repository": "starship",
+        "operation": "tree",
+        "concurrency": 16,
+        "seconds": 16.009098416019697,
+        "requests": 152799,
+        "outcomes": {
+          "ok": 24050,
+          "http_503_or_invalid_body": 85628,
+          "BrokenPipeError": 42647,
+          "RemoteDisconnected": 236,
+          "ConnectionResetError": 238
+        },
+        "latency_ms_all_attempts": {
+          "p50": 0.8189580403268337,
+          "p95": 6.577374995686114,
+          "p99": 7.767125032842159,
+          "min": 0.02887495793402195,
+          "max": 14.533292036503553,
+          "mean": 1.6718909593842297
+        },
+        "latency_ms_successful": {
+          "p50": 6.068458023946732,
+          "p95": 7.914166955742985,
+          "p99": 8.801666961517185,
+          "min": 2.592250006273389,
+          "max": 14.533292036503553,
+          "mean": 6.141423780936748
+        },
+        "successful_requests_per_second": 1502.2707322439894,
+        "successful_response_mib_per_second": 4.78240448478861,
+        "error_percent": 84.26036819612693
+      }
+    ],
+    "overload_outcomes": {
+      "concurrency": 16,
+      "attempts": 1962881,
+      "http_503": 1303498,
+      "transport_errors": 471230,
+      "successful": 188153,
+      "invalid_successful_bodies": 0,
+      "note": "Single account, closed-loop workload without Retry-After backoff; failed attempts retained separately from successful latency and throughput."
+    }
+  },
+  "cold": {
+    "method": "one first authenticated read per repository/API after graceful restart with a new empty Canopy data directory; RustFS and OS caches remain warm",
+    "reads": [
+      {
+        "repository": "bat",
+        "operation": "refs",
+        "startup_seconds": 0.6589105000020936,
+        "latency_ms": 474.42112502176315,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 6832,
+        "query": {
+          "kind": "refs"
+        }
+      },
+      {
+        "repository": "bat",
+        "operation": "tree",
+        "startup_seconds": 1.0333095410023816,
+        "latency_ms": 745.7135000149719,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 4541,
+        "query": {
+          "kind": "tree",
+          "commit": "d9559c69f541873f8c47ac8ad81d985f4441edf6",
+          "path_base64": ""
+        }
+      },
+      {
+        "repository": "bat",
+        "operation": "blob",
+        "startup_seconds": 1.0326245839823969,
+        "latency_ms": 381.3612499507144,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 22279,
+        "query": {
+          "kind": "file",
+          "commit": "d9559c69f541873f8c47ac8ad81d985f4441edf6",
+          "path_base64": "dGVzdHMvZXhhbXBsZXMvbG9uZ2xpbmUuanNvbg"
+        }
+      },
+      {
+        "repository": "bat",
+        "operation": "commits",
+        "startup_seconds": 1.0474249579710886,
+        "latency_ms": 236.28650000318885,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 20535,
+        "query": {
+          "kind": "history",
+          "commit": "d9559c69f541873f8c47ac8ad81d985f4441edf6"
+        }
+      },
+      {
+        "repository": "libgit2",
+        "operation": "refs",
+        "startup_seconds": 0.5767115830094554,
+        "latency_ms": 975.2154999878258,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 25061,
+        "query": {
+          "kind": "refs"
+        }
+      },
+      {
+        "repository": "libgit2",
+        "operation": "tree",
+        "startup_seconds": 1.0377434589900076,
+        "latency_ms": 991.5179999661632,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 5398,
+        "query": {
+          "kind": "tree",
+          "commit": "4af47f040cb4d80c75f37f626f511843e0dd8d44",
+          "path_base64": ""
+        }
+      },
+      {
+        "repository": "libgit2",
+        "operation": "blob",
+        "startup_seconds": 1.0659633749746718,
+        "latency_ms": 859.9925839807838,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 22154,
+        "query": {
+          "kind": "file",
+          "commit": "4af47f040cb4d80c75f37f626f511843e0dd8d44",
+          "path_base64": "ZGVwcy9wY3JlMi9wY3JlMl9jb21waWxlLmg"
+        }
+      },
+      {
+        "repository": "libgit2",
+        "operation": "commits",
+        "startup_seconds": 0.5351114589720964,
+        "latency_ms": 1275.7054580142722,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 18498,
+        "query": {
+          "kind": "history",
+          "commit": "4af47f040cb4d80c75f37f626f511843e0dd8d44"
+        }
+      },
+      {
+        "repository": "starship",
+        "operation": "refs",
+        "startup_seconds": 0.5408446250366978,
+        "latency_ms": 352.6365830330178,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 15078,
+        "query": {
+          "kind": "refs"
+        }
+      },
+      {
+        "repository": "starship",
+        "operation": "tree",
+        "startup_seconds": 0.581210583972279,
+        "latency_ms": 409.1240420239046,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 5088,
+        "query": {
+          "kind": "tree",
+          "commit": "df688000684138943610bbaa2a6c454db6987d48",
+          "path_base64": ""
+        }
+      },
+      {
+        "repository": "starship",
+        "operation": "blob",
+        "startup_seconds": 0.5271440829965286,
+        "latency_ms": 396.08150004642084,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 22185,
+        "query": {
+          "kind": "file",
+          "commit": "df688000684138943610bbaa2a6c454db6987d48",
+          "path_base64": "LmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWw"
+        }
+      },
+      {
+        "repository": "starship",
+        "operation": "commits",
+        "startup_seconds": 1.040699000004679,
+        "latency_ms": 499.0982919698581,
+        "status": 200,
+        "valid": true,
+        "response_bytes": 19598,
+        "query": {
+          "kind": "history",
+          "commit": "df688000684138943610bbaa2a6c454db6987d48"
+        }
+      }
+    ]
+  },
+  "resources": {
+    "server": {
+      "sampling_interval_seconds": 2,
+      "max_observed_rss_mib": 40.375,
+      "max_observed_ps_cpu_percent": 424.5,
+      "median_observed_ps_cpu_percent": 199.2
+    },
+    "client": {
+      "sampling_interval_seconds": 2,
+      "max_observed_rss_mib": 82.375,
+      "max_observed_ps_cpu_percent": 201.1,
+      "median_observed_ps_cpu_percent": 18.4
+    },
+    "scope": "Two-second ps samples of the Canopy parent and benchmark client only; excludes SQLite/Git children, RustFS, OS page cache and true between-sample peaks."
+  },
+  "storage": {
+    "repositories": [
+      {
+        "repository_id": "c26304a7f3e4433a933277ffcbb26cbd",
+        "sqlite_bytes": 190627840,
+        "objects": 20952,
+        "refs": 66
+      },
+      {
+        "repository_id": "beb162113d72439794e609639ba05503",
+        "sqlite_bytes": 2093539328,
+        "objects": 134967,
+        "refs": 271
+      },
+      {
+        "repository_id": "f82d452384d14ab48099743457d303ae",
+        "sqlite_bytes": 685969408,
+        "objects": 38333,
+        "refs": 164
+      }
+    ],
+    "provider_df": "Filesystem       1B-blocks        Used  Available Use% Mounted on\n/dev/vdb1      83953606656 76902137856 2739830784  97% /data\n",
+    "rustfs_data_directory_apparent_bytes": 22525385112,
+    "provider_df_after_cold_reads": "Filesystem       1B-blocks        Used  Available Use% Mounted on\n/dev/vdb1      83953606656 76903243776 2738724864  97% /data\n"
+  },
+  "harness_sha256": {
+    "benchmark_repositories.py": "17515a1a8471fe8a35433b9eeeb8bc809d377dea44252f34c06ccedad4767320",
+    "benchmark_browse.py": "fb2945e0ca503413d5d5fd81351cb3e7b4ca6ab76c441693459a6417ec24d97a"
+  },
+  "sample_count": 2425079,
+  "normal_load_requests": 462198,
+  "normal_load_errors": 0,
+  "raw_evidence_directory": "~/.local/share/canopy-benchmark-20261013/results"
+}

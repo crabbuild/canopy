@@ -42,15 +42,17 @@ impl Workspace {
         fs::create_dir_all(directory)?;
         let directory = fs::canonicalize(directory)?;
         let owner = OwnerLock::acquire(&directory.join(".canopy-owner.lock"))?;
-        match fs::symlink_metadata(directory.join("runtime-v1")) {
-            Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "legacy Canopy runtime requires a fresh packed-format data directory",
-                ));
+        for previous in ["runtime-v1", "canopy-pack-v1"] {
+            match fs::symlink_metadata(directory.join(previous)) {
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "older Canopy state requires a fresh data directory",
+                    ));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
         }
         let root = directory.join(crate::deployment::STORAGE_FORMAT);
         #[cfg(unix)]

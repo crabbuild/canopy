@@ -190,26 +190,17 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn supported_current_and_retained_proofs_are_returned_unchanged() -> TestResult {
-    let retained = Digest::from_bytes(
-        hex::decode("f7254eda9d5d339566f45457502618ad13cbbf6e5a74595f5b3ce46653ea12f1")?
-            .try_into()
-            .map_err(|_| "invalid retained code")?,
-    );
-    for code in [None, Some(retained)] {
-        let fixture = Fixture::new()?;
-        fixture.ready().await?;
-        let proof = fixture
-            .proof(CatalogRole::Sql, code.unwrap_or(fixture.code()), 1)
-            .await?;
-        let entry = proof.entry().clone();
-        let revision = proof.revision();
-        let release = fixture.releases.load().await?.unwrap().record().clone();
-        let admitted = fixture.admit(proof).await?;
-        assert_eq!(admitted.entry(), &entry);
-        assert_eq!(admitted.revision(), revision);
-        assert_eq!(fixture.releases.load().await?.unwrap().record(), &release);
-    }
+async fn current_catalog_proof_is_returned_unchanged() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.ready().await?;
+    let proof = fixture.proof(CatalogRole::Sql, fixture.code(), 1).await?;
+    let entry = proof.entry().clone();
+    let revision = proof.revision();
+    let release = fixture.releases.load().await?.unwrap().record().clone();
+    let admitted = fixture.admit(proof).await?;
+    assert_eq!(admitted.entry(), &entry);
+    assert_eq!(admitted.revision(), revision);
+    assert_eq!(fixture.releases.load().await?.unwrap().record(), &release);
     Ok(())
 }
 
@@ -278,7 +269,7 @@ async fn corrupted_selected_descriptor_closes_existing_admission() -> TestResult
 
 #[tokio::test]
 async fn unsupported_catalog_identity_and_wrong_target_are_not_adopted() -> TestResult {
-    for case in 0..4 {
+    for case in 0..5 {
         let fixture = Fixture::new()?;
         fixture.ready().await?;
         let role = if case == 0 {
@@ -288,6 +279,12 @@ async fn unsupported_catalog_identity_and_wrong_target_are_not_adopted() -> Test
         };
         let code = if case == 1 {
             Digest::from_bytes([1; 32])
+        } else if case == 4 {
+            Digest::from_bytes(
+                hex::decode("f7254eda9d5d339566f45457502618ad13cbbf6e5a74595f5b3ce46653ea12f1")?
+                    .try_into()
+                    .map_err(|_| "old code")?,
+            )
         } else {
             fixture.code()
         };

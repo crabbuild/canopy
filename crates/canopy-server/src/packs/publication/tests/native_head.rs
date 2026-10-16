@@ -73,6 +73,16 @@ async fn recover(
 async fn native_head_reuses_ref_tree_and_preserves_original_receipt_after_typed_retirement()
 -> Result {
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        retired_head(format).await?;
+    }
+    Ok(())
+}
+
+// Construct the complete scenario outside the harness's polling stack frame.
+fn retired_head(
+    format: ObjectFormat,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Result>>> {
+    Box::pin(async move {
         let (f, graph, _) = initial(format, false).await?;
         let (prepared, root, budget) = preparation(&f, &graph).await?;
         let check = prepared.base.capability().2.clone();
@@ -219,8 +229,8 @@ async fn native_head_reuses_ref_tree_and_preserves_original_receipt_after_typed_
         runtime.shutdown().await?;
         drop(graph.prepared);
         cleaned(graph.root.path(), &graph.budget).await?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 #[tokio::test]
 async fn native_head_denials_recheck_current_authority_generation_and_native_branch_existence()

@@ -15,11 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check Cellule release alignment
+        run: python3 scripts/check_cellule.py
       - name: Install tools
         run: |
           rustup component add clippy rustfmt
           sudo apt-get update
-          sudo apt-get install -y git-lfs openssh-client
+          sudo apt-get install -y git-lfs openssh-client openssl
           git lfs install
       - name: Report tool versions
         run: |
@@ -32,8 +34,8 @@ jobs:
       - name: Check lints
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --workspace --locked
-      - name: Qualify Git compatibility against RustFS
-        run: python3 scripts/qualify_size.py --provider-only
+        run: cargo test --workspace --locked -- --test-threads=1
       - name: Build server
         run: cargo build --locked --bin canopy
+      - name: Qualify Git compatibility and process recovery against RustFS
+        run: python3 scripts/qualify_size.py --provider-only --process-binary target/debug/canopy

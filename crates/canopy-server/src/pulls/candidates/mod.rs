@@ -6,7 +6,6 @@ pub(crate) mod command;
 pub(crate) mod rebase;
 use super::merge::{MergeStrategy, oid, policy_state, policy_statement};
 use super::*;
-use crate::ObjectKind;
 use cellule_runtime::{
     codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError, codec::WireValue,
     registry::CommandContext,
@@ -274,59 +273,6 @@ pub(crate) fn commit_body(candidate: &MergeCandidate, tree_oid: &str) -> Vec<u8>
     let time = candidate.created_at_ms / 1000;
     let message = &candidate.request.message;
     format!("tree {tree_oid}\n{parents}author {actor} <{actor}@users.canopy.invalid> {time} +0000\ncommitter {actor} <{actor}@users.canopy.invalid> {time} +0000\n\n{message}{}",if message.ends_with('\n') {""} else {"\n"}).into_bytes()
-}
-
-pub(crate) fn publication_oid(
-    context: &CommandContext<'_, '_>,
-    number: i64,
-    request: &merge::MergeRequest,
-) -> cellule_runtime::Result<Option<crate::ObjectId>> {
-    let Some(id) = request.candidate_id.as_deref() else {
-        return Ok(None);
-    };
-    let Some((_, candidate)) = decode(&context.sql(&query(id)?)?)? else {
-        return Ok(None);
-    };
-    if candidate.number != number
-        || candidate.request.revision != request.revision
-        || candidate.request.strategy != request.strategy
-    {
-        return Ok(None);
-    }
-    let CandidateResult::Ready {
-        oid: commit,
-        tree_oid,
-    } = &candidate.result
-    else {
-        return Ok(None);
-    };
-    if !certified(context, &candidate, commit, tree_oid)? {
-        return Ok(None);
-    }
-    Ok(Some(oid(commit)?))
-}
-fn certified(
-    context: &CommandContext<'_, '_>,
-    candidate: &MergeCandidate,
-    commit: &str,
-    tree: &str,
-) -> cellule_runtime::Result<bool> {
-    if candidate.request.strategy == MergeStrategy::Rebase {
-        return rebase::certified(context, candidate, commit, tree);
-    }
-    // The trusted native worker owns tree-merging semantics. The transaction
-    // verifies exact parent order, author, timestamp, message and graph closure.
-    let body = commit_body(candidate, tree);
-    let commit = oid(commit)?;
-    if crate::object_id(commit.format(), ObjectKind::Commit, &body) != commit {
-        return Ok(false);
-    }
-    let rows=context.sql(&SqlBatch {statements:vec![SqlStatement {
-        sql:"SELECT o.body FROM objects o JOIN object_closure c ON c.oid = o.oid WHERE o.oid = ?1 AND o.kind = 'commit' AND o.storage = 'inline'".into(),parameters:vec![SqlValue::Blob(commit.to_vec())],
-    }]})?;
-    Ok(
-        matches!(rows.first().and_then(|set|set.rows.first()).map(Vec::as_slice),Some([SqlValue::Blob(stored)]) if *stored == body),
-    )
 }
 
 pub(crate) fn intent_binding(candidate: &MergeCandidate) -> cellule_runtime::Result<Vec<u8>> {

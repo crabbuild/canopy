@@ -63,8 +63,8 @@ takeover. Cross-node placement races and larger hot sets still need qualificatio
 Each storage prefix has one durable tenant/application identity and a selected
 compiled release. First startup initializes an empty deployment; later nodes
 must match its release and configured image identity. A nonempty catalog without
-release metadata is rejected. Existing preview prefixes require explicit future
-migration; do not point this build at them as an upgrade.
+release metadata is rejected. Breaking schema or format changes require a fresh
+storage prefix; this build has no compatibility reader or in-place upgrade path.
 
 To close admission and drain the fleet, choose a fresh operation UUID and use
 the same binary and configuration as the deployment:
@@ -113,8 +113,9 @@ failed root verification return an error. Retry the same operation after the
 reported condition is resolved; recovery never resumes serving automatically.
 Do not remove authority records or force `drained` to bypass an error.
 
-Upgrade/migration and object collection remain pending. Maintenance and owner
-recovery do not provide a separate backup copy.
+Cellule object collection uses the [retention maintenance procedure](#cellule-retention-collection).
+Product-owned pack/catalog/LFS collection remains a separate policy. Maintenance
+and owner recovery do not provide a separate backup copy.
 
 ### Backup and restore
 
@@ -157,9 +158,9 @@ failed operation after repairing its reported cause. Replaying a completed resto
 does not reset subsequently published service state.
 
 This is a same-provider copy, not protection from losing the entire bucket or
-provider. Cross-provider export, old-release migration, automated retention and
-the complete interruption fault matrix remain pending. Do not use older binaries
-that lack prefix reservations with these backup/restore destinations.
+provider. Cross-provider export, automated retention and the complete interruption
+fault matrix remain pending. Restore requires the same compiled release and
+current formats; breaking changes use a fresh storage prefix.
 
 ### Recover a lost push reply
 
@@ -189,3 +190,30 @@ publication can still return transport errors. Response bodies are limited to
 staging chunks currently have no expiry or collector and consume repository storage.
 
 Native Git requires an explicit native_limits configuration. See the [native resource admission contract](design/native-resource-admission.md) for vector profiles, reserved maintenance shares, HTTP 503 on exhaustion and drain ownership. Choose measured claims within OS limits and server/filesystem headroom; the default production and small evaluation profiles are estimates. The container checker includes these claims in memory and descriptor headroom checks. Missing configuration rejects startup; each foreground/maintenance share must fit a read/pack pipeline. Shutdown permanently closes native admission and waits for both class owners before Cell shutdown, workspace release and lease withdrawal. Poisoned accounting or quarantined native work can retain this drain until process restart; an elapsed shutdown deadline is not a successful drain acknowledgement.
+
+
+## Cellule retention collection
+
+Use the exact deployed executable, image identity, credentials and configuration.
+The current `canopy-pack-v2` release requires a fresh storage prefix; it cannot
+collect an earlier release through a compatibility reader.
+
+1. Run `canopy maintenance config.json begin <operation-uuid>` and stop every
+   serving process gracefully. For a crashed owner, run the same release's
+   maintenance recovery with its enrolled worker configuration.
+2. Confirm `canopy maintenance config.json status` reports `drained: true`.
+   Expired advertisements alone do not prove closure.
+3. Run `canopy gc config.json <operation-uuid> <grace-ms> <max-deletes>`.
+   The deletion bound is at most 100,000 objects per pass. Repeat bounded passes
+   until the JSON report has `complete: true`.
+4. Verify the retained data/backup, then run
+   `canopy maintenance config.json end <operation-uuid>` before restarting.
+
+The collector uses Cellule's verified roots and backup pins and leaves the
+release in maintenance. The persisted worker claim excludes recovery and
+maintenance completion during a sweep. If the worker process dies, retry with
+its same node/signing identity and canonical workspace after its process has
+closed; time passing does not permit a different worker to take over a paused
+delete. Policy, release, workspace and drain checks fail before deletion.
+Cellule collection does not delete product-owned native packs, catalogs or LFS
+bodies; reclaiming unreferenced product artifacts remains a separate policy.

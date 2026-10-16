@@ -1,279 +1,13 @@
-//! Bounded object certificates and constant-per-ref graph checks at publication.
+//! Typed structural Git parsing for native catalog verification.
+use crate::ObjectKind;
 
-use std::collections::BTreeMap;
-
-use crate::{ObjectKind, PushPlan, RepositoryModule, object_batch::VERIFY_BATCH_BYTES, object_id};
-use cellule_runtime::{
-    CellModule, Command, Error, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError,
-    codec::WireValue, primitives::sql::SqlBatch, primitives::sql::SqlResultSet,
-    primitives::sql::SqlStatement, primitives::sql::SqlValue, registry::CommandContext,
-    registry::CommandResult,
-};
-
-mod preparation;
 pub(crate) mod stream;
-
+#[cfg(test)]
 type Oid = crate::ObjectId;
+#[cfg(test)]
 type Edge = (Oid, Option<ObjectKind>);
-const MAX_CERTIFICATES: usize = 512;
 
-#[derive(Default)]
-pub(crate) struct CertificateBatch(Vec<Oid>);
-
-impl WireValue for CertificateBatch {
-    fn encode(&self, encoder: &mut BoundedEncoder) -> Result<(), CodecError> {
-        if !(1..=MAX_CERTIFICATES).contains(&self.0.len()) {
-            return Err(CodecError::Invalid("certificate batch count"));
-        }
-        encoder.write_count(self.0.len())?;
-        for oid in &self.0 {
-            encoder.write_bytes(oid)?;
-        }
-        Ok(())
-    }
-    fn decode(decoder: &mut BoundedDecoder<'_>) -> Result<Self, CodecError> {
-        let count = decoder.read_count()?;
-        if !(1..=MAX_CERTIFICATES).contains(&count) {
-            return Err(CodecError::Invalid("certificate batch count"));
-        }
-        let mut batch = Self(Vec::with_capacity(count));
-        for _ in 0..count {
-            batch.0.push(
-                decoder
-                    .read_bytes()?
-                    .try_into()
-                    .map_err(|_| CodecError::Invalid("certificate OID width"))?,
-            );
-        }
-        Ok(batch)
-    }
-}
-
-#[derive(Clone)]
-struct Status {
-    kind: ObjectKind,
-    bytes: u64,
-    certified: bool,
-}
-
-fn status_query(oids: &[Oid]) -> SqlBatch {
-    let placeholders = vec!["?"; oids.len()].join(",");
-    SqlBatch {
-        statements: vec![SqlStatement {
-            sql: format!(
-                "SELECT o.oid, o.kind, CASE WHEN o.storage IN ('external', 'packed') THEN 0 ELSE o.size END, c.oid FROM objects o LEFT JOIN object_closure c ON c.oid = o.oid WHERE o.oid IN ({placeholders})"
-            ),
-            parameters: oids
-                .iter()
-                .map(|oid| SqlValue::Blob(oid.to_vec()))
-                .collect(),
-        }],
-    }
-}
-
-fn statuses(results: &[SqlResultSet]) -> cellule_runtime::Result<BTreeMap<Oid, Status>> {
-    let mut states = BTreeMap::new();
-    for row in &results
-        .first()
-        .ok_or(Error::Command("missing graph result"))?
-        .rows
-    {
-        let [
-            SqlValue::Blob(oid),
-            SqlValue::Text(kind),
-            SqlValue::Integer(bytes),
-            certificate,
-        ] = row.as_slice()
-        else {
-            return Err(Error::Command("invalid graph status"));
-        };
-        let kind = parse_kind(kind.as_bytes()).ok_or(Error::Command("invalid graph kind"))?;
-        let bytes = u64::try_from(*bytes).map_err(|_| Error::Command("invalid graph size"))?;
-        states.insert(
-            oid.as_slice()
-                .try_into()
-                .map_err(|_| Error::Command("invalid graph OID"))?,
-            Status {
-                kind,
-                bytes,
-                certified: matches!(certificate, SqlValue::Blob(_)),
-            },
-        );
-    }
-    Ok(states)
-}
-
-pub(crate) struct CertifyObjects;
-impl Command for CertifyObjects {
-    const MODULE: &'static str = RepositoryModule::NAME;
-    const ID: u32 = 6;
-    const CODEC_VERSION: u32 = 3;
-    type Input = CertificateBatch;
-    type Output = bool;
-
-    fn execute(
-        context: &mut CommandContext<'_, '_>,
-        batch: CertificateBatch,
-    ) -> cellule_runtime::Result<CommandResult<bool>> {
-        let mut verified = 0;
-        for oid in batch.0 {
-            let states = statuses(&context.sql(&status_query(&[oid]))?)?;
-            let Some(state) = states.get(&oid) else {
-                return Ok(CommandResult::Rejected(false));
-            };
-            if state.certified {
-                continue;
-            }
-            if verified != 0 && state.bytes > VERIFY_BATCH_BYTES.saturating_sub(verified) {
-                return Ok(CommandResult::Rejected(false));
-            }
-            verified += state.bytes;
-            let Some(edges) = object_edges(context, oid, state.kind)? else {
-                return Ok(CommandResult::Rejected(false));
-            };
-            for edges in edges.chunks(MAX_CERTIFICATES) {
-                let oids: Vec<_> = edges.iter().map(|(oid, _)| *oid).collect();
-                let states = statuses(&context.sql(&status_query(&oids))?)?;
-                if edges.iter().any(|(oid, kind)| {
-                    !states.get(oid).is_some_and(|state| {
-                        state.certified && kind.is_none_or(|kind| kind == state.kind)
-                    })
-                }) {
-                    return Ok(CommandResult::Rejected(false));
-                }
-            }
-            // Only certified, typed edges enter the reachability index. Keeping
-            // this with closure publication prevents lazy fetch from trusting
-            // staged or malformed object graphs.
-            for edges in edges.chunks(crate::object_batch::MAX_OBJECTS) {
-                context.sql(&SqlBatch {
-                    statements: edges
-                        .iter()
-                        .map(|(child, _)| SqlStatement {
-                            sql: "INSERT INTO object_edges (parent, child) VALUES (?1, ?2)".into(),
-                            parameters: vec![
-                                SqlValue::Blob(oid.to_vec()),
-                                SqlValue::Blob(child.to_vec()),
-                            ],
-                        })
-                        .collect(),
-                })?;
-            }
-            if state.kind == ObjectKind::Commit {
-                let parents: Vec<_> = edges
-                    .iter()
-                    .filter(|(_, kind)| *kind == Some(ObjectKind::Commit))
-                    .map(|(parent, _)| *parent)
-                    .collect();
-                for parents in parents.chunks(crate::object_batch::MAX_OBJECTS) {
-                    context.sql(&SqlBatch { statements: parents.iter().map(|parent| SqlStatement {
-                        sql: "INSERT INTO commit_parents (child, parent) VALUES (?1, ?2) ON CONFLICT DO NOTHING".into(),
-                        parameters: vec![SqlValue::Blob(oid.to_vec()), SqlValue::Blob(parent.to_vec())],
-                    }).collect() })?;
-                }
-            }
-            // These proofs depend only on immutable objects. A future collector must
-            // invalidate certificates before removing any reachable object or chunk.
-            context.sql(&SqlBatch {
-                statements: vec![SqlStatement {
-                    sql: "INSERT INTO object_closure (oid) VALUES (?1)".into(),
-                    parameters: vec![SqlValue::Blob(oid.to_vec())],
-                }],
-            })?;
-        }
-        Ok(CommandResult::Success(true))
-    }
-}
-
-pub(crate) fn certified_roots(
-    context: &CommandContext<'_, '_>,
-    plan: &PushPlan,
-) -> cellule_runtime::Result<bool> {
-    for updates in plan.updates.chunks(MAX_CERTIFICATES) {
-        let oids: Vec<_> = updates.iter().filter_map(|update| update.new_oid).collect();
-        if oids.is_empty() {
-            continue;
-        }
-        let states = statuses(&context.sql(&status_query(&oids))?)?;
-        if !updates.iter().all(|update| {
-            update.new_oid.is_none_or(|oid| {
-                states.get(&oid).is_some_and(|state| {
-                    state.certified
-                        && (!update.name.starts_with("refs/heads/")
-                            || state.kind == ObjectKind::Commit)
-                })
-            })
-        }) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn object_edges(
-    context: &CommandContext<'_, '_>,
-    oid: Oid,
-    kind: ObjectKind,
-) -> cellule_runtime::Result<Option<Vec<Edge>>> {
-    let result = context.sql(&SqlBatch {
-        statements: vec![SqlStatement {
-            sql: "SELECT storage, body, digest, size, chunk_id FROM objects WHERE oid = ?1".into(),
-            parameters: vec![SqlValue::Blob(oid.to_vec())],
-        }],
-    })?;
-    let Some(
-        [
-            SqlValue::Text(storage),
-            body,
-            SqlValue::Blob(digest),
-            SqlValue::Integer(size),
-            upload,
-        ],
-    ) = result
-        .first()
-        .and_then(|set| set.rows.first())
-        .map(Vec::as_slice)
-    else {
-        return Err(Error::Command("invalid stored graph object"));
-    };
-    let edges = match (storage.as_str(), body, upload) {
-        ("inline", SqlValue::Blob(body), SqlValue::Null) => {
-            if object_id(oid.format(), kind, body) != oid
-                || blake3::hash(body).as_bytes() != digest.as_slice()
-            {
-                return Err(Error::Command("corrupt stored graph object"));
-            }
-            let Some(edges) = edges(oid.format(), kind, body) else {
-                return Ok(None);
-            };
-            edges
-        }
-        // The immutable upload is verified before its SQLite record is published.
-        // Blobs have no outgoing Git edges; no network I/O belongs in this transaction.
-        ("external" | "packed", SqlValue::Null, SqlValue::Null) if kind == ObjectKind::Blob => {
-            Vec::new()
-        }
-        ("chunked", SqlValue::Null, SqlValue::Blob(upload)) => {
-            let invalid = || Error::Command("invalid stored graph object chunks");
-            let body = crate::object_chunks::body(
-                context,
-                oid,
-                kind,
-                upload.as_slice().try_into().map_err(|_| invalid())?,
-                u64::try_from(*size).map_err(|_| invalid())?,
-                digest.as_slice().try_into().map_err(|_| invalid())?,
-            )?
-            .ok_or_else(invalid)?;
-            let Some(edges) = edges(oid.format(), kind, &body) else {
-                return Ok(None);
-            };
-            edges
-        }
-        _ => return Err(Error::Command("invalid stored graph object")),
-    };
-    Ok(Some(edges))
-}
-
+#[cfg(test)]
 pub(crate) fn edges(
     format: crate::ObjectFormat,
     kind: ObjectKind,
@@ -304,6 +38,7 @@ pub(crate) fn edges(
     Some(edges)
 }
 
+#[cfg(test)]
 pub(crate) fn tag_edge(mut body: &[u8]) -> Option<Edge> {
     let target = hex_oid(line(&mut body)?.strip_prefix(b"object ")?)?;
     let kind = parse_kind(line(&mut body)?.strip_prefix(b"type ")?)?;
@@ -311,6 +46,7 @@ pub(crate) fn tag_edge(mut body: &[u8]) -> Option<Edge> {
     Some((target, Some(kind)))
 }
 
+#[cfg(test)]
 fn line<'a>(body: &mut &'a [u8]) -> Option<&'a [u8]> {
     let newline = body.iter().position(|byte| *byte == b'\n')?;
     let line = &body[..newline];
@@ -318,6 +54,7 @@ fn line<'a>(body: &mut &'a [u8]) -> Option<&'a [u8]> {
     Some(line)
 }
 
+#[cfg(test)]
 fn tree_edges(format: crate::ObjectFormat, mut body: &[u8]) -> Option<Vec<Edge>> {
     let mut edges = Vec::new();
     while !body.is_empty() {
@@ -363,6 +100,7 @@ fn tree_edges(format: crate::ObjectFormat, mut body: &[u8]) -> Option<Vec<Edge>>
     Some(edges)
 }
 
+#[cfg(test)]
 fn hex_oid(text: &[u8]) -> Option<Oid> {
     let oid = Oid::from_hex(text).ok()?;
     (!oid.is_zero()).then_some(oid)

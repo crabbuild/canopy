@@ -68,7 +68,7 @@ impl Fixture {
                 registry
                     .module_code(RepositoryModule::NAME)
                     .ok_or("module")?,
-                1,
+                crate::REPOSITORY_SCHEMA_VERSION,
             )?)
             .await?;
         let incarnation = IncarnationId::from_bytes([93; 16]);

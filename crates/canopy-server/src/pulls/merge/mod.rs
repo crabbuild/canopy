@@ -4,7 +4,7 @@ use crate::ReadIdentity;
 
 pub(crate) mod command;
 use super::*;
-use crate::{RefExpectation, RefUpdate, directory::TokenScope};
+use crate::{RefExpectation, RefUpdate};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,7 +129,6 @@ pub(crate) fn reviewed_native_update(
 pub(super) struct ReviewState {
     pub(super) policy: ReviewPolicy,
     base: String,
-    writable: bool,
 }
 
 pub(crate) fn valid_request(request: &MergeRequest) -> bool {
@@ -187,81 +186,6 @@ impl RepositoryCell {
             receipt: result.receipt,
         })
     }
-    /// Prepares ancestry facts and atomically publishes an exact reviewed merge.
-    ///
-    /// Current write authority, reviews, checks and ref versions are rechecked at
-    /// publication. Exact request retries preserve the original merge record.
-    pub async fn merge_pull(
-        &self,
-        identity: MutationIdentity,
-        actor: &str,
-        number: i64,
-        request: MergeRequest,
-    ) -> Result<Committed<MergeOutcome>, InvocationError<MergeOutcome>> {
-        if !valid_request(&request) || number < 1 || validate_component(actor).is_err() {
-            return Err(InvocationError::NotStarted(Error::Command(
-                "invalid merge request",
-            )));
-        }
-        let state = self
-            .pull_review_state(ReadIdentity::Account(actor), number)
-            .await
-            .map_err(preparation)?
-            .output;
-        if state.is_some_and(|state| {
-            state.writable
-                && state.policy.ready
-                && state.policy.reviews_satisfied
-                && state.policy.revision.as_ref() == Some(&request.revision)
-        }) {
-            let base = oid(&request.revision.base_oid).map_err(InvocationError::NotStarted)?;
-            let source = match &request.candidate_id {
-                None => {
-                    Some(oid(&request.revision.source_oid).map_err(InvocationError::NotStarted)?)
-                }
-                Some(id) => self
-                    .merge_candidate(actor, number, id)
-                    .await
-                    .map_err(preparation)?
-                    .output
-                    .filter(|candidate| {
-                        candidate.request.revision == request.revision
-                            && candidate.request.strategy == request.strategy
-                    })
-                    .and_then(|candidate| match candidate.result {
-                        super::candidates::CandidateResult::Ready { oid: commit, .. } => {
-                            parse_oid(&commit).and_then(|bytes| bytes.try_into().ok())
-                        }
-                        _ => None,
-                    }),
-            };
-            if let Some(source) = source {
-                self.prepare_ancestry(base, source)
-                    .await
-                    .map_err(preparation)?;
-            }
-        }
-        self.application
-            .command::<command::MergePull>(
-                &self.target,
-                identity,
-                command::MergeInput {
-                    actor: actor.into(),
-                    number,
-                    request,
-                    issued_at_ms: identity.issued_at_ms,
-                },
-            )
-            .await
-    }
-}
-fn preparation(
-    error: impl std::error::Error + Send + Sync + 'static,
-) -> InvocationError<MergeOutcome> {
-    InvocationError::NotStarted(Error::Facility {
-        name: "merge preparation",
-        source: Box::new(error),
-    })
 }
 pub(crate) fn oid(text: &str) -> cellule_runtime::Result<crate::ObjectId> {
     parse_oid(text)
@@ -304,7 +228,7 @@ pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Opt
         SqlValue::Integer(needed),
         SqlValue::Integer(approvals),
         SqlValue::Integer(changes),
-        SqlValue::Integer(write),
+        SqlValue::Integer(_write),
     ] = row.as_slice()
     else {
         return Err(Error::Command("invalid review policy result"));
@@ -327,7 +251,6 @@ pub(super) fn policy_state(sets: &[SqlResultSet]) -> cellule_runtime::Result<Opt
         });
     Ok(Some(ReviewState {
         base: base.clone(),
-        writable: *write == 1,
         policy: ReviewPolicy {
             revision,
             ready,

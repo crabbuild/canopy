@@ -1,21 +1,19 @@
 use std::collections::BTreeMap;
 
 use cellule_runtime::{
-    CellModule, Command, Error, InvocationError, Observed, Receipt, codec::BoundedDecoder,
-    codec::BoundedEncoder, codec::CodecError, codec::WireValue, primitives::sql::SqlBatch,
-    primitives::sql::SqlResultSet, primitives::sql::SqlStatement, primitives::sql::SqlValue,
-    registry::CommandContext, registry::CommandResult,
+    Error, codec::BoundedDecoder, codec::BoundedEncoder, codec::CodecError, codec::WireValue,
+    primitives::sql::SqlBatch, primitives::sql::SqlStatement, primitives::sql::SqlValue,
+    registry::CommandContext,
 };
 
 use crate::{
-    RepositoryCell, RepositoryModule,
     access::{access_statement, decode_access},
     directory::{TokenScope, validate_component},
 };
 
 pub(crate) const MAX_UPDATES: usize = 100_000;
 pub(crate) const REF_PAGE_SIZE: usize = 256;
-// Cellule bounds SQL results to 1 MiB; leave room for OIDs, versions and the page header.
+// Bound transactional namespace-conflict pages under the SQL output ceiling.
 const REF_PAGE_NAME_BYTES: i64 = 512 * 1024;
 
 /// A bounded ref page tied to one durable ref generation, including deletions.
@@ -24,14 +22,6 @@ pub struct RefPage {
     pub default_branch: String,
     pub refs: Vec<(String, RefExpectation)>,
     pub has_more: bool,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RefReadError {
-    #[error("repository refs changed while reading pages")]
-    Changed,
-    #[error("repository ref query failed")]
-    Cell(#[from] InvocationError<Vec<SqlResultSet>>),
 }
 
 /// Expected ref version and optional tip; a missing tip is a retained deletion.
@@ -54,152 +44,6 @@ pub struct RefUpdate {
 pub struct PushPlan {
     pub actor: String,
     pub updates: Vec<RefUpdate>,
-}
-
-impl RepositoryCell {
-    /// Reads a live or deleted ref and its version; None means the name has never existed.
-    pub async fn ref_state(
-        &self,
-        name: &str,
-        minimum: Option<Receipt>,
-    ) -> std::result::Result<Observed<Option<RefExpectation>>, InvocationError<Vec<SqlResultSet>>>
-    {
-        let result = self
-            .sql
-            .query(
-                minimum,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        sql: "SELECT oid, version FROM refs WHERE name = ?1".into(),
-                        parameters: vec![SqlValue::Text(name.into())],
-                    }],
-                },
-            )
-            .await?;
-        let state = result
-            .output
-            .first()
-            .and_then(|set| set.rows.first())
-            .map(|row| decode_ref_row(row))
-            .transpose()
-            .map_err(InvocationError::NotStarted)?;
-        Ok(Observed {
-            output: state,
-            receipt: result.receipt,
-        })
-    }
-
-    /// Reads a byte-bounded page of at most 256 refs; continuations require the first page's generation.
-    ///
-    /// A changed generation rejects the page, requiring a new scan from the start.
-    pub async fn refs_page(
-        &self,
-        after: &str,
-        generation: Option<i64>,
-    ) -> Result<Observed<RefPage>, RefReadError> {
-        if !after.is_empty() && generation.is_none() {
-            return Err(InvocationError::NotStarted(Error::Command(
-                "ref cursor requires a generation",
-            ))
-            .into());
-        }
-        let result = self
-            .sql
-            .query(
-                None,
-                SqlBatch {
-                    statements: vec![SqlStatement {
-                        // One SQLite statement binds the generation even to an empty
-                        // final page. Separate observations could miss a concurrent push.
-                        sql: r#"
-                            WITH candidates AS MATERIALIZED (
-                                SELECT name, oid, version FROM refs
-                                WHERE name > ?1 ORDER BY name LIMIT ?2
-                            ), ranked AS (
-                                SELECT name, oid, version,
-                                    ROW_NUMBER() OVER (ORDER BY name) AS position,
-                                    SUM(LENGTH(CAST(name AS BLOB)) + 64)
-                                        OVER (ORDER BY name) AS bytes
-                                FROM candidates
-                            ), page AS MATERIALIZED (
-                                SELECT name, oid, version FROM ranked
-                                WHERE bytes <= ?3 OR position = 1
-                            )
-                            SELECT g.generation, g.default_branch, NULL, NULL, NULL,
-                                EXISTS(SELECT 1 FROM refs WHERE name >
-                                    COALESCE((SELECT MAX(name) FROM page), ?1))
-                            FROM ref_generation g WHERE g.singleton = 1
-                            UNION ALL
-                            SELECT NULL, NULL, name, oid, version, NULL FROM page
-                            ORDER BY name
-                        "#
-                        .into(),
-                        parameters: vec![
-                            SqlValue::Text(after.into()),
-                            SqlValue::Integer(REF_PAGE_SIZE as i64),
-                            SqlValue::Integer(REF_PAGE_NAME_BYTES),
-                        ],
-                    }],
-                },
-            )
-            .await?;
-        let rows = result
-            .output
-            .first()
-            .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing refs page")))?;
-        let row = rows
-            .rows
-            .first()
-            .ok_or_else(|| InvocationError::NotStarted(Error::Command("missing ref generation")))?;
-        let head = crate::default_branch::decode_head(row).map_err(InvocationError::NotStarted)?;
-        let has_more = match row.as_slice() {
-            [
-                _,
-                _,
-                SqlValue::Null,
-                SqlValue::Null,
-                SqlValue::Null,
-                SqlValue::Integer(more),
-            ] => *more != 0,
-            _ => {
-                return Err(
-                    InvocationError::NotStarted(Error::Command("invalid ref page head")).into(),
-                );
-            }
-        };
-        let current = head.generation;
-        if generation.is_some_and(|expected| expected != current) {
-            return Err(RefReadError::Changed);
-        }
-        let mut refs = Vec::with_capacity(rows.rows.len().saturating_sub(1));
-        for row in rows.rows.iter().skip(1) {
-            let [
-                SqlValue::Null,
-                SqlValue::Null,
-                SqlValue::Text(name),
-                oid,
-                version,
-                SqlValue::Null,
-            ] = row.as_slice()
-            else {
-                return Err(
-                    InvocationError::NotStarted(Error::Command("invalid stored ref row")).into(),
-                );
-            };
-            let state = decode_ref_row(&[oid.clone(), version.clone()])
-                .map_err(InvocationError::NotStarted)?;
-            refs.push((name.clone(), state));
-        }
-        Ok(Observed {
-            output: RefPage {
-                generation: current,
-                default_branch: head.reference,
-                refs,
-                has_more,
-            },
-            receipt: result.receipt,
-        })
-    }
 }
 
 impl WireValue for PushPlan {
@@ -316,47 +160,6 @@ fn read_oid(decoder: &mut BoundedDecoder<'_>) -> Result<crate::ObjectId, CodecEr
         .read_bytes()?
         .try_into()
         .map_err(|_| CodecError::Invalid("Git object ID must be 20 or 32 bytes"))
-}
-
-/// Checks prepared graph certificates and expected versions, publishing all ref changes in one command.
-pub struct FinalizePush;
-
-impl Command for FinalizePush {
-    const MODULE: &'static str = RepositoryModule::NAME;
-    const ID: u32 = 3;
-    const CODEC_VERSION: u32 = 4;
-    type Input = PushPlan;
-    type Output = bool;
-
-    fn execute(
-        context: &mut CommandContext<'_, '_>,
-        plan: Self::Input,
-    ) -> cellule_runtime::Result<CommandResult<Self::Output>> {
-        Ok(if apply_refs(context, &plan, None)? {
-            CommandResult::Success(true)
-        } else {
-            CommandResult::Rejected(false)
-        })
-    }
-}
-
-// A false decision must precede every write: HTTP completion records its
-// rejection report in the same transaction without relying on rollback.
-pub(crate) fn apply_refs(
-    context: &mut CommandContext<'_, '_>,
-    plan: &PushPlan,
-    merge: Option<&crate::pulls::merge::ReviewedMerge>,
-) -> cellule_runtime::Result<bool> {
-    let Some(validated) = validate_refs(context, plan)? else {
-        return Ok(false);
-    };
-    if !crate::graph::certified_roots(context, plan)?
-        || !crate::branch_rules::policies_allow(context, plan, merge)?
-    {
-        return Ok(false);
-    }
-    validated.apply(context)?;
-    Ok(true)
 }
 
 /// Only ref/ACL validation constructs this result. Catalog membership and

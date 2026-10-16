@@ -1,4 +1,4 @@
--- Fresh canopy-pack-v1 repository schema. No legacy Git bodies or per-object placement.
+-- Fresh canopy-pack-v2 repository schema. No legacy Git bodies or per-object placement.
 -- Product OID membership and ancestry decisions require certified catalog facts.
 CREATE TABLE refs (
     name TEXT PRIMARY KEY,

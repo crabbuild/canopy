@@ -178,6 +178,11 @@ pub struct CatalogPreparation {
     input_checkpoint_digest: Option<[u8; 32]>,
     failed: bool,
 }
+struct ConstructionLimits {
+    input: MetadataLimits,
+    closure: MetadataLimits,
+    output: MetadataLimits,
+}
 impl CatalogPreparation {
     pub async fn new(
         root: &Path,
@@ -206,16 +211,30 @@ impl CatalogPreparation {
         limits: MetadataLimits,
         output_limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
-        Self::new_inner(root, budget, base, limits, output_limits, None).await
+        Self::new_inner(
+            root,
+            budget,
+            base,
+            ConstructionLimits {
+                input: limits,
+                closure: limits,
+                output: output_limits,
+            },
+            None,
+        )
+        .await
     }
     /// Production construction retains the admitted worker through every
     /// detached assembler job, while the finished private proof owns no worker.
+    /// The aggregate graph has an explicit ceiling independent of input shards
+    /// and output runs; all three still share the caller's admitted disk budget.
     pub async fn new_staged(
         context: &StagingContext,
         root: &Path,
         budget: DiskBudget,
         base: Arc<PreparationBaseResolver>,
         limits: MetadataLimits,
+        closure_limits: MetadataLimits,
     ) -> Result<Self, CatalogPreparationError> {
         context.ensure_live().map_err(PhysicalError::from)?;
         if context.token().map_err(PhysicalError::from)? != base.context_token()
@@ -227,10 +246,13 @@ impl CatalogPreparation {
             root,
             budget,
             base,
-            limits,
-            MetadataLimits {
-                max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
-                ..limits
+            ConstructionLimits {
+                input: limits,
+                closure: closure_limits,
+                output: MetadataLimits {
+                    max_file_bytes: limits.max_file_bytes.min(RUN_TARGET_BYTES),
+                    ..limits
+                },
             },
             Some(context.clone()),
         )
@@ -240,10 +262,14 @@ impl CatalogPreparation {
         root: &Path,
         budget: DiskBudget,
         base: Arc<PreparationBaseResolver>,
-        limits: MetadataLimits,
-        output_limits: MetadataLimits,
+        limits: ConstructionLimits,
         staging: Option<StagingContext>,
     ) -> Result<Self, CatalogPreparationError> {
+        let ConstructionLimits {
+            input: limits,
+            closure: closure_limits,
+            output: output_limits,
+        } = limits;
         DirectoryPartitioner::validate_limits(output_limits)?;
         let (lease, deadline) = base.live_lease()?;
         let indexes = base.indexes();
@@ -269,7 +295,7 @@ impl CatalogPreparation {
                 Arc::clone(&workspace),
                 budget.clone(),
                 context,
-                limits,
+                closure_limits,
                 activity.clone(),
             )
             .await?;
@@ -455,14 +481,14 @@ impl CatalogPreparation {
         &mut self,
         input: StagedNativeMetadata,
     ) -> Result<(), CatalogPreparationError> {
-        let deadline = self.start()?;
+        self.start()?;
         let context = self
             .staging
             .clone()
             .ok_or(CatalogPreparationError::Integrity)?;
         // The complete operation is poisoned on cancellation, including a
         // failed/absent provider artifact or an incomplete descriptor replay.
-        let result = timeout_at(deadline, async {
+        let work = async {
             let native = input.witness.native();
             self.failed = false;
             self.begin_retained_pack(input.witness).await?;
@@ -495,9 +521,14 @@ impl CatalogPreparation {
             context.ensure_live().map_err(PhysicalError::from)?;
             self.failed = false;
             self.finish_pack().await
-        })
-        .await
-        .map_err(|_| PreparationBaseError::Inactive)?;
+        };
+        // A full pack can span several renewed leases. Observe the shared
+        // custody clock and permanent fence instead of the first shard's
+        // deadline; the fixed bound residence ceiling still limits this work.
+        let result = tokio::select! {
+            result = work => result,
+            _ = context.fenced() => Err(PreparationBaseError::Inactive.into()),
+        };
         if result.is_err() {
             self.failed = true;
         }
@@ -527,9 +558,19 @@ impl CatalogPreparation {
         if self.active.is_some() {
             return Err(CatalogPreparationError::Integrity);
         }
-        timeout_at(deadline, self.finish_inner())
-            .await
-            .map_err(|_| PreparationBaseError::Inactive)?
+        if let Some(context) = self.staging.clone() {
+            // Closure certification and immutable output construction can span
+            // renewed leases. Observe shared custody and its residence ceiling
+            // rather than the deadline captured at the start of this phase.
+            tokio::select! {
+                result = self.finish_inner() => result,
+                _ = context.fenced() => Err(PreparationBaseError::Inactive.into()),
+            }
+        } else {
+            timeout_at(deadline, self.finish_inner())
+                .await
+                .map_err(|_| PreparationBaseError::Inactive)?
+        }
     }
     async fn finish_inner(mut self) -> Result<PreparedCatalog, CatalogPreparationError> {
         let context = self.base.context();

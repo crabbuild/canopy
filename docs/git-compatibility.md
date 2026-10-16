@@ -135,14 +135,13 @@ dedicated disk but no host-volume sharing, use `--docker-volume`; it creates and
 removes an isolated named volume while retaining the full size assertions.
 Use `--release` to run the same gate against optimized server/test code.
 
-The gate pushes an incompressible pack above 512 MiB, checks the SQLite database
-exceeds 512 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh
+The gate pushes an incompressible pack above 512 MiB, checks Repository SQLite
+stays below 16 MiB, stores a Git blob and LFS object above 5 GiB, restarts on fresh
 local storage, then checks clone bytes, strict fsck, and the LFS download hash.
 The ordinary large-object integration test covers a 65 MiB commit and recovery.
 These are qualification points, not configured maxima or performance targets.
 
-The pinned runtime retains its five-second SQL command deadline. Very large
-non-blob verification still materializes a complete object inside a transaction;
+The pinned runtime retains its five-second SQL command deadline. Structural Git verification uses bounded native streams and immutable metadata;
 progressive verification is needed before claiming arbitrary structural-object
 capacity. LTX artifact promotion and backup copies still use the configured
 provider's conditional-copy implementation; very large LTX artifacts need

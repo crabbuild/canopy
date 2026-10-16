@@ -854,7 +854,16 @@ async fn acquire_sql_cell(
                 .provision(
                     &catalog,
                     &registry,
-                    CatalogEntry::new(target, CatalogRole::Sql, code, 1)?,
+                    CatalogEntry::new(
+                        target,
+                        CatalogRole::Sql,
+                        code,
+                        if target.namespace() == crate::REPOSITORIES {
+                            crate::REPOSITORY_SCHEMA_VERSION
+                        } else {
+                            1
+                        },
+                    )?,
                 )
                 .await?
         }

@@ -32,7 +32,7 @@ impl http_body::Body for Repeated {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "large transfer qualification; run on a dedicated disk with at least 40 GiB free"]
-async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() -> Result {
+async fn native_pack_exceeds_512_mib_and_git_lfs_exceed_5_gib_after_restore() -> Result {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::WARN)
         .try_init();
@@ -62,8 +62,8 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
     ] {
         run_git(Some(&source), &["config", name, value]).await?;
     }
-    // Each incompressible blob stays in SQLite. The combined pack and database
-    // both exceed their former caps, so externalization cannot conceal a quota.
+    // Incompressible bodies make the native pack exceed the old transfer cap.
+    // SQLite must retain only metadata, independently of the logical Git bytes.
     for index in 0_u64..900 {
         let mut bytes = vec![0; 640 * 1024];
         blake3::Hasher::new()
@@ -81,7 +81,11 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
         .set_len((PART * parts) as u64)
         .await?;
     run_git(Some(&source), &["add", "."]).await?;
-    run_git(Some(&source), &["commit", "-m", "Large SQLite repository"]).await?;
+    run_git(
+        Some(&source),
+        &["commit", "-m", "Large native-pack repository"],
+    )
+    .await?;
     run_git(Some(&source), &["repack", "-ad"]).await?;
     let mut packs = tokio::fs::read_dir(source.join(".git/objects/pack")).await?;
     let mut pack_bytes = 0;
@@ -99,7 +103,7 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
     run_git(Some(&source), &["-c", AUTH, "push", &url, "main"]).await?;
     let expected = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
     tokio::fs::remove_dir_all(&source).await?;
-    let database_root = workspace.path().join("first/canopy-pack-v1");
+    let database_root = workspace.path().join("first/canopy-pack-v2");
     let database_bytes = tokio::task::spawn_blocking(
         move || -> std::result::Result<u64, Box<dyn std::error::Error + Send + Sync>> {
             for entry in std::fs::read_dir(database_root)? {
@@ -121,7 +125,10 @@ async fn push_and_database_exceed_512_mib_and_lfs_exceeds_5_gib_after_restore() 
     )
     .await?
     .map_err(|error| error as Box<dyn std::error::Error>)?;
-    assert!(database_bytes > 512 * 1024 * 1024);
+    assert!(
+        database_bytes < 16 * 1024 * 1024,
+        "Git bodies must not expand into SQLite"
+    );
     eprintln!("large push published; SQLite database: {database_bytes} bytes");
 
     // Independent SHA-256 reference (Python hashlib): 641 blocks of 8 MiB zeros.

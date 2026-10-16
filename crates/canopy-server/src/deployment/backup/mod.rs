@@ -3,7 +3,6 @@
 use super::*;
 use crate::{
     REPOSITORIES, REPOSITORY_DATABASE_LIMIT_BYTES,
-    blob::LargeBlobError,
     lfs::LfsError,
     server::{ServerError, unix_now_ms},
 };
@@ -33,8 +32,6 @@ pub enum BackupError {
     Store(#[from] StorageError),
     #[error("backup external part copy failed")]
     External(#[from] object_store::Error),
-    #[error("backup Git blob verification failed")]
-    Blob(#[from] LargeBlobError),
     #[error("backup LFS verification failed")]
     Lfs(#[from] LfsError),
     #[error("backup SQLite read failed")]

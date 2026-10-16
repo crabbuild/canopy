@@ -2,8 +2,6 @@ mod accounts;
 mod capacity;
 mod compatibility;
 mod expiry;
-#[path = "../support/retained_directory.rs"]
-mod retained_directory;
 mod ssh_keys;
 
 use std::{
@@ -156,7 +154,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &registry,
                 &layout,
                 &first_target,
-                (RepositoryModule::NAME, include_str!("../../src/schema.sql")),
+                (RepositoryModule::NAME, canopy_server::REPOSITORY_SCHEMA),
                 first_session,
                 &files.path().join("first-alpha.sqlite"),
             )
@@ -176,7 +174,7 @@ async fn directory_reservations_recover_two_distinct_repository_cells()
                 &registry,
                 &layout,
                 &second_target,
-                (RepositoryModule::NAME, include_str!("../../src/schema.sql")),
+                (RepositoryModule::NAME, canopy_server::REPOSITORY_SCHEMA),
                 first_session,
                 &files.path().join("first-beta.sqlite"),
             )
@@ -461,7 +459,16 @@ async fn bootstrap(
     let (module, schema) = module_schema;
     let code = registry.module_code(module).ok_or("module missing")?;
     let proof = CellCatalog::new(layout.clone(), target.tenant())
-        .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            target,
+            CatalogRole::Sql,
+            code,
+            if target.namespace() == canopy_server::REPOSITORIES {
+                canopy_server::REPOSITORY_SCHEMA_VERSION
+            } else {
+                1
+            },
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let observed = authority
@@ -506,7 +513,16 @@ async fn restore(
 ) -> Result<CellHandle, Box<dyn std::error::Error>> {
     let code = registry.module_code(module).ok_or("module missing")?;
     let proof = CellCatalog::new(layout.clone(), target.tenant())
-        .provision(CatalogEntry::new(target, CatalogRole::Sql, code, 1)?)
+        .provision(CatalogEntry::new(
+            target,
+            CatalogRole::Sql,
+            code,
+            if target.namespace() == canopy_server::REPOSITORIES {
+                canopy_server::REPOSITORY_SCHEMA_VERSION
+            } else {
+                1
+            },
+        )?)
         .await?;
     let authority = CellAuthority::new(layout.clone());
     let observed = authority

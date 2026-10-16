@@ -450,8 +450,9 @@ dependencies = [
 
 [[package]]
 name = "cellule-app"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b211ee2e9719b8c75906f0218d5621827526a67a959dd99fc54ad0e1a969c52e"
 dependencies = [
  "blake3",
  "cellule-runtime",
@@ -459,9 +460,11 @@ dependencies = [
 
 [[package]]
 name = "cellule-host"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c372232c1e30332d7468003d9efed396fbb67d4c79f2bef8d1efecb12ae1debf"
 dependencies = [
+ "blake3",
  "cellule-app",
  "cellule-runtime",
  "futures-util",
@@ -473,8 +476,9 @@ dependencies = [
 
 [[package]]
 name = "cellule-ltx"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59a5bcca2da813d30d048651212ab76bf678e7ad001a70df3b2997e0661179e7"
 dependencies = [
  "async-trait",
  "blake3",
@@ -495,8 +499,9 @@ dependencies = [
 
 [[package]]
 name = "cellule-runtime"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb3bc9e5375b4668b01454a73e7ca5ec8ac7efd4d8fd23e1b7064418466fba4d"
 dependencies = [
  "blake3",
  "bytes",
@@ -521,8 +526,9 @@ dependencies = [
 
 [[package]]
 name = "cellule-store"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29273d95baf35553f8512ccc0b72b88ad8f0c447de5c142c1e83d2048688a07f"
 dependencies = [
  "async-trait",
  "blake3",
@@ -544,8 +550,9 @@ dependencies = [
 
 [[package]]
 name = "cellule-types"
-version = "0.1.0"
-source = "git+https://github.com/crabbuild/cellule.git?rev=161067f5a21703b3e257024bcb64e565fd9657b4#161067f5a21703b3e257024bcb64e565fd9657b4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff52f9c6b2e11fb9065d77dced00b9b680c7c35617051b9a6b3b91dca6c8a996"
 dependencies = [
  "schemars",
  "serde",

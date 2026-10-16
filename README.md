@@ -36,7 +36,7 @@ This page keeps the project overview, setup path, and first repository workflow.
 | Browser | Embedded repository, issue, pull-request and account views | [Repository browser](docs/user-guide.md#repository-browser) |
 
 These are implementation capabilities, not a production capacity guarantee.
-The [roadmap](ROADMAP.md) lists remaining work such as migrations, full fault
+The [roadmap](ROADMAP.md) lists remaining work such as release validation, full fault
 qualification, collection, provider qualification, observability and a repeatable
 deployment. The [delivery plan](docs/delivery-plan.md) records release gates;
 the [performance plan](docs/performance-plan.md) separates measured results from
@@ -49,8 +49,9 @@ before relying on a feature in a new environment.
 
 The **Directory Cell** maps an owner and repository name to a stable repository
 UUID and owns accounts. Each UUID identifies a **Repository Cell** containing
-authoritative refs, Git metadata, ACLs and collaboration records. Large Git
-blobs and LFS bodies are immutable external objects referenced by that Cell.
+authoritative catalog/ref roots, ACLs and collaboration records. Native Git
+packs, indexes, catalog metadata and LFS bodies are immutable external objects
+referenced by the committed state.
 Native Git handles wire protocols using a **disposable cache**: after local disk
 loss, Canopy restores published Cell state from the object store and rebuilds
 the cache. See the [persisted contracts](docs/contracts.md) for publication and
@@ -92,7 +93,8 @@ sequenceDiagram
 This is a development path for one node with an existing S3-compatible object
 store. The [bounded Linux deployment](deploy/README.md) describes the container
 profile and its resource limits. Use a **new storage prefix** for this build;
-there is no migration from earlier preview layouts yet.
+breaking schema or format changes require a fresh prefix. This build supports
+only its compiled release and current storage formats.
 
 1. Install Rust 1.97 or newer and Git with `http-backend`,
    `merge-tree --write-tree` (`-z --name-only --no-messages`) and `commit-tree`.

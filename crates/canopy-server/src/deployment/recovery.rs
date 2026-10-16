@@ -57,9 +57,13 @@ impl Deployment {
         config: WorkerConfig,
     ) -> std::result::Result<(), ServerError> {
         self.require_maintenance(operation).await?;
-        let data_dir = config.data_dir;
+        let data_dir = config.data_dir.clone();
         let local =
             tokio::task::spawn_blocking(move || workspace::Workspace::open(&data_dir)).await??;
+        let worker = maintenance::Worker::new(&config, local.path())?;
+        let claim =
+            maintenance::acquire(self, operation, maintenance::Action::Recover, Some(worker))
+                .await?;
         crate::server::storage::probe(
             self.layout.store(),
             &self.layout.application_prefix().join("canopy-probe"),
@@ -172,16 +176,19 @@ impl Deployment {
                         } else {
                             return Err(Error::Release("unknown maintenance Cell namespace").into());
                         };
-                        // Existing catalog entries pin their original contract.
-                        // Retained executable code is valid for restoration;
-                        // requiring target code would strand predecessor Cells.
-                        // Acquisition separately validates persisted Control.
-                        if !self.registry.supports_cell(
-                            entry.namespace(),
-                            entry.role(),
-                            entry.initial_code(),
-                            entry.initial_schema(),
-                        ) {
+                        let module_code = self
+                            .registry
+                            .module_code(module)
+                            .ok_or(Error::Release("maintenance module is not compiled"))?;
+                        let schema_version = if entry.namespace() == REPOSITORIES {
+                            crate::REPOSITORY_SCHEMA_VERSION
+                        } else {
+                            1
+                        };
+                        if entry.role() != cellule_runtime::cell::catalog::CatalogRole::Sql
+                            || entry.initial_code() != module_code
+                            || entry.initial_schema() != schema_version
+                        {
                             return Err(
                                 Error::Release("maintenance Cell descriptor differs").into()
                             );
@@ -228,6 +235,7 @@ impl Deployment {
         self.nodes
             .withdraw(&*observed.lock().await, unix_now_ms()?)
             .await?;
+        claim.finish(self).await?;
         result
     }
 }

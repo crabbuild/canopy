@@ -14,7 +14,7 @@ fn legacy_runtime_prevents_cutover_and_preserves_every_file() -> Result {
             .is_err_and(|error| error.kind() == io::ErrorKind::InvalidData)
     );
     assert_eq!(fs::read(legacy.join("important"))?, b"retain old state");
-    assert!(!directory.path().join("canopy-pack-v1").exists());
+    assert!(!directory.path().join("canopy-pack-v2").exists());
     Ok(())
 }
 
@@ -26,7 +26,7 @@ fn packed_workspace_checks_format_before_reclaiming_any_file() -> Result {
         Some(b"unknown-format"),
     ] {
         let directory = tempfile::TempDir::new()?;
-        let root = directory.path().join("canopy-pack-v1");
+        let root = directory.path().join("canopy-pack-v2");
         fs::create_dir(&root)?;
         fs::write(root.join("important"), b"retain unrecognized state")?;
         if let Some(marker) = marker {

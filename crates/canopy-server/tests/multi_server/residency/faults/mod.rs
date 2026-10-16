@@ -210,7 +210,7 @@ impl Fixture {
         let oid = run_git(Some(&source), &["rev-parse", "HEAD"]).await?;
         create(&client, address, "second").await?;
         create(&client, address, "third").await?;
-        let local = workspace.path().join("server/canopy-pack-v1");
+        let local = workspace.path().join("server/canopy-pack-v2");
         Ok(Self {
             workspace,
             store,

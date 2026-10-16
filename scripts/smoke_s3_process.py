@@ -28,6 +28,7 @@ import uuid
 from lease_contract import NODE_LEASE_WAIT_SECONDS
 import smoke_s3_account_audit
 import smoke_s3_backup
+import smoke_s3_retention
 import smoke_s3_branch_rules
 import smoke_s3_checks
 import smoke_s3_corpus
@@ -335,6 +336,20 @@ def clone_and_verify(url, directory, expected_oid, expected_readme, expected_lfs
         assert (directory / "asset.lfs").read_bytes() == expected_lfs
 
 
+def hydrate_fetch_cache(url, directory, expected_oid, expected_readme, branch="main"):
+    authorization = "http.extraHeader=Authorization: Bearer local-test-token"
+    git("-c", authorization, "clone", "--filter=blob:none", "--no-checkout",
+        "--single-branch", "--branch", branch, url, str(directory))
+    readme = git("rev-parse", f"{expected_oid.decode()}:README.md", cwd=directory).decode()
+    actual = subprocess.run(
+        ["git", "-c", "credential.helper=", "-c", authorization, "cat-file", "blob", readme],
+        cwd=directory, capture_output=True, check=True,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    ).stdout
+    assert actual == expected_readme
+    return readme
+
+
 def push_with_lost_reply(base_url, local):
     captured = {}
     push_id = str(uuid.uuid4())
@@ -492,8 +507,8 @@ def verify_many_objects(base_url, directory, count, expected):
     print(f"PASS: {count}-file clone restored both commits, annotated tag and 300 refs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
-def seed_sqlite_chunks(base_url, directory):
-    url, _ = create_repository(base_url, "sqlite-chunks")
+def seed_structural_objects(base_url, directory, message_bytes):
+    url, _ = create_repository(base_url, "structural-objects")
     local = directory / "chunk-source"
     git("init", "--bare", str(local))
     expected = {}
@@ -513,26 +528,26 @@ def seed_sqlite_chunks(base_url, directory):
     commit = write("commit", (
         f"tree {tree}\nauthor Canopy <test@example.invalid> 0 +0000\n"
         "committer Canopy <test@example.invalid> 0 +0000\n\n"
-    ).encode() + b"c" * 1_100_000 + b"\n")
+    ).encode() + b"c" * message_bytes + b"\n")
     tag = write("tag", (
         f"object {commit}\ntype commit\ntag release\n"
         "tagger Canopy <test@example.invalid> 0 +0000\n\n"
-    ).encode() + b"t" * 1_100_000 + b"\n")
+    ).encode() + b"t" * message_bytes + b"\n")
     git("update-ref", "refs/heads/main", commit, cwd=local)
     git("symbolic-ref", "HEAD", "refs/heads/main", cwd=local)
     git("update-ref", "refs/tags/release", tag, cwd=local)
     started = time.monotonic()
     git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
         "push", url, "refs/heads/main", "refs/tags/release", cwd=local)
-    print(f"PASS: large tree, commit and tag pushed into SQLite chunks in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: large tree, commit and tag pushed into native packs in {time.monotonic() - started:.2f}s", flush=True)
     return expected
 
 
-def verify_sqlite_chunks(base_url, directory, expected):
+def verify_structural_objects(base_url, directory, expected):
     clone = directory / "chunk-restored"
     started = time.monotonic()
     git("-c", "http.extraHeader=Authorization: Bearer local-test-token",
-        "clone", "--bare", f"{base_url}/canopy/sqlite-chunks.git", str(clone))
+        "clone", "--bare", f"{base_url}/canopy/structural-objects.git", str(clone))
     for kind, (oid, path) in expected.items():
         # run()/git() strip whitespace for command output. Compare raw object bytes here.
         actual = subprocess.run(["git", "cat-file", kind, oid], cwd=clone,
@@ -541,7 +556,7 @@ def verify_sqlite_chunks(base_url, directory, expected):
     assert git("rev-parse", "refs/heads/main", cwd=clone).decode() == expected["commit"][0]
     assert git("rev-parse", "refs/tags/release", cwd=clone).decode() == expected["tag"][0]
     git("fsck", "--strict", "--full", cwd=clone)
-    print(f"PASS: SQLite chunks restored exact tree/commit/tag bytes and OIDs after takeover in {time.monotonic() - started:.2f}s", flush=True)
+    print(f"PASS: Native packs restored exact tree/commit/tag bytes and OIDs after takeover in {time.monotonic() - started:.2f}s", flush=True)
 
 
 def main():
@@ -551,11 +566,15 @@ def main():
     parser.add_argument("--work-parent", type=Path, required=True)
     parser.add_argument("--large-clone", action="store_true", help="Qualify a push and v0/v2 clones above 64 MiB, including takeover")
     parser.add_argument("--many-objects", type=int, default=0, metavar="COUNT", help="Qualify many small objects, an incremental push, and takeover recovery")
-    parser.add_argument("--sqlite-chunks", action="store_true", help="Qualify large tree, commit and tag objects stored in SQLite and restored after takeover")
+    parser.add_argument("--structural-objects", action="store_true", help="Qualify large tree, commit and tag objects stored in native packs and restored after takeover")
+    parser.add_argument("--structural-object-bytes", type=int, default=1_100_000,
+                        help="Commit/tag message bytes for --structural-objects")
     parser.add_argument("--corpus-repository", type=Path, help="Read HEAD history from an existing repository without changing it; qualify exact object bytes after takeover")
     parser.add_argument("--peers-only", action="store_true", help="Run the two-node HTTPS Git/LFS and takeover gate without the other process suites")
     parser.add_argument("--retain-work-dir", action="store_true", help="Retain the temporary workspace and server logs for diagnosis")
     args = parser.parse_args()
+    if args.structural_object_bytes < 1:
+        parser.error("--structural-object-bytes must be positive")
     if args.many_objects < 0:
         parser.error("--many-objects must be nonnegative")
     for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CANOPY_NODE_SIGNING_KEY_HEX"):
@@ -718,7 +737,7 @@ def main():
             expiring_token = seed_expiring_token(base_url)
             disabled_tokens = seed_disabled_account(base_url)
             audit_state = smoke_s3_account_audit.seed(base_url)
-            chunks = seed_sqlite_chunks(base_url, directory) if args.sqlite_chunks else None
+            chunks = seed_structural_objects(base_url, directory, args.structural_object_bytes) if args.structural_objects else None
             large = seed_large_repository(base_url, directory) if args.large_clone else None
             many = seed_many_objects(base_url, directory, args.many_objects) if args.many_objects else None
             corpus = None
@@ -753,11 +772,15 @@ def main():
             verify_discovery(base_url, reader_token, ["renamed"])
             clone_and_verify(url, directory / "clean-clone", oid, b"Canopy process smoke\n", lfs_body, branch="trunk")
             clone_and_verify(f"{base_url}/canopy/other.git", directory / "clean-other", other_oid, other_readme)
+            # Materialize real lazy-fetch hydration scratch for owner-death cleanup.
+            readme = hydrate_fetch_cache(url, directory / "partial-before-owner-death",
+                                        oid, b"Canopy process smoke\n", branch="trunk")
             second.kill()
             second.wait(timeout=10)
-            abandoned = directory / "second" / "canopy-pack-v1"
-            stale_caches = list(abandoned.glob("canopy-git-*"))
-            assert stale_caches, "expected a retained fetch cache at owner death"
+            abandoned = directory / "second" / "canopy-pack-v2"
+            stale_caches = list(abandoned.rglob("canopy-git-*"))
+            assert any((cache / "repo.git" / "objects" / readme[:2] / readme[2:]).is_file()
+                       for cache in stale_caches), "expected the hydrated blob cache at owner death"
             sentinel = abandoned / "abandoned-upload"
             sentinel.write_bytes(b"disposable scratch")
             # SQLite is a recovered cache: corrupting the killed node's copy must
@@ -851,7 +874,7 @@ def main():
             if large is not None:
                 verify_large_clone(base_url, directory, large)
             if chunks is not None:
-                verify_sqlite_chunks(base_url, directory, chunks)
+                verify_structural_objects(base_url, directory, chunks)
             if many is not None:
                 verify_many_objects(base_url, directory, args.many_objects, many)
             if corpus is not None:
@@ -862,6 +885,7 @@ def main():
                 raise RuntimeError("takeover owner did not shut down cleanly")
             smoke_s3_peers.qualify(args.binary, directory, settings, processes)
             smoke_s3_backup.qualify(args.binary, directory, settings, processes)
+            smoke_s3_retention.qualify(args.binary, directory, settings, processes)
             assert {path.name for path in (directory / "host-git").iterdir()} == {"config"}
             print("PASS: native Git ignores host config, object paths, exec path, protocol and trace settings", flush=True)
             print("PASS: Git/LFS, repository discovery, default branch, ACL, ref outcomes, and a dropped push reply survived restart, disk loss, and lease takeover")

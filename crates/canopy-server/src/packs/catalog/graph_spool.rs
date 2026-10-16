@@ -40,7 +40,7 @@ impl GraphSpool {
         db.pragma_update(None, "cache_size", -(i64::from(cache_kib)))?;
         growth::configure(&db, &mut file)?;
         growth::transaction(&mut db, &mut file, maximum, |tx| {
-            tx.execute_batch("CREATE TABLE nodes(oid BLOB PRIMARY KEY,kind TEXT,done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))) WITHOUT ROWID; CREATE INDEX pending ON nodes(done,oid); CREATE TABLE packs(checksum BLOB PRIMARY KEY,pack BLOB NOT NULL,idx BLOB NOT NULL,pack_bytes INTEGER NOT NULL,idx_bytes INTEGER NOT NULL,objects INTEGER NOT NULL) WITHOUT ROWID;")?;
+            tx.execute_batch("CREATE TABLE nodes(oid BLOB PRIMARY KEY,kind TEXT,done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1))) WITHOUT ROWID; CREATE INDEX pending ON nodes(done,oid); CREATE TABLE packs(checksum BLOB PRIMARY KEY,pack BLOB NOT NULL,idx BLOB NOT NULL,pack_bytes INTEGER NOT NULL,idx_bytes INTEGER NOT NULL,objects INTEGER NOT NULL,complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0,1))) WITHOUT ROWID;")?;
             Ok::<_, MetadataError>(())
         })?;
         Ok(Self {
@@ -172,7 +172,7 @@ impl GraphSpool {
     ) -> Result<(), MetadataError> {
         growth::transaction(&mut self.db, &mut self.file, self.maximum, |tx| {
             tx.execute(
-                "INSERT INTO packs VALUES(?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO packs VALUES(?1,?2,?3,?4,?5,?6,0)",
                 params![
                     p.git_checksum.as_ref(),
                     p.pack.digest.as_slice(),
@@ -183,6 +183,39 @@ impl GraphSpool {
                 ],
             )?;
             Ok::<_, MetadataError>(())
+        })
+    }
+    /// Logical source discovery does not mean its bytes were installed. Bind
+    /// physical completion to the exact verified pack/index identity separately.
+    pub(in crate::packs) fn pack_complete(
+        &self,
+        p: NativePackDescriptor,
+    ) -> Result<bool, MetadataError> {
+        if !self.pack_seen(p)? {
+            return Ok(false);
+        }
+        Ok(self.db.query_row(
+            "SELECT complete FROM packs WHERE checksum=?1",
+            [p.git_checksum.as_ref()],
+            |r| r.get(0),
+        )?)
+    }
+    pub(in crate::packs) fn mark_pack_complete(
+        &mut self,
+        p: NativePackDescriptor,
+    ) -> Result<(), MetadataError> {
+        if !self.pack_seen(p)? {
+            self.imported(p)?;
+        }
+        growth::transaction(&mut self.db, &mut self.file, self.maximum, |tx| {
+            if tx.execute(
+                "UPDATE packs SET complete=1 WHERE checksum=?1",
+                [p.git_checksum.as_ref()],
+            )? != 1
+            {
+                return Err(MetadataError::Integrity);
+            }
+            Ok(())
         })
     }
     pub(in crate::packs) fn contains(&self, ids: &[ObjectId]) -> Result<Vec<bool>, MetadataError> {

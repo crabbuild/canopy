@@ -237,7 +237,7 @@ async fn qualify_competing_cold_gateways(delay_claim_reply: bool) -> Result {
         .await?
         .ok_or("missing control")?;
     let local_path = format!(
-        "canopy-pack-v1/{}/repository.sqlite",
+        "canopy-pack-v2/{}/repository.sqlite",
         repository_id.simple()
     );
     let local_owners = ["first", "second"]

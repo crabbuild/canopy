@@ -459,6 +459,23 @@ async fn list_repositories(
     Query(query): Query<ListRepositoriesQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response<Body> {
+    let mut response = repository_list_page(state, query, headers).await;
+    if response.status() == StatusCode::SERVICE_UNAVAILABLE {
+        // Every unavailable page follows the same bounded GET retry contract,
+        // including readiness loss and errors reached while moving cold Cells.
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    response
+}
+
+async fn repository_list_page(
+    state: Arc<RepositoryHttp>,
+    query: ListRepositoriesQuery,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
     if !(state.manager.ready)() {
         return plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready");
     }
@@ -491,19 +508,12 @@ async fn list_repositories(
             }),
         ),
         Ok(_) => plain(StatusCode::SERVICE_UNAVAILABLE, "Canopy node is not ready"),
-        Err(ServerError::Runtime(cellule_runtime::Error::Capacity(_))) => {
-            let mut response = plain(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Repository listing capacity is full; retry the request",
-            );
-            response.headers_mut().insert(
-                header::RETRY_AFTER,
-                axum::http::HeaderValue::from_static("1"),
-            );
-            response
-        }
+        Err(ServerError::Runtime(cellule_runtime::Error::Capacity(_))) => plain(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Repository listing capacity is full; retry the request",
+        ),
         Err(error) => {
-            tracing::error!(error = %error, "repository listing failed");
+            tracing::error!(error = ?error, "repository listing failed");
             plain(StatusCode::SERVICE_UNAVAILABLE, "Repository listing failed")
         }
     }

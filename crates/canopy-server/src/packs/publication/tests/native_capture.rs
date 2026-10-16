@@ -444,6 +444,46 @@ enum MetadataFault {
     MissingArtifact,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenewalPhase {
+    Replay,
+    Finish,
+}
+
+#[tokio::test]
+async fn native_receive_metadata_finish_survives_original_deadline_after_custody_renewal() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let qualification = Box::pin(native_receive_metadata_case(
+            format,
+            false,
+            CompletionMode::Success,
+            None,
+            Some(RenewalPhase::Finish),
+        ))
+        .await?;
+        assert!(qualification.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_receive_metadata_replay_survives_original_deadline_after_custody_renewal() -> Result
+{
+    for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+        let qualification = Box::pin(native_receive_metadata_case(
+            format,
+            false,
+            CompletionMode::Success,
+            None,
+            Some(RenewalPhase::Replay),
+        ))
+        .await?;
+        assert!(qualification.is_none());
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_shards_without_publication()
 -> Result {
@@ -453,13 +493,15 @@ async fn native_receive_metadata_refuses_capacity_corrupt_replay_and_missing_sha
             MetadataFault::TruncatedReplay,
             MetadataFault::MissingArtifact,
         ] {
-            Box::pin(native_receive_metadata_case(
+            let qualification = Box::pin(native_receive_metadata_case(
                 format,
                 true,
                 CompletionMode::Success,
                 Some(fault),
+                None,
             ))
             .await?;
+            assert!(qualification.is_none());
         }
     }
     Ok(())
@@ -472,15 +514,25 @@ async fn publication_state(fixture: &Fixture) -> Result<Vec<u8>> {
         Ok([state.0.to_be_bytes(), state.1.to_be_bytes(), state.2.to_be_bytes()].concat())
     }).await?)
 }
+type RootedQualification = std::pin::Pin<Box<dyn std::future::Future<Output = Result>>>;
+
 async fn native_receive_case(format: ObjectFormat, rooted: bool, mode: CompletionMode) -> Result {
-    Box::pin(native_receive_metadata_case(format, rooted, mode, None)).await
+    let qualification = Box::pin(native_receive_metadata_case(
+        format, rooted, mode, None, None,
+    ))
+    .await?;
+    if let Some(qualification) = qualification {
+        qualification.await?;
+    }
+    Ok(())
 }
 async fn native_receive_metadata_case(
     format: ObjectFormat,
     rooted: bool,
     mode: CompletionMode,
     metadata_fault: Option<MetadataFault>,
-) -> Result {
+    renewal: Option<RenewalPhase>,
+) -> Result<Option<RootedQualification>> {
     let ref_free = match mode {
         CompletionMode::RefFree { kind, .. } => Some(kind),
         CompletionMode::Durable { .. }
@@ -490,7 +542,16 @@ async fn native_receive_metadata_case(
     };
     let fixture = Fixture::new(format).await?;
     let provider = Arc::new(InMemory::new());
-    let store = Arc::new(ArtifactStore::new(provider.clone(), fixture.repository));
+    let throttled = Arc::new(object_store::throttle::ThrottledStore::new(
+        provider.clone(),
+        object_store::throttle::ThrottleConfig::default(),
+    ));
+    let object_store: Arc<dyn object_store::ObjectStore> = if renewal.is_some() {
+        throttled.clone()
+    } else {
+        provider.clone()
+    };
+    let store = Arc::new(ArtifactStore::new(object_store, fixture.repository));
     if rooted {
         let (base, _, _) = opened(&fixture, [159; 16], store.clone()).await?;
         let root = tempfile::TempDir::new()?;
@@ -846,7 +907,7 @@ async fn native_receive_metadata_case(
             .await?;
         }
         cleaned(work_root.path(), &disk).await?;
-        return Ok(());
+        return Ok(None);
     }
     if let CompletionMode::RefFree {
         kind,
@@ -876,7 +937,7 @@ async fn native_receive_metadata_case(
         .await?;
         cleaned(work_root.path(), &disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
     let before_publication = publication_state(&fixture).await?;
     let physical_root = Arc::new(tempfile::TempDir::new()?);
@@ -931,7 +992,7 @@ async fn native_receive_metadata_case(
         assert_eq!(publication_state(&fixture).await?, before_publication);
         cleaned(physical_root.path(), &physical_disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
     let staged = staged.map_err(|error| error.to_string())?;
     assert_eq!(staged.shard_count(), input.object_count);
@@ -977,6 +1038,10 @@ async fn native_receive_metadata_case(
     }
     let producer_root = Arc::clone(&physical_root);
     let producer_disk = physical_disk.clone();
+    let renewal_ticket = ticket.clone();
+    let slow_store = throttled.clone();
+    let (started, entered) = tokio::sync::oneshot::channel();
+    let mut started = Some(started);
     let work = ticket.spawn_bound(move |_, context| async move {
         let result = async {
             let mut builder = CatalogPreparation::new_staged(
@@ -985,8 +1050,20 @@ async fn native_receive_metadata_case(
                 producer_disk,
                 base,
                 limits(),
+                limits(),
             )
             .await?;
+            if renewal == Some(RenewalPhase::Replay) {
+                // Force the complete multi-shard replay across an old local
+                // deadline while a real registered renewal refreshes custody.
+                slow_store.config_mut(|config| {
+                    config.wait_get_per_byte = Duration::from_micros(10);
+                });
+                let deadline = renewal_ticket
+                    .shorten_bound_lease_for_test(Duration::from_secs(1))
+                    .map_err(crate::packs::verification::PhysicalError::from)?;
+                let _ = started.take().expect("one renewal phase").send(deadline);
+            }
             let added = builder.add_staged_pack(staged).await;
             if metadata_fault.is_some() {
                 let error = added.expect_err("invalid staged metadata accepted");
@@ -997,12 +1074,39 @@ async fn native_receive_metadata_case(
                 return Err(error);
             }
             added?;
+            if renewal == Some(RenewalPhase::Finish) {
+                // Delay the first immutable output upload beyond the old
+                // deadline while the same bound session receives a renewal.
+                slow_store.config_mut(|config| {
+                    config.wait_put_per_call = Duration::from_millis(1100);
+                });
+                let deadline = renewal_ticket
+                    .shorten_bound_lease_for_test(Duration::from_secs(1))
+                    .map_err(crate::packs::verification::PhysicalError::from)?;
+                let _ = started.take().expect("one renewal phase").send(deadline);
+            }
             builder.finish().await
         }
         .await;
         result.map_err(|error| StagingError::Input(Box::new(error)))
     })?;
+    let original_deadline = if renewal.is_some() {
+        let deadline = entered.await?;
+        // Let the selected assembly phase capture its deadline before renewal.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        ticket.renew_for_test();
+        timeout(Duration::from_secs(1), async {
+            while ticket.bound_renewal().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        Some(deadline)
+    } else {
+        None
+    };
     let prepared = work.wait().await;
+    throttled.config_mut(|config| *config = object_store::throttle::ThrottleConfig::default());
     if metadata_fault.is_some() {
         assert!(prepared.is_err());
         assert!(coordinator.close_and_drain().await.is_empty());
@@ -1010,9 +1114,13 @@ async fn native_receive_metadata_case(
         assert_eq!(publication_state(&fixture).await?, before_publication);
         cleaned(physical_root.path(), &physical_disk).await?;
         fixture.runtime.shutdown().await?;
-        return Ok(());
+        return Ok(None);
     }
-    let prepared = prepared.map_err(|error| error.to_string())?;
+    let prepared = prepared.map_err(|error| format!("{error:?}"))?;
+    if let Some(deadline) = original_deadline {
+        assert!(tokio::time::Instant::now() > deadline);
+        assert!(ticket.bound_session().is_ok());
+    }
     if rooted {
         if matches!(
             mode,
@@ -1026,38 +1134,42 @@ async fn native_receive_metadata_case(
                 | CompletionMode::PolicyDispatch { .. }
                 | CompletionMode::Dispatch { .. }
         ) {
-            let result = qualify_rooted(
-                super::root_dispatch::Context {
-                    fixture: &fixture,
-                    prepared: Arc::new(prepared),
-                    store: &store,
-                    staging: &coordinator,
-                    ticket: &ticket,
-                    root: physical_root.path(),
-                    budget: physical_disk.clone(),
-                    request: recovered,
-                },
-                mode,
-            )
-            .await;
-            if mode == CompletionMode::MandatoryRegistration {
-                assert!(coordinator.close_and_drain().await.is_empty());
-                fixture.runtime.shutdown().await?;
-            }
-            result?;
-            if matches!(
-                mode,
-                CompletionMode::PolicyRefusalDispatch { .. }
-                    | CompletionMode::PolicyDispatch { .. }
-                    | CompletionMode::Dispatch { .. }
-            ) {
-                cleaned(physical_root.path(), &physical_disk).await?;
-                fixture.runtime.shutdown().await?;
-            } else {
-                cleaned(work_root.path(), &disk).await?;
-                cleaned(physical_root.path(), &physical_disk).await?;
-            }
-            return Ok(());
+            // Finish polling the large native setup before polling recovery.
+            // The continuation owns the same fixture, custody and scratch pins.
+            return Ok(Some(Box::pin(async move {
+                let result = qualify_rooted(
+                    super::root_dispatch::Context {
+                        fixture: &fixture,
+                        prepared: Arc::new(prepared),
+                        store: &store,
+                        staging: &coordinator,
+                        ticket: &ticket,
+                        root: physical_root.path(),
+                        budget: physical_disk.clone(),
+                        request: recovered,
+                    },
+                    mode,
+                )
+                .await;
+                if mode == CompletionMode::MandatoryRegistration {
+                    assert!(coordinator.close_and_drain().await.is_empty());
+                    fixture.runtime.shutdown().await?;
+                }
+                result?;
+                if matches!(
+                    mode,
+                    CompletionMode::PolicyRefusalDispatch { .. }
+                        | CompletionMode::PolicyDispatch { .. }
+                        | CompletionMode::Dispatch { .. }
+                ) {
+                    cleaned(physical_root.path(), &physical_disk).await?;
+                    fixture.runtime.shutdown().await?;
+                } else {
+                    cleaned(work_root.path(), &disk).await?;
+                    cleaned(physical_root.path(), &physical_disk).await?;
+                }
+                Ok(())
+            })));
         }
         let (fixture, replay) = super::root_completion::spawn_qualify(
             fixture,
@@ -1073,7 +1185,7 @@ async fn native_receive_metadata_case(
         cleaned(physical_root.path(), &physical_disk).await?;
         assert!(coordinator.close_and_drain().await.is_empty());
         super::root_completion::restored(&fixture, &store, replay).await?;
-        return Ok(());
+        return Ok(None);
     }
     let expected = recovered.response.clone();
     let producer_root = Arc::clone(&physical_root);
@@ -1202,7 +1314,7 @@ async fn native_receive_metadata_case(
         Ok(Vec::new())
     }).await?;
     fixture.runtime.shutdown().await?;
-    Ok(())
+    Ok(None)
 }
 
 #[tokio::test]

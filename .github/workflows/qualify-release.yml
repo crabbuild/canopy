@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check Cellule release alignment
+        run: python3 scripts/check_cellule.py
       - name: Initialize qualification evidence before tool setup
         run: |
           mkdir qualification
@@ -29,7 +31,7 @@ jobs:
         run: |
           rustup component add clippy rustfmt
           sudo apt-get update
-          sudo apt-get install -y git-lfs openssh-client
+          sudo apt-get install -y git-lfs openssh-client openssl
           aws --version
           git lfs install
       - name: Bind exact source and dependency inputs
@@ -45,23 +47,25 @@ jobs:
 
           metadata = json.loads(Path('qualification/metadata.json').read_text())
           manifest = tomllib.loads(Path('crates/canopy-server/Cargo.toml').read_text())
-          revisions = {value['rev'] for value in manifest['dependencies'].values()
-                       if isinstance(value, dict) and value.get('git') == 'https://github.com/crabbuild/cellule.git'}
-          assert len(revisions) == 1
-          revision = revisions.pop()
+          pins = {value['version'] for name, value in manifest['dependencies'].items()
+                  if name.startswith('cellule-')}
+          assert len(pins) == 1 and next(iter(pins)).startswith('=')
+          version = pins.pop()[1:]
           packages = {package['name']: package['source'] for package in metadata['packages']
                       if package['name'].startswith('cellule-')}
           assert set(packages) == {'cellule-app', 'cellule-host', 'cellule-ltx',
                                    'cellule-runtime', 'cellule-store', 'cellule-types'}
-          assert all(source == f'git+https://github.com/crabbuild/cellule.git?rev={revision}#{revision}'
+          assert all(source == 'registry+https://github.com/rust-lang/crates.io-index'
                      for source in packages.values())
+          assert all(package['version'] == version for package in metadata['packages']
+                     if package['name'].startswith('cellule-'))
           files = subprocess.check_output(['git', 'ls-files', 'crates', 'scripts', 'Cargo.toml',
                                             'Cargo.lock', '.github/workflows'], text=True).splitlines()
           image = json.loads(subprocess.check_output(['docker', 'image', 'inspect',
                                                       'rustfs/rustfs:1.0.0-beta.8-glibc'], text=True))[0]
           result = {
               'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-              'cellule_revision': revision,
+              'cellule_version': version,
               'packages': packages,
               'source_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files},
               'rustc': subprocess.check_output(['rustc', '-Vv'], text=True),
@@ -80,11 +84,9 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --release --workspace --all-targets --locked -- -D warnings 2>&1 | tee qualification/release-clippy.log
       - name: Test release workspace
-        run: cargo test --release --workspace --locked -- --test-threads=4 2>&1 | tee qualification/release-workspace.log
+        run: cargo test --release --workspace --locked -- --test-threads=1 2>&1 | tee qualification/release-workspace.log
       - name: Check Python qualification harness
         run: python3 -B -m unittest discover -s scripts -p 'test_*.py' 2>&1 | tee qualification/python-harness.log
-      - name: Qualify release Git compatibility against RustFS
-        run: python3 scripts/qualify_size.py --provider-only --release 2>&1 | tee qualification/release-rustfs.log
       - name: Build and retain release executable
         run: |
           cargo build --release --locked --bin canopy 2>&1 | tee qualification/release-build.log
@@ -98,13 +100,15 @@ jobs:
                      for name, digest in inputs['source_sha256'].items())
           binary = Path('target/release/canopy')
           digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-          result = {'head': inputs['head'], 'cellule_revision': inputs['cellule_revision'],
+          result = {'head': inputs['head'], 'cellule_version': inputs['cellule_version'],
                     'binary_sha256': digest, 'binary_size_bytes': binary.stat().st_size,
                     'bound_source_unchanged': True, 'scope': inputs['scope']}
           Path('qualification/release-output.json').write_text(json.dumps(result, indent=2) + '\n')
           PY
           sha256sum target/release/canopy > qualification/canopy.sha256
           tar -czf qualification/canopy-release-linux.tar.gz -C target/release canopy
+      - name: Qualify release Git compatibility and process recovery against RustFS
+        run: python3 scripts/qualify_size.py --provider-only --release --process-binary target/release/canopy 2>&1 | tee qualification/release-rustfs.log
       - name: Retain qualification evidence including failed attempts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

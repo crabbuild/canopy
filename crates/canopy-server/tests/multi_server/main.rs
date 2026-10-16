@@ -14,8 +14,6 @@ mod paused_blobs;
 mod pulls;
 mod push_options;
 mod rebase;
-#[path = "../support/retained_directory.rs"]
-mod retained_directory;
 mod sha256;
 mod size;
 mod ssh;
@@ -29,6 +27,7 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as StorePath};
 use tokio::{net::TcpListener, process::Command};
 
 mod branch_rules;
+mod catalog_contract;
 mod checks;
 mod collaborators;
 mod default_branch;
@@ -41,7 +40,6 @@ mod lifecycle;
 mod listener_handoff;
 mod peers;
 mod residency;
-mod retained_catalog;
 mod tokens;
 mod transfers;
 mod visibility;

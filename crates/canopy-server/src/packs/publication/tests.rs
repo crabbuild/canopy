@@ -66,8 +66,8 @@ impl CellModule for Module {
             let descriptor = |id| cellule_runtime::registry::OperationDescriptor {
                 id,
                 codec_version: 1,
-                schema_min: 1,
-                schema_max: 1,
+                schema_min: crate::REPOSITORY_SCHEMA_VERSION,
+                schema_max: crate::REPOSITORY_SCHEMA_VERSION,
                 input_limit: 4096,
                 output_limit: 4096,
             };
@@ -106,10 +106,10 @@ impl CellModule for Module {
                 name: Self::NAME,
                 source_digest: Digest::from_bytes([11; 32]),
                 retained_codes: &[],
-                schema_min: 1,
-                schema_max: 1,
+                schema_min: crate::REPOSITORY_SCHEMA_VERSION,
+                schema_max: crate::REPOSITORY_SCHEMA_VERSION,
                 migrations: Box::leak(Box::new([MigrationDescriptor {
-                    version: 1,
+                    version: crate::REPOSITORY_SCHEMA_VERSION,
                     sql: SCHEMA,
                     digest: Digest::from_bytes(*blake3::hash(SCHEMA.as_bytes()).as_bytes()),
                 }])),
@@ -200,7 +200,7 @@ impl Fixture {
                 &target,
                 CatalogRole::Sql,
                 registry.module_code("repository").ok_or("code")?,
-                1,
+                crate::REPOSITORY_SCHEMA_VERSION,
             )?)
             .await?;
         let authority = CellAuthority::new(layout.clone());
