@@ -829,7 +829,7 @@ async fn native_review_policy_observes_current_rules_reviews_membership_and_ref_
 
 #[tokio::test]
 async fn native_thread_receiver_binds_verified_anchor_and_rechecks_editorial_revision() -> Result {
-    use crate::git_read::{ComparisonTarget, Side, patch::LineAnchor};
+    use crate::git::read::{ComparisonTarget, Side, patch::LineAnchor};
     use crate::pulls::{
         native::CreateNativeThread,
         native::threads::{ThreadData, ThreadRequest},

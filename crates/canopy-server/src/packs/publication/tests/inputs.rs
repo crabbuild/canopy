@@ -15,7 +15,7 @@ async fn capture_real(
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let root = tempfile::TempDir::new()?;
     let disk = cellule_ltx::DiskBudget::new(16 << 20);
-    let backend = crate::git_http::GitHttpBackend::initialize(
+    let backend = crate::git::http::GitHttpBackend::initialize(
         root.path().into(),
         disk,
         "refs/heads/main",

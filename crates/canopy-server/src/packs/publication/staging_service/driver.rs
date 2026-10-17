@@ -72,7 +72,7 @@ impl StagingCoordinator {
         request: BeginRequest,
         store: &canopy_object_storage::artifact::ArtifactStore,
     ) -> Result<
-        Option<crate::git_http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>>,
+        Option<crate::git::http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>>,
         RootPushReplayError,
     > {
         let (client, _, _) = self

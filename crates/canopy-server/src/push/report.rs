@@ -1,5 +1,5 @@
 use super::*;
-use crate::{PushPlan, git_http::GitHttpResponse};
+use crate::{PushPlan, git::http::GitHttpResponse};
 
 pub(crate) const REJECTED: &str =
     "Canopy publication rejected: refs, permissions or policy changed; fetch and retry";

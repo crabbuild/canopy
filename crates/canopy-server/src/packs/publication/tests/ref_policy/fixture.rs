@@ -1,9 +1,9 @@
 //! Scoped synthetic results isolate policy semantics; genuine CGI is qualified
 //! independently by native_capture. Native pack bytes and custody are real.
 use super::*;
-use crate::git_gateway::preflight::EncodedPush;
-use crate::git_http::{GitHttpRequest, GitHttpResponse};
-use crate::git_input::GitInput;
+use crate::git::gateway::preflight::EncodedPush;
+use crate::git::http::{GitHttpRequest, GitHttpResponse};
+use crate::git::input::GitInput;
 use crate::packs::catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes};
 use crate::packs::verification::physical::tests::upload_fixture;
 

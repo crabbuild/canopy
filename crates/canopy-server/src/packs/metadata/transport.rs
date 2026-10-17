@@ -56,7 +56,7 @@ impl MetadataSegment {
     pub(crate) async fn upload_owned(
         self: Arc<Self>,
         store: &ArtifactStore,
-        activity: crate::git_objects::ReadOwner,
+        activity: crate::git::objects::ReadOwner,
     ) -> Result<StoredSegment, MetadataError> {
         let segment = self.descriptor();
         if segment.identity.repository != store.repository() {
@@ -107,7 +107,7 @@ impl MetadataSegment {
         stored: StoredSegment,
         limits: MetadataLimits,
         reader: Option<ReaderAdmission>,
-        activity: crate::git_objects::ReadOwner,
+        activity: crate::git::objects::ReadOwner,
     ) -> Result<Arc<Self>, MetadataError> {
         stored.validate(store)?;
         let admitted = download_file_owned(
@@ -145,7 +145,7 @@ impl PinnedFile for MetadataSegment {
 // not keep a creating worker alive across Bind or a bound worker across publish.
 pub(crate) struct OwnedFile<T: PinnedFile> {
     pub(crate) file: Arc<T>,
-    pub(crate) activity: crate::git_objects::ReadOwner,
+    pub(crate) activity: crate::git::objects::ReadOwner,
 }
 impl<T: PinnedFile> PinnedFile for OwnedFile<T> {
     fn open(&self) -> io::Result<File> {
@@ -213,7 +213,7 @@ pub(in crate::packs) async fn download_file_owned(
     key: ArtifactKey,
     artifact: ArtifactDescriptor,
     limits: MetadataLimits,
-    admission: (Option<ReaderAdmission>, crate::git_objects::ReadOwner),
+    admission: (Option<ReaderAdmission>, crate::git::objects::ReadOwner),
 ) -> Result<AdmittedFile, MetadataError> {
     let (reader, activity) = admission;
     if limits.cache_kib == 0
@@ -271,7 +271,7 @@ pub(in crate::packs) async fn download_file_owned(
 // Field order closes/unlinks the private file before releasing admission.
 struct DownloadSpool {
     admitted: Mutex<AdmittedFile>,
-    _activity: crate::git_objects::ReadOwner,
+    _activity: crate::git::objects::ReadOwner,
 }
 
 // Unlike a bare tokio::fs::File, each pending blocking task owns its admission
@@ -350,7 +350,7 @@ mod tests {
             release_rx.recv().unwrap();
         });
         ready_rx.recv_timeout(std::time::Duration::from_secs(5))?;
-        let activity: crate::git_objects::ReadOwner = Arc::new(());
+        let activity: crate::git::objects::ReadOwner = Arc::new(());
         let weak_activity = Arc::downgrade(&activity);
         let mut stream = SegmentStream {
             source: Arc::new(ReadPin {

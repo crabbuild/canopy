@@ -63,7 +63,7 @@ fn driver_request(repository: &RepositoryCell, operation: u8) -> BeginRequest {
 }
 
 struct DriverOwnedFailure {
-    _pin: crate::git_objects::ReadOwner,
+    _pin: crate::git::objects::ReadOwner,
     message: String,
 }
 impl std::fmt::Debug for DriverOwnedFailure {

@@ -162,7 +162,7 @@ impl PreparedCatalog {
                 if index == 0 && tree_edge.child != tree {
                     return Err(NativeCandidateVerificationError::Invalid);
                 }
-                let owner: crate::git_objects::ReadOwner = self.base.clone();
+                let owner: crate::git::objects::ReadOwner = self.base.clone();
                 let original = files
                     .body(original, MAX_COMMIT_BYTES, owner)
                     .await

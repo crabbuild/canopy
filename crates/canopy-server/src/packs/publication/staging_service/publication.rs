@@ -35,14 +35,14 @@ impl StagedPublicationTicket {
     }
     pub async fn response(
         &self,
-    ) -> Result<crate::git_http::GitHttpResponse, CatalogPushResponseError> {
+    ) -> Result<crate::git::http::GitHttpResponse, CatalogPushResponseError> {
         self.ticket.response().await
     }
     pub async fn root_response(
         &self,
         store: &canopy_object_storage::artifact::ArtifactStore,
     ) -> Result<
-        crate::git_http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>,
+        crate::git::http::GitHttpResponse<canopy_object_storage::artifact::ArtifactRead>,
         RootPushReplayError,
     > {
         self.ticket.root_response(store).await

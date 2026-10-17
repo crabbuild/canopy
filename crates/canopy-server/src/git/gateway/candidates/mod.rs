@@ -1,0 +1,273 @@
+use super::*;
+use crate::{
+    git::http::{GitProcess, read_bounded},
+    pulls::{
+        candidates::{
+            CandidateOutcome, CandidateRequest, CandidateResult, MergeCandidate,
+            command::CandidateAction, valid_result,
+        },
+        merge::MergeStrategy,
+    },
+};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use cellule_runtime::InvocationError;
+use std::process::{ExitStatus, Stdio};
+use tokio::io::AsyncWriteExt;
+
+mod produce;
+mod rebase;
+pub(crate) use produce::ProducedCandidate;
+
+impl GitGateway {
+    pub(crate) async fn prepare_candidate(
+        &self,
+        actor: &str,
+        number: i64,
+        request: CandidateRequest,
+    ) -> Result<CandidateOutcome, GatewayError> {
+        let identity = new_identity()?;
+        let reserved = self
+            .candidate_command(CandidateAction::Reserve {
+                actor: actor.into(),
+                number,
+                request,
+                created_ms: identity.issued_at_ms,
+            })
+            .await?;
+        let CandidateOutcome::Applied(candidate) = reserved else {
+            return Ok(reserved);
+        };
+        if candidate.result != CandidateResult::Pending {
+            return Ok(CandidateOutcome::Applied(candidate));
+        }
+        self.publish_candidate(*candidate).await
+    }
+
+    async fn candidate_command(
+        &self,
+        action: CandidateAction,
+    ) -> Result<CandidateOutcome, GatewayError> {
+        match self
+            .repository
+            .candidate_action(new_identity()?, action)
+            .await
+        {
+            Ok(result) => Ok(result.output),
+            Err(InvocationError::Rejected(result)) => Ok(result.output),
+            Err(error) => Err(GatewayError::Cell(Box::new(error))),
+        }
+    }
+}
+
+async fn prepare_native(
+    context: &crate::packs::publication::StagingContext,
+    backend: &GitHttpBackend,
+    candidate: &MergeCandidate,
+) -> Result<CandidateResult, GatewayError> {
+    let revision = &candidate.request.revision;
+    let related = run(
+        context,
+        backend,
+        &["merge-base", &revision.base_oid, &revision.source_oid],
+        b"",
+        &[],
+    )
+    .await?;
+    match related.status.code() {
+        Some(0) => {}
+        Some(1) => return Ok(CandidateResult::Unrelated),
+        _ => return Err(related.error()),
+    }
+    if candidate.request.strategy == MergeStrategy::Rebase {
+        let common = output_oid(&related.stdout)?;
+        return rebase::prepare(context, backend, candidate, &common).await;
+    }
+    // Native merge-tree consolidates multiple merge bases itself. Never select
+    // one merge base or infer a clean result from an empty conflict-path list.
+    let (tree_oid, conflict) = merge_tree(
+        context,
+        backend,
+        &revision.base_oid,
+        &revision.source_oid,
+        None,
+    )
+    .await?;
+    if let Some(conflict) = conflict {
+        return Ok(conflict);
+    }
+    let mut args = vec!["commit-tree", &tree_oid, "-p", &revision.base_oid];
+    if candidate.request.strategy == MergeStrategy::MergeCommit {
+        args.extend(["-p", &revision.source_oid]);
+    }
+    args.extend(["-F", "-", "--no-gpg-sign"]);
+    let email = format!("{}@users.canopy.invalid", candidate.actor);
+    let date = format!("@{} +0000", candidate.created_at_ms / 1000);
+    let environment = [
+        ("GIT_AUTHOR_NAME", candidate.actor.as_str()),
+        ("GIT_COMMITTER_NAME", candidate.actor.as_str()),
+        ("GIT_AUTHOR_EMAIL", email.as_str()),
+        ("GIT_COMMITTER_EMAIL", email.as_str()),
+        ("GIT_AUTHOR_DATE", date.as_str()),
+        ("GIT_COMMITTER_DATE", date.as_str()),
+    ];
+    let mut message = candidate.request.message.clone();
+    if !message.ends_with('\n') {
+        message.push('\n');
+    }
+    let commit = run(context, backend, &args, message.as_bytes(), &environment).await?;
+    if !commit.status.success() {
+        return Err(commit.error());
+    }
+    Ok(CandidateResult::Ready {
+        oid: output_oid(&commit.stdout)?,
+        tree_oid,
+    })
+}
+
+fn output_oid(bytes: &[u8]) -> Result<String, GatewayError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| GatewayError::MalformedCache)?;
+    let oid = text
+        .strip_suffix('\n')
+        .ok_or(GatewayError::MalformedCache)?;
+    parse_oid(oid)?;
+    Ok(oid.into())
+}
+
+async fn merge_tree(
+    context: &crate::packs::publication::StagingContext,
+    backend: &GitHttpBackend,
+    base: &str,
+    source: &str,
+    ancestor: Option<&str>,
+) -> Result<(String, Option<CandidateResult>), GatewayError> {
+    let mut args = vec![
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "--no-messages",
+        "-z",
+    ];
+    let explicit;
+    if let Some(ancestor) = ancestor {
+        explicit = format!("--merge-base={ancestor}");
+        args.push(&explicit);
+    }
+    args.extend([base, source]);
+    let merged = run(context, backend, &args, b"", &[]).await?;
+    if !matches!(merged.status.code(), Some(0 | 1)) {
+        return Err(merged.error());
+    }
+    let (tree, paths) = merge_output(&merged.stdout)?;
+    let conflict = if merged.status.code() == Some(1) {
+        Some(CandidateResult::Conflicted {
+            paths_base64: paths
+                .into_iter()
+                .map(|path| URL_SAFE_NO_PAD.encode(path))
+                .collect(),
+        })
+    } else {
+        if !paths.is_empty() {
+            return Err(GatewayError::MalformedCache);
+        }
+        None
+    };
+    Ok((tree, conflict))
+}
+
+fn merge_output(bytes: &[u8]) -> Result<(String, Vec<&[u8]>), GatewayError> {
+    let bytes = bytes
+        .strip_suffix(&[0])
+        .ok_or(GatewayError::MalformedCache)?;
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let tree = std::str::from_utf8(fields.next().ok_or(GatewayError::MalformedCache)?)
+        .map_err(|_| GatewayError::MalformedCache)?;
+    parse_oid(tree)?;
+    let paths: Vec<_> = fields.collect();
+    if paths.iter().any(|path| path.is_empty()) {
+        return Err(GatewayError::MalformedCache);
+    }
+    Ok((tree.into(), paths))
+}
+
+pub(super) struct Output {
+    pub(super) status: ExitStatus,
+    pub(super) stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+impl Output {
+    pub(super) fn error(self) -> GatewayError {
+        GitHttpError::GitExit {
+            status: self.status,
+            stderr: String::from_utf8_lossy(&self.stderr).into_owned(),
+        }
+        .into()
+    }
+}
+pub(super) async fn run(
+    context: &crate::packs::publication::StagingContext,
+    backend: &GitHttpBackend,
+    args: &[&str],
+    input: &[u8],
+    environment: &[(&str, &str)],
+) -> Result<Output, GatewayError> {
+    run_owned(backend, args, input, environment, context.physical_owner()).await
+}
+
+pub(super) async fn run_owned(
+    backend: &GitHttpBackend,
+    args: &[&str],
+    input: &[u8],
+    environment: &[(&str, &str)],
+    owner: crate::git::objects::ReadOwner,
+) -> Result<Output, GatewayError> {
+    let mut command = crate::git::native::command(&backend.git_dir())?;
+    command
+        .envs(environment.iter().copied())
+        .arg("--git-dir")
+        .arg(backend.git_dir())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut process = GitProcess::spawn(
+        command,
+        (Arc::clone(&backend.cache), owner),
+        backend
+            .cache
+            .native
+            .try_admit(crate::native_resources::NativeWork::Pack)?,
+    )?;
+    let mut stdin = process
+        .child
+        .stdin
+        .take()
+        .ok_or(GitHttpError::Interrupted)?;
+    let stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or(GitHttpError::Interrupted)?;
+    let stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or(GitHttpError::Interrupted)?;
+    // Drain bounded pipes before reaping the leader, retaining the cache and
+    // process group on cancellation or overflow until all children are killed.
+    let (_, stdout, stderr) = tokio::try_join!(
+        async {
+            stdin.write_all(input).await?;
+            stdin.shutdown().await?;
+            drop(stdin);
+            Ok::<_, GitHttpError>(())
+        },
+        read_bounded(stdout, 300 * 1024),
+        read_bounded(stderr, 64 * 1024)
+    )?;
+    let status = process.wait().await?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}

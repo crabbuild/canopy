@@ -8,7 +8,7 @@ struct ActivePack {
 }
 pub struct ClosureVerifier {
     spool: Arc<Mutex<Spool>>,
-    activity: crate::git_objects::ReadOwner,
+    activity: crate::git::objects::ReadOwner,
     context: ClosureContext,
     canceled: Arc<AtomicBool>,
     active: Option<ActivePack>,
@@ -33,7 +33,7 @@ impl ClosureVerifier {
         budget: DiskBudget,
         context: ClosureContext,
         limits: MetadataLimits,
-        activity: crate::git_objects::ReadOwner,
+        activity: crate::git::objects::ReadOwner,
     ) -> Result<Self, ClosureError> {
         let root = workspace.path().to_owned();
         Self::new_inner(&root, budget, context, limits, Some(workspace), activity).await
@@ -44,7 +44,7 @@ impl ClosureVerifier {
         context: ClosureContext,
         limits: MetadataLimits,
         workspace: Option<Arc<tempfile::TempDir>>,
-        activity: crate::git_objects::ReadOwner,
+        activity: crate::git::objects::ReadOwner,
     ) -> Result<Self, ClosureError> {
         let canceled = Arc::new(AtomicBool::new(false));
         let mut guard = CancelGuard::new(canceled.clone());

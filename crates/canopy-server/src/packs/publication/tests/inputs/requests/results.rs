@@ -1,7 +1,7 @@
 //! Synthetic completions qualify retention/recovery; native CGI validity is
 //! covered independently by the receive/publication/cold-clone composition.
 use super::*;
-use crate::git_http::GitHttpResponse;
+use crate::git::http::GitHttpResponse;
 use canopy_object_storage::artifact::{ArtifactKey, ArtifactKind};
 use object_store::ObjectStoreExt;
 mod signed;

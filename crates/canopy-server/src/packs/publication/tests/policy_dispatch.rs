@@ -442,7 +442,7 @@ async fn complete(
     dispatch: Finalization<'_>,
     store: &canopy_object_storage::artifact::ArtifactStore,
     work: (&std::path::Path, cellule_ltx::DiskBudget),
-    expected: crate::git_http::GitHttpResponse,
+    expected: crate::git::http::GitHttpResponse,
 ) -> Result {
     let Finalization {
         coordinator: p,

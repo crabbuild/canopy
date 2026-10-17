@@ -276,7 +276,7 @@ impl CatalogPreparation {
         let (snapshot, source_root) = base.catalog_parts();
         let root = root.to_owned();
         let activity = staging.as_ref().map_or_else(
-            || Arc::new(()) as crate::git_objects::ReadOwner,
+            || Arc::new(()) as crate::git::objects::ReadOwner,
             StagingContext::physical_owner,
         );
         let work = async {
@@ -347,9 +347,9 @@ impl CatalogPreparation {
         }
         Ok(self.base.live_lease()?.1)
     }
-    fn physical_owner(&self) -> crate::git_objects::ReadOwner {
+    fn physical_owner(&self) -> crate::git::objects::ReadOwner {
         self.staging.as_ref().map_or_else(
-            || Arc::new(()) as crate::git_objects::ReadOwner,
+            || Arc::new(()) as crate::git::objects::ReadOwner,
             StagingContext::physical_owner,
         )
     }

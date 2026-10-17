@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     PushPlan,
-    git_http::GitHttpResponse,
+    git::http::GitHttpResponse,
     push::{CHUNK_BYTES, MAX_RESPONSE_BYTES, VerifiedPushCertificate},
 };
 use cellule_ltx::DiskBudget;

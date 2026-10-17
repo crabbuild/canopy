@@ -1,5 +1,7 @@
 use super::*;
-use crate::{git_gateway::preflight::EncodedPush, git_http::GitHttpRequest, git_input::GitInput};
+use crate::{
+    git::gateway::preflight::EncodedPush, git::http::GitHttpRequest, git::input::GitInput,
+};
 use cellule_ltx::DiskBudget;
 use std::io::Write;
 mod results;

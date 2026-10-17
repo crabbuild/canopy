@@ -1,6 +1,6 @@
 use super::publishing::{edit, state};
 use super::*;
-use crate::git_http::GitHttpResponse;
+use crate::git::http::GitHttpResponse;
 use crate::packs::metadata::tests::limits;
 use canopy_object_storage::artifact::{ArtifactRead, ArtifactStore};
 use cellule_ltx::DiskBudget;

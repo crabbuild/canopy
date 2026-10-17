@@ -81,7 +81,7 @@ pub(in crate::packs) async fn git_input(
     args: &[&str],
     input: &[u8],
 ) -> Result<Vec<u8>> {
-    let mut command = crate::native_git::command(root)?;
+    let mut command = crate::git::native::command(root)?;
     let mut child = command
         .args(args)
         .stdin(Stdio::piped())

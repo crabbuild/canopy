@@ -7,7 +7,7 @@ use super::{
     publishing::{assembled, edit, plan, update},
 };
 use crate::{
-    git_http::GitHttpResponse,
+    git::http::GitHttpResponse,
     packs::{
         catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes},
         metadata::tests::limits,

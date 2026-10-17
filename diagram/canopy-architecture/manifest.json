@@ -6,7 +6,7 @@
     "sources": [
       "crates/canopy-server/src/server/mod.rs",
       "crates/canopy-server/src/server/residency/mod.rs",
-      "crates/canopy-server/src/git_gateway/mod.rs",
+      "crates/canopy-server/src/git/gateway/mod.rs",
       "crates/canopy-server/src/lib.rs",
       "crates/canopy-server/src/schema.sql"
     ]
@@ -38,7 +38,7 @@
     "sources": [
       "crates/canopy-server/src/server/residency/mod.rs",
       "crates/canopy-server/src/server/peer.rs",
-      "crates/canopy-server/src/repository_http/authorization.rs",
+      "crates/canopy-server/src/api/authorization.rs",
       "crates/canopy-server/src/server/discovery.rs"
     ]
   },
@@ -47,9 +47,9 @@
     "title": "Git push from wire input to durable refs",
     "explanation": "After outer authentication, GitGateway spools and hashes the encoded request and binds a logical push ID to the actor and digest. It can replay a completed push before decoding and native work. New attempts prepare a private ref snapshot, run receive-pack, ingest canonical objects, certify graph closure and stage the report and ref plan. CompletePush checks current policy and expected ref versions and commits accepted refs with the canonical response pointer. Cellule gates acknowledgement on durable publication.",
     "sources": [
-      "crates/canopy-server/src/git_gateway/mod.rs",
-      "crates/canopy-server/src/git_gateway/preflight.rs",
-      "crates/canopy-server/src/git_gateway/push.rs",
+      "crates/canopy-server/src/git/gateway/mod.rs",
+      "crates/canopy-server/src/git/gateway/preflight.rs",
+      "crates/canopy-server/src/git/gateway/push.rs",
       "crates/canopy-server/src/push/mod.rs",
       "crates/canopy-server/src/refs.rs"
     ]
@@ -59,10 +59,10 @@
     "title": "Fetch, browse and Git LFS data paths",
     "explanation": "Fetch takes consistent refs, validates requested object reachability, hydrates selected verified objects and uses native upload-pack to stream the wire response. Browser APIs read through Cell metadata and verified body readers. LFS uploads first publish and verify immutable bytes, then commit authorized metadata; downloads verify manifest-bound parts. The active serving schema supports inline, chunked, external and packed storage records, distinct from the incomplete immutable catalog replacement.",
     "sources": [
-      "crates/canopy-server/src/git_gateway/fetch.rs",
-      "crates/canopy-server/src/git_gateway/hydration.rs",
-      "crates/canopy-server/src/git_gateway/discovery.rs",
-      "crates/canopy-server/src/git_read/mod.rs",
+      "crates/canopy-server/src/git/gateway/fetch.rs",
+      "crates/canopy-server/src/git/gateway/hydration.rs",
+      "crates/canopy-server/src/git/gateway/discovery.rs",
+      "crates/canopy-server/src/git/read/mod.rs",
       "crates/canopy-server/src/lfs/upload.rs",
       "crates/canopy-server/src/lfs/read.rs",
       "crates/canopy-server/src/schema.sql"
@@ -74,7 +74,7 @@
     "explanation": "Canopy locks its local runtime workspace, verifies storage capabilities, validates the selected release and enrolls a signed node lease before serving. New or cold Cells bootstrap, acquire idle authority or fence an expired owner and restore the authority-pinned SQLite root. Recovery preserves the request outcome ledger. Native caches rebuild afterward. Shutdown and maintenance supervise all admitted work; backup copies durable roots and referenced external bodies into an independent prefix.",
     "sources": [
       "crates/canopy-server/src/server/mod.rs",
-      "crates/canopy-server/src/server/lifecycle.rs",
+      "crates/canopy-server/src/server/lifecycle/mod.rs",
       "crates/canopy-server/src/server/workspace/mod.rs",
       "crates/canopy-server/src/deployment/recovery.rs",
       "crates/canopy-server/src/deployment/backup/mod.rs",

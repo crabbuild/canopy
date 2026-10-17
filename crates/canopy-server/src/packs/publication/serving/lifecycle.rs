@@ -143,7 +143,7 @@ impl ServingSnapshot {
     /// authorized staged producer; this API grants no forward membership proof.
     pub(crate) async fn native_base(
         &self,
-    ) -> Result<crate::git_http::GitHttpBackend, ServingReadError> {
+    ) -> Result<crate::git::http::GitHttpBackend, ServingReadError> {
         self.pin.native_base(self.actor.clone(), self.clone()).await
     }
     /// Build a complete forward closure from certified roots. Callers choosing

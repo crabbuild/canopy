@@ -1,6 +1,6 @@
 use super::publishing::{edit, state};
 use super::*;
-use crate::git_http::GitHttpResponse;
+use crate::git::http::GitHttpResponse;
 use canopy_object_storage::artifact::{ArtifactRead, ArtifactStore};
 use cellule_ltx::DiskBudget;
 use cellule_runtime::Resolution;

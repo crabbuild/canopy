@@ -4,7 +4,7 @@ Canopy should show the last commit that changed each directory entry at the sele
 
 ## Current behavior and exact meaning
 
-`git_read/browse.rs::browser_tree` returns up to 32 entries containing raw names and paths, kind, mode and OID, plus the selected commit. The selected commit is not each entry's last-changing commit. `browser_history` follows first parents and cannot serve as the attribution oracle without changing the semantics below.
+`git/read/browse.rs::browser_tree` returns up to 32 entries containing raw names and paths, kind, mode and OID, plus the selected commit. The selected commit is not each entry's last-changing commit. `browser_history` follows first parents and cannot serve as the attribution oracle without changing the semantics below.
 
 Define the initial algorithm version by the result of this invocation against an authorized, certified snapshot:
 

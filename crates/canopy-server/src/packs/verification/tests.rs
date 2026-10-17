@@ -272,7 +272,7 @@ async fn large_native_commit_messages_are_hashed_without_entering_the_edge_inven
         let mut body = format!("tree {}\nauthor Verifier <test@example.invalid> 1 +0000\ncommitter Verifier <test@example.invalid> 1 +0000\n\n", hex::encode(tree)).into_bytes();
         body.extend(std::iter::repeat_n(b'x', 8 << 20));
         let expected = crate::object_id(format, ObjectKind::Commit, &body);
-        let mut command: Command = crate::native_git::command(fixture.root.path())?;
+        let mut command: Command = crate::git::native::command(fixture.root.path())?;
         let mut child = command
             .arg("--git-dir")
             .arg(fixture.root.path())

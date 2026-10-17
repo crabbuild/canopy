@@ -24,7 +24,7 @@ use super::{RepositoryManager, ServerError, SqlCellSpec, acquire_sql_cell, mutat
 use crate::{
     CanopyApplication, ReadIdentity, RepositoryCell, RepositoryModule,
     directory::{RepositoryEntry, RepositoryState},
-    git_gateway::GitGateway,
+    git::gateway::GitGateway,
     http::GitHttpApi,
     repository_target,
 };

@@ -3,7 +3,7 @@
 //! membership spool authorizes wants; file presence never grants reachability.
 use super::*;
 use crate::packs::{catalog::graph_spool::GraphSpool, metadata::MetadataError};
-use crate::{ObjectId, git_cache::GitCache, git_objects::ReadOwner};
+use crate::{ObjectId, git::cache::GitCache, git::objects::ReadOwner};
 
 #[derive(Clone, Copy, Debug)]
 pub struct WorkspaceLimits {
@@ -37,8 +37,8 @@ struct Core {
     complete_packs: bool,
 }
 impl NativeWorkspace {
-    pub(crate) fn backend(&self, nonce_seed: Option<[u8; 32]>) -> crate::git_http::GitHttpBackend {
-        crate::git_http::GitHttpBackend {
+    pub(crate) fn backend(&self, nonce_seed: Option<[u8; 32]>) -> crate::git::http::GitHttpBackend {
+        crate::git::http::GitHttpBackend {
             cache: self.core.cache.clone(),
             nonce_seed,
             signers: None,
@@ -128,7 +128,7 @@ impl NativeWorkspace {
                         return Err(ServingReadError::TooLarge);
                     }
                     if core.complete_packs {
-                        let mut objects = crate::git_objects::GitObjects::batch_owned(
+                        let mut objects = crate::git::objects::GitObjects::batch_owned(
                             &core.cache.git_dir(),
                             &core.cache.native,
                             owner,

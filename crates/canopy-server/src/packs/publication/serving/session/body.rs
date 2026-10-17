@@ -33,7 +33,7 @@ impl ServingPin {
             }
             // This is a child of an already admitted worker. Closing refuses new
             // workers but must not invalidate native drain ownership of this one.
-            let owner: crate::git_objects::ReadOwner = Arc::new((inner.child(), permit));
+            let owner: crate::git::objects::ReadOwner = Arc::new((inner.child(), permit));
             Ok(Some(inner.context.files.body(object, limit, owner).await?))
         })
         .await

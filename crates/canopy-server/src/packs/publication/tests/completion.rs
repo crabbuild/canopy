@@ -4,7 +4,7 @@ use super::{
     publishing::{Graph, assembled, edit, next_graph, plan, state, update},
 };
 use crate::{
-    git_http::GitHttpResponse, packs::metadata::tests::limits, push::VerifiedPushCertificate,
+    git::http::GitHttpResponse, packs::metadata::tests::limits, push::VerifiedPushCertificate,
 };
 use sha2::{Digest as _, Sha256};
 

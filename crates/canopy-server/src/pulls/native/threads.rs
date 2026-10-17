@@ -1,6 +1,6 @@
 //! Verified line anchors are purpose-bound to native ref facts at publication.
 use super::*;
-use crate::git_read::{ComparisonTarget, patch::LineAnchor};
+use crate::git::read::{ComparisonTarget, patch::LineAnchor};
 use crate::pulls::threads::ThreadIntent;
 
 #[derive(Serialize, Deserialize)]

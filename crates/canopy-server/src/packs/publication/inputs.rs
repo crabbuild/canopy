@@ -9,7 +9,7 @@ use crate::packs::{
     },
     sources::{NativeInputIndex, NativeInputRoot, NativePackDescriptor},
 };
-use crate::{git_gateway::preflight::SavedPushRequest, packs::wire_request::WireRequestRoot};
+use crate::{git::gateway::preflight::SavedPushRequest, packs::wire_request::WireRequestRoot};
 use canopy_object_storage::artifact::ArtifactStore;
 use cellule_runtime::{CellClient, CellTarget, InvocationError, primitives::sql::SqlCell};
 use std::sync::Arc;

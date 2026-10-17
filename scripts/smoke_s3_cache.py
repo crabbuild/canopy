@@ -187,7 +187,7 @@ def qualify(args):
         # advances only over the three new headers and reuses those same files.
         receive_cursor_probe(source, url)
         refreshes, _ = cursor_diagnostics(first_log, log_offset, 263)
-        assert refreshes, "hydration diagnostics required: enable canopy_server::git_gateway=debug"
+        assert refreshes, "hydration diagnostics required: enable canopy_server::git::gateway=debug"
         assert sum(event["scanned"] for event in refreshes) == 3, refreshes
         assert sum(event["objects"] for event in refreshes) == 0, refreshes
         assert sum(event["reused"] for event in refreshes) == 3, refreshes

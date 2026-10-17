@@ -1,7 +1,7 @@
 //! Immutable original request bytes and metadata. This root is custody, not
 //! signature, native-result, ref-CAS or publication authority.
 use super::directory::index::codec::{artifact, fixed, read_artifact};
-use crate::{ObjectFormat, git_http::GitHttpRequest, packs::publication::BeginRequest};
+use crate::{ObjectFormat, git::http::GitHttpRequest, packs::publication::BeginRequest};
 use canopy_object_storage::artifact::{
     ArtifactDescriptor, ArtifactKey, ArtifactKind, ArtifactStore,
 };

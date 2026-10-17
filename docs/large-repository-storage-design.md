@@ -184,7 +184,7 @@ Command handlers verify pending `(sequence, oid)` matches the same object, edge 
 
 ## Reads and caches
 
-`GitObjectReader` is the common service-layer path for Git, browsing, raw files, diffs, archive generation and merge preparation. Cell commands do not perform object-store or native-process I/O. `crates/canopy-server/src/git_read/mod.rs` receives the resolver instead of reading SQL bodies; keep API response-size and tree-pagination limits as explicit product limits, independent of streaming storage limits.
+`GitObjectReader` is the common service-layer path for Git, browsing, raw files, diffs, archive generation and merge preparation. Cell commands do not perform object-store or native-process I/O. `crates/canopy-server/src/git/read/mod.rs` receives the resolver instead of reading SQL bodies; keep API response-size and tree-pagination limits as explicit product limits, independent of streaming storage limits.
 
 Resolve an object only after authorization and canonical publication checks. Fetch its descriptor from the Cell, install both pack and index under disk admission, verify them, then use a persistent `cat-file` reader. Streaming callers avoid a body-sized allocation. Callers asking for a bounded preview retain that explicit limit. Missing/corrupt artifacts fail closed; a different local object of the same OID is not an unverified repair source.
 

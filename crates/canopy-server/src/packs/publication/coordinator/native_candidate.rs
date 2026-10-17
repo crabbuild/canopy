@@ -11,7 +11,7 @@ impl PreparedCatalog {
     pub(crate) async fn ready_native_candidate(
         self: &Arc<Self>,
         identity: MutationIdentity,
-        produced: &crate::git_gateway::candidates::ProducedCandidate,
+        produced: &crate::git::gateway::candidates::ProducedCandidate,
         directory: &std::path::Path,
         budget: cellule_ltx::DiskBudget,
         limits: crate::packs::metadata::MetadataLimits,

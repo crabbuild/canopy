@@ -35,7 +35,7 @@ enum SshError {
     #[error("SSH repository operation failed")]
     Server(#[from] ServerError),
     #[error("SSH Git transfer failed")]
-    Git(#[from] crate::git_gateway::GatewayError),
+    Git(#[from] crate::git::gateway::GatewayError),
     #[error("SSH transfer admission failed")]
     Admission(#[from] cellule_runtime::Error),
     #[error("{0}")]
@@ -338,8 +338,8 @@ impl server::Handler for Connection {
             let code = if let Err(error) = run {
                 let message = match &error {
                     SshError::Rejected(message) => *message,
-                    SshError::Git(crate::git_gateway::GatewayError::Unauthorized) => "Repository access denied",
-                    SshError::Git(crate::git_gateway::GatewayError::UnreachableWant) => "Requested object is not reachable from a current repository ref",
+                    SshError::Git(crate::git::gateway::GatewayError::Unauthorized) => "Repository access denied",
+                    SshError::Git(crate::git::gateway::GatewayError::UnreachableWant) => "Requested object is not reachable from a current repository ref",
                     SshError::Admission(_) => "Canopy transfer capacity is busy; retry shortly",
                     _ => "Canopy Git operation failed; retry or contact the administrator",
                 };
