@@ -1,4 +1,4 @@
-use canopy_server::git_http::{GitHttpBackend, GitHttpRequest};
+use canopy_server::git::http::{GitHttpBackend, GitHttpRequest};
 
 #[tokio::test]
 async fn git_backend_advertises_smart_fetch_and_authenticated_push()
@@ -31,7 +31,7 @@ async fn git_backend_advertises_smart_fetch_and_authenticated_push()
                 content_type: None,
                 gzip: false,
                 protocol_v2: false,
-                body: canopy_server::git_input::GitInput::receive(
+                body: canopy_server::git::input::GitInput::receive(
                     axum::body::Body::empty(),
                     root.path(),
                     &cellule_ltx::DiskBudget::new(1 << 20),
@@ -83,7 +83,7 @@ async fn backend_instances_share_native_capacity_and_recover_after_release()
     }
     let held = native.usage()?;
     for backend in &backends {
-        let input = canopy_server::git_input::GitInput::receive(
+        let input = canopy_server::git::input::GitInput::receive(
             axum::body::Body::empty(),
             root.path(),
             &disk,
@@ -105,14 +105,14 @@ async fn backend_instances_share_native_capacity_and_recover_after_release()
             .await
             .unwrap_err();
         assert!(
-            matches!(error, canopy_server::git_http::GitHttpError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+            matches!(error, canopy_server::git::http::GitHttpError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
         assert_eq!(native.usage()?, held);
     }
     drop(active);
     assert_eq!(native.usage()?, NativeUsage::default());
     for backend in &backends {
-        let input = canopy_server::git_input::GitInput::receive(
+        let input = canopy_server::git::input::GitInput::receive(
             axum::body::Body::empty(),
             root.path(),
             &disk,

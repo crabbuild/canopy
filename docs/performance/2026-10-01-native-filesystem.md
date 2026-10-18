@@ -425,7 +425,7 @@ specific frontend request or establish billed/per-operation cost.
 The corresponding server logs report authentication/metadata failures with the
 opaque `repository directory operation failed` message. The
 [error wrapper](../../crates/canopy-server/src/server/mod.rs) retains a typed
-invocation failure, but the [HTTP logs](../../crates/canopy-server/src/repository_http/mod.rs)
+invocation failure, but the [HTTP logs](../../crates/canopy-server/src/api/mod.rs)
 print only its outer Display value. That observation cannot distinguish a
 durable refusal, pending outcome, invalid published result or not-started failure;
 it is not evidence of bad user credentials or a proven Cellule bottleneck. No

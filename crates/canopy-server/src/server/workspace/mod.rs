@@ -14,7 +14,7 @@ struct OwnerLock(File);
 
 impl OwnerLock {
     fn acquire(path: &Path) -> io::Result<Self> {
-        let file = crate::native_git::lock_file(path)?;
+        let file = crate::git::native::lock_file(path)?;
         file.try_lock().map_err(io::Error::from)?;
         Ok(Self(file))
     }
@@ -145,7 +145,7 @@ fn worker_fences(root: &Path) -> io::Result<Vec<File>> {
         if !entry
             .file_name()
             .as_encoded_bytes()
-            .starts_with(crate::git_cache::CACHE_PREFIX.as_bytes())
+            .starts_with(crate::git::cache::CACHE_PREFIX.as_bytes())
         {
             continue;
         }
@@ -155,7 +155,7 @@ fn worker_fences(root: &Path) -> io::Result<Vec<File>> {
                 "invalid Git cache directory",
             ));
         }
-        let Some(file) = crate::native_git::idle_fence(&entry.path().join("repo.git"))? else {
+        let Some(file) = crate::git::native::idle_fence(&entry.path().join("repo.git"))? else {
             continue;
         };
         // Windows does not inherit the Unix worker fence across exec. Never

@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     ObjectKind,
-    git_http::GitHttpResponse,
+    git::http::GitHttpResponse,
     packs::{
         catalog::{CatalogReader, CatalogSnapshot},
         metadata::tests::limits,

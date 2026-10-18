@@ -10,8 +10,8 @@ use super::super::{
 };
 use super::*;
 use crate::{
-    git_cache::{CacheError, GitCache},
-    git_http::{GitHttpError, GitProcess, WORKER_DEADLINE, read_bounded},
+    git::cache::{CacheError, GitCache},
+    git::http::{GitHttpError, GitProcess, WORKER_DEADLINE, read_bounded},
 };
 use canopy_object_storage::{artifact::ArtifactStore, external::MAX_ARTIFACT_BYTES};
 use cellule_ltx::DiskBudget;
@@ -195,7 +195,7 @@ impl PhysicalVerifier {
         descriptor: NativePackDescriptor,
         limits: PhysicalLimits,
         native: crate::native_resources::NativeScope,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<Self, PhysicalError> {
         descriptor.validate(store.repository(), descriptor.format)?;
         if limits.max_pack_bytes > MAX_ARTIFACT_BYTES
@@ -220,7 +220,7 @@ impl PhysicalVerifier {
             descriptor.format,
             None,
             native,
-            crate::git_cache::CacheOwnership {
+            crate::git::cache::CacheOwnership {
                 work: owner.clone(),
                 cleanup: Some(owner.clone()),
             },
@@ -383,7 +383,7 @@ async fn validate_native(
     descriptor: NativePackDescriptor,
     deadline: Duration,
 ) -> Result<(), GitHttpError> {
-    let mut command = crate::native_git::command(&cache.git_dir())?;
+    let mut command = crate::git::native::command(&cache.git_dir())?;
     command
         .args(["index-pack", "--threads=2", "--verify"])
         .arg(pack_path(&cache, descriptor))

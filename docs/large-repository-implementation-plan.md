@@ -75,7 +75,7 @@ Populate it from the admitted actor authority. Audit replay and retry execution 
 
 ## C. Generalize authenticated artifact transport
 
-**Files:** `crates/canopy-object-storage/src/external.rs`, `crates/canopy-object-storage/src/artifact.rs`, `crates/canopy-server/src/lfs/mod.rs` and its existing helper callers, `crates/canopy-server/src/deployment/backup/bodies.rs`.
+**Files:** `crates/canopy-object-storage/src/external.rs`, `crates/canopy-object-storage/src/artifact/mod.rs`, `crates/canopy-server/src/lfs/mod.rs` and its existing helper callers, `crates/canopy-server/src/deployment/backup/bodies.rs`.
 
 1. Extract/reuse `ArtifactDescriptor` and generalize `publish_lfs`/hashed reads into the common `CANOPY02` path. Preserve LFS SHA-256 identity and body behavior. Delete `CANOPY01` support when its Git callers are removed in F/G.
 2. Stream BLAKE3 file/part hashes. Enforce exact manifest length, part count, fixed part lengths except the final part, checked integer arithmetic and the 512 GiB per-artifact limit.
@@ -107,7 +107,7 @@ The earlier [SQL fixture](design/packed-repository-schema.sql) is not the releas
 
 ## E. Build the streaming pack verifier
 
-**Files:** `crates/canopy-server/src/git_objects/mod.rs`, `crates/canopy-server/src/native_git.rs`, `crates/canopy-server/src/git_http/mod.rs`, new `crates/canopy-server/src/packs/verify.rs` and `crates/canopy-server/src/packs/spool.rs`; native-resource tests.
+**Files:** `crates/canopy-server/src/git/objects/mod.rs`, `crates/canopy-server/src/git/native/mod.rs`, `crates/canopy-server/src/git/http/mod.rs`, new `crates/canopy-server/src/packs/verify.rs` and `crates/canopy-server/src/packs/spool.rs`; native-resource tests.
 
 1. The new GitHttpBackend::run_native_receive API retains pack/index pairs even for small staged requests. GitHttpBackend::stage_native_packs captures request-private pairs using the admitted StagingContext namespace, the existing pinned-file uploader and an exclusive native file fence; it returns authenticated inputs without legacy body/placement rows or an OID inventory. The native receive/staging/verification/publication/cold-clone composition fixture executes those APIs for SHA-1/SHA-256. See the [capture contract](design/native-input-capture.md). Authenticated descriptor inventories/checkpoints and retained-input adoption now exist using the shared range index and lease row; see the [checkpoint contract](design/native-input-checkpoint.md). The real receive fixture now registers through the staging supervisor. Bound checkpoint supervision now uses the publication dispatcher. Exact bound Claim/Renew dispatch now uses private factories and the publication coordinator. Automatic bound renewal, Claim admission, worker/result/checkpoint ownership and a local residence ceiling now reuse the staging supervisor. Final-publication lifecycle serialization now exists. The production gateway also uses [owned push preflight](design/owned-push-preflight.md), binding encoded request identity before replay and retaining normalized input with parsed intent. Production producer orchestration connecting that owner to the packed lifecycle, durable takeover reconstruction and complete wire-plan/response recovery remain open. Turn loose generated objects into packs. Repair thin packs with native Git. Use Git 2.50.1-compatible commands initially and record exact Git version in reports.
 2. Validate native `.idx` v2 and pair checksums. Reopen each output pack in an isolated object directory without alternates and decode every physical entry. Graph references may point outside the pack; delta bases may not.
@@ -121,7 +121,7 @@ The earlier [SQL fixture](design/packed-repository-schema.sql) is not the releas
 
 ## F. Route every object producer through packed publication
 
-**Files:** `crates/canopy-server/src/git_gateway/mod.rs`, `crates/canopy-server/src/git_gateway/push.rs`, `crates/canopy-server/src/push/mod.rs`, `crates/canopy-server/src/refs.rs`, `crates/canopy-server/src/pulls/candidates/mod.rs`, merge/rebase producer modules and server file-edit handlers found by their old `StoredObject` call sites.
+**Files:** `crates/canopy-server/src/git/gateway/mod.rs`, `crates/canopy-server/src/git/gateway/push.rs`, `crates/canopy-server/src/push/mod.rs`, `crates/canopy-server/src/refs.rs`, `crates/canopy-server/src/pulls/candidates/mod.rs`, merge/rebase producer modules and server file-edit handlers found by their old `StoredObject` call sites.
 
 1. Replace body enumeration/publication with E's verified artifacts and D's metadata/edge pipeline. Seal outputs and establish closure before the converted final push command. Reuse existing push identities/options/certificates and exact response semantics while publishing catalog facts and refs in that same final transaction; calling the unchanged legacy completion handler is insufficient.
 2. Preserve ordinary and atomic push behavior, hooks, push options/certificates, ref CAS, branch rules and durable response replay. Recheck ACL/policy at completion, not just on initial admission.
@@ -135,7 +135,7 @@ The earlier [SQL fixture](design/packed-repository-schema.sql) is not the releas
 
 ## G. Unify readers and replace heap inventory with native indexes
 
-**Files:** `crates/canopy-server/src/object_reads/mod.rs`, `crates/canopy-server/src/git_read/mod.rs`, `crates/canopy-server/src/git_cache/mod.rs`, `crates/canopy-server/src/git_cache/maintenance.rs`, `crates/canopy-server/src/git_gateway/{hydration,fetch,maintenance}.rs`, `crates/canopy-server/src/server/mod.rs`, HTTP/SSH service construction; cache tests.
+**Files:** `crates/canopy-server/src/object_reads/mod.rs`, `crates/canopy-server/src/git/read/mod.rs`, `crates/canopy-server/src/git/cache/mod.rs`, `crates/canopy-server/src/git/cache/maintenance.rs`, `crates/canopy-server/src/git/gateway/{hydration,fetch,maintenance}.rs`, `crates/canopy-server/src/server/mod.rs`, HTTP/SSH service construction; cache tests.
 
 1. Inject `GitObjectReader` into all consumers. Resolve canonical object headers and typed graph metadata from the selected certified catalog's immutable files; the Cell supplies authoritative ref/product snapshots and catalog facts. Part downloads, native lookup and verified streams remain in the service layer. Do not retain per-object SQL metadata queries as a hidden dependency of this cutover.
 2. Reuse current immutable generation/pinning mechanics. Install complete verified pack/index pairs; coalesce downloads; keep private request refs. Replace per-pack/full-repository heap `HashSet` membership with native batch/index/MIDX lookup.
@@ -150,7 +150,7 @@ The earlier [SQL fixture](design/packed-repository-schema.sql) is not the releas
 
 ## H. Complete browser, candidate and large-history behavior
 
-**Files:** `crates/canopy-server/src/git_read/mod.rs`, `crates/canopy-server/src/ancestry.rs`, `crates/canopy-server/src/pulls/candidates/mod.rs`, merge/rebase/patch/history readers; `crates/canopy-server/tests/multi_server/{browse,comparison,candidates,merge,rebase,partial_clone,sha256}.rs`.
+**Files:** `crates/canopy-server/src/git/read/mod.rs`, `crates/canopy-server/src/ancestry.rs`, `crates/canopy-server/src/pulls/candidates/mod.rs`, merge/rebase/patch/history readers; `crates/canopy-server/tests/multi_server/{browse,comparison,candidates,merge,rebase,partial_clone,sha256}.rs`.
 
 1. Remove SQL-body dependencies from browsing, diffs, patches and merge input readers. Retain bounded preview/API response semantics with explicit errors; storage's streaming support is independent.
 2. For generated candidate validation, compare expected canonical OID/body digest/size and certified metadata. Preserve ordered commit parents and exact policy inputs; unordered `commit_parents` is not an order proof.

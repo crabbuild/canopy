@@ -256,7 +256,7 @@ impl DirectoryRun {
     pub(in crate::packs) async fn upload_owned(
         self: Arc<Self>,
         store: &ArtifactStore,
-        activity: crate::git_objects::ReadOwner,
+        activity: crate::git::objects::ReadOwner,
     ) -> Result<StoredRun, MetadataError> {
         let run = self.descriptor;
         if run.repository != store.repository() {

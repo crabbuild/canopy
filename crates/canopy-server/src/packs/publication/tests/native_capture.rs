@@ -6,8 +6,8 @@ use super::{
     publishing::{plan, update},
 };
 use crate::{
-    git_http::{GitHttpBackend, GitHttpRequest, NativeCaptureError},
-    git_input::GitInput,
+    git::http::{GitHttpBackend, GitHttpRequest, NativeCaptureError},
+    git::input::GitInput,
     native_resources::{NativeClass, NativeResources},
     packs::{
         catalog::{CatalogFileLimits, CatalogFiles, CatalogIndexes, CatalogReader},
@@ -654,7 +654,7 @@ async fn native_receive_metadata_case(
             std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
         }
     }
-    let encoded = crate::git_gateway::preflight::EncodedPush::new(
+    let encoded = crate::git::gateway::preflight::EncodedPush::new(
         GitHttpRequest {
             method: "POST".into(),
             path_info: "/repo.git/git-receive-pack".into(),
@@ -1441,13 +1441,13 @@ async fn rejection_checks(
         Err(NativeCaptureError::Binding(_))
     ));
     std::fs::write(&path, original)?;
-    let mut command = crate::native_git::command(&backend.git_dir())?;
+    let mut command = crate::git::native::command(&backend.git_dir())?;
     command
         .args(["hash-object", "--stdin"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    let mut worker = crate::native_git::process::GitProcess::spawn(
+    let mut worker = crate::git::native::process::GitProcess::spawn(
         command,
         Arc::clone(&backend.cache),
         backend

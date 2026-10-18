@@ -3,7 +3,7 @@
 //! dispatch. This primitive does not guarantee progress against a moving root;
 //! frontier pipelining and production orchestration are separate requirements.
 use super::*;
-use crate::{git_http::GitHttpResponse, packs::metadata::MetadataLimits};
+use crate::{git::http::GitHttpResponse, packs::metadata::MetadataLimits};
 use cellule_ltx::DiskBudget;
 use cellule_runtime::{
     CellClient, CellTarget, Committed, InvocationError, MutationIdentity, PreparedCommand,

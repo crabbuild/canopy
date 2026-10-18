@@ -158,7 +158,7 @@ async fn orphan_git_descendant_prevents_reclamation_until_it_exits() -> Result {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let directory = tempfile::TempDir::new()?;
     let workspace = Workspace::open(directory.path())?;
-    let cache = crate::git_cache::GitCache::create(
+    let cache = crate::git::cache::GitCache::create(
         workspace.path().into(),
         cellule_ltx::DiskBudget::new(1 << 20),
         "refs/heads/main",
@@ -169,7 +169,7 @@ async fn orphan_git_descendant_prevents_reclamation_until_it_exits() -> Result {
     .await?;
     let data = workspace.path().join("directory.sqlite");
     fs::write(&data, b"old database")?;
-    let mut child = crate::native_git::command(&cache.git_dir())?
+    let mut child = crate::git::native::command(&cache.git_dir())?
         .args(["-c", "alias.hold=!printf '%s\\n' $$; read release", "hold"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

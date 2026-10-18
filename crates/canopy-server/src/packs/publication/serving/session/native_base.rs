@@ -2,14 +2,14 @@
 //! inputs, never fetch reachability or authority to publish mutations.
 use super::workspace::{Observation, job};
 use super::*;
-use crate::git_objects::ReadOwner;
+use crate::git::objects::ReadOwner;
 
 impl ServingPin {
     pub(in crate::packs::publication::serving) async fn native_base(
         &self,
         actor: Option<String>,
         snapshot: ServingSnapshot,
-    ) -> Result<crate::git_http::GitHttpBackend, ServingReadError> {
+    ) -> Result<crate::git::http::GitHttpBackend, ServingReadError> {
         self.read_session(
             actor.clone(),
             move |inner, deadline, permit| async move {
@@ -94,7 +94,7 @@ impl ServingPin {
                     .await
                     .map_err(crate::packs::catalog::NativeReadError::from)?;
                 inner.observe(actor).await?;
-                Ok(crate::git_http::GitHttpBackend {
+                Ok(crate::git::http::GitHttpBackend {
                     cache,
                     nonce_seed: None,
                     signers: None,

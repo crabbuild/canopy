@@ -50,7 +50,27 @@ suite modules normally; reserve `#[path]` for shared helpers in `tests/support/`
 ```text
 src/
   access.rs
-  git_cache/
+  api/
+    mod.rs
+    authorization.rs
+  git/
+    mod.rs
+    cache/
+      mod.rs
+      tests.rs
+    gateway/
+      mod.rs
+    http/
+      mod.rs
+    input/
+      mod.rs
+    native/
+      mod.rs
+    objects/
+      mod.rs
+    read/
+      mod.rs
+  native_resources/
     mod.rs
     tests.rs
 tests/
@@ -67,3 +87,7 @@ tests/
 The module layout is independent of the public Rust paths. Moving a module root
 into `mod.rs` preserves its module name, visibility, and imports. Update relative
 `include_str!` and `include_bytes!` paths whenever moving a source file.
+
+Git transport, cache, native execution, and object readers live under `git/`.
+The public transport modules use `canopy_server::git::{gateway, http, input}`.
+The `api/` module owns application HTTP routing and API handlers.

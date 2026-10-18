@@ -1548,7 +1548,7 @@ Four focused cursor/SQL tests, the Repository Cell suite, stock Git suite includ
 32 coherent concurrent advertisements and disk-pressure retries, and three native
 merge-candidate tests passed. All-target Clippy with warnings denied, formatting
 and the optimized build passed. `scripts/smoke_s3_cache.py` now asserts the three
-scanned headers as well as body reuse; enable `canopy_server::git_gateway=debug`
+scanned headers as well as body reuse; enable `canopy_server::git::gateway=debug`
 for the required diagnostic evidence. Broader capacity and pack reuse remain open.
 
 

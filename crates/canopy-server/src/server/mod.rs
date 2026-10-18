@@ -36,14 +36,15 @@ use tokio_util::{
 };
 
 use crate::{
-    CanopyApplication, ReadIdentity, build_descriptor,
+    CanopyApplication, ReadIdentity,
+    api::RepositoryHttp,
+    build_descriptor,
     deployment::Deployment,
     directory::{
         self, CreateAccountOutcome, DirectoryCell, DirectoryModule, Principal, RenameOutcome,
         RepositoryEntry, RepositoryState, TokenScope,
     },
     http,
-    repository_http::RepositoryHttp,
 };
 
 mod catalog_admission;

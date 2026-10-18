@@ -136,7 +136,7 @@ and graceful shutdown passed. This small recovery check is not full-corpus or
 The first cache-probe invocation omitted the documented Git-gateway debug
 filter. Its initial push, clone, exact body and 260 cached-file assertions
 passed, but cursor-log assertions failed with an empty log. The corrected
-invocation uses `RUST_LOG=canopy_server::git_gateway=debug` on a fresh prefix;
+invocation uses `RUST_LOG=canopy_server::git::gateway=debug` on a fresh prefix;
 no log wait, cursor, cache or integrity assertion was changed. Both logs are
 retained separately.
 
@@ -245,7 +245,7 @@ python3 -B scripts/smoke_s3_activation.py \
   --storage-url s3://disposable-bucket/pr14-activation \
   --work-dir /tmp/canopy-new-activation --concurrency 8
 
-RUST_LOG=canopy_server::git_gateway=debug \
+RUST_LOG=canopy_server::git::gateway=debug \
 python3 -B scripts/smoke_s3_cache.py \
   --binary target/release/canopy \
   --storage-url s3://disposable-bucket/pr14-cache \

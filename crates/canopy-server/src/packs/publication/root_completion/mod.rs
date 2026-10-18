@@ -6,7 +6,7 @@ use crate::packs::{
     input_artifact::{INPUT_ROOT_BYTES, StoredInputRoot},
     metadata::MetadataLimits,
 };
-use crate::{directory::DirectoryCell, git_http::GitHttpResponse};
+use crate::{directory::DirectoryCell, git::http::GitHttpResponse};
 use canopy_object_storage::artifact::{ArtifactDescriptor, ArtifactStore};
 use cellule_ltx::DiskBudget;
 use sha2::{Digest as _, Sha256};

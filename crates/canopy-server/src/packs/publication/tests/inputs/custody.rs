@@ -324,7 +324,7 @@ async fn retained_input_custody_reconciles_over_moving_nonempty_base_and_cold_cl
             .await?
             .ok_or("retained tip")?;
         assert_eq!(selected.source.record.native(), recovered.native);
-        let backend = crate::git_http::GitHttpBackend::initialize(
+        let backend = crate::git::http::GitHttpBackend::initialize(
             cold_root.path().into(),
             cold_budget,
             "refs/heads/main",

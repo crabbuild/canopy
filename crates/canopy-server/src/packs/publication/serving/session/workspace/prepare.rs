@@ -1,6 +1,6 @@
 //! Requested structural closure, then native Git's exact blob filter selection.
 use super::*;
-use crate::{ObjectKind, git_objects::GitObjectWalk};
+use crate::{ObjectKind, git::objects::GitObjectWalk};
 
 const SELECTION_PAGE: usize = 128;
 
@@ -150,7 +150,7 @@ impl NativeWorkspace {
         if roots.is_empty() {
             return Ok(());
         }
-        if roots.len() > crate::git_input::MAX_FETCH_REQUEST_BYTES as usize / 40
+        if roots.len() > crate::git::input::MAX_FETCH_REQUEST_BYTES as usize / 40
             || roots
                 .iter()
                 .any(|id| id.is_zero() || id.format() != self.object_format())

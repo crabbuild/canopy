@@ -12,6 +12,7 @@ use cellule_runtime::{
 
 mod access;
 mod admission;
+mod api;
 pub use admission::AdmissionPermit;
 mod visibility;
 pub use visibility::{RepositoryVisibility, Visibility};
@@ -20,26 +21,19 @@ pub mod checks;
 mod default_branch;
 pub mod deployment;
 pub mod directory;
-pub(crate) use canopy_object_storage::external;
-mod git_cache;
 pub(crate) use canopy_git_format as git_format;
+pub(crate) use canopy_object_storage::external;
 pub use git_format::{ObjectFormat, ObjectId, ObjectIdError, ObjectKind, object_id};
-pub mod git_gateway;
-pub mod git_http;
-pub mod git_input;
-mod git_objects;
-mod git_read;
+pub mod git;
 mod graph;
 pub mod http;
 pub mod issues;
 pub mod lfs;
-mod native_git;
 pub mod native_resources;
 pub mod packs;
 pub mod pulls;
 mod push;
 mod refs;
-mod repository_http;
 pub mod server;
 pub mod ssh;
 mod transfer;
@@ -142,8 +136,8 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/publication/backup.rs"));
                 source.update(include_bytes!("packs/publication/recovery/backup.rs"));
                 source.update(include_bytes!("server/mod.rs"));
-                source.update(include_bytes!("server/catalog_admission.rs"));
-                source.update(include_bytes!("server/lifecycle.rs"));
+                source.update(include_bytes!("server/catalog_admission/mod.rs"));
+                source.update(include_bytes!("server/lifecycle/mod.rs"));
                 source.update(include_bytes!("admission.rs"));
                 source.update(include_bytes!("server/workspace/mod.rs"));
                 source.update(include_bytes!("../../canopy-git-format/src/lib.rs"));
@@ -155,45 +149,46 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("graph/mod.rs"));
                 source.update(include_bytes!("branch_rules/mod.rs"));
                 source.update(include_bytes!("branch_rules/command.rs"));
-                source.update(include_bytes!("git_objects/mod.rs"));
-                source.update(include_bytes!("git_cache/artifacts.rs"));
-                source.update(include_bytes!("git_cache/verified.rs"));
-                source.update(include_bytes!("git_cache/serving_refs.rs"));
-                source.update(include_bytes!("git_cache/cleanup.rs"));
-                source.update(include_bytes!("git_cache/mod.rs"));
-                source.update(include_bytes!("git_cache/maintenance.rs"));
-                source.update(include_bytes!("packs/catalog/native.rs"));
+                source.update(include_bytes!("git/mod.rs"));
+                source.update(include_bytes!("git/objects/mod.rs"));
+                source.update(include_bytes!("git/cache/artifacts.rs"));
+                source.update(include_bytes!("git/cache/verified.rs"));
+                source.update(include_bytes!("git/cache/serving_refs.rs"));
+                source.update(include_bytes!("git/cache/cleanup.rs"));
+                source.update(include_bytes!("git/cache/mod.rs"));
+                source.update(include_bytes!("git/cache/maintenance.rs"));
+                source.update(include_bytes!("packs/catalog/native/mod.rs"));
                 source.update(include_bytes!("packs/catalog/sparse.rs"));
                 source.update(include_bytes!("packs/catalog/reader.rs"));
-                source.update(include_bytes!("packs/catalog/graph_spool.rs"));
+                source.update(include_bytes!("packs/catalog/graph_spool/mod.rs"));
                 source.update(include_bytes!("packs/catalog/files.rs"));
-                source.update(include_bytes!("native_resources.rs"));
-                source.update(include_bytes!("native_git.rs"));
-                source.update(include_bytes!("native_git/process.rs"));
-                source.update(include_bytes!("native_git/process/fence.rs"));
-                source.update(include_bytes!("git_gateway/mod.rs"));
-                source.update(include_bytes!("git_gateway/merge.rs"));
-                source.update(include_bytes!("git_gateway/head.rs"));
-                source.update(include_bytes!("git_gateway/candidates/mod.rs"));
-                source.update(include_bytes!("git_gateway/fetch.rs"));
-                source.update(include_bytes!("git_gateway/discovery.rs"));
-                source.update(include_bytes!("git_gateway/ssh.rs"));
-                source.update(include_bytes!("git_gateway/preflight.rs"));
-                source.update(include_bytes!("git_gateway/preflight/retention.rs"));
-                source.update(include_bytes!("git_gateway/branch_policy.rs"));
-                source.update(include_bytes!("git_gateway/push.rs"));
-                source.update(include_bytes!("git_gateway/push/native.rs"));
-                source.update(include_bytes!("git_input/mod.rs"));
-                source.update(include_bytes!("git_http/capture.rs"));
-                source.update(include_bytes!("git_http/mod.rs"));
+                source.update(include_bytes!("native_resources/mod.rs"));
+                source.update(include_bytes!("git/native/mod.rs"));
+                source.update(include_bytes!("git/native/process.rs"));
+                source.update(include_bytes!("git/native/process/fence.rs"));
+                source.update(include_bytes!("git/gateway/mod.rs"));
+                source.update(include_bytes!("git/gateway/merge.rs"));
+                source.update(include_bytes!("git/gateway/head.rs"));
+                source.update(include_bytes!("git/gateway/candidates/mod.rs"));
+                source.update(include_bytes!("git/gateway/fetch.rs"));
+                source.update(include_bytes!("git/gateway/discovery.rs"));
+                source.update(include_bytes!("git/gateway/ssh.rs"));
+                source.update(include_bytes!("git/gateway/preflight.rs"));
+                source.update(include_bytes!("git/gateway/preflight/retention.rs"));
+                source.update(include_bytes!("git/gateway/branch_policy.rs"));
+                source.update(include_bytes!("git/gateway/push.rs"));
+                source.update(include_bytes!("git/gateway/push/native.rs"));
+                source.update(include_bytes!("git/input/mod.rs"));
+                source.update(include_bytes!("git/http/capture.rs"));
+                source.update(include_bytes!("git/http/mod.rs"));
                 source.update(include_bytes!("packs/verification/mod.rs"));
                 source.update(include_bytes!("packs/verification/physical.rs"));
-                source.update(include_bytes!("packs/verification/physical/staged.rs"));
+                source.update(include_bytes!("packs/verification/physical/staged/mod.rs"));
                 source.update(include_bytes!("packs/closure/verifier.rs"));
                 source.update(include_bytes!("packs/directory/mod.rs"));
                 source.update(include_bytes!("packs/directory/writer.rs"));
                 source.update(include_bytes!("packs/publication/prepare.rs"));
-                source.update(include_bytes!("packs/verification/spool.rs"));
+                source.update(include_bytes!("packs/verification/spool/mod.rs"));
                 source.update(include_bytes!("packs/wire_request.rs"));
                 source.update(include_bytes!("packs/input_artifact.rs"));
                 source.update(include_bytes!("packs/directory/index/mod.rs"));
@@ -212,7 +207,9 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/ref_state/snapshot.rs"));
                 source.update(include_bytes!("packs/publication/native_result.rs"));
                 source.update(include_bytes!("packs/publication/native_result/codec.rs"));
-                source.update(include_bytes!("packs/publication/native_result/plan.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/native_result/plan/mod.rs"
+                ));
                 source.update(include_bytes!("packs/publication/root_completion/mod.rs"));
                 source.update(include_bytes!("packs/publication/root_completion/codec.rs"));
                 source.update(include_bytes!(
@@ -251,7 +248,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!(
                     "packs/publication/coordinator/native_candidate.rs"
                 ));
-                source.update(include_bytes!("git_gateway/candidates/produce.rs"));
+                source.update(include_bytes!("git/gateway/candidates/produce.rs"));
                 source.update(include_bytes!("packs/publication/native_head/publish.rs"));
                 source.update(include_bytes!(
                     "packs/publication/coordinator/native_head.rs"
@@ -290,8 +287,10 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!(
                     "packs/publication/coordinator/serving_drain.rs"
                 ));
-                source.update(include_bytes!("packs/publication/coordinator/budget.rs"));
-                source.update(include_bytes!("packs/publication/scan.rs"));
+                source.update(include_bytes!(
+                    "packs/publication/coordinator/budget/mod.rs"
+                ));
+                source.update(include_bytes!("packs/publication/scan/mod.rs"));
                 source.update(include_bytes!("packs/publication/custody/scan.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/policy.rs"));
                 source.update(include_bytes!("packs/publication/coordinator/roots.rs"));
@@ -329,11 +328,11 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!(
                     "packs/publication/serving/session/native_base.rs"
                 ));
-                source.update(include_bytes!("git_read/mod.rs"));
-                source.update(include_bytes!("git_read/browse.rs"));
-                source.update(include_bytes!("git_read/graph.rs"));
-                source.update(include_bytes!("git_read/trees.rs"));
-                source.update(include_bytes!("git_read/patch/mod.rs"));
+                source.update(include_bytes!("git/read/mod.rs"));
+                source.update(include_bytes!("git/read/browse.rs"));
+                source.update(include_bytes!("git/read/graph.rs"));
+                source.update(include_bytes!("git/read/trees.rs"));
+                source.update(include_bytes!("git/read/patch/mod.rs"));
                 source.update(include_bytes!("packs/publication/serving/session/refs.rs"));
                 source.update(include_bytes!("packs/publication/serving/lifecycle.rs"));
                 source.update(include_bytes!("packs/publication/serving/pool.rs"));
@@ -356,7 +355,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("pulls/threads.rs"));
                 source.update(include_bytes!("pulls/native/reads.rs"));
                 source.update(include_bytes!("packs/publication/registry.rs"));
-                source.update(include_bytes!("server/catalog_initialization.rs"));
+                source.update(include_bytes!("server/catalog_initialization/mod.rs"));
                 source.update(include_bytes!("server/residency/mod.rs"));
                 source.update(include_bytes!("server/residency/recovery.rs"));
                 source.update(include_bytes!("server/peer.rs"));
@@ -369,7 +368,7 @@ impl CellModule for RepositoryModule {
                 source.update(include_bytes!("packs/metadata/transport.rs"));
                 source.update(include_bytes!("packs/publication/inputs.rs"));
                 source.update(include_bytes!(
-                    "../../canopy-object-storage/src/artifact.rs"
+                    "../../canopy-object-storage/src/artifact/mod.rs"
                 ));
                 source.update(include_bytes!(
                     "../../canopy-object-storage/src/external.rs"

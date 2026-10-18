@@ -7,7 +7,7 @@ use super::{
     publishing::edit,
 };
 use crate::{
-    git_gateway::candidates::ProducedCandidate,
+    git::gateway::candidates::ProducedCandidate,
     packs::verification::physical::tests::prepared_for_store,
     pulls::{
         candidates::{CandidateResult, MergeCandidate, commit_body},

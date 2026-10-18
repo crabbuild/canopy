@@ -2,8 +2,8 @@
 //! This is not a physical pack, graph closure or publication certificate.
 
 use super::metadata::CanonicalObject;
-pub use crate::git_objects::{EdgeSink, ObjectReadError};
-use crate::{ObjectFormat, ObjectId, git_objects::GitObjects};
+pub use crate::git::objects::{EdgeSink, ObjectReadError};
+use crate::{ObjectFormat, ObjectId, git::objects::GitObjects};
 use std::path::Path;
 
 mod spool;
@@ -33,7 +33,7 @@ impl CanonicalVerifier {
         git_dir: &Path,
         format: ObjectFormat,
         native: &crate::native_resources::NativeScope,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<Self, ObjectReadError> {
         Ok(Self {
             native: GitObjects::batch_owned(git_dir, native, owner)?,

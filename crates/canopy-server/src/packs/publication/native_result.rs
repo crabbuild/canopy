@@ -6,7 +6,7 @@ use crate::packs::{
     wire_request::{WireRequestError, WireRequestRoot},
 };
 use crate::{
-    directory::DirectoryCell, git_http::GitHttpResponse, git_input::InputError,
+    directory::DirectoryCell, git::http::GitHttpResponse, git::input::InputError,
     push::VerifiedPushCertificate,
 };
 use canopy_object_storage::artifact::{

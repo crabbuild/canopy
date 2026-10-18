@@ -1577,7 +1577,7 @@ pub struct StagingContext {
 impl StagingContext {
     /// Lifetime ownership only; it grants no custody or publication authority.
     /// Keep this in every physical worker that can outlive its async observer.
-    pub(crate) fn physical_owner(&self) -> crate::git_objects::ReadOwner {
+    pub(crate) fn physical_owner(&self) -> crate::git::objects::ReadOwner {
         self.activity.clone()
     }
     pub(super) fn capability(&self) -> (&CellClient, &CellTarget, LeaseCheck) {

@@ -1,8 +1,8 @@
 //! Selected authenticated packed extents in a private native decoder workspace.
 use super::*;
 use crate::{
-    git_cache::GitCache,
-    git_objects::{ObjectReadError, ReadOwner},
+    git::cache::GitCache,
+    git::objects::{ObjectReadError, ReadOwner},
     native_resources::{NativeScope, NativeWork},
     packs::{metadata::MetadataError, sources::NativePackDescriptor},
 };

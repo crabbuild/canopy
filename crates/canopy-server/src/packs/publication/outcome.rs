@@ -160,7 +160,7 @@ impl PreparationSession {
     pub async fn completed_push_response(
         &self,
         completed: &Committed<CatalogCompletionReply>,
-    ) -> Result<crate::git_http::GitHttpResponse, CatalogPushResponseError> {
+    ) -> Result<crate::git::http::GitHttpResponse, CatalogPushResponseError> {
         let CatalogCompletionReply::Completed(output) = completed.output else {
             return Err(CatalogPushResponseError::Invalid);
         };

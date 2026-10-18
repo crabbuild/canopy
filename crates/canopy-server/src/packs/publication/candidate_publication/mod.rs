@@ -213,7 +213,7 @@ pub enum NativeCandidatePublicationError {
 impl PreparedCatalog {
     pub(crate) async fn native_candidate_proof(
         &self,
-        produced: &crate::git_gateway::candidates::ProducedCandidate,
+        produced: &crate::git::gateway::candidates::ProducedCandidate,
         directory: &Path,
         budget: DiskBudget,
         limits: crate::packs::metadata::MetadataLimits,

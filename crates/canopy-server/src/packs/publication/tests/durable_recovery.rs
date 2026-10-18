@@ -1,7 +1,7 @@
 //! Destroy factory outputs and local SQLite, then recover solely from the pin.
 use super::*;
 use super::{publishing::edit, root_outcome::Context};
-use crate::git_http::GitHttpResponse;
+use crate::git::http::GitHttpResponse;
 use cellule_runtime::Resolution;
 
 pub(super) async fn qualify(context: Context<'_>, fault: u8, revoked: bool) -> Result {

@@ -17,7 +17,7 @@ async fn native_write_base_streams_catalog_inputs_and_isolates_new_native_output
         let backend = view.native_base().await?;
         assert!(backend.cache.pack_sources().await?.is_empty());
         assert_eq!(files.native_stats()?.ok_or("stats")?.open_files, 2);
-        let mut objects = crate::git_objects::GitObjects::batch_owned(
+        let mut objects = crate::git::objects::GitObjects::batch_owned(
             &backend.git_dir(),
             &backend.cache.native,
             backend.cache.clone(),
@@ -508,7 +508,7 @@ async fn closed_producer_renews_during_long_construction_and_returned_workspace_
 
 #[tokio::test]
 async fn reachability_stops_at_live_refs_without_scanning_other_history() -> Result {
-    use crate::git_gateway::{GatewayError, GitGateway};
+    use crate::git::gateway::{GatewayError, GitGateway};
     use crate::packs::ref_state::{RefStateSnapshot, RefStateSnapshotRoot};
     for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
         let f = Fixture::new(format).await?;

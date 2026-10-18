@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::ReadIdentity;
-use crate::git_read::{ComparisonTarget, Side, patch::LineAnchor};
+use crate::git::read::{ComparisonTarget, Side, patch::LineAnchor};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
 pub(crate) const PAGE: usize = 16;

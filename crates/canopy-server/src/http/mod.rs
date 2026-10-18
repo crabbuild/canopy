@@ -19,8 +19,8 @@ mod lfs_locks;
 use crate::{
     ReadIdentity,
     directory::{LfsOperation, Principal, TokenScope, validate_component},
-    git_gateway::{GatewayError, GitGateway},
-    git_http::GitHttpRequest,
+    git::gateway::{GatewayError, GitGateway},
+    git::http::GitHttpRequest,
     lfs::LfsError,
 };
 
@@ -652,11 +652,11 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         }
         Ok(_) => unavailable(),
         Err(GatewayError::Unauthorized) => unauthorized(),
-        Err(GatewayError::Input(crate::git_input::InputError::Commands)) => plain(
+        Err(GatewayError::Input(crate::git::input::InputError::Commands)) => plain(
             StatusCode::BAD_REQUEST,
             "Malformed Git receive-pack commands",
         ),
-        Err(GatewayError::Input(crate::git_input::InputError::Fetch)) => plain(
+        Err(GatewayError::Input(crate::git::input::InputError::Fetch)) => plain(
             StatusCode::BAD_REQUEST,
             "Malformed Git upload-pack commands",
         ),
@@ -664,19 +664,19 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::BAD_REQUEST,
             "Requested Git object is not reachable from a current repository ref",
         ),
-        Err(GatewayError::Input(crate::git_input::InputError::TooLarge)) => {
+        Err(GatewayError::Input(crate::git::input::InputError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git request is too large")
         }
-        Err(GatewayError::Input(crate::git_input::InputError::Timeout)) => {
+        Err(GatewayError::Input(crate::git::input::InputError::Timeout)) => {
             plain(StatusCode::REQUEST_TIMEOUT, "Git upload timed out")
         }
-        Err(GatewayError::Input(crate::git_input::InputError::Body(_))) => {
+        Err(GatewayError::Input(crate::git::input::InputError::Body(_))) => {
             plain(StatusCode::BAD_REQUEST, "Git request body failed")
         }
-        Err(GatewayError::Input(crate::git_input::InputError::Gzip(_))) => {
+        Err(GatewayError::Input(crate::git::input::InputError::Gzip(_))) => {
             plain(StatusCode::BAD_REQUEST, "Invalid Git gzip stream")
         }
-        Err(GatewayError::Input(crate::git_input::InputError::Budget(_))) => plain(
+        Err(GatewayError::Input(crate::git::input::InputError::Budget(_))) => plain(
             StatusCode::INSUFFICIENT_STORAGE,
             "Git upload disk budget exhausted",
         ),
@@ -686,7 +686,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
         ),
         Err(
             GatewayError::Cache(error)
-            | GatewayError::Http(crate::git_http::GitHttpError::Cache(error)),
+            | GatewayError::Http(crate::git::http::GitHttpError::Cache(error)),
         ) if error.is_admission() => plain(
             StatusCode::INSUFFICIENT_STORAGE,
             "Git cache disk budget exhausted",
@@ -695,7 +695,7 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
             StatusCode::CONFLICT,
             "Push ID is bound to another request or account",
         ),
-        Err(GatewayError::Objects(crate::git_gateway::ObjectReadError::TooLarge)) => {
+        Err(GatewayError::Objects(crate::git::gateway::ObjectReadError::TooLarge)) => {
             plain(StatusCode::PAYLOAD_TOO_LARGE, "Git object is too large")
         }
         Err(error) => git_failure(error),
@@ -705,9 +705,9 @@ async fn git_request(State(api): State<Arc<GitHttpApi>>, request: Request<Body>)
 fn git_failure(error: GatewayError) -> Response<Body> {
     match error {
         GatewayError::Io(error)
-        | GatewayError::Http(crate::git_http::GitHttpError::Io(error))
-        | GatewayError::Cache(crate::git_cache::CacheError::Io(error))
-        | GatewayError::Objects(crate::git_objects::ObjectReadError::Io(error))
+        | GatewayError::Http(crate::git::http::GitHttpError::Io(error))
+        | GatewayError::Cache(crate::git::cache::CacheError::Io(error))
+        | GatewayError::Objects(crate::git::objects::ObjectReadError::Io(error))
             if crate::native_resources::is_exhausted(&error) =>
         {
             plain(
@@ -875,9 +875,9 @@ mod tests {
         }
         for wrap in [
             GatewayError::Io,
-            |error| GatewayError::Http(crate::git_http::GitHttpError::Io(error)),
-            |error| GatewayError::Cache(crate::git_cache::CacheError::Io(error)),
-            |error| GatewayError::Objects(crate::git_objects::ObjectReadError::Io(error)),
+            |error| GatewayError::Http(crate::git::http::GitHttpError::Io(error)),
+            |error| GatewayError::Cache(crate::git::cache::CacheError::Io(error)),
+            |error| GatewayError::Objects(crate::git::objects::ObjectReadError::Io(error)),
         ] {
             let exhausted = scope.try_admit(NativeWork::Read).err().unwrap();
             assert_eq!(

@@ -151,10 +151,10 @@ impl CatalogFiles {
     }
     pub(in crate::packs) async fn workspace(
         &self,
-        owner: crate::git_objects::ReadOwner,
-        cleanup: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
+        cleanup: crate::git::objects::ReadOwner,
         head: String,
-    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+    ) -> Result<Arc<crate::git::cache::GitCache>, super::native::NativeReadError> {
         self.native
             .as_ref()
             .ok_or(super::native::NativeReadError::Unavailable)?
@@ -163,11 +163,11 @@ impl CatalogFiles {
     }
     pub(in crate::packs) async fn write_workspace(
         &self,
-        owner: crate::git_objects::ReadOwner,
-        cleanup: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
+        cleanup: crate::git::objects::ReadOwner,
         head: String,
-        objects: Arc<crate::git_cache::GitCache>,
-    ) -> Result<Arc<crate::git_cache::GitCache>, super::native::NativeReadError> {
+        objects: Arc<crate::git::cache::GitCache>,
+    ) -> Result<Arc<crate::git::cache::GitCache>, super::native::NativeReadError> {
         self.native
             .as_ref()
             .ok_or(super::native::NativeReadError::Unavailable)?
@@ -176,9 +176,9 @@ impl CatalogFiles {
     }
     pub(in crate::packs) async fn install_workspace(
         &self,
-        cache: Arc<crate::git_cache::GitCache>,
+        cache: Arc<crate::git::cache::GitCache>,
         source: &ResolvedObject,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<(), super::native::NativeReadError> {
         self.native
             .as_ref()
@@ -188,9 +188,9 @@ impl CatalogFiles {
     }
     pub(in crate::packs) async fn install_transient_workspace(
         &self,
-        cache: Arc<crate::git_cache::GitCache>,
+        cache: Arc<crate::git::cache::GitCache>,
         source: &ResolvedObject,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<(), super::native::NativeReadError> {
         self.native
             .as_ref()
@@ -200,9 +200,9 @@ impl CatalogFiles {
     }
     pub(in crate::packs) async fn install_pack_workspace(
         &self,
-        cache: Arc<crate::git_cache::GitCache>,
+        cache: Arc<crate::git::cache::GitCache>,
         source: super::super::sources::NativePackDescriptor,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<(), super::native::NativeReadError> {
         self.native
             .as_ref()
@@ -214,8 +214,8 @@ impl CatalogFiles {
         &self,
         maximum: u64,
         cache_kib: u32,
-        owner: crate::git_objects::ReadOwner,
-        cleanup: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
+        cleanup: crate::git::objects::ReadOwner,
     ) -> Result<Arc<Mutex<super::graph_spool::GraphSpool>>, MetadataError> {
         let (root, budget) = (self.root.clone(), self.budget.clone());
         tokio::task::spawn_blocking(move || {
@@ -230,7 +230,7 @@ impl CatalogFiles {
         &self,
         object: ResolvedObject,
         limit: usize,
-        owner: crate::git_objects::ReadOwner,
+        owner: crate::git::objects::ReadOwner,
     ) -> Result<Vec<u8>, super::native::NativeReadError> {
         self.native
             .as_ref()

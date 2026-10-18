@@ -1,5 +1,5 @@
 use super::*;
-use crate::git_objects::GitObjects;
+use crate::git::objects::GitObjects;
 use std::{collections::BTreeMap, process::Stdio};
 use tokio::{io::AsyncWriteExt, process::Command};
 
